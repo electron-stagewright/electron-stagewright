@@ -41,18 +41,9 @@ session-traces/
 .tmp/
 .turbo/
 
-# Internal planning (local-only — never commit; ADRs under docs/adr/ ARE tracked)
+# Internal planning + documentation (local-only — never commit)
 .claude/
 .agents/
 AGENTS.md
 CLAUDE.md
-docs/ROADMAP.md
-docs/PLAN.md
-docs/SPRINT-PLAN.md
-docs/BACKLOG.md
-docs/SESSION-HANDOFF.md
-docs/electron-driver-audit.md
-docs/market-analysis.md
-docs/customer-discovery-findings.md
-docs/laststance-audit.md
-docs/mcp-modern-best-practices.md
+docs/
