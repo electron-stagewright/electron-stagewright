@@ -14,6 +14,12 @@
 
 export const VERSION = '0.0.0'
 
+/**
+ * Error code registry, response envelope helpers, and operation-type routing.
+ * See docs/adr/006-error-code-registry.md for the full design.
+ */
+export * from './errors/index.js'
+
 // Placeholder entry. The real Server + Transport + Tool dispatcher are
 // being implemented; the package publishes cleanly so downstream tooling
 // can pin against a real npm artifact during early integration.

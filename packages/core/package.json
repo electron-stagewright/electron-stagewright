@@ -50,7 +50,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "zod-to-json-schema": "^3.23.0"
   },
   "peerDependencies": {
     "playwright": ">=1.49.0"

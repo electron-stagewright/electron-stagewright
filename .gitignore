@@ -44,6 +44,7 @@ session-traces/
 # Internal planning (local-only — never commit; ADRs under docs/adr/ ARE tracked)
 .claude/
 .agents/
+AGENTS.md
 CLAUDE.md
 docs/ROADMAP.md
 docs/PLAN.md
@@ -55,4 +56,3 @@ docs/market-analysis.md
 docs/customer-discovery-findings.md
 docs/laststance-audit.md
 docs/mcp-modern-best-practices.md
-
