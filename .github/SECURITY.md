@@ -5,7 +5,7 @@
 The project is pre-`1.0`. Until `v1.0.0` ships, only the latest minor receives security updates.
 
 | Version | Supported |
-|---------|-----------|
+| ------- | --------- |
 | latest  | yes       |
 | older   | no        |
 

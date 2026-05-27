@@ -1,0 +1,19 @@
+# Lockfiles — managed by their package manager, not Prettier
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# Build / cache outputs
+dist/
+build/
+coverage/
+.cache/
+.tsbuildinfo
+
+# Per-package outputs (pnpm workspaces)
+packages/**/dist/
+packages/**/build/
+examples/**/dist/
+
+# Node tooling that has its own format
+node_modules/

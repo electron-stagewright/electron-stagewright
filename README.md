@@ -95,8 +95,8 @@ Success:
   "_meta": {
     "estimated_tokens": 47,
     "elapsed_ms": 142,
-    "renderer_reloaded_since_last_snapshot": false
-  }
+    "renderer_reloaded_since_last_snapshot": false,
+  },
 }
 ```
 
@@ -111,11 +111,11 @@ Error:
   "next_actions": ["snapshot()", "wait_for_state({ ref: 5, state: 'visible' })"],
   "similar_refs": [
     { "ref": 9, "role": "button", "name": "Submit" },
-    { "ref": 12, "role": "button", "name": "Cancel" }
+    { "ref": 12, "role": "button", "name": "Cancel" },
   ],
   "retryable": false,
   "http": 404,
-  "_meta": { "estimated_tokens": 89, "elapsed_ms": 23 }
+  "_meta": { "estimated_tokens": 89, "elapsed_ms": 23 },
 }
 ```
 
