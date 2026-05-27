@@ -1,0 +1,9 @@
+packages:
+  - 'packages/*'
+  - 'examples/*'
+
+# Allow native postinstall builds for trusted packages.
+# pnpm 11+ blocks all postinstall scripts by default as a supply-chain
+# safeguard; this map opts back in for the packages we actually need.
+allowBuilds:
+  esbuild: true

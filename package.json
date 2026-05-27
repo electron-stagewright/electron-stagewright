@@ -1,0 +1,42 @@
+{
+  "name": "electron-stagewright-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Workspace root for Electron Stagewright — drive Electron apps the way Playwright drives browsers.",
+  "license": "MIT",
+  "author": "johnny4young <asesordeprogramacion@gmail.com>",
+  "homepage": "https://github.com/electron-stagewright/electron-stagewright",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electron-stagewright/electron-stagewright.git"
+  },
+  "bugs": {
+    "url": "https://github.com/electron-stagewright/electron-stagewright/issues"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@11.3.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@typescript-eslint/eslint-plugin": "^8.59.4",
+    "@typescript-eslint/parser": "^8.59.4",
+    "eslint": "^10.4.0",
+    "prettier": "^3.8.3",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Test output
+coverage/
+.vitest-cache/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json.example
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Stagewright runtime artifacts
+.stagewright/
+session-traces/
+
+# Misc
+.cache/
+.tmp/
+.turbo/
+
+# Internal planning (local-only — never commit; ADRs under docs/adr/ ARE tracked)
+.claude/
+.agents/
+CLAUDE.md
+docs/ROADMAP.md
+docs/PLAN.md
+docs/SPRINT-PLAN.md
+docs/BACKLOG.md
+docs/SESSION-HANDOFF.md
+docs/electron-driver-audit.md
+docs/market-analysis.md
+docs/customer-discovery-findings.md
+docs/laststance-audit.md
+docs/mcp-modern-best-practices.md
+

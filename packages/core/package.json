@@ -1,0 +1,66 @@
+{
+  "name": "@electron-stagewright/core",
+  "version": "0.0.0",
+  "description": "Core MCP server for Electron Stagewright. Drive Electron apps the way Playwright drives browsers.",
+  "type": "module",
+  "license": "MIT",
+  "author": "johnny4young <johnny.iv.young@gmail.com>",
+  "homepage": "https://github.com/electron-stagewright/electron-stagewright",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electron-stagewright/electron-stagewright.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/electron-stagewright/electron-stagewright/issues"
+  },
+  "keywords": [
+    "electron",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "claude",
+    "claude-code",
+    "cursor",
+    "testing",
+    "automation",
+    "e2e",
+    "playwright",
+    "stagewright"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "electron-stagewright": "./dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "peerDependencies": {
+    "playwright": ">=1.49.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
