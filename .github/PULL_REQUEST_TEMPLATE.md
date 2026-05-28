@@ -11,9 +11,9 @@
 - [ ] CI / infrastructure
 - [ ] Refactor (no functional change)
 
-## Linked issues / ADRs
+## Linked issues
 
-<!-- Reference issues with #N, ADRs with docs/adr/NNN-title.md. -->
+<!-- Reference issues with #N. -->
 
 ## Verification
 

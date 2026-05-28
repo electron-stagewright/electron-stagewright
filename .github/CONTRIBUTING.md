@@ -1,12 +1,12 @@
 # Contributing to Electron Stagewright
 
-This project is in its earliest days. The architecture is locked through the ADRs in [`docs/adr/`](../docs/adr/); the implementation is underway.
+This project is in its earliest days. The architecture is locked; the implementation is underway.
 
 If you're reading this before the first release ships: thanks for stopping by. The most useful contribution right now is **opening a discussion** with use cases or pain points from your own Electron testing experience — that input shapes which plugins land first.
 
 ## How we work
 
-- Decisions are made through [Architecture Decision Records](../docs/adr/). Read the relevant ADR before proposing a structural change; reference it explicitly in your PR.
+- Architectural direction is maintained by the maintainers and discussed publicly in GitHub Issues and Discussions before structural changes land.
 - All discussion happens in GitHub Issues and Discussions (no private channels until the project grows).
 - Conventional Commits format for commit messages.
 - Pull requests require: passing CI (`pnpm verify`), conventional commits, a reasonably-scoped diff.
@@ -21,14 +21,13 @@ cd electron-stagewright
 corepack enable
 
 pnpm install
-pnpm verify  # lint + typecheck + test + build
+pnpm verify  # lint + typecheck + test + build + format check
 ```
 
 ## Project structure
 
 ```
 electron-stagewright/
-├── docs/                     # ADRs, architecture docs (Diátaxis-organized as they grow)
 ├── examples/                 # Example Electron apps + scripted scenarios
 ├── packages/
 │   └── core/                 # @electron-stagewright/core — MCP server
@@ -49,7 +48,6 @@ Future plugin packages live under `packages/plugin-*/` and publish as `@electron
 This repository ships **only** content that is intended to remain public and stable. Internal planning vocabulary stays out of the codebase, documentation, commit messages, PR descriptions, and code comments. Concretely:
 
 - **Do not** reference iteration codes, sprint codes, milestone labels, internal ticket IDs, or roadmap shorthand (e.g. `Hito X`, `Sprint Y`, `RL-XXX`, `TIK-XXX`, "lands in week N", "by Q3"). If a fix or feature has internal planning context, leave that context in the internal tracker and write the public artifact (code, doc, commit) so it stands alone without it.
-- **The single exception is ADR IDs.** Architecture Decision Records (`ADR-001`, `ADR-002`, …) live under [`docs/adr/`](../docs/adr/) inside this repository, are dated and signed off in the open, and constitute the canonical project history. Referencing them in code, docs, PRs, and commits is encouraged.
 - If you find an existing reference to internal planning in this repo, fix it inline as part of whatever PR you're working on, no separate ticket needed.
 
 This policy keeps the public artifact legible to people who arrive without prior context, and avoids leaking ephemeral planning vocabulary that loses meaning the moment the milestone closes.

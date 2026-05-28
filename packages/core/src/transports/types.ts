@@ -1,0 +1,201 @@
+/**
+ * Transport abstraction — the single contract every tool dispatches through.
+ *
+ * Three implementations sit behind this contract: PlaywrightElectronTransport
+ * (default, uses Playwright's experimental _electron API), CDPTransport (raw
+ * Chrome DevTools Protocol, deferred implementation), and InjectorTransport
+ * (Node Inspector injection into a running process, deferred implementation).
+ * Each transport declares a capability matrix at load time so the dispatcher
+ * refuses unsupported operations with a registered error code from the central
+ * registry instead of crashing into the underlying SDK.
+ *
+ * @module
+ */
+
+/** Identifier for each concrete transport implementation. */
+export type TransportId = 'playwright-electron' | 'cdp' | 'injector'
+
+/** Opaque session identifier — generated at launch/attach time. */
+export type SessionId = string
+
+/**
+ * What a given transport can do. Inspected by the dispatcher BEFORE invoking any
+ * method, so tools that need capabilities the active transport lacks are refused
+ * at boot time (or at the first call) with a clear `TRANSPORT_UNSUPPORTED`
+ * error rather than crashing partway through the SDK.
+ */
+export interface TransportCapabilities {
+  /** The transport can spawn an Electron app from an executable path. */
+  readonly canLaunch: boolean
+  /** The transport can attach to an Electron process that is already running. */
+  readonly canAttach: boolean
+  /** The transport can inject a debugger into a running process that did not start with one. */
+  readonly canInject: boolean
+  /** The transport can intercept and modify network or IPC traffic mid-flight. */
+  readonly canIntercept: boolean
+  /** The transport can install a synthetic clock for time-based testing. */
+  readonly canControlClock: boolean
+  /** The transport can evaluate JavaScript in the main process context. */
+  readonly supportsMainEval: boolean
+  /** The transport can evaluate JavaScript in a renderer (BrowserWindow) context. */
+  readonly supportsRendererEval: boolean
+}
+
+/**
+ * Discriminated reference to a window. Each kind resolves differently:
+ *
+ * - `'index'`: position in the Electron app's BrowserWindow list (0-based).
+ * - `'title'`: matches `window.document.title` — string for equality, RegExp for pattern.
+ * - `'id'`: matches the transport-specific window identifier (CDP targetId, Playwright
+ *   `Page` `_guid`, etc.).
+ */
+export type WindowRef =
+  | { readonly kind: 'index'; readonly index: number }
+  | { readonly kind: 'title'; readonly pattern: string | RegExp }
+  | { readonly kind: 'id'; readonly id: string }
+
+/** Snapshot of one Electron window, returned by `TransportSession.windowsList()`. */
+export interface WindowDescriptor {
+  readonly id: string
+  readonly index: number
+  readonly title: string
+  readonly url?: string
+  readonly visible: boolean
+  readonly focused: boolean
+}
+
+/** Options accepted by `ITransport.launch`. */
+export interface LaunchOptions {
+  /**
+   * Absolute path to the app's main-process JavaScript entry. For Playwright's
+   * Electron driver this is passed as the first command-line argument, not as
+   * `executablePath`.
+   */
+  readonly appPath?: string
+  /** Electron executable or packaged app binary to launch. Defaults to Playwright's bundled Electron. */
+  readonly executablePath?: string
+  /** Extra arguments appended after `appPath` when present. */
+  readonly args?: readonly string[]
+  /** Environment variables to set in the spawned Electron process. */
+  readonly env?: Readonly<Record<string, string>>
+  /** Working directory for the spawned process. Defaults to the parent process cwd. */
+  readonly cwd?: string
+  /** Maximum time to wait for the first window to appear. */
+  readonly timeoutMs?: number
+}
+
+/** Options accepted by `ITransport.attach`. At least one identifier MUST be provided. */
+export interface AttachOptions {
+  /** Process ID of the running Electron app. */
+  readonly pid?: number
+  /** Full Chrome DevTools Protocol URL (e.g. `ws://localhost:9222/devtools/browser/...`). */
+  readonly cdpUrl?: string
+  /** CDP port (the transport resolves the browser endpoint from `/json/version`). */
+  readonly port?: number
+  /** Host name when using `port`. Defaults to `localhost`. */
+  readonly host?: string
+  /** Maximum time to wait for the attach handshake. */
+  readonly timeoutMs?: number
+}
+
+/** Options accepted by `ITransport.inject`. */
+export interface InjectOptions {
+  /** Process ID of the running Electron app to inject the Node Inspector into. */
+  readonly pid: number
+  /** Maximum time to wait for the inspector handshake. */
+  readonly timeoutMs?: number
+}
+
+/** Options accepted by `ITransport.stop`. */
+export interface StopOptions {
+  /** Maximum time to wait for graceful shutdown before falling back to forceKill. */
+  readonly timeoutMs?: number
+  /** Skip graceful shutdown entirely and SIGKILL the process. */
+  readonly force?: boolean
+}
+
+/** Options accepted by `TransportSession.screenshot`. */
+export interface ScreenshotOptions {
+  /** Capture the full scrollable page rather than just the viewport. */
+  readonly fullPage?: boolean
+  /** Restrict the capture to a rectangle in CSS pixels. */
+  readonly clip?: { x: number; y: number; width: number; height: number }
+  /** Output image format. Defaults to `'png'`. */
+  readonly format?: 'png' | 'jpeg'
+  /** JPEG quality (0-100). Ignored when format is `'png'`. */
+  readonly quality?: number
+}
+
+/**
+ * IPC observation/injection surface for a session. Placeholder shape — the
+ * full IPC plugin interface lands with the forthcoming IPC capture slice
+ * (plan: `ipc_invoke`, `ipc_capture`, `ipc_stub`).
+ */
+export interface IpcChannel {
+  /** Which transport produced this channel. */
+  readonly transport: TransportId
+}
+
+/**
+ * Rolling console buffer surface for a session. Placeholder shape — the full
+ * console_logs tool surface (filters, overflow flag, time-range queries) lands
+ * with the forthcoming read+wait+eval tool slice.
+ */
+export interface ConsoleStream {
+  /** Which transport produced this stream. */
+  readonly transport: TransportId
+}
+
+/**
+ * A live session against an Electron app, returned by `launch`, `attach`, or
+ * `inject`. Disposal is idempotent: calling `dispose()` twice MUST NOT throw,
+ * and MUST NOT double-free underlying resources.
+ */
+export interface TransportSession {
+  readonly id: SessionId
+  readonly transport: TransportId
+
+  /** Evaluate a JavaScript body in the main process or a renderer. */
+  evaluate<T = unknown>(target: 'main' | 'renderer', body: string, arg?: unknown): Promise<T>
+
+  /** Capture a screenshot of the given window. */
+  screenshot(target: WindowRef, opts?: ScreenshotOptions): Promise<Buffer>
+
+  /** Enumerate the current windows. */
+  windowsList(): Promise<readonly WindowDescriptor[]>
+
+  readonly ipc: IpcChannel
+  readonly console: ConsoleStream
+
+  /**
+   * Release session resources. Safe to call multiple times — the second and
+   * subsequent invocations are no-ops. After dispose, every other method on
+   * this session MUST throw `NOT_RUNNING`.
+   */
+  dispose(): Promise<void>
+}
+
+/**
+ * The single contract every tool dispatches through. Three concrete
+ * implementations exist: PlaywrightElectronTransport, CDPTransport,
+ * InjectorTransport.
+ */
+export interface ITransport {
+  readonly id: TransportId
+  readonly capabilities: TransportCapabilities
+
+  /** Spawn a new Electron app. */
+  launch(opts: LaunchOptions): Promise<TransportSession>
+
+  /** Connect to an already-running Electron app exposing a debug port. */
+  attach(opts: AttachOptions): Promise<TransportSession>
+
+  /** Inject a Node Inspector into a running Electron process that lacks one. */
+  inject(opts: InjectOptions): Promise<TransportSession>
+
+  /** Gracefully shut down the session. */
+  stop(session: TransportSession, opts?: StopOptions): Promise<void>
+
+  /** Forcefully kill the underlying process and release the session. */
+  forceKill(session: TransportSession): Promise<void>
+}

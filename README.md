@@ -131,8 +131,6 @@ Three transport implementations behind a single `ITransport` interface, so the p
 
 Plugin model: small core, domain plugins ship as `@electron-stagewright/plugin-*` packages (`production`, `trace`, `network`, `clock`, `storage`, `ipc`, `macos-native`).
 
-Architectural decisions are documented as ADRs under [`docs/adr/`](docs/adr/) — start with [ADR-001](docs/adr/001-naming-and-license.md).
-
 ## Dogfooding targets
 
 The MCP is built against two real Electron applications maintained by the author, covering distinct verticals so the design doesn't accidentally bias to one shape:
