@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lit-shape fixture</title>
+  </head>
+  <body>
+    <!--
+      Shape representative of a Lit / Web Components Electron app: custom
+      elements, light-DOM toolbar controls, and shadow-root content that the
+      current document walker intentionally does not traverse.
+    -->
+    <main>
+      <h1>Editor</h1>
+      <my-toolbar>
+        <button>Bold</button>
+        <button>Italic</button>
+      </my-toolbar>
+
+      <!--
+        Custom element with an open shadow root, attached imperatively below
+        via inline <script>. The current document walker does not recurse into
+        this root.
+      -->
+      <my-color-picker id="picker"></my-color-picker>
+
+      <!-- Custom element with closed shadow root — opaque to the walker. -->
+      <my-secret-widget id="secret"></my-secret-widget>
+
+      <p>Document title: <em id="doc-title">Untitled</em></p>
+    </main>
+
+    <script>
+      // Build shadow DOM contents via the DOM API rather than innerHTML.
+      // This is a test fixture with hard-coded strings (no untrusted input),
+      // but using createElement + setAttribute + textContent keeps the
+      // intent explicit and avoids static-analysis warnings about innerHTML.
+      const picker = document.getElementById('picker')
+      if (picker !== null) {
+        const root = picker.attachShadow({ mode: 'open' })
+        const palette = [
+          { label: 'Red', char: 'R' },
+          { label: 'Green', char: 'G' },
+          { label: 'Blue', char: 'B' },
+        ]
+        for (const { label, char } of palette) {
+          const button = document.createElement('button')
+          button.setAttribute('aria-label', label)
+          button.textContent = char
+          root.appendChild(button)
+        }
+      }
+
+      const secret = document.getElementById('secret')
+      if (secret !== null) {
+        // Closed shadow — walker cannot inspect.
+        secret.attachShadow({ mode: 'closed' })
+      }
+    </script>
+  </body>
+</html>

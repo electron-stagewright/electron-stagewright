@@ -4,7 +4,14 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "composite": true,
-    "types": ["node"]
+    "types": ["node"],
+    // The snapshot walker runs in a Document context (Chromium renderer at
+    // runtime, jsdom at test time) and consumes DOM globals (`Document`,
+    // `Element`, `HTMLElement`, etc.). Adding the `DOM` lib makes the types
+    // resolve at compile time. The walker's invocation site is responsible
+    // for ensuring it only executes in a real Document environment; the
+    // server-side code never touches these DOM globals.
+    "lib": ["ES2023", "DOM"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "tests/**"]

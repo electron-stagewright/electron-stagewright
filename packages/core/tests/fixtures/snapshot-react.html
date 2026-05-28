@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>React-shape fixture</title>
+  </head>
+  <body>
+    <!--
+      Shape representative of a typical React-rendered Electron app: standard
+      HTML semantics with className-only styling and no framework-internal
+      attributes the walker can lean on. The walker MUST classify these as
+      interactive via accessibility role + ARIA + HTML semantics alone.
+    -->
+    <header>
+      <h1>Settings</h1>
+      <nav aria-label="Sections">
+        <a href="#general">General</a>
+        <a href="#account">Account</a>
+        <a href="#advanced">Advanced</a>
+      </nav>
+    </header>
+    <main id="general">
+      <section aria-labelledby="profile-heading">
+        <h2 id="profile-heading">Profile</h2>
+        <form>
+          <label for="display-name">Display name</label>
+          <input id="display-name" type="text" placeholder="Your name" />
+
+          <label for="email">Email address</label>
+          <input id="email" type="email" required aria-invalid="false" />
+
+          <label>
+            <input type="checkbox" id="newsletter" />
+            Subscribe to the newsletter
+          </label>
+
+          <fieldset>
+            <legend>Theme</legend>
+            <label><input type="radio" name="theme" value="light" />Light</label>
+            <label><input type="radio" name="theme" value="dark" checked />Dark</label>
+            <label><input type="radio" name="theme" value="auto" />Auto</label>
+          </fieldset>
+
+          <button type="submit">Save changes</button>
+          <button type="button" disabled>Reset</button>
+        </form>
+      </section>
+    </main>
+    <footer>
+      <p>© 2026 ACME Corp</p>
+    </footer>
+  </body>
+</html>
