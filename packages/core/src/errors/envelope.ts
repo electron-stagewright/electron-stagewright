@@ -5,7 +5,7 @@
  * computes BEFORE handing off to the MCP transport. The transport layer is responsible
  * for serialising the envelope into the protocol-specific tool result.
  *
- * Design contract (see docs/adr/006-error-code-registry.md and ADR-007 Principles 1–3, 10):
+ * Design contract:
  * - Every response (success AND error) carries `_meta.estimated_tokens` so agents budget in real time.
  * - Error responses carry `code`, `retryable`, and `hint` machine-readably — no prose parsing.
  * - The envelope shape is stable; new fields are additive, never breaking.

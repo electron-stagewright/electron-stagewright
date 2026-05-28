@@ -109,8 +109,7 @@ const DANGEROUS_EVAL_KEYWORDS = [
  */
 export function validateCommandContent(_input: unknown): void {
   // Intentional no-op stub. Real validation lands with the forthcoming lifecycle tools.
-  // The mere existence of this function pins the routing contract documented in
-  // docs/adr/006-error-code-registry.md § Operation-type routing.
+  // The mere existence of this function pins the dispatcher's routing contract.
 }
 
 /** Options for {@link validateEvalContent}. */

@@ -1,8 +1,8 @@
 /**
  * Central error code registry — every error response from any tool MUST reference a code
- * from this table. Adding a new code is an ADR amendment to ADR-006.
+ * from this table.
  *
- * Registry shape constraints (see docs/adr/006-error-code-registry.md):
+ * Registry shape constraints:
  * - Codes are SCREAMING_SNAKE_CASE — easy to grep, stable across versions.
  * - Every code carries `http` (forward-looking REST gateway), `retryable` (so agents can
  *   build automatic retry policy without parsing prose), and `hint` (consistent

@@ -3,7 +3,7 @@
  *
  * MCP server entry point.
  *
- * Architecture summary (see docs/adr/ for full rationale):
+ * Architecture summary:
  * - Server registers MCP stdio transport with @modelcontextprotocol/sdk.
  * - Tools dispatch through an ITransport abstraction with three implementations
  *   (Playwright `_electron`, CDP direct, Inspector inject).
@@ -16,9 +16,16 @@ export const VERSION = '0.0.0'
 
 /**
  * Error code registry, response envelope helpers, and operation-type routing.
- * See docs/adr/006-error-code-registry.md for the full design.
  */
 export * from './errors/index.js'
+
+/**
+ * Transport abstraction — the single contract every tool dispatches through.
+ * Three implementations: Playwright `_electron`, raw CDP, Node Inspector
+ * injector. Each declares a capability matrix at load time so the dispatcher
+ * refuses unsupported operations with a registered error code.
+ */
+export * from './transports/index.js'
 
 // Placeholder entry. The real Server + Transport + Tool dispatcher are
 // being implemented; the package publishes cleanly so downstream tooling
