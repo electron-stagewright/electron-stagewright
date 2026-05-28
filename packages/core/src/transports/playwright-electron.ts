@@ -7,20 +7,17 @@
  * matrix; only invoking `launch()` will surface a `TRANSPORT_UNSUPPORTED` error
  * with a clear remediation hint.
  *
- * ## Capability decisions (deviation from PLAN.md noted)
+ * ## Capability decisions
  *
  * - `canLaunch: true` — Playwright `_electron.launch()` is the primary purpose.
  * - `canAttach: false` — Playwright's `_electron` does NOT expose an attach API
- *   in the published surface; attach is provided by CDPTransport instead. This
- *   deviates from PLAN.md's blanket "all capabilities except canIntercept and
- *   canControlClock return true" because attach has no upstream implementation
- *   to call into. The deviation is documented in the ADR.
+ *   in the published surface; attach is provided by CDPTransport instead. The
+ *   capability matrix reflects the upstream API rather than the broader
+ *   Stagewright transport contract.
  * - `canInject: false` — Injector is its own transport.
- * - `canIntercept: false` — Network/IPC interception ships with the future
- *   network-plugin slice; the Playwright transport will expose `page.route()`
- *   then but not yet.
- * - `canControlClock: false` — Clock control ships with the future clock-plugin
- *   slice.
+ * - `canIntercept: false` — Network/IPC interception is not exposed through this
+ *   transport contract.
+ * - `canControlClock: false` — Clock control is not provided by this transport.
  * - `supportsMainEval: true` — `electronApp.evaluate()`.
  * - `supportsRendererEval: true` — `page.evaluate()`.
  *
@@ -203,9 +200,8 @@ class PlaywrightSession implements TransportSession {
     // is responsible for calling validateEvalContent (see errors/operation-type.ts)
     // before invoking this method. Direct callers (tests, application code) that
     // bypass the dispatcher inherit the responsibility for validating untrusted
-    // payloads. The real eval_main/eval_renderer tool implementations will land a
-    // more robust protocol than string concatenation; tracked for the read+wait+eval
-    // tool slice.
+    // payloads. Prefer structured function serialization at any public API boundary
+    // that accepts untrusted JavaScript.
     if (target === 'main') {
       const wrapped = `async (electronApp, arg) => { ${body} }`
       return app.evaluate<T>(wrapped, arg)
@@ -352,8 +348,7 @@ export class PlaywrightElectronTransport implements ITransport {
   public readonly capabilities: TransportCapabilities = {
     canLaunch: true,
     // Playwright's _electron does not expose an attach API in its public
-    // surface. Attach is provided by CDPTransport. Deviation from PLAN.md
-    // noted in the ADR.
+    // surface. Attach is provided by CDPTransport.
     canAttach: false,
     canInject: false,
     canIntercept: false,

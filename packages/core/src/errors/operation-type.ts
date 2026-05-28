@@ -27,9 +27,8 @@
  *
  * Despite the name, this file never invokes the JavaScript `eval()` function and
  * never executes any payload locally. The word "eval" refers to a CLASSIFICATION
- * LABEL for tool calls (the planned `eval_main` and `eval_renderer` tools) whose
- * payloads will eventually be sent to a REMOTE Electron process to be executed
- * there — over the CDP `Runtime.evaluate` channel or the Playwright
+ * LABEL for tool calls whose payloads are sent to a REMOTE Electron process to
+ * be executed there — over the CDP `Runtime.evaluate` channel or the Playwright
  * `electronApp.evaluate(...)` API, never in this server process.
  *
  * The validators in this file are the FIRST line of defence: they inspect the
@@ -37,16 +36,15 @@
  * dispatcher hands the payload off to the transport. That mitigation is the
  * point of the file; it is not the vulnerability.
  *
- * Full secure-by-default eval policy (AST inspection, `--allow-eval` opt-in flag,
- * authorisation check) is documented in the forthcoming threat-model ADR.
+ * Additional eval safeguards belong at the dispatcher or transport boundary so
+ * this module stays limited to payload classification and keyword checks.
  *
  * ## Implementation status
  *
- * The validator bodies in this file are intentionally MINIMAL stubs. Real validation
- * logic lands with the forthcoming lifecycle and interaction tool ADRs, where the
- * tools themselves know which inputs require which checks. What ships here is the
- * ROUTING CONTRACT: the seams are in place, callers cannot accidentally bypass them,
- * and downstream slices can fill in the bodies without re-litigating the security shape.
+ * The validator bodies in this file are intentionally MINIMAL. Tool-specific
+ * checks can expand behind these hooks without changing the dispatcher routing
+ * contract: callers cannot accidentally bypass command-vs-eval classification,
+ * and tool authors keep ownership of the checks that only their inputs require.
  *
  * @module
  */
@@ -83,9 +81,8 @@ export const OperationTypeSchema = z.enum([
 export type OperationType = z.infer<typeof OperationTypeSchema>
 
 /**
- * Minimal blocklist for eval payloads — the obvious foot-guns that any agent should
- * be required to opt into via `allowDangerous`. The full safety story lives in the
- * forthcoming threat-model ADR and the dispatcher's `--allow-eval` opt-in flag.
+ * Minimal blocklist for eval payloads — the obvious foot-guns that stay blocked
+ * even when eval tools are visible.
  */
 const DANGEROUS_EVAL_KEYWORDS = [
   'process.exit',
@@ -96,53 +93,61 @@ const DANGEROUS_EVAL_KEYWORDS = [
   'child_process',
 ] as const
 
+const EVAL_SOURCE_FIELDS = ['body', 'code', 'script', 'source', 'expression', 'javascript'] as const
+
+function evalSourceCandidates(input: unknown): readonly string[] {
+  if (typeof input === 'string') return [input]
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return []
+
+  const record = input as Record<string, unknown>
+  const candidates: string[] = []
+  for (const field of EVAL_SOURCE_FIELDS) {
+    const value = record[field]
+    if (typeof value === 'string') candidates.push(value)
+  }
+  return candidates
+}
+
 /**
- * Stub validator for non-eval operations. Accepts every input today; the forthcoming
- * lifecycle and interaction tool ADRs will fill in tool-specific shape validation here
- * (input-arity checks, ref-vs-selector exclusivity, file-path absoluteness, etc.) once
- * tools land.
+ * Stub validator for non-eval operations. Accepts every input here; tool
+ * definitions still own Zod shape validation, and operation-specific policy
+ * checks can expand behind this stable routing hook.
  *
  * The function exists primarily to pin the routing contract: the dispatcher invokes
  * one of validateCommandContent OR validateEvalContent for every call, never both,
- * never neither. The first lifecycle-tool commit will fill the body without changing
- * the signature.
+ * never neither.
  */
 export function validateCommandContent(_input: unknown): void {
-  // Intentional no-op stub. Real validation lands with the forthcoming lifecycle tools.
-  // The mere existence of this function pins the dispatcher's routing contract.
+  // Intentional no-op stub. The function pins the dispatcher's routing contract.
 }
 
 /** Options for {@link validateEvalContent}. */
 export interface ValidateEvalOptions {
-  /** Bypass the keyword blocklist. Default false. The dispatcher only sets this true when the operator started the server with the planned --allow-eval flag (forthcoming threat-model ADR). */
+  /** Bypass the keyword blocklist for trusted direct callers; the dispatcher keeps this false. */
   readonly allowDangerous?: boolean
 }
 
 /**
- * Stub validator for eval operations. v1 enforces a minimal keyword blocklist; the
- * full secure-by-default eval policy ships with the forthcoming threat-model ADR —
- * at which point this body grows to include AST inspection, timeout enforcement
- * coordination, and the --allow-eval opt-in flag check.
+ * Stub validator for eval operations. v1 enforces a minimal keyword blocklist;
+ * callers that execute JavaScript still need dispatcher-level opt-in plus
+ * transport-level controls outside this function.
  *
  * @throws {@link StagewrightError} with code `EVAL_BLOCKED_KEYWORD` when a dangerous
  * keyword is detected and `allowDangerous` is not set.
  */
 export function validateEvalContent(input: unknown, opts: ValidateEvalOptions = {}): void {
-  if (typeof input !== 'string') {
-    // Non-string eval bodies are a dispatcher contract violation, not a content issue.
-    // The dispatcher will surface this as BAD_ARGUMENT before reaching this validator.
-    return
-  }
   if (opts.allowDangerous === true) {
     return
   }
-  for (const keyword of DANGEROUS_EVAL_KEYWORDS) {
-    if (input.includes(keyword)) {
-      throw new StagewrightError(
-        'EVAL_BLOCKED_KEYWORD',
-        `Eval payload contains blocked keyword: ${keyword}`,
-        { keyword },
-      )
+  for (const source of evalSourceCandidates(input)) {
+    for (const keyword of DANGEROUS_EVAL_KEYWORDS) {
+      if (source.includes(keyword)) {
+        throw new StagewrightError(
+          'EVAL_BLOCKED_KEYWORD',
+          `Eval payload contains blocked keyword: ${keyword}`,
+          { keyword },
+        )
+      }
     }
   }
 }

@@ -34,11 +34,16 @@ export * from './transports/index.js'
  */
 export * from './snapshot/index.js'
 
-// Placeholder entry. The real Server + Transport + Tool dispatcher are
-// being implemented; the package publishes cleanly so downstream tooling
-// can pin against a real npm artifact during early integration.
+/**
+ * Tools — the {@link ToolDefinition} contract every tool is expressed in, plus
+ * the concrete tool families (lifecycle today; interaction/read/eval to come).
+ */
+export * from './tools/index.js'
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  console.error(`@electron-stagewright/core ${VERSION} — pre-alpha.`)
-  process.exit(0)
-}
+/**
+ * Server — the tool dispatcher, session manager, logger, and the `createServer`
+ * assembly entry point. `createServer().connectStdio()` is the production path;
+ * the executable entry lives in `cli.ts` (published as the `electron-stagewright`
+ * bin).
+ */
+export * from './server/index.js'

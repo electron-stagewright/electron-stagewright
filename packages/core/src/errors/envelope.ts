@@ -14,19 +14,19 @@
  */
 
 import { ERROR_CODES, type ErrorCode } from './registry.js'
+import { currentSessionId } from './session-context.js'
 
 /** Metadata block attached to every response — success or error. */
 export interface ResponseMeta {
   /**
    * Estimated token cost of the response payload, computed via {@link estimateTokens}.
-   * Char/4 heuristic for v1; a future benchmark-driven slice will swap in a
-   * model-accurate tokenizer (TODO: replace with @anthropic-ai/tokenizer or
-   * tiktoken when the benchmark suite ships).
+   * Char/4 heuristic for v1. Replace with a model-accurate tokenizer when
+   * benchmark coverage can prove the trade-off.
    */
   readonly estimated_tokens: number
   /** Wall-clock duration of the tool dispatch, in milliseconds. */
   readonly elapsed_ms: number
-  /** Optional session correlation id — filled by the dispatcher once the session-lifecycle wiring lands. */
+  /** Optional session correlation id filled by the dispatcher. */
   readonly session_id?: string
 }
 
@@ -101,12 +101,15 @@ export function estimateTokens(payload: unknown): number {
 }
 
 /**
- * Placeholder session-id resolver. The dispatcher (forthcoming) will wire the real
- * session lifecycle through AsyncLocalStorage or its execution context; for v1 this
- * returns `undefined` so the `_meta.session_id` field is omitted from envelopes.
+ * Resolve the session id for the in-flight tool dispatch. The dispatcher runs
+ * each handler inside an `AsyncLocalStorage` context (see
+ * `errors/session-context.ts`), so this reads the ambient id without it being
+ * threaded through call signatures. Outside a dispatched call — or for a tool
+ * that runs without a resolved session — it returns `undefined`, and the
+ * envelope omits `_meta.session_id`.
  */
 export function getSessionId(): string | undefined {
-  return undefined
+  return currentSessionId()
 }
 
 /** Options accepted by {@link makeError}. */

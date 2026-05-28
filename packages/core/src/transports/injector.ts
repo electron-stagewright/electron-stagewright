@@ -1,14 +1,14 @@
 /**
  * InjectorTransport — Node Inspector injection into a running Electron process.
- * STUB IN THIS SLICE.
+ * Stub implementation.
  *
  * The primary purpose is the "attach without restart" workflow: agents driving
  * a dev server should not have to relaunch the app to start a tool session.
  * The technique uses `process._debugProcess(pid)` to enable the inspector on a
  * running process; the platform matrix is non-trivial (Linux and macOS work
  * reliably, Windows needs a fallback path via port discovery via `lsof`/`ss`
- * equivalents). All of that ships when this transport's body lands; today the
- * stub just declares the contract and surface.
+ * equivalents). This stub declares the contract and surface without attempting
+ * the inspector handshake.
  *
  * Capability matrix:
  *
@@ -50,7 +50,7 @@ function unsupported(method: string, capability: keyof TransportCapabilities): S
 function notImplemented(method: string): StagewrightError {
   return new StagewrightError(
     'NOT_IMPLEMENTED',
-    `InjectorTransport.${method} is not implemented yet; the contract is declared but the body lands in a later slice.`,
+    `InjectorTransport.${method} is not implemented yet; this transport has no implementation for it.`,
     { transport: TRANSPORT_ID, method },
   )
 }

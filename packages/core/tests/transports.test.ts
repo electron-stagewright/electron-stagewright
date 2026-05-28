@@ -406,10 +406,9 @@ describe('capability-vs-method drift (table-driven)', () => {
 describe('TransportSession idempotent dispose contract (type-level)', () => {
   it('the contract documents dispose() as idempotent', () => {
     // A type-level sanity check that the interface signature is stable.
-    // The Playwright session's runtime idempotency is exercised against a real
-    // app in a future dogfooding slice; the fake here just confirms the call
-    // signature compiles and a fake implementation respects "second call is
-    // a no-op".
+    // Runtime idempotency needs a real Electron app; the fake here confirms the
+    // call signature compiles and a fake implementation treats the second call
+    // as a no-op.
     let calls = 0
     const session: TransportSession = {
       ...FAKE_SESSION,
