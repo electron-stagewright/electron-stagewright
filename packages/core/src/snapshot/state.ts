@@ -14,6 +14,7 @@
  * @module
  */
 
+import { composedParentElement } from './dom-utils.js'
 import type { SnapshotRole, SnapshotState } from './schema.js'
 
 /** Roles that carry a `checked` state. */
@@ -103,16 +104,17 @@ export function extractState(element: Element, role: SnapshotRole): SnapshotStat
 }
 
 /**
- * Visibility walks up the ancestor chain: an element is considered visible only
- * if it AND every ancestor pass the visibility checks. Compensates for jsdom's
- * lack of cascade-aware computed styles by inspecting inline `display` /
- * `visibility` directly, plus `hidden` attribute and `aria-hidden`.
+ * Visibility walks up the composed ancestor chain: an element is considered
+ * visible only if it, its DOM ancestors, and any shadow hosts pass the
+ * visibility checks. Compensates for jsdom's lack of cascade-aware computed
+ * styles by inspecting inline `display` / `visibility` directly, plus `hidden`
+ * attribute and `aria-hidden`.
  */
 export function isVisible(element: Element): boolean {
   let current: Element | null = element
   while (current !== null) {
     if (isElementSelfHidden(current)) return false
-    current = current.parentElement
+    current = composedParentElement(current)
   }
   return true
 }
@@ -143,21 +145,22 @@ function isElementSelfHidden(element: Element): boolean {
 }
 
 /**
- * Disabled state walks up the ancestor chain for `<fieldset disabled>` and
- * also checks the form-control `disabled` attribute plus `aria-disabled`.
+ * Disabled state walks up the composed ancestor chain for `<fieldset disabled>`
+ * and inherited `aria-disabled`, while also checking the element's own disabled
+ * property.
  */
 export function isDisabled(element: Element): boolean {
-  if ((element as { disabled?: boolean }).disabled === true) return true
-  if (element.getAttribute('aria-disabled') === 'true') return true
-  let current: Element | null = element.parentElement
+  let current: Element | null = element
   while (current !== null) {
+    if (current === element && (current as { disabled?: boolean }).disabled === true) return true
+    if (current.getAttribute('aria-disabled') === 'true') return true
     if (
       current.tagName.toLowerCase() === 'fieldset' &&
       (current as { disabled?: boolean }).disabled === true
     ) {
       return true
     }
-    current = current.parentElement
+    current = composedParentElement(current)
   }
   return false
 }

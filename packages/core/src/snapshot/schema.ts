@@ -205,6 +205,11 @@ export interface SnapshotMeta {
    */
   readonly title: string
   /**
+   * Renderer document start time in milliseconds. A different value across two
+   * same-URL snapshots means the renderer reloaded without navigating.
+   */
+  readonly navigation_started_at_ms: number
+  /**
    * Whether the snapshot is a delta (since the previous snapshot) or a full
    * walk. The pure walker emits `'full'` unless the caller supplies `'diff'`.
    */
@@ -215,6 +220,72 @@ export interface SnapshotMeta {
    * walker emits `false`.
    */
   readonly renderer_reloaded_since_last_snapshot: boolean
+}
+
+/** The fields of an entry that a diff compares for change detection. */
+export type ChangedField = 'state' | 'value' | 'bbox' | 'name'
+
+/**
+ * One entry that survived between two snapshots (matched by fingerprint) but
+ * whose observable properties changed. The agent uses `changed_fields` to know
+ * what kind of change happened without diffing the two entries itself.
+ */
+export interface SnapshotEntryChange {
+  readonly fingerprint: string
+  readonly prev: SnapshotEntry
+  readonly curr: SnapshotEntry
+  readonly changed_fields: readonly ChangedField[]
+}
+
+/**
+ * The delta between two snapshots. `added` and `removed` are entries that
+ * appeared / disappeared (by fingerprint); `changed` are entries present in
+ * both whose state / value / bbox / name differ. `ref_map` maps a current
+ * fingerprint to the ref it held in the previous snapshot, so orchestration can
+ * reuse ref numbers. It is a plain object rather than a `Map` because snapshot
+ * diffs are returned over JSON-based transports.
+ */
+export interface SnapshotDiff {
+  readonly added: readonly SnapshotEntry[]
+  readonly removed: readonly SnapshotEntry[]
+  readonly changed: readonly SnapshotEntryChange[]
+  readonly ref_map: Readonly<Record<string, number>>
+  /**
+   * Token-economy metadata so the agent can decide whether applying the diff is
+   * cheaper than re-reading the full snapshot (ADR-007 Principle 2).
+   */
+  readonly _meta: {
+    readonly entries_added: number
+    readonly entries_removed: number
+    readonly entries_changed: number
+    readonly estimated_tokens: number
+  }
+}
+
+/**
+ * Query accepted by `findEntries`. All provided fields must match (logical AND).
+ * `name_contains` is a case-insensitive substring; `name_exact` is a
+ * case-insensitive equality — supply one or the other, not both.
+ */
+export interface FindQuery {
+  readonly role?: SnapshotRole
+  readonly name_contains?: string
+  readonly name_exact?: string
+  readonly visible?: boolean
+  readonly interactive?: boolean
+}
+
+/**
+ * Result of reconciling ref numbers between two snapshots. `snapshot` is the
+ * current snapshot with interactive refs reassigned to reuse the previous
+ * snapshot's numbers where fingerprints match. The counts let orchestration and
+ * tests assert ref-stability behaviour without diffing by hand.
+ */
+export interface RefReconciliation {
+  readonly snapshot: Snapshot
+  readonly reused: number
+  readonly fresh: number
+  readonly dropped: number
 }
 
 /**
@@ -320,6 +391,7 @@ export const SnapshotJsonSchema = {
         'viewport',
         'url',
         'title',
+        'navigation_started_at_ms',
         'diff_baseline',
         'renderer_reloaded_since_last_snapshot',
       ],
@@ -336,6 +408,7 @@ export const SnapshotJsonSchema = {
         },
         url: { type: 'string' },
         title: { type: 'string' },
+        navigation_started_at_ms: { type: 'number' },
         diff_baseline: { enum: ['full', 'diff'] },
         renderer_reloaded_since_last_snapshot: { type: 'boolean' },
       },

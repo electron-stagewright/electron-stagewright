@@ -28,6 +28,8 @@
  * @module
  */
 
+import { cssEscape, queryElementByIdFromSameRoot, querySelectorFromSameRoot } from './dom-utils.js'
+
 /**
  * Roles whose name comes from their text content (W3C accname § 4.3.10 step F).
  * Excludes roles like `textbox` and `searchbox` whose `name` should NEVER come
@@ -138,8 +140,6 @@ function computeNameInner(element: Element, ctx: NameContext): string {
 }
 
 function resolveLabelledby(element: Element, idRefs: string, ctx: NameContext): string {
-  const doc = element.ownerDocument
-  if (doc === null) return ''
   const ids = idRefs.split(/\s+/).filter((id) => id !== '')
   const parts: string[] = []
   const nextCtx: NameContext = {
@@ -147,7 +147,7 @@ function resolveLabelledby(element: Element, idRefs: string, ctx: NameContext): 
     depth: ctx.depth + 1,
   }
   for (const id of ids) {
-    const referenced = doc.getElementById(id)
+    const referenced = queryElementByIdFromSameRoot(element, id)
     if (referenced === null) continue
     // Per W3C: when computing name from a labelledby target, recurse without
     // re-entering aria-labelledby on the target (to avoid loops).
@@ -165,20 +165,16 @@ function computeNativeHtmlName(element: Element, ctx: NameContext): string {
   if (isFormControl(element)) {
     const id = element.getAttribute('id')
     if (id !== null && id !== '') {
-      const doc = element.ownerDocument
-      if (doc !== null) {
-        // CSS.escape may be undefined in some jsdom configurations; fall back
-        // to a manual character-escape so attribute-selector remains valid.
-        const escaped = cssEscape(id)
-        const explicit = doc.querySelector(`label[for="${escaped}"]`)
-        if (explicit) {
-          const nextCtx: NameContext = {
-            visited: new Set([...ctx.visited, element]),
-            depth: ctx.depth + 1,
-          }
-          const labelText = computeNameInner(explicit, nextCtx) || textContent(explicit)
-          if (labelText) return labelText
+      // CSS.escape may be undefined in some jsdom configurations; fall back
+      // to a manual character-escape so attribute-selector remains valid.
+      const explicit = querySelectorFromSameRoot(element, `label[for="${cssEscape(id)}"]`)
+      if (explicit) {
+        const nextCtx: NameContext = {
+          visited: new Set([...ctx.visited, element]),
+          depth: ctx.depth + 1,
         }
+        const labelText = computeNameInner(explicit, nextCtx) || textContent(explicit)
+        if (labelText) return labelText
       }
     }
     // Wrapping label
@@ -314,17 +310,6 @@ function closestAncestor(element: Element, tagName: string): Element | null {
     current = current.parentElement
   }
   return null
-}
-
-function cssEscape(value: string): string {
-  if (
-    typeof (globalThis as { CSS?: { escape?: (s: string) => string } }).CSS?.escape === 'function'
-  ) {
-    const escape = (globalThis as { CSS: { escape: (s: string) => string } }).CSS.escape
-    return escape(value)
-  }
-  // Minimal manual escape covering the characters that break attribute selectors.
-  return value.replace(/["\\\n\r\f]/g, (ch) => `\\${ch}`)
 }
 
 function collapseWhitespace(value: string): string {
