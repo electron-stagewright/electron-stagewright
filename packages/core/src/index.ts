@@ -27,6 +27,13 @@ export * from './errors/index.js'
  */
 export * from './transports/index.js'
 
+/**
+ * Snapshot — framework-agnostic accessibility-tree walker. Produces the agent's
+ * structured view of the current renderer (interactive elements with role,
+ * name, state, bounding box, and stable fingerprint).
+ */
+export * from './snapshot/index.js'
+
 // Placeholder entry. The real Server + Transport + Tool dispatcher are
 // being implemented; the package publishes cleanly so downstream tooling
 // can pin against a real npm artifact during early integration.

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vue-shape fixture</title>
+  </head>
+  <body>
+    <!--
+      Shape representative of a Vue Single-File-Component output: scoped CSS
+      classes (`data-v-*` attributes), `v-` directives left in the rendered
+      output as plain attrs, slot wrappers. None of these are interactivity
+      signals — the walker MUST classify via accessibility role + ARIA + HTML
+      semantics alone.
+    -->
+    <header data-v-app="">
+      <h1 data-v-app="">Inbox</h1>
+      <nav aria-label="Folders" data-v-2391fa="">
+        <ul role="tablist" data-v-2391fa="">
+          <li role="tab" aria-selected="true" tabindex="0" data-v-2391fa="">All</li>
+          <li role="tab" aria-selected="false" tabindex="-1" data-v-2391fa="">Unread</li>
+          <li role="tab" aria-selected="false" tabindex="-1" data-v-2391fa="">Flagged</li>
+        </ul>
+      </nav>
+    </header>
+    <main data-v-app="">
+      <section aria-label="Messages">
+        <div
+          role="searchbox"
+          contenteditable="true"
+          data-v-9912a=""
+          aria-label="Search messages"
+        ></div>
+        <button data-v-9912a="" aria-expanded="false" aria-haspopup="menu">Filters</button>
+        <div role="menu" hidden data-v-9912a="">
+          <div role="menuitem">Sender</div>
+          <div role="menuitemcheckbox" aria-checked="false">Has attachment</div>
+          <div role="menuitemcheckbox" aria-checked="true">Unread only</div>
+        </div>
+        <ul data-v-9912a="">
+          <li>
+            <article aria-labelledby="msg-1-subject">
+              <h3 id="msg-1-subject">Project kickoff</h3>
+              <p>Looking forward to Monday.</p>
+              <button data-v-9912a="" aria-pressed="false">Star</button>
+            </article>
+          </li>
+          <li>
+            <article aria-labelledby="msg-2-subject">
+              <h3 id="msg-2-subject">Lunch?</h3>
+              <p>Tomorrow at 12.</p>
+              <button data-v-9912a="" aria-pressed="true">Star</button>
+            </article>
+          </li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
