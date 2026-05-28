@@ -41,6 +41,8 @@ export interface FakeSessionOptions {
   readonly transport?: TransportId
   readonly evaluate?: FakeEvaluate
   readonly windows?: readonly WindowDescriptor[]
+  /** When set, `windowsList` rejects with this error (to exercise post-register cleanup). */
+  readonly windowsError?: Error
 }
 
 /** In-memory {@link TransportSession}. Tracks dispose calls for idempotency tests. */
@@ -53,6 +55,7 @@ export class FakeSession implements TransportSession {
   disposeCount = 0
   readonly #evaluate: FakeEvaluate
   readonly #windows: readonly WindowDescriptor[]
+  readonly #windowsError?: Error
 
   constructor(opts: FakeSessionOptions = {}) {
     this.id = opts.id ?? `fake-${Math.random().toString(36).slice(2, 10)}`
@@ -61,6 +64,7 @@ export class FakeSession implements TransportSession {
     this.console = { transport: this.transport }
     this.#evaluate = opts.evaluate ?? (async () => undefined)
     this.#windows = opts.windows ?? []
+    if (opts.windowsError !== undefined) this.#windowsError = opts.windowsError
   }
 
   async evaluate<T = unknown>(
@@ -76,6 +80,7 @@ export class FakeSession implements TransportSession {
   }
 
   async windowsList(): Promise<readonly WindowDescriptor[]> {
+    if (this.#windowsError !== undefined) throw this.#windowsError
     return this.#windows
   }
 
@@ -88,6 +93,8 @@ export interface FakeTransportOptions {
   readonly id?: TransportId
   readonly capabilities?: TransportCapabilities
   readonly session?: FakeSession
+  /** When set, `launch` rejects with this error (to exercise launch-error diagnosis). */
+  readonly launchError?: Error
 }
 
 /** In-memory {@link ITransport}. Tracks stop/forceKill calls and disposes its session. */
@@ -98,22 +105,32 @@ export class FakeTransport implements ITransport {
 
   stopCount = 0
   forceKillCount = 0
+  launchCount = 0
+  attachCount = 0
+  injectCount = 0
+
+  readonly #launchError?: Error
 
   constructor(opts: FakeTransportOptions = {}) {
     this.id = opts.id ?? 'playwright-electron'
     this.capabilities = opts.capabilities ?? FULL_CAPS
     this.session = opts.session ?? new FakeSession({ transport: this.id })
+    if (opts.launchError !== undefined) this.#launchError = opts.launchError
   }
 
   async launch(): Promise<TransportSession> {
+    this.launchCount += 1
+    if (this.#launchError !== undefined) throw this.#launchError
     return this.session
   }
 
   async attach(): Promise<TransportSession> {
+    this.attachCount += 1
     return this.session
   }
 
   async inject(): Promise<TransportSession> {
+    this.injectCount += 1
     return this.session
   }
 

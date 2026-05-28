@@ -42,11 +42,14 @@ import { runWithSessionContext } from '../errors/session-context.js'
 import type { AnyToolDefinition, ToolContext, ToolResult } from '../tools/types.js'
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
 import type { SessionManager } from './session-manager.js'
+import { TransportRegistry } from './transport-registry.js'
 
 /** Options for constructing a {@link Dispatcher}. */
 export interface DispatcherOptions {
   /** Session registry threaded into every tool context. */
   readonly sessions: SessionManager
+  /** Transport registry threaded into every tool context. Defaults to the built-in set. */
+  readonly transports?: TransportRegistry
   /** Logger for slow-op warnings and diagnostics. Defaults to a no-op logger. */
   readonly logger?: Logger
   /**
@@ -93,6 +96,7 @@ function toCallToolResult(envelope: ToolResult): CallToolResult {
 export class Dispatcher {
   readonly #tools = new Map<string, AnyToolDefinition>()
   readonly #sessions: SessionManager
+  readonly #transports: TransportRegistry
   readonly #logger: Logger
   readonly #allowEval: boolean
   readonly #now: () => number
@@ -100,6 +104,7 @@ export class Dispatcher {
 
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
+    this.#transports = opts.transports ?? new TransportRegistry()
     this.#logger = opts.logger ?? NOOP_LOGGER
     this.#allowEval = opts.allowEval ?? false
     this.#now = opts.now ?? Date.now
@@ -214,6 +219,7 @@ export class Dispatcher {
     const sessionId = readSessionId(args)
     const ctx: ToolContext = {
       sessions: this.#sessions,
+      transports: this.#transports,
       logger: this.#logger,
       allowEval: this.#allowEval,
       startedAt,

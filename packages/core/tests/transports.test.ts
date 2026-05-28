@@ -52,7 +52,13 @@ function createFakePage(title: string) {
     },
     url: () => `app:///${title}`,
     title: async () => title,
-    evaluate: async <T = unknown>() => undefined as T,
+    evaluate: async <T = unknown>(
+      fn: (payload: { readonly body: string; readonly arg?: unknown }) => T | Promise<T>,
+      arg?: { readonly body: string; readonly arg?: unknown },
+    ) => {
+      if (arg === undefined) return undefined as T
+      return fn(arg)
+    },
     screenshot: async () => {
       screenshotCalls += 1
       return Buffer.from(title)
@@ -61,13 +67,20 @@ function createFakePage(title: string) {
   }
 }
 
-function createFakeElectronApp(initialPages: ReturnType<typeof createFakePage>[]) {
+function createFakeElectronApp(
+  initialPages: ReturnType<typeof createFakePage>[],
+  electronModule: unknown = { value: 3 },
+) {
   let pages = initialPages
   let closeCalls = 0
+  let firstWindowCalls = 0
   const killSignals: string[] = []
   return {
     get closeCalls() {
       return closeCalls
+    },
+    get firstWindowCalls() {
+      return firstWindowCalls
     },
     killSignals,
     setPages: (nextPages: ReturnType<typeof createFakePage>[]) => {
@@ -75,11 +88,21 @@ function createFakeElectronApp(initialPages: ReturnType<typeof createFakePage>[]
     },
     windows: () => pages,
     firstWindow: async () => {
+      firstWindowCalls += 1
       const page = pages[0]
       if (page === undefined) throw new Error('no windows')
       return page
     },
-    evaluate: async <T = unknown>() => undefined as T,
+    evaluate: async <T = unknown>(
+      fn: (
+        electronApp: unknown,
+        payload: { readonly body: string; readonly arg?: unknown },
+      ) => T | Promise<T>,
+      arg?: { readonly body: string; readonly arg?: unknown },
+    ) => {
+      if (arg === undefined) return undefined as T
+      return fn(electronModule, arg)
+    },
     close: async () => {
       closeCalls += 1
     },
@@ -128,16 +151,26 @@ describe('PlaywrightElectronTransport', () => {
     await expect(t.forceKill(FAKE_SESSION)).resolves.toBeUndefined()
   })
 
-  it('launch() surfaces TRANSPORT_UNSUPPORTED when playwright is missing or stale', async () => {
-    // This may fail at the optional-peer import boundary, or after Playwright
-    // receives the bogus launch path. Either way, the transport contract is
-    // that callers get a registered StagewrightError, never a raw dependency
-    // error.
-    const result = await t.launch({ appPath: '/nonexistent/app' } as LaunchOptions).catch((e) => e)
+  it('launch() surfaces TRANSPORT_UNSUPPORTED when the playwright peer cannot load', async () => {
+    // The transport contract is that a peer-load failure reaches the caller as a
+    // registered StagewrightError, never a raw dependency error. We inject a
+    // failing loader so this is deterministic regardless of whether playwright
+    // happens to be installed in the dev environment (it is a devDep for the
+    // real-Electron smoke test, so we must not depend on its absence here).
+    const missing = new PlaywrightElectronTransport({
+      loadElectron: () =>
+        Promise.reject(
+          new StagewrightError(
+            'TRANSPORT_UNSUPPORTED',
+            'Playwright peer dependency is not installed.',
+          ),
+        ),
+    })
+    const result = await missing
+      .launch({ appPath: '/nonexistent/app' } as LaunchOptions)
+      .catch((e: unknown) => e)
     expect(result).toBeInstanceOf(StagewrightError)
-    expect(['TRANSPORT_UNSUPPORTED', 'LAUNCH_TIMEOUT', 'INTERNAL_ERROR']).toContain(
-      (result as StagewrightError).code,
-    )
+    expect((result as StagewrightError).code).toBe('TRANSPORT_UNSUPPORTED')
   })
 
   it('maps a main-process appPath to Playwright args instead of executablePath', () => {
@@ -224,6 +257,32 @@ describe('PlaywrightElectronTransport', () => {
 
     expect(pageA.screenshotCalls).toBe(1)
     expect(pageB.screenshotCalls).toBe(0)
+  })
+
+  it('waits for the first window before returning a launched session', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+
+    await transport.launch({ appPath: '/abs/main.js' })
+
+    expect(app.firstWindowCalls).toBe(1)
+  })
+
+  it('executes main and renderer evaluate bodies with the supplied arg', async () => {
+    const app = createFakeElectronApp([createFakePage('A')], { value: 40 })
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    await expect(
+      session.evaluate('main', 'return electronApp.value + arg.delta;', { delta: 2 }),
+    ).resolves.toBe(42)
+    await expect(session.evaluate('renderer', 'return arg.label;', { label: 'ok' })).resolves.toBe(
+      'ok',
+    )
   })
 
   it('forceKill() sends SIGKILL for Playwright-owned sessions and marks them stopped', async () => {
