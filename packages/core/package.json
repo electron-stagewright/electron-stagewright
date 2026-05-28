@@ -54,7 +54,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "jsdom": "^29.1.1"
+    "electron": "^42.3.0",
+    "jsdom": "^29.1.1",
+    "playwright": "^1.60.0"
   },
   "peerDependencies": {
     "playwright": ">=1.49.0"

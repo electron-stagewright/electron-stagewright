@@ -11,6 +11,9 @@ build/
 coverage/
 .vitest-cache/
 
+# Review / verification artifacts (screenshots, traces captured during validation)
+output/
+
 # Editor / OS
 .DS_Store
 Thumbs.db

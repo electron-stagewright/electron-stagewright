@@ -53,7 +53,7 @@ const TRANSPORT_ID: TransportId = 'playwright-electron'
 interface PWPage {
   url(): string
   title(): Promise<string>
-  evaluate<T = unknown>(fn: string, arg?: unknown): Promise<T>
+  evaluate<T = unknown>(fn: (payload: EvalPayload) => unknown, arg?: EvalPayload): Promise<T>
   screenshot(opts?: {
     fullPage?: boolean
     clip?: ScreenshotOptions['clip']
@@ -65,8 +65,11 @@ interface PWPage {
 
 interface PWElectronApp {
   windows(): readonly PWPage[]
-  firstWindow(): Promise<PWPage>
-  evaluate<T = unknown>(fn: string, arg?: unknown): Promise<T>
+  firstWindow(opts?: { timeout?: number }): Promise<PWPage>
+  evaluate<T = unknown>(
+    fn: (electronApp: unknown, payload: EvalPayload) => unknown,
+    arg?: EvalPayload,
+  ): Promise<T>
   close(): Promise<void>
   process(): { pid: number | undefined; kill(signal: string): boolean }
 }
@@ -84,6 +87,11 @@ interface PWElectron {
 interface PWModule {
   _electron?: PWElectron
   default?: { _electron?: PWElectron }
+}
+
+interface EvalPayload {
+  readonly body: string
+  readonly arg?: unknown
 }
 
 export interface PlaywrightElectronTransportOptions {
@@ -190,11 +198,11 @@ class PlaywrightSession implements TransportSession {
     arg?: unknown,
   ): Promise<T> {
     const app = this.requireRunning()
-    // Playwright's electronApp.evaluate and page.evaluate both call the page
-    // function with positional arguments. Main process: pageFunction(electronApp, arg).
-    // Renderer: pageFunction(arg). We wrap the agent-supplied body in a function
-    // string with the correct positional parameter names so the body can reference
-    // `electronApp` (main) or `arg` (both) directly.
+    const payload: EvalPayload = arg === undefined ? { body } : { body, arg }
+    // Playwright serialises a function plus one argument into the target context.
+    // Main process receives (electron module namespace, payload); renderer receives
+    // (payload). The payload body is still executed dynamically, but the wrapper is
+    // actually invoked by Playwright instead of being treated as a passive string.
     //
     // Security note: this transport does NOT validate body content. The dispatcher
     // is responsible for calling validateEvalContent (see errors/operation-type.ts)
@@ -203,12 +211,22 @@ class PlaywrightSession implements TransportSession {
     // payloads. Prefer structured function serialization at any public API boundary
     // that accepts untrusted JavaScript.
     if (target === 'main') {
-      const wrapped = `async (electronApp, arg) => { ${body} }`
-      return app.evaluate<T>(wrapped, arg)
+      return app.evaluate<T>(
+        (electronApp, input) =>
+          Function(
+            'electronApp',
+            'arg',
+            `"use strict"; return (async () => { ${input.body} })()`,
+          )(electronApp, input.arg),
+        payload,
+      )
     }
     const page = await app.firstWindow()
-    const wrapped = `async (arg) => { ${body} }`
-    return page.evaluate<T>(wrapped, arg)
+    return page.evaluate<T>(
+      (input) =>
+        Function('arg', `"use strict"; return (async () => { ${input.body} })()`)(input.arg),
+      payload,
+    )
   }
 
   async screenshot(target: WindowRef, opts: ScreenshotOptions = {}): Promise<Buffer> {
@@ -369,6 +387,22 @@ export class PlaywrightElectronTransport implements ITransport {
       throw new StagewrightError(
         isTimeout ? 'LAUNCH_TIMEOUT' : 'INTERNAL_ERROR',
         `Playwright launch failed: ${message}`,
+        { transport: TRANSPORT_ID, appPath: opts.appPath ?? opts.executablePath ?? '' },
+      )
+    }
+    try {
+      await app.firstWindow(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : undefined)
+    } catch (cause) {
+      try {
+        await app.close()
+      } catch {
+        // A failed launch can leave the app half-open; closing is best-effort.
+      }
+      const message = cause instanceof Error ? cause.message : String(cause)
+      const isTimeout = /timeout/i.test(message)
+      throw new StagewrightError(
+        isTimeout ? 'LAUNCH_TIMEOUT' : 'INTERNAL_ERROR',
+        `Playwright did not report an initial window: ${message}`,
         { transport: TRANSPORT_ID, appPath: opts.appPath ?? opts.executablePath ?? '' },
       )
     }

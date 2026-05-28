@@ -22,6 +22,7 @@ import type { ErrorResponse, SuccessResponse } from '../errors/envelope.js'
 import type { OperationType } from '../errors/operation-type.js'
 import type { Logger } from '../server/logger.js'
 import type { SessionManager } from '../server/session-manager.js'
+import type { TransportRegistry } from '../server/transport-registry.js'
 
 /**
  * The value a tool handler resolves to. It is exactly the agent-facing response
@@ -40,6 +41,12 @@ export type ToolResult = ErrorResponse | SuccessResponse<Record<string, unknown>
 export interface ToolContext {
   /** The session registry — tools resolve, create, or remove sessions through this. */
   readonly sessions: SessionManager
+  /**
+   * The transport registry — session-creating tools (`launch`/`attach`/`inject`)
+   * obtain a capability-appropriate transport through this. Tools that operate on
+   * an existing session use `sessions.resolve(...).transport` instead.
+   */
+  readonly transports: TransportRegistry
   /** Structured logger. Writes to stderr only (stdout is the MCP protocol channel). */
   readonly logger: Logger
   /**

@@ -9,6 +9,8 @@ export { Dispatcher, type DispatcherOptions, type ToolManifestEntry } from './di
 
 export { SessionManager, type ManagedSession } from './session-manager.js'
 
+export { TransportRegistry, type TransportRegistryOptions } from './transport-registry.js'
+
 export {
   StderrLogger,
   NOOP_LOGGER,

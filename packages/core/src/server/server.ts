@@ -19,6 +19,7 @@ import { LIFECYCLE_TOOLS } from '../tools/lifecycle/index.js'
 import { Dispatcher } from './dispatcher.js'
 import { type Logger, type LogLevel, StderrLogger } from './logger.js'
 import { SessionManager } from './session-manager.js'
+import { TransportRegistry } from './transport-registry.js'
 
 /** Server name advertised to MCP clients. */
 const SERVER_NAME = '@electron-stagewright/core'
@@ -42,6 +43,8 @@ export interface CreateServerOptions {
   readonly logLevel?: LogLevel
   /** Tools to register. Defaults to the core lifecycle tools. */
   readonly tools?: Iterable<AnyToolDefinition>
+  /** Transport registry. Defaults to the built-in set (Playwright/CDP/Injector). */
+  readonly transports?: TransportRegistry
   /** Clock injection for deterministic timing in tests. */
   readonly now?: () => number
 }
@@ -54,6 +57,8 @@ export interface StagewrightServer {
   readonly dispatcher: Dispatcher
   /** The session registry. */
   readonly sessions: SessionManager
+  /** The transport registry. */
+  readonly transports: TransportRegistry
   /** Connect over stdio (reads stdin / writes protocol frames to stdout). */
   connectStdio(): Promise<void>
   /** Close the MCP server and dispose every live session. Idempotent-safe. */
@@ -68,8 +73,10 @@ export interface StagewrightServer {
 export function createServer(opts: CreateServerOptions = {}): StagewrightServer {
   const logger = opts.logger ?? new StderrLogger({ level: opts.logLevel ?? 'info' })
   const sessions = new SessionManager()
+  const transports = opts.transports ?? new TransportRegistry()
   const dispatcher = new Dispatcher({
     sessions,
+    transports,
     logger,
     allowEval: opts.allowEval ?? false,
     ...(opts.now !== undefined ? { now: opts.now } : {}),
@@ -83,6 +90,7 @@ export function createServer(opts: CreateServerOptions = {}): StagewrightServer 
     mcp,
     dispatcher,
     sessions,
+    transports,
     async connectStdio(): Promise<void> {
       await mcp.connect(new StdioServerTransport())
     },
