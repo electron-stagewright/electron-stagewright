@@ -51,11 +51,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "^3.23.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "jsdom": "^25.0.0",
-    "zod-to-json-schema": "^3.23.0"
+    "jsdom": "^29.1.1"
   },
   "peerDependencies": {
     "playwright": ">=1.49.0"

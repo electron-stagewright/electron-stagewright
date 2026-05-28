@@ -127,9 +127,9 @@ export interface ScreenshotOptions {
 }
 
 /**
- * IPC observation/injection surface for a session. Placeholder shape — the
- * full IPC plugin interface lands with the forthcoming IPC capture slice
- * (plan: `ipc_invoke`, `ipc_capture`, `ipc_stub`).
+ * IPC observation/injection surface for a session. Minimal placeholder shape for
+ * transports that can surface IPC channels; concrete IPC tools can extend this
+ * contract without changing session ownership.
  */
 export interface IpcChannel {
   /** Which transport produced this channel. */
@@ -137,9 +137,9 @@ export interface IpcChannel {
 }
 
 /**
- * Rolling console buffer surface for a session. Placeholder shape — the full
- * console_logs tool surface (filters, overflow flag, time-range queries) lands
- * with the forthcoming read+wait+eval tool slice.
+ * Rolling console buffer surface for a session. Minimal placeholder shape for
+ * transports that can surface console output; concrete log tools can extend this
+ * contract without changing session ownership.
  */
 export interface ConsoleStream {
   /** Which transport produced this stream. */

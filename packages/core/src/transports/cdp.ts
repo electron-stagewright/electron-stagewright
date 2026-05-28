@@ -1,24 +1,24 @@
 /**
- * CDPTransport — raw Chrome DevTools Protocol transport. STUB IN THIS SLICE.
+ * CDPTransport — raw Chrome DevTools Protocol transport. Stub implementation.
  *
  * The ADR documents the intended connection-pool design (multiplexed WebSocket
  * per target, pending-message map keyed by request ID, per-method timeouts,
  * `enabledDomains: Set<string>` to skip redundant `Runtime.enable` /
  * `Page.enable`, `awaitPromise: true` option for evaluation tools that need
- * Promise resolution). None of that ships here; this file only declares the
- * capability matrix and forces every method to throw a registered
+ * Promise resolution). This file declares the capability matrix and forces every
+ * method to throw a registered
  * `NOT_IMPLEMENTED` (or `TRANSPORT_UNSUPPORTED` when the capability matrix
- * already refuses) so the dispatcher's failure mode is uniform across slices.
+ * already refuses) so the dispatcher's failure mode is uniform across transport
+ * implementations.
  *
  * Capability matrix:
  *
  * - `canLaunch: false` — CDP requires an existing process to connect to.
- * - `canAttach: true` — attach is the primary purpose; future implementation
- *   wires this body against `chrome-remote-interface` or a hand-rolled client.
+ * - `canAttach: true` — attach is the primary purpose; an implementation can
+ *   wire this body against `chrome-remote-interface` or a hand-rolled client.
  * - `canInject: false` — InjectorTransport handles the no-pre-flag case.
- * - `canIntercept: true` — CDP `Fetch.enable` will land with the network plugin.
- * - `canControlClock: true` — CDP `Emulation.setVirtualTimePolicy` will land
- *   with the clock plugin.
+ * - `canIntercept: true` — CDP exposes `Fetch.enable` for request interception.
+ * - `canControlClock: true` — CDP exposes `Emulation.setVirtualTimePolicy`.
  * - `supportsMainEval: true` — CDP `Runtime.evaluate` against the main target.
  * - `supportsRendererEval: true` — CDP `Runtime.evaluate` against a renderer
  *   target.
@@ -43,7 +43,7 @@ const TRANSPORT_ID: TransportId = 'cdp'
 function notImplemented(method: string): StagewrightError {
   return new StagewrightError(
     'NOT_IMPLEMENTED',
-    `CDPTransport.${method} is not implemented yet; the contract is declared but the body lands in a later slice.`,
+    `CDPTransport.${method} is not implemented yet; this transport has no implementation for it.`,
     { transport: TRANSPORT_ID, method },
   )
 }

@@ -275,7 +275,7 @@ describe('OperationType discriminator', () => {
 })
 
 describe('validateCommandContent (stub)', () => {
-  it('accepts every input today — body lands with the forthcoming lifecycle tools', () => {
+  it('accepts every input while command validation remains a routing hook', () => {
     expect(() => validateCommandContent({})).not.toThrow()
     expect(() => validateCommandContent('any string')).not.toThrow()
     expect(() => validateCommandContent(null)).not.toThrow()
@@ -293,6 +293,12 @@ describe('validateEvalContent', () => {
   it('accepts benign string payloads', () => {
     expect(() => validateEvalContent('return 1 + 1')).not.toThrow()
     expect(() => validateEvalContent('document.title')).not.toThrow()
+  })
+
+  it('checks common object-shaped eval source fields without treating data args as code', () => {
+    expect(() => validateEvalContent({ body: 'process.exit(0)' })).toThrow(StagewrightError)
+    expect(() => validateEvalContent({ code: 'require("fs")' })).toThrow(StagewrightError)
+    expect(() => validateEvalContent({ body: 'return arg', arg: 'process.exit(0)' })).not.toThrow()
   })
 
   it('rejects every keyword in the DANGEROUS list with EVAL_BLOCKED_KEYWORD', () => {
@@ -321,6 +327,12 @@ describe('validateEvalContent', () => {
 describe('routeByOperationType', () => {
   it("routes 'eval' through validateEvalContent (blocks dangerous keywords)", () => {
     expect(() => routeByOperationType('eval', 'process.exit(0)')).toThrow(StagewrightError)
+  })
+
+  it("routes object-shaped 'eval' payloads through validateEvalContent", () => {
+    expect(() => routeByOperationType('eval', { body: 'process.exit(0)' })).toThrow(
+      StagewrightError,
+    )
   })
 
   it("routes 'command' through validateCommandContent (accepts everything today)", () => {

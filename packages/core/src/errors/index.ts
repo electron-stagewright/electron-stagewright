@@ -37,3 +37,9 @@ export {
   routeByOperationType,
   DANGEROUS_EVAL_KEYWORDS_FOR_TESTS,
 } from './operation-type.js'
+
+export {
+  type SessionContextStore,
+  runWithSessionContext,
+  currentSessionId,
+} from './session-context.js'
