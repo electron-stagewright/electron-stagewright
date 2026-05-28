@@ -15,6 +15,11 @@ export type {
   SnapshotBbox,
   SnapshotMeta,
   SnapshotJsonSchemaShape,
+  SnapshotDiff,
+  SnapshotEntryChange,
+  ChangedField,
+  FindQuery,
+  RefReconciliation,
 } from './schema.js'
 
 export { SnapshotJsonSchema } from './schema.js'
@@ -28,3 +33,9 @@ export { fnv1a32, computeFingerprint } from './fingerprint.js'
 export { resolveRole, isRoleInteractive } from './roles.js'
 
 export { extractState, isVisible, isDisabled } from './state.js'
+
+export { diffSnapshots, markRecentlyChanged, detectRendererReload, withReloadFlag } from './diff.js'
+
+export { reconcileRefs } from './reconcile.js'
+
+export { findEntries } from './find.js'

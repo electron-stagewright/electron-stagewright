@@ -549,6 +549,7 @@ describe('walkAccessibilityTree — top-level shape', () => {
     expect(snap.schemaVersion).toBe(1)
     expect(snap.entries).toEqual([])
     expect(snap.meta.diff_baseline).toBe('full')
+    expect(typeof snap.meta.navigation_started_at_ms).toBe('number')
     expect(snap.meta.renderer_reloaded_since_last_snapshot).toBe(false)
   })
 
@@ -991,12 +992,17 @@ describe('framework-shape fixtures', () => {
       expect(findEntry(snap, byRoleAndName('heading', 'Editor'))).toBeDefined()
     })
 
-    it('open shadow root contents are not walked by the document walker', () => {
-      // Buttons inside the picker's open shadow root are outside
-      // document.querySelectorAll.
-      expect(findEntry(snap, byRoleAndName('button', 'Red'))).toBeUndefined()
-      expect(findEntry(snap, byRoleAndName('button', 'Green'))).toBeUndefined()
-      expect(findEntry(snap, byRoleAndName('button', 'Blue'))).toBeUndefined()
+    it('open shadow root contents ARE walked (recursion into element.shadowRoot)', () => {
+      // The walker now recurses into open shadow roots. The picker's R/G/B
+      // buttons live in an open shadow root and must appear in the snapshot.
+      expect(findEntry(snap, byRoleAndName('button', 'Red'))).toBeDefined()
+      expect(findEntry(snap, byRoleAndName('button', 'Green'))).toBeDefined()
+      expect(findEntry(snap, byRoleAndName('button', 'Blue'))).toBeDefined()
+    })
+
+    it('open-shadow entries are not marked shadow_closed', () => {
+      const red = findEntry(snap, byRoleAndName('button', 'Red'))
+      expect(red?.state.shadow_closed).toBe(false)
     })
   })
 })
