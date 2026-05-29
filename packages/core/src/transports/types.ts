@@ -168,12 +168,25 @@ export interface InteractionOptions {
   readonly timeoutMs?: number
 }
 
-/** Options for {@link TransportSession.press}. */
+/** Options for {@link TransportSession.press} and {@link TransportSession.typeText}. */
 export interface PressOptions {
-  /** When set, focus this element before pressing the key; otherwise press globally. */
+  /** When set, focus this element before pressing the key / typing; otherwise act globally. */
   readonly selector?: string
-  /** Max wait for the element to receive the key, in ms. */
+  /** Max wait for the element to receive the key / text, in ms. */
   readonly timeoutMs?: number
+}
+
+/**
+ * Options for {@link TransportSession.click}. Extends the common actionability
+ * options with pointer-button selection and multi-click support, so one `click`
+ * method covers right-click (context menus) and double-click (click-to-edit)
+ * without separate transport methods.
+ */
+export interface ClickOptions extends InteractionOptions {
+  /** Which mouse button to use. Defaults to `'left'`. */
+  readonly button?: 'left' | 'right' | 'middle'
+  /** Number of sequential clicks (2 for a double-click). Defaults to 1; must be a positive integer. */
+  readonly clickCount?: number
 }
 
 /** Options for {@link TransportSession.scroll}. */
@@ -210,8 +223,8 @@ export interface TransportSession {
   // All operate on the active/default window with real user input. Transports
   // that cannot interact reject these with `NOT_IMPLEMENTED`.
 
-  /** Click an element matched by `selector`. */
-  click(selector: string, opts?: InteractionOptions): Promise<void>
+  /** Click an element matched by `selector`. Supports button + multi-click via {@link ClickOptions}. */
+  click(selector: string, opts?: ClickOptions): Promise<void>
 
   /** Set the value of a text input / textarea matched by `selector` (fires input events). */
   fill(selector: string, value: string, opts?: InteractionOptions): Promise<void>
@@ -221,6 +234,14 @@ export interface TransportSession {
 
   /** Press a key (e.g. `'Enter'`, `'Control+A'`); focuses `opts.selector` first when given. */
   press(key: string, opts?: PressOptions): Promise<void>
+
+  /**
+   * Type `text` as real per-character keystrokes (fires keydown/keypress/input/keyup
+   * for each char), unlike {@link fill} which sets `.value` and fires a single input
+   * event. Focuses `opts.selector` first when given; otherwise types into the active
+   * element. Use this for inputs with per-keystroke handlers (editors, autocompletes).
+   */
+  typeText(text: string, opts?: PressOptions): Promise<void>
 
   /** Select option(s) by value in a `<select>` matched by `selector`. Returns the selected values. */
   selectOption(

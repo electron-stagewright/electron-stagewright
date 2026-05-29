@@ -96,6 +96,9 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
     press: async (selector: string, key: string, opts?: unknown) => {
       interactions.push({ method: 'press', args: [selector, key, opts] })
     },
+    type: async (selector: string, text: string, opts?: unknown) => {
+      interactions.push({ method: 'type', args: [selector, text, opts] })
+    },
     selectOption: async (selector: string, values: readonly string[], opts?: unknown) => {
       interactions.push({ method: 'selectOption', args: [selector, values, opts] })
       return values
@@ -115,6 +118,9 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
     keyboard: {
       press: async (key: string) => {
         interactions.push({ method: 'keyboard.press', args: [key] })
+      },
+      type: async (text: string) => {
+        interactions.push({ method: 'keyboard.type', args: [text] })
       },
     },
     mouse: {
@@ -390,6 +396,38 @@ describe('PlaywrightElectronTransport', () => {
     ])
 
     expect(session.transport).toBe('playwright-electron')
+  })
+
+  it('maps click button + clickCount onto Playwright click options', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await session.click('#ctx', { button: 'right', clickCount: 2, timeoutMs: 300 })
+
+    expect(page.interactions).toEqual([
+      { method: 'click', args: ['#ctx', { timeout: 300, button: 'right', clickCount: 2 }] },
+    ])
+  })
+
+  it('typeText emits real keystrokes via the selector or the active keyboard', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await session.typeText('hello', { selector: '#editor', timeoutMs: 200 })
+    await session.typeText('world')
+
+    expect(page.interactions).toEqual([
+      { method: 'type', args: ['#editor', 'hello', { timeout: 200 }] },
+      { method: 'keyboard.type', args: ['world'] },
+    ])
   })
 
   it('returns the resolved values from selectOption', async () => {

@@ -9,6 +9,7 @@
  */
 
 import type {
+  ClickOptions,
   ITransport,
   InteractionOptions,
   PressOptions,
@@ -47,6 +48,12 @@ export interface FakeSessionOptions {
   readonly windows?: readonly WindowDescriptor[]
   /** When set, `windowsList` rejects with this error (to exercise post-register cleanup). */
   readonly windowsError?: Error
+  /**
+   * When set, every interaction method (click/fill/.../scroll/typeText) rejects
+   * with this error before recording — used to exercise `diagnoseInteractionError`
+   * mapping (e.g. a Playwright-like "element is not enabled" message → ELEMENT_DISABLED).
+   */
+  readonly interactionError?: Error
 }
 
 /** In-memory {@link TransportSession}. Tracks dispose calls for idempotency tests. */
@@ -60,6 +67,7 @@ export class FakeSession implements TransportSession {
   readonly #evaluate: FakeEvaluate
   readonly #windows: readonly WindowDescriptor[]
   readonly #windowsError?: Error
+  readonly #interactionError?: Error
 
   constructor(opts: FakeSessionOptions = {}) {
     this.id = opts.id ?? `fake-${Math.random().toString(36).slice(2, 10)}`
@@ -69,6 +77,12 @@ export class FakeSession implements TransportSession {
     this.#evaluate = opts.evaluate ?? (async () => undefined)
     this.#windows = opts.windows ?? []
     if (opts.windowsError !== undefined) this.#windowsError = opts.windowsError
+    if (opts.interactionError !== undefined) this.#interactionError = opts.interactionError
+  }
+
+  /** Throw the configured interaction error, if any, before recording a call. */
+  #failIfConfigured(): void {
+    if (this.#interactionError !== undefined) throw this.#interactionError
   }
 
   async evaluate<T = unknown>(
@@ -91,20 +105,29 @@ export class FakeSession implements TransportSession {
   /** Recorded interaction calls, in order, for assertions in interaction-tool tests. */
   readonly interactions: { readonly method: string; readonly args: readonly unknown[] }[] = []
 
-  async click(selector: string, opts?: InteractionOptions): Promise<void> {
+  async click(selector: string, opts?: ClickOptions): Promise<void> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'click', args: [selector, opts] })
   }
 
   async fill(selector: string, value: string, opts?: InteractionOptions): Promise<void> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'fill', args: [selector, value, opts] })
   }
 
   async hover(selector: string, opts?: InteractionOptions): Promise<void> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'hover', args: [selector, opts] })
   }
 
   async press(key: string, opts?: PressOptions): Promise<void> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'press', args: [key, opts] })
+  }
+
+  async typeText(text: string, opts?: PressOptions): Promise<void> {
+    this.#failIfConfigured()
+    this.interactions.push({ method: 'typeText', args: [text, opts] })
   }
 
   async selectOption(
@@ -112,11 +135,13 @@ export class FakeSession implements TransportSession {
     values: readonly string[],
     opts?: InteractionOptions,
   ): Promise<readonly string[]> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'selectOption', args: [selector, values, opts] })
     return values
   }
 
   async setChecked(selector: string, checked: boolean, opts?: InteractionOptions): Promise<void> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'setChecked', args: [selector, checked, opts] })
   }
 
@@ -125,14 +150,17 @@ export class FakeSession implements TransportSession {
     paths: readonly string[],
     opts?: InteractionOptions,
   ): Promise<void> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'setInputFiles', args: [selector, paths, opts] })
   }
 
   async dragTo(source: string, target: string, opts?: InteractionOptions): Promise<void> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'dragTo', args: [source, target, opts] })
   }
 
   async scroll(opts?: ScrollOptions): Promise<void> {
+    this.#failIfConfigured()
     this.interactions.push({ method: 'scroll', args: [opts] })
   }
 

@@ -29,6 +29,7 @@ import { randomUUID } from 'node:crypto'
 import { StagewrightError } from '../errors/registry.js'
 import type {
   AttachOptions,
+  ClickOptions,
   ConsoleStream,
   ITransport,
   InjectOptions,
@@ -53,6 +54,20 @@ function toActionOptions(opts: InteractionOptions): { force?: boolean; timeout?:
   return {
     ...(opts.force !== undefined ? { force: opts.force } : {}),
     ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+  }
+}
+
+/** Map {@link ClickOptions} onto Playwright's click options (adds button + clickCount). */
+function toClickOptions(opts: ClickOptions): {
+  force?: boolean
+  timeout?: number
+  button?: 'left' | 'right' | 'middle'
+  clickCount?: number
+} {
+  return {
+    ...toActionOptions(opts),
+    ...(opts.button !== undefined ? { button: opts.button } : {}),
+    ...(opts.clickCount !== undefined ? { clickCount: opts.clickCount } : {}),
   }
 }
 
@@ -101,6 +116,12 @@ interface PWActionOptions {
   timeout?: number
 }
 
+/** Playwright's click options — actionability plus pointer-button + multi-click. */
+interface PWClickOptions extends PWActionOptions {
+  button?: 'left' | 'right' | 'middle'
+  clickCount?: number
+}
+
 interface PWPage {
   url(): string
   title(): Promise<string>
@@ -112,10 +133,11 @@ interface PWPage {
     quality?: number
   }): Promise<Buffer>
   isVisible(selector: string): Promise<boolean>
-  click(selector: string, opts?: PWActionOptions): Promise<void>
+  click(selector: string, opts?: PWClickOptions): Promise<void>
   fill(selector: string, value: string, opts?: PWActionOptions): Promise<void>
   hover(selector: string, opts?: PWActionOptions): Promise<void>
   press(selector: string, key: string, opts?: PWActionOptions): Promise<void>
+  type(selector: string, text: string, opts?: PWActionOptions): Promise<void>
   selectOption(
     selector: string,
     values: readonly string[],
@@ -125,7 +147,7 @@ interface PWPage {
   uncheck(selector: string, opts?: PWActionOptions): Promise<void>
   setInputFiles(selector: string, files: readonly string[], opts?: PWActionOptions): Promise<void>
   dragAndDrop(source: string, target: string, opts?: PWActionOptions): Promise<void>
-  keyboard: { press(key: string): Promise<void> }
+  keyboard: { press(key: string): Promise<void>; type(text: string): Promise<void> }
   mouse: { wheel(deltaX: number, deltaY: number): Promise<void> }
 }
 
@@ -332,8 +354,8 @@ class PlaywrightSession implements TransportSession {
     return this.requireRunning().firstWindow()
   }
 
-  async click(selector: string, opts: InteractionOptions = {}): Promise<void> {
-    await (await this.activePage()).click(selector, toActionOptions(opts))
+  async click(selector: string, opts: ClickOptions = {}): Promise<void> {
+    await (await this.activePage()).click(selector, toClickOptions(opts))
   }
 
   async fill(selector: string, value: string, opts: InteractionOptions = {}): Promise<void> {
@@ -350,6 +372,16 @@ class PlaywrightSession implements TransportSession {
       await page.press(opts.selector, key, toTimeoutOptions(opts))
     } else {
       await page.keyboard.press(key)
+    }
+  }
+
+  async typeText(text: string, opts: PressOptions = {}): Promise<void> {
+    const page = await this.activePage()
+    if (opts.selector !== undefined) {
+      // page.type focuses the selector and emits a real keystroke per character.
+      await page.type(opts.selector, text, toTimeoutOptions(opts))
+    } else {
+      await page.keyboard.type(text)
     }
   }
 

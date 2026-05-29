@@ -16,6 +16,7 @@ export type {
   StopOptions,
   ScreenshotOptions,
   InteractionOptions,
+  ClickOptions,
   PressOptions,
   ScrollOptions,
   IpcChannel,

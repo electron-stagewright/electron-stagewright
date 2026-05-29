@@ -5,6 +5,7 @@
  * @module
  */
 
+import { INTERACTION_TOOLS } from './interaction/index.js'
 import { LIFECYCLE_TOOLS } from './lifecycle/index.js'
 import { SNAPSHOT_TOOLS } from './snapshot/index.js'
 import type { AnyToolDefinition } from './types.js'
@@ -20,9 +21,15 @@ export {
 
 export { LIFECYCLE_TOOLS } from './lifecycle/index.js'
 export { SNAPSHOT_TOOLS } from './snapshot/index.js'
+export { INTERACTION_TOOLS } from './interaction/index.js'
 
 /**
  * The full set of tools registered with the dispatcher by default — lifecycle
- * (launch/stop/info/windows/discover/…) plus snapshot (snapshot/find).
+ * (launch/stop/info/windows/discover/…), snapshot (snapshot/find), and
+ * interaction (click/type/key/hover/drag/scroll/select/check/set-files).
  */
-export const DEFAULT_TOOLS: readonly AnyToolDefinition[] = [...LIFECYCLE_TOOLS, ...SNAPSHOT_TOOLS]
+export const DEFAULT_TOOLS: readonly AnyToolDefinition[] = [
+  ...LIFECYCLE_TOOLS,
+  ...SNAPSHOT_TOOLS,
+  ...INTERACTION_TOOLS,
+]
