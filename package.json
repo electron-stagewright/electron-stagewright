@@ -15,7 +15,7 @@
     "url": "https://github.com/electron-stagewright/electron-stagewright/issues"
   },
   "engines": {
-    "node": ">=22.0.0",
+    "node": ">=24.0.0",
     "pnpm": ">=11.0.0"
   },
   "packageManager": "pnpm@11.3.0",
@@ -30,7 +30,7 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^24.12.4",
     "@typescript-eslint/eslint-plugin": "^8.60.0",
     "@typescript-eslint/parser": "^8.60.0",
     "eslint": "^10.4.0",
