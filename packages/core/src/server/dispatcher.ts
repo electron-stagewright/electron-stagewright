@@ -42,6 +42,7 @@ import { runWithSessionContext } from '../errors/session-context.js'
 import type { AnyToolDefinition, ToolContext, ToolResult } from '../tools/types.js'
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
 import type { SessionManager } from './session-manager.js'
+import { SnapshotStore } from './snapshot-store.js'
 import { TransportRegistry } from './transport-registry.js'
 
 /** Options for constructing a {@link Dispatcher}. */
@@ -50,6 +51,8 @@ export interface DispatcherOptions {
   readonly sessions: SessionManager
   /** Transport registry threaded into every tool context. Defaults to the built-in set. */
   readonly transports?: TransportRegistry
+  /** Per-session snapshot store threaded into every tool context. Defaults to a fresh store. */
+  readonly snapshots?: SnapshotStore
   /** Logger for slow-op warnings and diagnostics. Defaults to a no-op logger. */
   readonly logger?: Logger
   /**
@@ -97,6 +100,7 @@ export class Dispatcher {
   readonly #tools = new Map<string, AnyToolDefinition>()
   readonly #sessions: SessionManager
   readonly #transports: TransportRegistry
+  readonly #snapshots: SnapshotStore
   readonly #logger: Logger
   readonly #allowEval: boolean
   readonly #now: () => number
@@ -105,6 +109,7 @@ export class Dispatcher {
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
     this.#transports = opts.transports ?? new TransportRegistry()
+    this.#snapshots = opts.snapshots ?? new SnapshotStore()
     this.#logger = opts.logger ?? NOOP_LOGGER
     this.#allowEval = opts.allowEval ?? false
     this.#now = opts.now ?? Date.now
@@ -220,6 +225,7 @@ export class Dispatcher {
     const ctx: ToolContext = {
       sessions: this.#sessions,
       transports: this.#transports,
+      snapshots: this.#snapshots,
       logger: this.#logger,
       allowEval: this.#allowEval,
       startedAt,

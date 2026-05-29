@@ -11,6 +11,8 @@ export { SessionManager, type ManagedSession } from './session-manager.js'
 
 export { TransportRegistry, type TransportRegistryOptions } from './transport-registry.js'
 
+export { SnapshotStore } from './snapshot-store.js'
+
 export {
   StderrLogger,
   NOOP_LOGGER,

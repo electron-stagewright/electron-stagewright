@@ -24,6 +24,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { PlaywrightElectronTransport } from '../src/transports/index.js'
 import { infoTool, launchTool, stopTool, windowsListTool } from '../src/tools/lifecycle/index.js'
+import { snapshotTool } from '../src/tools/snapshot/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
 const FIXTURE_MAIN = path.join(
@@ -46,7 +47,7 @@ describe('lifecycle smoke (real Electron)', () => {
     async () => {
       const transports = new TransportRegistry({ transports: [new PlaywrightElectronTransport()] })
       const dispatcher = new Dispatcher({ sessions, transports })
-      dispatcher.registerAll([launchTool, infoTool, windowsListTool, stopTool])
+      dispatcher.registerAll([launchTool, infoTool, windowsListTool, snapshotTool, stopTool])
 
       const launched = await dispatcher.dispatch('electron_launch', { main: FIXTURE_MAIN })
       expect(launched.ok).toBe(true)
@@ -60,6 +61,15 @@ describe('lifecycle smoke (real Electron)', () => {
 
       const windows = await dispatcher.dispatch('electron_windows_list', { sessionId })
       expect((windows as SuccessResponse & { count: number }).count).toBeGreaterThanOrEqual(1)
+
+      // Real renderer injection: the esbuild walker bundle runs in the page and
+      // returns the fixture's button as an interactive entry.
+      const snapshot = await dispatcher.dispatch('electron_snapshot', { sessionId })
+      expect(snapshot.ok).toBe(true)
+      expect(
+        (snapshot as SuccessResponse & { snapshot: { entries: readonly unknown[] } }).snapshot
+          .entries.length,
+      ).toBeGreaterThan(0)
 
       const stopped = await dispatcher.dispatch('electron_stop', { sessionId })
       expect(stopped.ok).toBe(true)

@@ -113,6 +113,14 @@ export interface WalkerOptions {
    * orchestration can pass `'diff'` when returning a delta.
    */
   readonly diffBaseline?: 'full' | 'diff'
+  /**
+   * When set, each interactive element that receives a `ref` is tagged with this
+   * attribute set to its ref number (e.g. `data-sw-ref="5"`), so a later tool can
+   * resolve `ref: 5` to the `[data-sw-ref="5"]` selector and act on the element.
+   * Omitted by default — the pure walker does not mutate the DOM. Only the
+   * renderer-injected snapshot tool passes it.
+   */
+  readonly refAttribute?: string
 }
 
 /** Mutable ref allocator threaded through the recursive walk. */
@@ -139,11 +147,17 @@ export function walkAccessibilityTree(document: Document, options: WalkerOptions
   const refCounter: RefCounter = { next: 1 }
 
   // Light DOM + open shadow roots, recursively.
-  walkRoot(document, entries, refCounter, { shadowClosed: false, depth: 0 })
+  walkRoot(document, entries, refCounter, { shadowClosed: false, depth: 0 }, options.refAttribute)
 
   // Closed shadow roots the app author opted to expose.
   for (const shadowRoot of getInspectableClosedShadows(document)) {
-    walkRoot(shadowRoot, entries, refCounter, { shadowClosed: true, depth: 0 })
+    walkRoot(
+      shadowRoot,
+      entries,
+      refCounter,
+      { shadowClosed: true, depth: 0 },
+      options.refAttribute,
+    )
   }
 
   return {
@@ -164,7 +178,9 @@ function walkRoot(
   entries: SnapshotEntry[],
   refCounter: RefCounter,
   ctx: WalkContext,
+  refAttribute: string | undefined,
 ): void {
+  if (refAttribute !== undefined) clearRefAttributes(root, refAttribute)
   const candidates = collectCandidateSet(root)
   for (const element of collectElements(root)) {
     if (candidates.has(element)) {
@@ -172,7 +188,19 @@ function walkRoot(
       if (entry !== null) {
         // Landmarks (non-interactive) emit with `ref: null` so they don't consume a
         // ref slot; interactive elements get the next ref and increment the counter.
-        if (entry.ref !== null) refCounter.next++
+        if (entry.ref !== null) {
+          refCounter.next++
+          // Tag the element so a ref resolves to a [refAttribute="<ref>"] selector
+          // for later interaction. Best-effort: a frozen/locked element that
+          // refuses the attribute must not abort the whole walk.
+          if (refAttribute !== undefined) {
+            try {
+              element.setAttribute(refAttribute, String(entry.ref))
+            } catch {
+              // ignore — tagging is an optimisation, not a correctness requirement
+            }
+          }
+        }
         entries.push(entry)
       }
     }
@@ -180,11 +208,25 @@ function walkRoot(
     if (ctx.depth >= MAX_SHADOW_DEPTH) continue
     const shadow = element.shadowRoot
     if (shadow !== null) {
-      walkRoot(shadow, entries, refCounter, {
-        shadowClosed: ctx.shadowClosed,
-        depth: ctx.depth + 1,
-      })
+      walkRoot(
+        shadow,
+        entries,
+        refCounter,
+        { shadowClosed: ctx.shadowClosed, depth: ctx.depth + 1 },
+        refAttribute,
+      )
     }
+  }
+}
+
+/** Remove stale ref tags before applying this walk's current tags. */
+function clearRefAttributes(root: Document | ShadowRoot, refAttribute: string): void {
+  try {
+    for (const element of root.querySelectorAll(`[${refAttribute}]`)) {
+      element.removeAttribute(refAttribute)
+    }
+  } catch {
+    // Invalid/custom attribute names should not abort a snapshot walk.
   }
 }
 

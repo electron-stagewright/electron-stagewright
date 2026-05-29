@@ -14,11 +14,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
+import { DEFAULT_TOOLS } from '../tools/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
-import { LIFECYCLE_TOOLS } from '../tools/lifecycle/index.js'
 import { Dispatcher } from './dispatcher.js'
 import { type Logger, type LogLevel, StderrLogger } from './logger.js'
 import { SessionManager } from './session-manager.js'
+import { SnapshotStore } from './snapshot-store.js'
 import { TransportRegistry } from './transport-registry.js'
 
 /** Server name advertised to MCP clients. */
@@ -59,6 +60,8 @@ export interface StagewrightServer {
   readonly sessions: SessionManager
   /** The transport registry. */
   readonly transports: TransportRegistry
+  /** The per-session snapshot store. */
+  readonly snapshots: SnapshotStore
   /** Connect over stdio (reads stdin / writes protocol frames to stdout). */
   connectStdio(): Promise<void>
   /** Close the MCP server and dispose every live session. Idempotent-safe. */
@@ -74,14 +77,16 @@ export function createServer(opts: CreateServerOptions = {}): StagewrightServer 
   const logger = opts.logger ?? new StderrLogger({ level: opts.logLevel ?? 'info' })
   const sessions = new SessionManager()
   const transports = opts.transports ?? new TransportRegistry()
+  const snapshots = new SnapshotStore()
   const dispatcher = new Dispatcher({
     sessions,
     transports,
+    snapshots,
     logger,
     allowEval: opts.allowEval ?? false,
     ...(opts.now !== undefined ? { now: opts.now } : {}),
   })
-  dispatcher.registerAll(opts.tools ?? LIFECYCLE_TOOLS)
+  dispatcher.registerAll(opts.tools ?? DEFAULT_TOOLS)
 
   const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION })
   dispatcher.bindToMcpServer(mcp)
@@ -91,6 +96,7 @@ export function createServer(opts: CreateServerOptions = {}): StagewrightServer 
     dispatcher,
     sessions,
     transports,
+    snapshots,
     async connectStdio(): Promise<void> {
       await mcp.connect(new StdioServerTransport())
     },
@@ -100,6 +106,7 @@ export function createServer(opts: CreateServerOptions = {}): StagewrightServer 
       try {
         await mcp.close()
       } finally {
+        snapshots.clearAll()
         await sessions.disposeAll()
       }
     },
