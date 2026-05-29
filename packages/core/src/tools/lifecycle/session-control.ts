@@ -37,7 +37,11 @@ export const stopTool: AnyToolDefinition = defineTool({
   operationType: 'command',
   handler: async (args, ctx) => {
     const managed = ctx.sessions.resolve(args.sessionId)
-    await ctx.sessions.remove(managed.id)
+    try {
+      await ctx.sessions.remove(managed.id)
+    } finally {
+      ctx.snapshots.clear(managed.id)
+    }
     return makeSuccess(
       { session_id: managed.id, stopped: true },
       { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
@@ -58,7 +62,11 @@ export const forceKillTool: AnyToolDefinition = defineTool({
   operationType: 'command',
   handler: async (args, ctx) => {
     const managed = ctx.sessions.resolve(args.sessionId)
-    await ctx.sessions.remove(managed.id, { force: true })
+    try {
+      await ctx.sessions.remove(managed.id, { force: true })
+    } finally {
+      ctx.snapshots.clear(managed.id)
+    }
     return makeSuccess(
       { session_id: managed.id, killed: true },
       { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },

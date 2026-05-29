@@ -22,6 +22,7 @@ import type { ErrorResponse, SuccessResponse } from '../errors/envelope.js'
 import type { OperationType } from '../errors/operation-type.js'
 import type { Logger } from '../server/logger.js'
 import type { SessionManager } from '../server/session-manager.js'
+import type { SnapshotStore } from '../server/snapshot-store.js'
 import type { TransportRegistry } from '../server/transport-registry.js'
 
 /**
@@ -47,6 +48,8 @@ export interface ToolContext {
    * an existing session use `sessions.resolve(...).transport` instead.
    */
   readonly transports: TransportRegistry
+  /** Per-session last-snapshot store, backing `electron_snapshot({ since: 'last' })`. */
+  readonly snapshots: SnapshotStore
   /** Structured logger. Writes to stderr only (stdout is the MCP protocol channel). */
   readonly logger: Logger
   /**

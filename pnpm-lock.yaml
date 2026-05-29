@@ -45,6 +45,9 @@ importers:
       electron:
         specifier: ^42.3.0
         version: 42.3.0
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
       jsdom:
         specifier: ^29.1.1
         version: 29.1.1
