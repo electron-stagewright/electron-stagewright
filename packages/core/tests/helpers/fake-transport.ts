@@ -10,7 +10,10 @@
 
 import type {
   ITransport,
+  InteractionOptions,
+  PressOptions,
   ScreenshotOptions,
+  ScrollOptions,
   StopOptions,
   TransportCapabilities,
   TransportId,
@@ -27,6 +30,7 @@ const FULL_CAPS: TransportCapabilities = {
   canControlClock: true,
   supportsMainEval: true,
   supportsRendererEval: true,
+  supportsInteraction: true,
 }
 
 /** Evaluate implementation: receives target/body/arg, returns the probe result. */
@@ -82,6 +86,54 @@ export class FakeSession implements TransportSession {
   async windowsList(): Promise<readonly WindowDescriptor[]> {
     if (this.#windowsError !== undefined) throw this.#windowsError
     return this.#windows
+  }
+
+  /** Recorded interaction calls, in order, for assertions in interaction-tool tests. */
+  readonly interactions: { readonly method: string; readonly args: readonly unknown[] }[] = []
+
+  async click(selector: string, opts?: InteractionOptions): Promise<void> {
+    this.interactions.push({ method: 'click', args: [selector, opts] })
+  }
+
+  async fill(selector: string, value: string, opts?: InteractionOptions): Promise<void> {
+    this.interactions.push({ method: 'fill', args: [selector, value, opts] })
+  }
+
+  async hover(selector: string, opts?: InteractionOptions): Promise<void> {
+    this.interactions.push({ method: 'hover', args: [selector, opts] })
+  }
+
+  async press(key: string, opts?: PressOptions): Promise<void> {
+    this.interactions.push({ method: 'press', args: [key, opts] })
+  }
+
+  async selectOption(
+    selector: string,
+    values: readonly string[],
+    opts?: InteractionOptions,
+  ): Promise<readonly string[]> {
+    this.interactions.push({ method: 'selectOption', args: [selector, values, opts] })
+    return values
+  }
+
+  async setChecked(selector: string, checked: boolean, opts?: InteractionOptions): Promise<void> {
+    this.interactions.push({ method: 'setChecked', args: [selector, checked, opts] })
+  }
+
+  async setInputFiles(
+    selector: string,
+    paths: readonly string[],
+    opts?: InteractionOptions,
+  ): Promise<void> {
+    this.interactions.push({ method: 'setInputFiles', args: [selector, paths, opts] })
+  }
+
+  async dragTo(source: string, target: string, opts?: InteractionOptions): Promise<void> {
+    this.interactions.push({ method: 'dragTo', args: [source, target, opts] })
+  }
+
+  async scroll(opts?: ScrollOptions): Promise<void> {
+    this.interactions.push({ method: 'scroll', args: [opts] })
   }
 
   async dispose(): Promise<void> {

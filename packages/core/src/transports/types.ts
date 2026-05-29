@@ -39,6 +39,12 @@ export interface TransportCapabilities {
   readonly supportsMainEval: boolean
   /** The transport can evaluate JavaScript in a renderer (BrowserWindow) context. */
   readonly supportsRendererEval: boolean
+  /**
+   * The transport can perform real user input (click, type, hover, drag, …) on a
+   * renderer element. Drives the `electron_*` interaction tools; a transport that
+   * declares this `false` rejects those methods with `NOT_IMPLEMENTED`.
+   */
+  readonly supportsInteraction: boolean
 }
 
 /**
@@ -147,6 +153,42 @@ export interface ConsoleStream {
 }
 
 /**
+ * Common options for interaction methods. `selector` is a CSS or text selector
+ * the tool layer has already resolved (a snapshot `ref` becomes
+ * `[data-sw-ref="<ref>"]` before reaching the transport).
+ */
+export interface InteractionOptions {
+  /**
+   * Bypass actionability checks (visibility, enabled, stable, receives-events).
+   * Default false — the transport waits for the element to be actionable and
+   * surfaces a failure the tool maps to `ELEMENT_DISABLED` / `ELEMENT_NOT_VISIBLE`.
+   */
+  readonly force?: boolean
+  /** Max wait for the element to become actionable, in ms. */
+  readonly timeoutMs?: number
+}
+
+/** Options for {@link TransportSession.press}. */
+export interface PressOptions {
+  /** When set, focus this element before pressing the key; otherwise press globally. */
+  readonly selector?: string
+  /** Max wait for the element to receive the key, in ms. */
+  readonly timeoutMs?: number
+}
+
+/** Options for {@link TransportSession.scroll}. */
+export interface ScrollOptions {
+  /** When set, scroll this element into view (centred). */
+  readonly selector?: string
+  /** Horizontal wheel delta in CSS pixels (used when `selector` is omitted). */
+  readonly dx?: number
+  /** Vertical wheel delta in CSS pixels (used when `selector` is omitted). */
+  readonly dy?: number
+  /** Max wait for the element, in ms. */
+  readonly timeoutMs?: number
+}
+
+/**
  * A live session against an Electron app, returned by `launch`, `attach`, or
  * `inject`. Disposal is idempotent: calling `dispose()` twice MUST NOT throw,
  * and MUST NOT double-free underlying resources.
@@ -163,6 +205,45 @@ export interface TransportSession {
 
   /** Enumerate the current windows. */
   windowsList(): Promise<readonly WindowDescriptor[]>
+
+  // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
+  // All operate on the active/default window with real user input. Transports
+  // that cannot interact reject these with `NOT_IMPLEMENTED`.
+
+  /** Click an element matched by `selector`. */
+  click(selector: string, opts?: InteractionOptions): Promise<void>
+
+  /** Set the value of a text input / textarea matched by `selector` (fires input events). */
+  fill(selector: string, value: string, opts?: InteractionOptions): Promise<void>
+
+  /** Hover the element matched by `selector`. */
+  hover(selector: string, opts?: InteractionOptions): Promise<void>
+
+  /** Press a key (e.g. `'Enter'`, `'Control+A'`); focuses `opts.selector` first when given. */
+  press(key: string, opts?: PressOptions): Promise<void>
+
+  /** Select option(s) by value in a `<select>` matched by `selector`. Returns the selected values. */
+  selectOption(
+    selector: string,
+    values: readonly string[],
+    opts?: InteractionOptions,
+  ): Promise<readonly string[]>
+
+  /** Check or uncheck a checkbox / radio matched by `selector`. */
+  setChecked(selector: string, checked: boolean, opts?: InteractionOptions): Promise<void>
+
+  /** Set the files of a file input matched by `selector` (absolute paths). */
+  setInputFiles(
+    selector: string,
+    paths: readonly string[],
+    opts?: InteractionOptions,
+  ): Promise<void>
+
+  /** Drag the element matched by `source` onto the element matched by `target`. */
+  dragTo(source: string, target: string, opts?: InteractionOptions): Promise<void>
+
+  /** Scroll an element into view (`opts.selector`) or the page by a wheel delta (`dx`/`dy`). */
+  scroll(opts: ScrollOptions): Promise<void>
 
   readonly ipc: IpcChannel
   readonly console: ConsoleStream

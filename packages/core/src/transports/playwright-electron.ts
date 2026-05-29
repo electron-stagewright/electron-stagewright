@@ -32,9 +32,12 @@ import type {
   ConsoleStream,
   ITransport,
   InjectOptions,
+  InteractionOptions,
   IpcChannel,
   LaunchOptions,
+  PressOptions,
   ScreenshotOptions,
+  ScrollOptions,
   StopOptions,
   TransportCapabilities,
   TransportId,
@@ -45,11 +48,59 @@ import type {
 
 const TRANSPORT_ID: TransportId = 'playwright-electron'
 
+/** Map the transport-neutral interaction options onto Playwright's action options. */
+function toActionOptions(opts: InteractionOptions): { force?: boolean; timeout?: number } {
+  return {
+    ...(opts.force !== undefined ? { force: opts.force } : {}),
+    ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+  }
+}
+
+/** Map the transport-neutral timeout option onto Playwright APIs that lack `force`. */
+function toTimeoutOptions(opts: { readonly timeoutMs?: number }): { timeout?: number } {
+  return {
+    ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+  }
+}
+
+/** Renderer body for selector-based scroll. Waits only when `timeoutMs` is set. */
+function buildScrollIntoViewBody(): string {
+  return `
+const selector = String(arg.selector);
+const timeoutMs =
+  typeof arg.timeoutMs === 'number' && Number.isFinite(arg.timeoutMs)
+    ? Math.max(0, arg.timeoutMs)
+    : 0;
+const startedAt = Date.now();
+for (;;) {
+  let element = null;
+  try {
+    element = document.querySelector(selector);
+  } catch {
+    return false;
+  }
+  if (element !== null) {
+    element.scrollIntoView({ block: 'center', inline: 'center' });
+    return true;
+  }
+  const remaining = timeoutMs - (Date.now() - startedAt);
+  if (remaining <= 0) return false;
+  await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));
+}
+`
+}
+
 /**
  * Local opaque interfaces describing the slice of Playwright's API we use. We
  * avoid `import type { ElectronApplication } from 'playwright'` because the
  * optional peerDep may not be installed at typecheck time on consumer projects.
  */
+/** The slice of Playwright's actionability options the interaction methods use. */
+interface PWActionOptions {
+  force?: boolean
+  timeout?: number
+}
+
 interface PWPage {
   url(): string
   title(): Promise<string>
@@ -61,6 +112,21 @@ interface PWPage {
     quality?: number
   }): Promise<Buffer>
   isVisible(selector: string): Promise<boolean>
+  click(selector: string, opts?: PWActionOptions): Promise<void>
+  fill(selector: string, value: string, opts?: PWActionOptions): Promise<void>
+  hover(selector: string, opts?: PWActionOptions): Promise<void>
+  press(selector: string, key: string, opts?: PWActionOptions): Promise<void>
+  selectOption(
+    selector: string,
+    values: readonly string[],
+    opts?: PWActionOptions,
+  ): Promise<readonly string[]>
+  check(selector: string, opts?: PWActionOptions): Promise<void>
+  uncheck(selector: string, opts?: PWActionOptions): Promise<void>
+  setInputFiles(selector: string, files: readonly string[], opts?: PWActionOptions): Promise<void>
+  dragAndDrop(source: string, target: string, opts?: PWActionOptions): Promise<void>
+  keyboard: { press(key: string): Promise<void> }
+  mouse: { wheel(deltaX: number, deltaY: number): Promise<void> }
 }
 
 interface PWElectronApp {
@@ -261,6 +327,94 @@ class PlaywrightSession implements TransportSession {
     return descriptors
   }
 
+  /** The active window that interaction targets. Playwright's first window. */
+  private async activePage(): Promise<PWPage> {
+    return this.requireRunning().firstWindow()
+  }
+
+  async click(selector: string, opts: InteractionOptions = {}): Promise<void> {
+    await (await this.activePage()).click(selector, toActionOptions(opts))
+  }
+
+  async fill(selector: string, value: string, opts: InteractionOptions = {}): Promise<void> {
+    await (await this.activePage()).fill(selector, value, toActionOptions(opts))
+  }
+
+  async hover(selector: string, opts: InteractionOptions = {}): Promise<void> {
+    await (await this.activePage()).hover(selector, toActionOptions(opts))
+  }
+
+  async press(key: string, opts: PressOptions = {}): Promise<void> {
+    const page = await this.activePage()
+    if (opts.selector !== undefined) {
+      await page.press(opts.selector, key, toTimeoutOptions(opts))
+    } else {
+      await page.keyboard.press(key)
+    }
+  }
+
+  async selectOption(
+    selector: string,
+    values: readonly string[],
+    opts: InteractionOptions = {},
+  ): Promise<readonly string[]> {
+    return (await this.activePage()).selectOption(selector, values, toActionOptions(opts))
+  }
+
+  async setChecked(
+    selector: string,
+    checked: boolean,
+    opts: InteractionOptions = {},
+  ): Promise<void> {
+    const page = await this.activePage()
+    if (checked) {
+      await page.check(selector, toActionOptions(opts))
+    } else {
+      await page.uncheck(selector, toActionOptions(opts))
+    }
+  }
+
+  async setInputFiles(
+    selector: string,
+    paths: readonly string[],
+    opts: InteractionOptions = {},
+  ): Promise<void> {
+    await (await this.activePage()).setInputFiles(selector, paths, toTimeoutOptions(opts))
+  }
+
+  async dragTo(source: string, target: string, opts: InteractionOptions = {}): Promise<void> {
+    await (await this.activePage()).dragAndDrop(source, target, toActionOptions(opts))
+  }
+
+  async scroll(opts: ScrollOptions = {}): Promise<void> {
+    const page = await this.activePage()
+    if (opts.selector !== undefined) {
+      // Scroll the element into view via the renderer; avoids needing a separate
+      // Playwright locator API in the minimal page surface. The body reports
+      // whether the element was found so a no-match surfaces as SELECTOR_NO_MATCH
+      // instead of resolving silently — every other interaction method rejects on
+      // a missing target, and scroll must not diverge or the tool layer would
+      // report a phantom success it cannot diagnose.
+      const found = await page.evaluate<boolean>(
+        (input) =>
+          Function('arg', `"use strict"; return (async () => { ${input.body} })()`)(input.arg),
+        {
+          body: buildScrollIntoViewBody(),
+          arg: { selector: opts.selector, timeoutMs: opts.timeoutMs },
+        },
+      )
+      if (!found) {
+        throw new StagewrightError(
+          'SELECTOR_NO_MATCH',
+          `scroll target "${opts.selector}" matched no element.`,
+          { transport: TRANSPORT_ID, selector: opts.selector },
+        )
+      }
+      return
+    }
+    await page.mouse.wheel(opts.dx ?? 0, opts.dy ?? 0)
+  }
+
   private async resolveWindow(app: PWElectronApp, ref: WindowRef): Promise<PWPage> {
     const pages = app.windows()
     if (pages.length === 0) {
@@ -373,6 +527,7 @@ export class PlaywrightElectronTransport implements ITransport {
     canControlClock: false,
     supportsMainEval: true,
     supportsRendererEval: true,
+    supportsInteraction: true,
   }
 
   async launch(opts: LaunchOptions): Promise<TransportSession> {

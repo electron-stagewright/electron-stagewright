@@ -15,6 +15,7 @@
  *   contract via the type system and a lightweight runtime fake).
  */
 
+import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 
 import { StagewrightError } from '../src/errors/registry.js'
@@ -41,21 +42,40 @@ const FAKE_SESSION: TransportSession = {
   evaluate: async () => undefined as unknown,
   screenshot: async () => Buffer.alloc(0),
   windowsList: async () => [],
+  click: async () => undefined,
+  fill: async () => undefined,
+  hover: async () => undefined,
+  press: async () => undefined,
+  selectOption: async (_selector, values) => values,
+  setChecked: async () => undefined,
+  setInputFiles: async () => undefined,
+  dragTo: async () => undefined,
+  scroll: async () => undefined,
   dispose: async () => undefined,
 }
 
-function createFakePage(title: string) {
+function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
   let screenshotCalls = 0
+  // Records every interaction method invocation, in order, so tests can assert
+  // PlaywrightSession routed the call to the right page method with the mapped
+  // actionability options ({ force, timeoutMs } -> { force, timeout }).
+  const interactions: { readonly method: string; readonly args: readonly unknown[] }[] = []
   return {
     get screenshotCalls() {
       return screenshotCalls
     },
+    interactions,
     url: () => `app:///${title}`,
     title: async () => title,
     evaluate: async <T = unknown>(
       fn: (payload: { readonly body: string; readonly arg?: unknown }) => T | Promise<T>,
       arg?: { readonly body: string; readonly arg?: unknown },
     ) => {
+      // The scroll-into-view body queries `document`, which does not exist in the
+      // Node test environment. When a test supplies `evalResult`, short-circuit to
+      // it so the transport's found/not-found handling can be exercised without a
+      // DOM (the real renderer execution is covered by the gated Electron smoke).
+      if (opts.evalResult !== undefined) return opts.evalResult as T
       if (arg === undefined) return undefined as T
       return fn(arg)
     },
@@ -64,6 +84,44 @@ function createFakePage(title: string) {
       return Buffer.from(title)
     },
     isVisible: async () => true,
+    click: async (selector: string, opts?: unknown) => {
+      interactions.push({ method: 'click', args: [selector, opts] })
+    },
+    fill: async (selector: string, value: string, opts?: unknown) => {
+      interactions.push({ method: 'fill', args: [selector, value, opts] })
+    },
+    hover: async (selector: string, opts?: unknown) => {
+      interactions.push({ method: 'hover', args: [selector, opts] })
+    },
+    press: async (selector: string, key: string, opts?: unknown) => {
+      interactions.push({ method: 'press', args: [selector, key, opts] })
+    },
+    selectOption: async (selector: string, values: readonly string[], opts?: unknown) => {
+      interactions.push({ method: 'selectOption', args: [selector, values, opts] })
+      return values
+    },
+    check: async (selector: string, opts?: unknown) => {
+      interactions.push({ method: 'check', args: [selector, opts] })
+    },
+    uncheck: async (selector: string, opts?: unknown) => {
+      interactions.push({ method: 'uncheck', args: [selector, opts] })
+    },
+    setInputFiles: async (selector: string, files: readonly string[], opts?: unknown) => {
+      interactions.push({ method: 'setInputFiles', args: [selector, files, opts] })
+    },
+    dragAndDrop: async (source: string, target: string, opts?: unknown) => {
+      interactions.push({ method: 'dragAndDrop', args: [source, target, opts] })
+    },
+    keyboard: {
+      press: async (key: string) => {
+        interactions.push({ method: 'keyboard.press', args: [key] })
+      },
+    },
+    mouse: {
+      wheel: async (deltaX: number, deltaY: number) => {
+        interactions.push({ method: 'mouse.wheel', args: [deltaX, deltaY] })
+      },
+    },
   }
 }
 
@@ -129,6 +187,7 @@ describe('PlaywrightElectronTransport', () => {
       canControlClock: false,
       supportsMainEval: true,
       supportsRendererEval: true,
+      supportsInteraction: true,
     })
   })
 
@@ -299,6 +358,157 @@ describe('PlaywrightElectronTransport', () => {
     expect(app.closeCalls).toBe(1)
     await expect(session.windowsList()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })
+
+  it('routes interaction methods to the active page with mapped actionability options', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    // { force, timeoutMs } collapses to Playwright's { force, timeout }.
+    await session.click('#go', { force: true, timeoutMs: 500 })
+    await session.fill('#name', 'Ada', { timeoutMs: 250 })
+    await session.hover('#menu')
+    await session.setChecked('#agree', true)
+    await session.setChecked('#agree', false)
+    await session.setInputFiles('#file', ['/abs/a.txt', '/abs/b.txt'], {
+      force: true,
+      timeoutMs: 125,
+    })
+    await session.dragTo('#src', '#dst', { force: true })
+
+    expect(page.interactions).toEqual([
+      { method: 'click', args: ['#go', { force: true, timeout: 500 }] },
+      { method: 'fill', args: ['#name', 'Ada', { timeout: 250 }] },
+      { method: 'hover', args: ['#menu', {}] },
+      { method: 'check', args: ['#agree', {}] },
+      { method: 'uncheck', args: ['#agree', {}] },
+      { method: 'setInputFiles', args: ['#file', ['/abs/a.txt', '/abs/b.txt'], { timeout: 125 }] },
+      { method: 'dragAndDrop', args: ['#src', '#dst', { force: true }] },
+    ])
+
+    expect(session.transport).toBe('playwright-electron')
+  })
+
+  it('returns the resolved values from selectOption', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(session.selectOption('#sel', ['x', 'y'])).resolves.toEqual(['x', 'y'])
+    expect(page.interactions).toEqual([{ method: 'selectOption', args: ['#sel', ['x', 'y'], {}] }])
+  })
+
+  it('press targets a selector when given one, else the active keyboard', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await session.press('Enter', { selector: '#input', timeoutMs: 100 })
+    await session.press('Escape')
+
+    expect(page.interactions).toEqual([
+      { method: 'press', args: ['#input', 'Enter', { timeout: 100 }] },
+      { method: 'keyboard.press', args: ['Escape'] },
+    ])
+  })
+
+  it('scrolls via the mouse wheel when no selector is supplied', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await session.scroll({ dx: 0, dy: 480 })
+    await session.scroll()
+
+    expect(page.interactions).toEqual([
+      { method: 'mouse.wheel', args: [0, 480] },
+      { method: 'mouse.wheel', args: [0, 0] },
+    ])
+  })
+
+  it('resolves when scroll-into-view finds the target element', async () => {
+    const page = createFakePage('A', { evalResult: true })
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(session.scroll({ selector: '#present' })).resolves.toBeUndefined()
+    // The selector path goes through the renderer, never the wheel.
+    expect(page.interactions).toEqual([])
+  })
+
+  it('waits up to timeoutMs for scroll-into-view to find the target element', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    const dom = new JSDOM('<main></main>')
+    const documentGlobal = globalThis as typeof globalThis & { document?: Document }
+    const previousDocument = documentGlobal.document
+    let scrolled = false
+
+    documentGlobal.document = dom.window.document
+    setTimeout(() => {
+      const button = dom.window.document.createElement('button')
+      button.id = 'late'
+      button.scrollIntoView = () => {
+        scrolled = true
+      }
+      dom.window.document.querySelector('main')?.append(button)
+    }, 1)
+
+    try {
+      await expect(session.scroll({ selector: '#late', timeoutMs: 100 })).resolves.toBeUndefined()
+    } finally {
+      if (previousDocument === undefined) {
+        delete documentGlobal.document
+      } else {
+        documentGlobal.document = previousDocument
+      }
+    }
+    expect(scrolled).toBe(true)
+  })
+
+  it('rejects with SELECTOR_NO_MATCH when scroll-into-view finds no element', async () => {
+    const page = createFakePage('A', { evalResult: false })
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(session.scroll({ selector: '#missing' })).rejects.toMatchObject({
+      code: 'SELECTOR_NO_MATCH',
+    })
+  })
+
+  it('refuses interaction after the session is disposed', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    await session.dispose()
+
+    await expect(session.click('#go')).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
 })
 
 describe('CDPTransport', () => {
@@ -314,6 +524,7 @@ describe('CDPTransport', () => {
       canControlClock: true,
       supportsMainEval: true,
       supportsRendererEval: true,
+      supportsInteraction: false,
     })
   })
 
@@ -358,6 +569,7 @@ describe('InjectorTransport', () => {
       canControlClock: false,
       supportsMainEval: true,
       supportsRendererEval: false,
+      supportsInteraction: false,
     })
   })
 

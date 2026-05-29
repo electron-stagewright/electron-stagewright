@@ -65,6 +65,7 @@ export class InjectorTransport implements ITransport {
     canControlClock: false,
     supportsMainEval: true,
     supportsRendererEval: false,
+    supportsInteraction: false,
   }
 
   launch(_opts: LaunchOptions): Promise<TransportSession> {

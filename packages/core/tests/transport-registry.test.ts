@@ -19,6 +19,7 @@ function caps(partial: Partial<TransportCapabilities>): TransportCapabilities {
     canControlClock: false,
     supportsMainEval: false,
     supportsRendererEval: false,
+    supportsInteraction: false,
     ...partial,
   }
 }
