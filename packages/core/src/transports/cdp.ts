@@ -66,6 +66,8 @@ export class CDPTransport implements ITransport {
     canControlClock: true,
     supportsMainEval: true,
     supportsRendererEval: true,
+    // CDP can drive Input.dispatch* once implemented; the stub does not yet.
+    supportsInteraction: false,
   }
 
   launch(_opts: LaunchOptions): Promise<TransportSession> {
