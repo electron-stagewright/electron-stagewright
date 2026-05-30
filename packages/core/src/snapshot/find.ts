@@ -1,6 +1,6 @@
 /**
  * Semantic query over a snapshot. `findEntries` lets an agent ask for elements
- * by role / name / visibility / interactivity without re-reading the full
+ * by role / name / state / interactivity without re-reading the full
  * snapshot or guessing CSS selectors.
  *
  * Pure filter over an already-produced `Snapshot`. All provided query fields
@@ -31,6 +31,9 @@ function matchesQuery(entry: SnapshotEntry, query: FindQuery): boolean {
     return false
   }
   if (query.visible !== undefined && entry.state.visible !== query.visible) {
+    return false
+  }
+  if (query.enabled !== undefined && entry.state.enabled !== query.enabled) {
     return false
   }
   if (query.name_exact !== undefined) {

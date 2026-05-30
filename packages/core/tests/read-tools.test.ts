@@ -178,6 +178,7 @@ describe('bundle-backed read tools', () => {
   it('electron_get_state returns the full state envelope', async () => {
     const state = {
       visible: true,
+      enabled: true,
       disabled: false,
       checked: null,
       selected: null,

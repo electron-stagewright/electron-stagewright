@@ -65,9 +65,13 @@ describe('read smoke (real Electron)', () => {
       const state = (await dispatcher.dispatch('electron_get_state', {
         sessionId,
         selector: '#ping',
-      })) as SuccessResponse & { role: string; state: { visible: boolean; disabled: boolean } }
+      })) as SuccessResponse & {
+        role: string
+        state: { visible: boolean; enabled: boolean; disabled: boolean }
+      }
       expect(state.role).toBe('button')
       expect(state.state.visible).toBe(true)
+      expect(state.state.enabled).toBe(true)
       expect(state.state.disabled).toBe(false)
 
       await dispatcher.dispatch('electron_type', { sessionId, selector: '#name', text: 'Ada' })

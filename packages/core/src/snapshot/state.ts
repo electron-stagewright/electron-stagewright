@@ -3,8 +3,9 @@
  *
  * The state shape is documented in `schema.ts`. Every flag is always present:
  * `null` when the flag does not apply to the entry's role; `true` / `false`
- * when it does. Agents can read `state.disabled === true` and
- * `state.checked === false` without defensive `?.` access.
+ * when it does. Agents can read `state.enabled === true`,
+ * `state.disabled === true`, and `state.checked === false` without defensive
+ * `?.` access.
  *
  * Layout-sensitive checks (`state.visible` via computed styles) compensate for
  * jsdom limitations: when computed style data is unavailable the walker treats
@@ -81,9 +82,11 @@ const INVALID_ROLES = new Set<SnapshotRole>([
  * role so this module does not duplicate role resolution.
  */
 export function extractState(element: Element, role: SnapshotRole): SnapshotState {
+  const disabled = isDisabled(element)
   return {
     visible: isVisible(element),
-    disabled: isDisabled(element),
+    enabled: !disabled,
+    disabled,
     checked: CHECKED_ROLES.has(role) ? readBooleanAttr(element, ['checked', 'aria-checked']) : null,
     selected: SELECTED_ROLES.has(role)
       ? readBooleanAttr(element, ['aria-selected', 'selected'])

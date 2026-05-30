@@ -20,24 +20,30 @@ import { type AnyToolDefinition, defineTool } from '../types.js'
 import { buildWalkBody, loadInjectedWalker } from './inject.js'
 import { reconcileRetagAndStore } from './refs.js'
 
-const inputSchema = z.object({
-  sessionId: z
-    .string()
-    .optional()
-    .describe('Target session id. Omit when a single session is running.'),
-  role: z.string().optional().describe('Accessibility role to match exactly (e.g. "button").'),
-  name_contains: z.string().optional().describe('Substring the accessible name must contain.'),
-  name_exact: z.string().optional().describe('Exact accessible name to match.'),
-  visible: z.boolean().optional().describe('Restrict to visible (or hidden) elements.'),
-  interactive: z
-    .boolean()
-    .optional()
-    .describe('Restrict to interactive (or non-interactive) elements.'),
-})
+const inputSchema = z
+  .object({
+    sessionId: z
+      .string()
+      .optional()
+      .describe('Target session id. Omit when a single session is running.'),
+    role: z.string().optional().describe('Accessibility role to match exactly (e.g. "button").'),
+    name_contains: z.string().optional().describe('Substring the accessible name must contain.'),
+    name_exact: z.string().optional().describe('Exact accessible name to match.'),
+    visible: z.boolean().optional().describe('Restrict to visible (or hidden) elements.'),
+    enabled: z.boolean().optional().describe('Restrict to enabled (or disabled) elements.'),
+    interactive: z
+      .boolean()
+      .optional()
+      .describe('Restrict to interactive (or non-interactive) elements.'),
+  })
+  .refine((args) => args.name_contains === undefined || args.name_exact === undefined, {
+    message: 'Provide name_contains or name_exact, not both.',
+    path: ['name_exact'],
+  })
 
 const DESCRIPTION = [
   'Find elements in the renderer by accessibility role + name + state — no CSS selectors.',
-  'Filters: role (exact), name_contains, name_exact, visible, interactive. Returns:',
+  'Filters: role (exact), name_contains, name_exact, visible, enabled, interactive. Returns:',
   '{ ok, matches: [{ ref, role, name, bbox }], count, renderer_reloaded }. A ref may be null',
   'for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable),',
   'BAD_ARGUMENT (multiple sessions live — pass sessionId).',
@@ -81,6 +87,7 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
         ...(args.name_contains !== undefined ? { name_contains: args.name_contains } : {}),
         ...(args.name_exact !== undefined ? { name_exact: args.name_exact } : {}),
         ...(args.visible !== undefined ? { visible: args.visible } : {}),
+        ...(args.enabled !== undefined ? { enabled: args.enabled } : {}),
         ...(args.interactive !== undefined ? { interactive: args.interactive } : {}),
       }
       const matches = findEntries(snapshot, query).map((entry) => ({

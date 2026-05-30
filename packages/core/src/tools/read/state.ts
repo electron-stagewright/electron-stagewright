@@ -1,8 +1,8 @@
 /**
  * `electron_get_state` — the full state envelope of one element (visible,
- * disabled, checked, selected, expanded, pressed, focused, readonly, required,
- * invalid, busy) in a single call, so an agent answers "is this clickable" /
- * "is this checked" without re-snapshotting. Reuses the walker bundle's
+ * enabled, disabled, checked, selected, expanded, pressed, focused, readonly,
+ * required, invalid, busy) in a single call, so an agent answers "is this
+ * clickable" / "is this checked" without re-snapshotting. Reuses the walker bundle's
  * single-element probe so the state semantics are identical to a snapshot.
  *
  * @module
@@ -29,7 +29,7 @@ export function makeGetStateTool(deps: ReadProbeDeps = {}): AnyToolDefinition {
     title: 'Get an element’s full state',
     description: [
       'Return the full state envelope of the element identified by ref or selector:',
-      '{ visible, disabled, checked, selected, expanded, pressed, focused, readonly, required, invalid, busy }',
+      '{ visible, enabled, disabled, checked, selected, expanded, pressed, focused, readonly, required, invalid, busy }',
       'plus its role and name. One call answers "is this clickable / checked / focused".',
       'Returns: { ok, session_id, ref, role, name, state }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH',
       '(carries similar_refs), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (invalid selector or',

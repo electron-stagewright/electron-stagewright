@@ -88,6 +88,13 @@ export const ERROR_CODES = {
     hint: 'Element is disabled; address the disabled state via app-level interaction.',
   },
 
+  // Waits
+  WAIT_TIMEOUT: {
+    http: 408,
+    retryable: true,
+    hint: 'The awaited condition did not hold within timeoutMs; raise timeoutMs or recheck the condition.',
+  },
+
   // Transports
   TRANSPORT_UNSUPPORTED: {
     http: 501,
