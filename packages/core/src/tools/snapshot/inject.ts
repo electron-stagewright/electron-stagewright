@@ -54,6 +54,16 @@ export function buildWalkBody(bundle: string): string {
 }
 
 /**
+ * Build the renderer-eval body that runs the single-element read probe the
+ * bundle installs as `globalThis.__stagewrightProbe`. The read tools call it with
+ * `arg = { mode, selector?, limit? }` (the transport's evaluate wrapper passes
+ * `arg`), reusing the same role / accname / state machinery as the walker.
+ */
+export function buildProbeBody(bundle: string): string {
+  return `${bundle}\nreturn globalThis.__stagewrightProbe(arg);`
+}
+
+/**
  * Build the renderer-eval body that retags elements after server-side ref
  * reconciliation. The initial walk tags elements with document-order refs; when
  * reconciliation reuses previous refs, the DOM tags must be swapped to match the
