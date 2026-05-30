@@ -6,7 +6,7 @@
 import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 
-import { type SuccessResponse } from '../src/errors/envelope.js'
+import { type ErrorResponse, type SuccessResponse } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
@@ -81,6 +81,28 @@ describe('electron_find', () => {
     })) as SuccessResponse & FindResult
     expect(res.count).toBe(1)
     expect(res.matches[0]?.name).toContain('Save')
+  })
+
+  it('filters by enabled state', async () => {
+    const { dispatcher } = setup('<button>Save</button><button disabled>Reset</button>')
+    const res = (await dispatcher.dispatch('electron_find', {
+      role: 'button',
+      enabled: false,
+    })) as SuccessResponse & FindResult
+    expect(res.count).toBe(1)
+    expect(res.matches[0]?.name).toBe('Reset')
+  })
+
+  it('rejects ambiguous name filters', async () => {
+    const { dispatcher } = setup('<button>Save</button>')
+    const res = (await dispatcher.dispatch('electron_find', {
+      name_contains: 'Save',
+      name_exact: 'Save',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.details?.['issues']).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'name_exact' })]),
+    )
   })
 
   it('returns an empty match set when nothing matches', async () => {

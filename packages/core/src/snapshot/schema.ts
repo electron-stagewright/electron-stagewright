@@ -153,12 +153,14 @@ export type SnapshotRole =
  * is null).
  *
  * Tri-state semantics: `null` = not applicable, `true` = flag set, `false` =
- * flag explicitly unset. Agents read `state.disabled === true` and
- * `state.checked === false` confidently.
+ * flag explicitly unset. Agents read `state.enabled === true`,
+ * `state.disabled === true`, and `state.checked === false` confidently.
  */
 export interface SnapshotState {
   /** `true` if visible (`display !== 'none'` and `visibility !== 'hidden'` and not inside `aria-hidden`). */
   readonly visible: boolean
+  /** Convenience inverse of `disabled`, exposed so agents can ask for enabled controls directly. */
+  readonly enabled: boolean
   /** `true` if the element is `:disabled` or has `aria-disabled="true"` or is inside a disabled fieldset. */
   readonly disabled: boolean
   /** Checked state for checkboxes / radios. `null` if role does not have a checked state. */
@@ -272,6 +274,7 @@ export interface FindQuery {
   readonly name_contains?: string
   readonly name_exact?: string
   readonly visible?: boolean
+  readonly enabled?: boolean
   readonly interactive?: boolean
 }
 
@@ -346,6 +349,7 @@ export const SnapshotJsonSchema = {
       type: 'object',
       required: [
         'visible',
+        'enabled',
         'disabled',
         'checked',
         'selected',
@@ -361,6 +365,7 @@ export const SnapshotJsonSchema = {
       additionalProperties: false,
       properties: {
         visible: { type: 'boolean' },
+        enabled: { type: 'boolean' },
         disabled: { type: 'boolean' },
         checked: { type: ['boolean', 'null'] },
         selected: { type: ['boolean', 'null'] },

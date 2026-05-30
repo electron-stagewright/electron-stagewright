@@ -9,6 +9,7 @@ import { INTERACTION_TOOLS } from './interaction/index.js'
 import { LIFECYCLE_TOOLS } from './lifecycle/index.js'
 import { READ_TOOLS } from './read/index.js'
 import { SNAPSHOT_TOOLS } from './snapshot/index.js'
+import { WAIT_TOOLS } from './wait/index.js'
 import type { AnyToolDefinition } from './types.js'
 
 export {
@@ -24,16 +25,19 @@ export { LIFECYCLE_TOOLS } from './lifecycle/index.js'
 export { SNAPSHOT_TOOLS } from './snapshot/index.js'
 export { INTERACTION_TOOLS } from './interaction/index.js'
 export { READ_TOOLS } from './read/index.js'
+export { WAIT_TOOLS } from './wait/index.js'
 
 /**
  * The full set of tools registered with the dispatcher by default — lifecycle
  * (launch/stop/info/windows/discover/…), snapshot (snapshot/find), interaction
- * (click/type/key/hover/drag/scroll/select/check/set-files), and read
- * (get_text/value/attribute/state/bbox/computed_style/exists/focused/elements).
+ * (click/type/key/hover/drag/scroll/select/check/set-files), read
+ * (get_text/value/attribute/state/bbox/computed_style/exists/focused/elements),
+ * and wait (wait/wait_for_selector/wait_for_state/wait_for_event).
  */
 export const DEFAULT_TOOLS: readonly AnyToolDefinition[] = [
   ...LIFECYCLE_TOOLS,
   ...SNAPSHOT_TOOLS,
   ...INTERACTION_TOOLS,
   ...READ_TOOLS,
+  ...WAIT_TOOLS,
 ]

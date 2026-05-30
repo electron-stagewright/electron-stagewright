@@ -309,6 +309,7 @@ describe('extractState — full state envelope, role-aware nulls', () => {
     const entry = findEntry(snap, byRoleAndName('button', 'Save'))
     expect(entry).toBeDefined()
     if (entry !== undefined) {
+      expect(entry.state.enabled).toBe(true)
       expect(entry.state.disabled).toBe(false)
       expect(entry.state.busy).toBe(false)
       // button has no checked/selected/readonly/required/invalid
@@ -329,6 +330,7 @@ describe('extractState — full state envelope, role-aware nulls', () => {
     expect(entry).toBeDefined()
     if (entry !== undefined) {
       expect(entry.interactive).toBe(true)
+      expect(entry.state.enabled).toBe(false)
       expect(entry.state.disabled).toBe(true)
     }
   })
@@ -570,6 +572,7 @@ describe('walkAccessibilityTree — top-level shape', () => {
     expect(entry).toBeDefined()
     if (entry !== undefined) {
       expect(typeof entry.state.visible).toBe('boolean')
+      expect(typeof entry.state.enabled).toBe('boolean')
       expect(typeof entry.state.disabled).toBe('boolean')
       expect(typeof entry.state.busy).toBe('boolean')
       expect(typeof entry.state.focused).toBe('boolean')
@@ -816,6 +819,7 @@ describe('SnapshotJsonSchema export', () => {
     expect(Object.keys(stateProps)).toEqual(
       expect.arrayContaining([
         'visible',
+        'enabled',
         'disabled',
         'checked',
         'selected',
@@ -876,6 +880,7 @@ describe('framework-shape fixtures', () => {
     it('detects the disabled Reset button with state.disabled=true', () => {
       const reset = findEntry(snap, byRoleAndName('button', 'Reset'))
       expect(reset).toBeDefined()
+      expect(reset?.state.enabled).toBe(false)
       expect(reset?.state.disabled).toBe(true)
       // Still interactive: the agent SEES it but reads state.disabled.
       expect(reset?.interactive).toBe(true)

@@ -83,6 +83,7 @@ function bboxEqual(a: SnapshotBbox, b: SnapshotBbox): boolean {
 function stateEqual(a: SnapshotState, b: SnapshotState): boolean {
   return (
     a.visible === b.visible &&
+    a.enabled === b.enabled &&
     a.disabled === b.disabled &&
     a.checked === b.checked &&
     a.selected === b.selected &&
