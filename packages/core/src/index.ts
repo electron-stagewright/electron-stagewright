@@ -36,7 +36,7 @@ export * from './snapshot/index.js'
 
 /**
  * Tools — the {@link ToolDefinition} contract every tool is expressed in, plus
- * the concrete tool families (lifecycle today; interaction/read/eval to come).
+ * the concrete tool families (lifecycle, snapshot, interaction, read, wait, eval).
  */
 export * from './tools/index.js'
 
