@@ -9,6 +9,8 @@
  * Flags:
  * - `--allow-eval` — register tools that execute arbitrary JavaScript (default:
  *   off). When disabled, eval-classified tools are omitted from `tools/list`.
+ * - `--screenshot-dir <path>` — directory the screenshot tool writes captures
+ *   into when no explicit path is given (default: the OS temp dir).
  *
  * On SIGINT / SIGTERM the server is closed and every live session disposed, so a
  * Ctrl-C never leaves a launched Electron process orphaned.
@@ -22,17 +24,34 @@ import { StderrLogger } from './server/logger.js'
 /** Parsed CLI options. */
 interface CliOptions {
   readonly allowEval: boolean
+  readonly screenshotDir?: string
+}
+
+/** Read the value following a `--flag <value>` argument, or `undefined` when absent. */
+function readFlagValue(argv: readonly string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag)
+  if (index === -1) return undefined
+  const value = argv[index + 1]
+  return value !== undefined && !value.startsWith('--') ? value : undefined
 }
 
 /** Parse the supported flags from argv (excluding `node` and the script path). */
 export function parseCliArgs(argv: readonly string[]): CliOptions {
-  return { allowEval: argv.includes('--allow-eval') }
+  const screenshotDir = readFlagValue(argv, '--screenshot-dir')
+  return {
+    allowEval: argv.includes('--allow-eval'),
+    ...(screenshotDir !== undefined ? { screenshotDir } : {}),
+  }
 }
 
 async function main(): Promise<void> {
-  const { allowEval } = parseCliArgs(process.argv.slice(2))
+  const { allowEval, screenshotDir } = parseCliArgs(process.argv.slice(2))
   const logger = new StderrLogger({ level: 'info' })
-  const server = createServer({ allowEval, logger })
+  const server = createServer({
+    allowEval,
+    logger,
+    ...(screenshotDir !== undefined ? { screenshotDir } : {}),
+  })
 
   let shuttingDown = false
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

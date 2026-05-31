@@ -10,6 +10,8 @@
 
 import type {
   ClickOptions,
+  ConsoleEntry,
+  ConsoleLogsResult,
   ITransport,
   InteractionOptions,
   PressOptions,
@@ -54,6 +56,12 @@ export interface FakeSessionOptions {
    * mapping (e.g. a Playwright-like "element is not enabled" message → ELEMENT_DISABLED).
    */
   readonly interactionError?: Error
+  /** Canned console buffer returned by `consoleLogs` (oldest first). */
+  readonly consoleEntries?: readonly ConsoleEntry[]
+  /** Canned dropped-entry count returned by `consoleLogs`. */
+  readonly consoleOverflowed?: number
+  /** Buffer returned by `screenshot` (defaults to an empty buffer). */
+  readonly screenshotResult?: Buffer
 }
 
 /** In-memory {@link TransportSession}. Tracks dispose calls for idempotency tests. */
@@ -68,6 +76,8 @@ export class FakeSession implements TransportSession {
   readonly #windows: readonly WindowDescriptor[]
   readonly #windowsError?: Error
   readonly #interactionError?: Error
+  readonly #consoleEntries: readonly ConsoleEntry[]
+  readonly #consoleOverflowed: number
 
   constructor(opts: FakeSessionOptions = {}) {
     this.id = opts.id ?? `fake-${Math.random().toString(36).slice(2, 10)}`
@@ -78,7 +88,18 @@ export class FakeSession implements TransportSession {
     this.#windows = opts.windows ?? []
     if (opts.windowsError !== undefined) this.#windowsError = opts.windowsError
     if (opts.interactionError !== undefined) this.#interactionError = opts.interactionError
+    this.#consoleEntries = opts.consoleEntries ?? []
+    this.#consoleOverflowed = opts.consoleOverflowed ?? 0
+    this.#screenshotResult = opts.screenshotResult ?? Buffer.alloc(0)
   }
+
+  async consoleLogs(): Promise<ConsoleLogsResult> {
+    return { entries: this.#consoleEntries, overflowed: this.#consoleOverflowed }
+  }
+
+  /** Recorded screenshot calls, for asserting window targeting / clip / format. */
+  readonly screenshotCalls: { readonly target: WindowRef; readonly opts?: ScreenshotOptions }[] = []
+  readonly #screenshotResult: Buffer
 
   /** Throw the configured interaction error, if any, before recording a call. */
   #failIfConfigured(): void {
@@ -93,8 +114,9 @@ export class FakeSession implements TransportSession {
     return (await this.#evaluate(target, body, arg)) as T
   }
 
-  async screenshot(_target: WindowRef, _opts?: ScreenshotOptions): Promise<Buffer> {
-    return Buffer.alloc(0)
+  async screenshot(target: WindowRef, opts?: ScreenshotOptions): Promise<Buffer> {
+    this.screenshotCalls.push({ target, ...(opts !== undefined ? { opts } : {}) })
+    return this.#screenshotResult
   }
 
   async windowsList(): Promise<readonly WindowDescriptor[]> {

@@ -30,6 +30,8 @@ import { StagewrightError } from '../errors/registry.js'
 import type {
   AttachOptions,
   ClickOptions,
+  ConsoleEntry,
+  ConsoleLogsResult,
   ConsoleStream,
   ITransport,
   InjectOptions,
@@ -149,6 +151,14 @@ interface PWPage {
   dragAndDrop(source: string, target: string, opts?: PWActionOptions): Promise<void>
   keyboard: { press(key: string): Promise<void>; type(text: string): Promise<void> }
   mouse: { wheel(deltaX: number, deltaY: number): Promise<void> }
+  on(event: 'console', handler: (message: PWConsoleMessage) => void): void
+}
+
+/** The slice of Playwright's ConsoleMessage we read into a {@link ConsoleEntry}. */
+interface PWConsoleMessage {
+  type(): string
+  text(): string
+  location(): { url?: string; lineNumber?: number; columnNumber?: number }
 }
 
 interface PWElectronApp {
@@ -261,9 +271,68 @@ class PlaywrightSession implements TransportSession {
   private readonly windowIds = new WeakMap<PWPage, string>()
   private nextWindowId = 0
 
-  constructor(app: PWElectronApp) {
+  /** Max console entries retained; older ones are dropped and counted in `#consoleOverflow`. */
+  static readonly #CONSOLE_CAP = 1000
+  private readonly consoleBuffer: ConsoleEntry[] = []
+  private consoleOverflow = 0
+
+  constructor(app: PWElectronApp, initialPage?: PWPage) {
     this.id = `pw-${randomUUID()}`
     this.app = app
+    // Best-effort console capture from the first window, from launch onward. A
+    // failure to attach (no window, dead app) is non-fatal — consoleLogs simply
+    // returns whatever was captured. When the caller already resolved the first
+    // window (launch does), reuse it so we make no extra firstWindow() call.
+    if (initialPage !== undefined) {
+      this.attachConsole(initialPage)
+    } else {
+      void this.attachConsoleCapture()
+    }
+  }
+
+  /** Resolve the first window (when not supplied) and attach the console listener. */
+  private async attachConsoleCapture(): Promise<void> {
+    try {
+      const app = this.app
+      if (app === null) return
+      this.attachConsole(await app.firstWindow())
+    } catch {
+      // Console capture is best-effort; a missing/closed window is not an error.
+    }
+  }
+
+  /** Attach the console listener to `page` so its messages buffer for `consoleLogs`. */
+  private attachConsole(page: PWPage): void {
+    page.on('console', (message) => this.pushConsole(message))
+  }
+
+  /** Append a captured console message, dropping the oldest when the buffer is full. */
+  private pushConsole(message: PWConsoleMessage): void {
+    const loc = message.location()
+    const entry: ConsoleEntry = {
+      type: message.type(),
+      text: message.text(),
+      timestamp: Date.now(),
+      ...(loc.url !== undefined || loc.lineNumber !== undefined
+        ? {
+            location: {
+              ...(loc.url !== undefined ? { url: loc.url } : {}),
+              ...(loc.lineNumber !== undefined ? { line: loc.lineNumber } : {}),
+              ...(loc.columnNumber !== undefined ? { column: loc.columnNumber } : {}),
+            },
+          }
+        : {}),
+    }
+    this.consoleBuffer.push(entry)
+    if (this.consoleBuffer.length > PlaywrightSession.#CONSOLE_CAP) {
+      this.consoleBuffer.shift()
+      this.consoleOverflow += 1
+    }
+  }
+
+  async consoleLogs(): Promise<ConsoleLogsResult> {
+    this.requireRunning()
+    return { entries: [...this.consoleBuffer], overflowed: this.consoleOverflow }
   }
 
   private requireRunning(): PWElectronApp {
@@ -577,8 +646,11 @@ export class PlaywrightElectronTransport implements ITransport {
         { transport: TRANSPORT_ID, appPath: opts.appPath ?? opts.executablePath ?? '' },
       )
     }
+    let initialPage: PWPage
     try {
-      await app.firstWindow(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : undefined)
+      initialPage = await app.firstWindow(
+        opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : undefined,
+      )
     } catch (cause) {
       try {
         await app.close()
@@ -593,7 +665,9 @@ export class PlaywrightElectronTransport implements ITransport {
         { transport: TRANSPORT_ID, appPath: opts.appPath ?? opts.executablePath ?? '' },
       )
     }
-    return new PlaywrightSession(app)
+    // Reuse the window we already awaited for console capture, so launch makes a
+    // single firstWindow() call rather than one here and one in the session.
+    return new PlaywrightSession(app, initialPage)
   }
 
   attach(_opts: AttachOptions): Promise<TransportSession> {

@@ -34,6 +34,12 @@ describe('default tool surface contract', () => {
     }
   })
 
+  it('uses specific operation types for observe tools', () => {
+    const byName = new Map(DEFAULT_TOOLS.map((tool) => [tool.name, tool.operationType]))
+    expect(byName.get('electron_screenshot')).toBe('screenshot')
+    expect(byName.get('electron_console_logs')).toBe('logs')
+  })
+
   it('registers into the dispatcher with JSON-schema-renderable input manifests', () => {
     // allowEval: true so the eval-gated tools register too — otherwise the
     // dispatcher hides them and the manifest is short of DEFAULT_TOOLS. (The

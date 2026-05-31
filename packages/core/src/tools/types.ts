@@ -60,6 +60,12 @@ export interface ToolContext {
    */
   readonly allowEval: boolean
   /**
+   * Directory the screenshot tool writes captures into when the caller does not
+   * pass an explicit absolute `path`. Configured by the server; `undefined` means
+   * the tool falls back to the OS temp dir.
+   */
+  readonly screenshotDir?: string | undefined
+  /**
    * Epoch-ms timestamp captured by the dispatcher when the call began. Pass it
    * (with {@link ToolContext.now}) to `makeSuccess` / `makeError` so the
    * response's `_meta.elapsed_ms` reflects the whole dispatch, not just the
