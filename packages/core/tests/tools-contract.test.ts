@@ -35,7 +35,10 @@ describe('default tool surface contract', () => {
   })
 
   it('registers into the dispatcher with JSON-schema-renderable input manifests', () => {
-    const dispatcher = new Dispatcher({ sessions: new SessionManager() })
+    // allowEval: true so the eval-gated tools register too — otherwise the
+    // dispatcher hides them and the manifest is short of DEFAULT_TOOLS. (The
+    // default-deny gate is exercised in eval-tools.test.ts.)
+    const dispatcher = new Dispatcher({ sessions: new SessionManager(), allowEval: true })
     dispatcher.registerAll(DEFAULT_TOOLS)
     const manifest = dispatcher.listManifest()
     expect(manifest).toHaveLength(DEFAULT_TOOLS.length)
