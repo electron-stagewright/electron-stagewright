@@ -38,6 +38,7 @@ describe('default tool surface contract', () => {
     const byName = new Map(DEFAULT_TOOLS.map((tool) => [tool.name, tool.operationType]))
     expect(byName.get('electron_screenshot')).toBe('screenshot')
     expect(byName.get('electron_console_logs')).toBe('logs')
+    expect(byName.get('electron_dialog_handler')).toBe('dialog')
   })
 
   it('registers into the dispatcher with JSON-schema-renderable input manifests', () => {

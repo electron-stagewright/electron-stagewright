@@ -181,6 +181,73 @@ export interface ConsoleLogsResult {
   readonly overflowed: number
 }
 
+/** How the dialog auto-responder resolves a native JS dialog. */
+export type DialogAction = 'accept' | 'dismiss'
+
+/** The kinds of native JS dialog an Electron renderer can raise. */
+export type DialogType = 'alert' | 'confirm' | 'prompt' | 'beforeunload'
+
+/**
+ * The auto-response policy for native JS dialogs (`alert` / `confirm` / `prompt` /
+ * `beforeunload`). These dialogs block the renderer until something answers, so
+ * there is no time to round-trip to the agent — the session applies this policy
+ * the instant a dialog fires. The policy is forward-looking: it governs the next
+ * dialog onward and never retroactively changes an already-handled dialog.
+ */
+export interface DialogPolicy {
+  /** Default action for any dialog without a more specific {@link DialogPolicy.perType} entry. */
+  readonly action: DialogAction
+  /** Text submitted to a `prompt()` dialog when its effective action is `accept`; ignored otherwise. */
+  readonly promptText?: string
+  /**
+   * Per-type overrides (e.g. accept `confirm` but dismiss `beforeunload`). A type
+   * absent from this map falls back to {@link DialogPolicy.action}.
+   */
+  readonly perType?: Partial<Record<DialogType, DialogAction>>
+  /**
+   * When true, the policy resolves exactly ONE dialog and then reverts to the safe
+   * `dismiss` default. Prevents a lingering `accept` from silently confirming a
+   * later, unexpected (possibly destructive) dialog.
+   */
+  readonly oneShot?: boolean
+}
+
+/**
+ * One observed native JS dialog, recorded in the per-session ring buffer AFTER the
+ * auto-responder resolved it. All fields are JSON-serialisable.
+ */
+export interface DialogEvent {
+  /** Dialog kind reported by the renderer (`'alert'`/`'confirm'`/`'prompt'`/`'beforeunload'`, …). */
+  readonly type: string
+  /** The dialog's message text. */
+  readonly message: string
+  /** How the auto-responder resolved this dialog. */
+  readonly action: DialogAction
+  /** The `prompt()` default value, when the renderer supplied a non-empty one. */
+  readonly defaultValue?: string
+  /** The text submitted to a `prompt()` accept, when any. */
+  readonly promptText?: string
+  /** Epoch milliseconds when the dialog was captured by the server. */
+  readonly timestamp: number
+}
+
+/** Options for {@link TransportSession.dialogEvents}. */
+export interface DialogEventsOptions {
+  /** When true, flush the entire dialog buffer (and overflow counter) AFTER reading it. */
+  readonly clear?: boolean
+}
+
+/**
+ * Result of reading a session's dialog buffer. `entries` is the retained tail
+ * (oldest first); `overflowed` is the number of older entries the capped ring
+ * dropped; `policy` is the auto-response policy currently in effect.
+ */
+export interface DialogEventsResult {
+  readonly entries: readonly DialogEvent[]
+  readonly overflowed: number
+  readonly policy: DialogPolicy
+}
+
 /**
  * Common options for interaction methods. `selector` is a CSS or text selector
  * the tool layer has already resolved (a snapshot `ref` becomes
@@ -250,6 +317,18 @@ export interface TransportSession {
 
   /** Read the session's rolling console buffer (oldest first) plus the dropped-entry count. */
   consoleLogs(): Promise<ConsoleLogsResult>
+
+  /**
+   * Arm the auto-responder for native JS dialogs. The policy takes effect for the
+   * NEXT dialog onward; it does not retroactively change already-handled dialogs.
+   */
+  setDialogPolicy(policy: DialogPolicy): Promise<void>
+
+  /**
+   * Read the captured dialog events (oldest first), the dropped-entry count, and
+   * the active policy. Pass `{ clear: true }` to flush the buffer after reading.
+   */
+  dialogEvents(opts?: DialogEventsOptions): Promise<DialogEventsResult>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

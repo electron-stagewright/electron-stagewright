@@ -23,6 +23,12 @@ export type {
   ConsoleStream,
   ConsoleEntry,
   ConsoleLogsResult,
+  DialogAction,
+  DialogType,
+  DialogPolicy,
+  DialogEvent,
+  DialogEventsOptions,
+  DialogEventsResult,
   TransportSession,
   ITransport,
 } from './types.js'

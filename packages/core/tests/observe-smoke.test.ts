@@ -1,7 +1,8 @@
 /**
- * Real-Electron observe smoke — proves `electron_screenshot` writes a real PNG and
- * `electron_console_logs` captures a real renderer console message end to end
- * (neither is reproducible under JSDOM, which has no renderer or layout).
+ * Real-Electron observe smoke — proves `electron_screenshot` writes a real PNG,
+ * `electron_console_logs` captures a real renderer console message, and
+ * `electron_dialog_handler` auto-responds to real native dialogs end to end (none
+ * of which is reproducible under JSDOM, which has no renderer or layout).
  *
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (and `electron` + `playwright` are
  * installed with their binaries). Skipped by default. Run it locally with:
@@ -68,6 +69,26 @@ describe('observe smoke (real Electron)', () => {
         match: 'stagewright-console-probe',
       })) as SuccessResponse & { count: number }
       expect(logs.count).toBeGreaterThanOrEqual(1)
+
+      // Arm accept, trigger a real confirm() and alert(), then read the captured
+      // dialog events back. The clicks only resolve because the session's dialog
+      // listener auto-responds. (Electron has no window.prompt(), so prompt-text
+      // handling is exercised in the unit tests, not here.)
+      await dispatcher.dispatch('electron_dialog_handler', { sessionId, action: 'accept' })
+      await dispatcher.dispatch('electron_click', { sessionId, selector: '#confirm' })
+      await dispatcher.dispatch('electron_click', { sessionId, selector: '#alert' })
+      const dialogs = (await dispatcher.dispatch('electron_dialog_handler', {
+        sessionId,
+      })) as SuccessResponse & {
+        count: number
+        entries: { type: string; action: string }[]
+      }
+      expect(dialogs.count).toBeGreaterThanOrEqual(2)
+      expect(dialogs.entries.map((e) => e.type)).toEqual(
+        expect.arrayContaining(['confirm', 'alert']),
+      )
+      const confirmed = dialogs.entries.find((e) => e.type === 'confirm')
+      expect(confirmed?.action).toBe('accept')
 
       const stopped = await dispatcher.dispatch('electron_stop', { sessionId })
       expect(stopped.ok).toBe(true)

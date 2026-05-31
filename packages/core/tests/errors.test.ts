@@ -261,7 +261,15 @@ describe('makeSuccess', () => {
 
 describe('OperationType discriminator', () => {
   it('accepts each registered operation type', () => {
-    const valid: OperationType[] = ['command', 'query', 'eval', 'screenshot', 'logs', 'window_info']
+    const valid: OperationType[] = [
+      'command',
+      'query',
+      'eval',
+      'screenshot',
+      'logs',
+      'dialog',
+      'window_info',
+    ]
     for (const op of valid) {
       expect(OperationTypeSchema.parse(op)).toBe(op)
     }
@@ -339,8 +347,8 @@ describe('routeByOperationType', () => {
     expect(() => routeByOperationType('command', 'process.exit(0)')).not.toThrow()
   })
 
-  it("routes 'query', 'screenshot', 'logs', 'window_info' through validateCommandContent", () => {
-    const nonEvalOps: OperationType[] = ['query', 'screenshot', 'logs', 'window_info']
+  it("routes 'query', 'screenshot', 'logs', 'dialog', 'window_info' through validateCommandContent", () => {
+    const nonEvalOps: OperationType[] = ['query', 'screenshot', 'logs', 'dialog', 'window_info']
     for (const op of nonEvalOps) {
       expect(() => routeByOperationType(op, 'process.exit(0)')).not.toThrow()
     }
@@ -361,7 +369,15 @@ describe('manifest-level OperationTypeSchema validation (boot-time fail-closed)'
   // via OperationTypeSchema.parse(). These tests pin the boot-time contract.
 
   it('parses every valid operation type', () => {
-    const valid: OperationType[] = ['command', 'query', 'eval', 'screenshot', 'logs', 'window_info']
+    const valid: OperationType[] = [
+      'command',
+      'query',
+      'eval',
+      'screenshot',
+      'logs',
+      'dialog',
+      'window_info',
+    ]
     for (const op of valid) {
       expect(OperationTypeSchema.parse(op)).toBe(op)
     }
