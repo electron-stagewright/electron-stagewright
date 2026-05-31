@@ -153,6 +153,35 @@ export interface ConsoleStream {
 }
 
 /**
+ * One captured console message from the app's renderer, in the rolling per-session
+ * buffer read by `TransportSession.consoleLogs`. All fields are JSON-serialisable.
+ */
+export interface ConsoleEntry {
+  /** Console level reported by the renderer (`'log'`, `'info'`, `'warning'`, `'error'`, `'debug'`, …). */
+  readonly type: string
+  /** The message text. */
+  readonly text: string
+  /** Epoch milliseconds when the message was captured by the server. */
+  readonly timestamp: number
+  /** Source location, when the renderer reports one. */
+  readonly location?: {
+    readonly url?: string
+    readonly line?: number
+    readonly column?: number
+  }
+}
+
+/**
+ * Result of reading a session's console buffer. `entries` is the retained tail
+ * (oldest first); `overflowed` is the number of older entries the capped ring
+ * dropped, so an agent knows the view is incomplete.
+ */
+export interface ConsoleLogsResult {
+  readonly entries: readonly ConsoleEntry[]
+  readonly overflowed: number
+}
+
+/**
  * Common options for interaction methods. `selector` is a CSS or text selector
  * the tool layer has already resolved (a snapshot `ref` becomes
  * `[data-sw-ref="<ref>"]` before reaching the transport).
@@ -218,6 +247,9 @@ export interface TransportSession {
 
   /** Enumerate the current windows. */
   windowsList(): Promise<readonly WindowDescriptor[]>
+
+  /** Read the session's rolling console buffer (oldest first) plus the dropped-entry count. */
+  consoleLogs(): Promise<ConsoleLogsResult>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

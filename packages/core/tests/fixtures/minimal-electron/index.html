@@ -14,5 +14,8 @@
       <option value="apple">Apple</option>
       <option value="pear">Pear</option>
     </select>
+    <!-- Logs on click, so the gated observe smoke can capture a console entry
+         reliably (after the session's console listener has attached). -->
+    <button id="log" onclick="console.log('stagewright-console-probe')">Log</button>
   </body>
 </html>

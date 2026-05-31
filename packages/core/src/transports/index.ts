@@ -21,6 +21,8 @@ export type {
   ScrollOptions,
   IpcChannel,
   ConsoleStream,
+  ConsoleEntry,
+  ConsoleLogsResult,
   TransportSession,
   ITransport,
 } from './types.js'

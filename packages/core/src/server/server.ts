@@ -46,6 +46,8 @@ export interface CreateServerOptions {
   readonly tools?: Iterable<AnyToolDefinition>
   /** Transport registry. Defaults to the built-in set (Playwright/CDP/Injector). */
   readonly transports?: TransportRegistry
+  /** Default directory the screenshot tool writes into; falls back to the OS temp dir. */
+  readonly screenshotDir?: string
   /** Clock injection for deterministic timing in tests. */
   readonly now?: () => number
 }
@@ -84,6 +86,7 @@ export function createServer(opts: CreateServerOptions = {}): StagewrightServer 
     snapshots,
     logger,
     allowEval: opts.allowEval ?? false,
+    ...(opts.screenshotDir !== undefined ? { screenshotDir: opts.screenshotDir } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
   })
   dispatcher.registerAll(opts.tools ?? DEFAULT_TOOLS)

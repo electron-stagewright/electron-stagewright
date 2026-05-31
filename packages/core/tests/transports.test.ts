@@ -42,6 +42,7 @@ const FAKE_SESSION: TransportSession = {
   evaluate: async () => undefined as unknown,
   screenshot: async () => Buffer.alloc(0),
   windowsList: async () => [],
+  consoleLogs: async () => ({ entries: [], overflowed: 0 }),
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -60,6 +61,7 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
   // PlaywrightSession routed the call to the right page method with the mapped
   // actionability options ({ force, timeoutMs } -> { force, timeout }).
   const interactions: { readonly method: string; readonly args: readonly unknown[] }[] = []
+  const consoleHandlers: ((message: unknown) => void)[] = []
   return {
     get screenshotCalls() {
       return screenshotCalls
@@ -127,6 +129,20 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
       wheel: async (deltaX: number, deltaY: number) => {
         interactions.push({ method: 'mouse.wheel', args: [deltaX, deltaY] })
       },
+    },
+    // Console-event capture: store the listener and expose an emitter so tests
+    // can drive PlaywrightSession's console buffer without a real renderer.
+    consoleHandlers,
+    on(event: 'console', handler: (message: unknown) => void) {
+      if (event === 'console') consoleHandlers.push(handler)
+    },
+    emitConsole(message: { type: string; text: string; location?: unknown }) {
+      const msg = {
+        type: () => message.type,
+        text: () => message.text,
+        location: () => message.location ?? {},
+      }
+      for (const handler of consoleHandlers) handler(msg)
     },
   }
 }
@@ -728,5 +744,45 @@ describe('TransportSession idempotent dispose contract (type-level)', () => {
     return Promise.all([session.dispose(), session.dispose(), session.dispose()]).then(() => {
       expect(calls).toBe(1)
     })
+  })
+})
+
+describe('PlaywrightSession console buffer', () => {
+  it('captures console messages from the first window for consoleLogs', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    page.emitConsole({ type: 'error', text: 'boom', location: { url: 'app://x', lineNumber: 4 } })
+    page.emitConsole({ type: 'log', text: 'ok' })
+
+    const { entries, overflowed } = await session.consoleLogs()
+    expect(overflowed).toBe(0)
+    expect(entries.map((e) => ({ type: e.type, text: e.text }))).toEqual([
+      { type: 'error', text: 'boom' },
+      { type: 'log', text: 'ok' },
+    ])
+    expect(entries[0]?.location).toEqual({ url: 'app://x', line: 4 })
+    expect(typeof entries[0]?.timestamp).toBe('number')
+  })
+
+  it('drops the oldest entries past the cap and counts the overflow', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    for (let i = 0; i < 1005; i++) page.emitConsole({ type: 'log', text: `m${i}` })
+
+    const { entries, overflowed } = await session.consoleLogs()
+    expect(entries).toHaveLength(1000)
+    expect(overflowed).toBe(5)
+    expect(entries[0]?.text).toBe('m5')
+    expect(entries.at(-1)?.text).toBe('m1004')
   })
 })

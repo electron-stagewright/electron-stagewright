@@ -60,6 +60,8 @@ export interface DispatcherOptions {
    * eval-gated tools register at all. Defaults to false (eval tools hidden).
    */
   readonly allowEval?: boolean
+  /** Default directory the screenshot tool writes into when no explicit path is given. */
+  readonly screenshotDir?: string
   /** Clock injection for deterministic `_meta.elapsed_ms` in tests. */
   readonly now?: () => number
   /** Elapsed-ms threshold above which a dispatch logs a slow-op warning. */
@@ -103,6 +105,7 @@ export class Dispatcher {
   readonly #snapshots: SnapshotStore
   readonly #logger: Logger
   readonly #allowEval: boolean
+  readonly #screenshotDir?: string
   readonly #now: () => number
   readonly #slowMs: number
 
@@ -112,6 +115,7 @@ export class Dispatcher {
     this.#snapshots = opts.snapshots ?? new SnapshotStore()
     this.#logger = opts.logger ?? NOOP_LOGGER
     this.#allowEval = opts.allowEval ?? false
+    if (opts.screenshotDir !== undefined) this.#screenshotDir = opts.screenshotDir
     this.#now = opts.now ?? Date.now
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
   }
@@ -228,6 +232,7 @@ export class Dispatcher {
       snapshots: this.#snapshots,
       logger: this.#logger,
       allowEval: this.#allowEval,
+      ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
       startedAt,
       now: this.#now,
     }
