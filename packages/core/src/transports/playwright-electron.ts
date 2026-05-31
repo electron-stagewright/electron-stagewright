@@ -33,6 +33,12 @@ import type {
   ConsoleEntry,
   ConsoleLogsResult,
   ConsoleStream,
+  DialogAction,
+  DialogEvent,
+  DialogEventsOptions,
+  DialogEventsResult,
+  DialogPolicy,
+  DialogType,
   ITransport,
   InjectOptions,
   InteractionOptions,
@@ -152,6 +158,7 @@ interface PWPage {
   keyboard: { press(key: string): Promise<void>; type(text: string): Promise<void> }
   mouse: { wheel(deltaX: number, deltaY: number): Promise<void> }
   on(event: 'console', handler: (message: PWConsoleMessage) => void): void
+  on(event: 'dialog', handler: (dialog: PWDialog) => void): void
 }
 
 /** The slice of Playwright's ConsoleMessage we read into a {@link ConsoleEntry}. */
@@ -159,6 +166,19 @@ interface PWConsoleMessage {
   type(): string
   text(): string
   location(): { url?: string; lineNumber?: number; columnNumber?: number }
+}
+
+/**
+ * The slice of Playwright's Dialog we read + resolve. Once a `dialog` listener is
+ * attached, Playwright stops auto-dismissing dialogs, so the handler MUST call
+ * `accept`/`dismiss` or the renderer hangs.
+ */
+interface PWDialog {
+  type(): string
+  message(): string
+  defaultValue(): string
+  accept(promptText?: string): Promise<void>
+  dismiss(): Promise<void>
 }
 
 interface PWElectronApp {
@@ -276,34 +296,108 @@ class PlaywrightSession implements TransportSession {
   private readonly consoleBuffer: ConsoleEntry[] = []
   private consoleOverflow = 0
 
+  /** Max dialog events retained; older ones are dropped and counted in `dialogOverflow`. */
+  static readonly #DIALOG_CAP = 200
+  private readonly dialogBuffer: DialogEvent[] = []
+  private dialogOverflow = 0
+  /**
+   * Active dialog auto-response policy. Defaults to `dismiss` so that — the moment
+   * a `dialog` listener is attached (which stops Playwright's own auto-dismiss) —
+   * every dialog is still resolved and the renderer never hangs, even before the
+   * agent arms anything.
+   */
+  private dialogPolicy: DialogPolicy = { action: 'dismiss' }
+
   constructor(app: PWElectronApp, initialPage?: PWPage) {
     this.id = `pw-${randomUUID()}`
     this.app = app
-    // Best-effort console capture from the first window, from launch onward. A
-    // failure to attach (no window, dead app) is non-fatal — consoleLogs simply
-    // returns whatever was captured. When the caller already resolved the first
+    // Best-effort console + dialog capture from the first window, from launch
+    // onward. A failure to attach (no window, dead app) is non-fatal — the
+    // buffers simply stay empty. When the caller already resolved the first
     // window (launch does), reuse it so we make no extra firstWindow() call.
     if (initialPage !== undefined) {
       this.attachConsole(initialPage)
+      this.attachDialog(initialPage)
     } else {
-      void this.attachConsoleCapture()
+      void this.attachCapture()
     }
   }
 
-  /** Resolve the first window (when not supplied) and attach the console listener. */
-  private async attachConsoleCapture(): Promise<void> {
+  /** Resolve the first window (when not supplied) and attach the event listeners. */
+  private async attachCapture(): Promise<void> {
     try {
       const app = this.app
       if (app === null) return
-      this.attachConsole(await app.firstWindow())
+      const page = await app.firstWindow()
+      this.attachConsole(page)
+      this.attachDialog(page)
     } catch {
-      // Console capture is best-effort; a missing/closed window is not an error.
+      // Event capture is best-effort; a missing/closed window is not an error.
     }
   }
 
   /** Attach the console listener to `page` so its messages buffer for `consoleLogs`. */
   private attachConsole(page: PWPage): void {
     page.on('console', (message) => this.pushConsole(message))
+  }
+
+  /** Attach the dialog listener to `page` so it auto-responds and buffers events. */
+  private attachDialog(page: PWPage): void {
+    page.on('dialog', (dialog) => {
+      // `handleDialog` is fire-and-forget; a malformed dialog handle (a throwing
+      // getter) would otherwise surface as an unhandled rejection and, under Node's
+      // default `--unhandled-rejections=throw`, terminate the whole server. Swallow
+      // here so one bad dialog can never take down every live session.
+      void this.handleDialog(dialog).catch(() => {})
+    })
+  }
+
+  /** Resolve a native JS dialog per the active policy and record what happened. */
+  private async handleDialog(dialog: PWDialog): Promise<void> {
+    // Read the dialog's fields BEFORE responding — accept()/dismiss() can
+    // invalidate the handle.
+    const type = dialog.type()
+    const message = dialog.message()
+    const defaultValue = dialog.defaultValue()
+    const policy = this.dialogPolicy
+    const action: DialogAction = policy.perType?.[type as DialogType] ?? policy.action
+    const promptText = action === 'accept' && type === 'prompt' ? policy.promptText : undefined
+
+    // A one-shot policy reverts to the safe default after a single dialog, so a
+    // lingering `accept` cannot silently confirm a later, unexpected dialog.
+    if (policy.oneShot === true) {
+      this.dialogPolicy = { action: 'dismiss' }
+    }
+
+    try {
+      if (action === 'accept') {
+        await dialog.accept(promptText)
+      } else {
+        await dialog.dismiss()
+      }
+    } catch {
+      // The dialog may already be handled or the page may have closed mid-flight;
+      // recording the event is still useful for post-mortem, so swallow and fall
+      // through to push it.
+    }
+
+    this.pushDialog({
+      type,
+      message,
+      action,
+      ...(defaultValue !== '' ? { defaultValue } : {}),
+      ...(promptText !== undefined ? { promptText } : {}),
+      timestamp: Date.now(),
+    })
+  }
+
+  /** Append a captured dialog event, dropping the oldest when the buffer is full. */
+  private pushDialog(entry: DialogEvent): void {
+    this.dialogBuffer.push(entry)
+    if (this.dialogBuffer.length > PlaywrightSession.#DIALOG_CAP) {
+      this.dialogBuffer.shift()
+      this.dialogOverflow += 1
+    }
   }
 
   /** Append a captured console message, dropping the oldest when the buffer is full. */
@@ -333,6 +427,27 @@ class PlaywrightSession implements TransportSession {
   async consoleLogs(): Promise<ConsoleLogsResult> {
     this.requireRunning()
     return { entries: [...this.consoleBuffer], overflowed: this.consoleOverflow }
+  }
+
+  async setDialogPolicy(policy: DialogPolicy): Promise<void> {
+    this.requireRunning()
+    this.dialogPolicy = copyDialogPolicy(policy)
+  }
+
+  async dialogEvents(opts: DialogEventsOptions = {}): Promise<DialogEventsResult> {
+    this.requireRunning()
+    // Snapshot the buffer (a copy) BEFORE an optional clear, so the returned
+    // entries survive the flush.
+    const result: DialogEventsResult = {
+      entries: [...this.dialogBuffer],
+      overflowed: this.dialogOverflow,
+      policy: copyDialogPolicy(this.dialogPolicy),
+    }
+    if (opts.clear === true) {
+      this.dialogBuffer.length = 0
+      this.dialogOverflow = 0
+    }
+    return result
   }
 
   private requireRunning(): PWElectronApp {
@@ -608,6 +723,15 @@ class PlaywrightSession implements TransportSession {
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function copyDialogPolicy(policy: DialogPolicy): DialogPolicy {
+  return {
+    action: policy.action,
+    ...(policy.promptText !== undefined ? { promptText: policy.promptText } : {}),
+    ...(policy.perType !== undefined ? { perType: { ...policy.perType } } : {}),
+    ...(policy.oneShot !== undefined ? { oneShot: policy.oneShot } : {}),
+  }
 }
 
 export class PlaywrightElectronTransport implements ITransport {

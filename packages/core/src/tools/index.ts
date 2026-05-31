@@ -38,7 +38,7 @@ export { OBSERVE_TOOLS } from './observe/index.js'
  * (get_text/value/attribute/state/bbox/computed_style/exists/focused/elements),
  * wait (wait/wait_for_selector/wait_for_state/wait_for_event), eval
  * (eval_main/eval_renderer — registered only when the server has --allow-eval),
- * and observe (screenshot/console_logs).
+ * and observe (screenshot/console_logs/dialog_handler).
  */
 export const DEFAULT_TOOLS: readonly AnyToolDefinition[] = [
   ...LIFECYCLE_TOOLS,

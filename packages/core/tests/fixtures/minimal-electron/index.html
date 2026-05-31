@@ -17,5 +17,12 @@
     <!-- Logs on click, so the gated observe smoke can capture a console entry
          reliably (after the session's console listener has attached). -->
     <button id="log" onclick="console.log('stagewright-console-probe')">Log</button>
+    <!-- Native dialogs exercised by the gated observe smoke. The session's dialog
+         listener auto-responds per the armed policy, so the click resolves.
+         NOTE: Electron does not support window.prompt() (it is a no-op that returns
+         null and fires no dialog), so the smoke uses confirm + alert; prompt-text
+         handling is covered by the unit tests via the transport fake. -->
+    <button id="confirm" onclick="window.__confirmed = window.confirm('proceed?')">Confirm</button>
+    <button id="alert" onclick="window.alert('heads up')">Alert</button>
   </body>
 </html>

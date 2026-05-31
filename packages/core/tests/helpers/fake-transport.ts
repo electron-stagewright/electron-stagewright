@@ -12,6 +12,10 @@ import type {
   ClickOptions,
   ConsoleEntry,
   ConsoleLogsResult,
+  DialogEvent,
+  DialogEventsOptions,
+  DialogEventsResult,
+  DialogPolicy,
   ITransport,
   InteractionOptions,
   PressOptions,
@@ -60,6 +64,12 @@ export interface FakeSessionOptions {
   readonly consoleEntries?: readonly ConsoleEntry[]
   /** Canned dropped-entry count returned by `consoleLogs`. */
   readonly consoleOverflowed?: number
+  /** Canned dialog buffer returned by `dialogEvents` (oldest first). */
+  readonly dialogEntries?: readonly DialogEvent[]
+  /** Canned dropped-event count returned by `dialogEvents`. */
+  readonly dialogOverflowed?: number
+  /** Initial dialog policy returned by `dialogEvents` (defaults to `{ action: 'dismiss' }`). */
+  readonly dialogPolicy?: DialogPolicy
   /** Buffer returned by `screenshot` (defaults to an empty buffer). */
   readonly screenshotResult?: Buffer
 }
@@ -78,6 +88,18 @@ export class FakeSession implements TransportSession {
   readonly #interactionError?: Error
   readonly #consoleEntries: readonly ConsoleEntry[]
   readonly #consoleOverflowed: number
+  readonly #dialogEntries: DialogEvent[]
+  #dialogOverflowed: number
+  #dialogPolicy: DialogPolicy = { action: 'dismiss' }
+
+  #copyDialogPolicy(policy: DialogPolicy): DialogPolicy {
+    return {
+      action: policy.action,
+      ...(policy.promptText !== undefined ? { promptText: policy.promptText } : {}),
+      ...(policy.perType !== undefined ? { perType: { ...policy.perType } } : {}),
+      ...(policy.oneShot !== undefined ? { oneShot: policy.oneShot } : {}),
+    }
+  }
 
   constructor(opts: FakeSessionOptions = {}) {
     this.id = opts.id ?? `fake-${Math.random().toString(36).slice(2, 10)}`
@@ -90,11 +112,36 @@ export class FakeSession implements TransportSession {
     if (opts.interactionError !== undefined) this.#interactionError = opts.interactionError
     this.#consoleEntries = opts.consoleEntries ?? []
     this.#consoleOverflowed = opts.consoleOverflowed ?? 0
+    this.#dialogEntries = [...(opts.dialogEntries ?? [])]
+    this.#dialogOverflowed = opts.dialogOverflowed ?? 0
+    if (opts.dialogPolicy !== undefined)
+      this.#dialogPolicy = this.#copyDialogPolicy(opts.dialogPolicy)
     this.#screenshotResult = opts.screenshotResult ?? Buffer.alloc(0)
   }
 
   async consoleLogs(): Promise<ConsoleLogsResult> {
     return { entries: this.#consoleEntries, overflowed: this.#consoleOverflowed }
+  }
+
+  /** Records each `setDialogPolicy` call so tool tests can assert the forwarded policy. */
+  readonly dialogPolicyCalls: DialogPolicy[] = []
+
+  async setDialogPolicy(policy: DialogPolicy): Promise<void> {
+    this.dialogPolicyCalls.push(this.#copyDialogPolicy(policy))
+    this.#dialogPolicy = this.#copyDialogPolicy(policy)
+  }
+
+  async dialogEvents(opts: DialogEventsOptions = {}): Promise<DialogEventsResult> {
+    const result: DialogEventsResult = {
+      entries: [...this.#dialogEntries],
+      overflowed: this.#dialogOverflowed,
+      policy: this.#copyDialogPolicy(this.#dialogPolicy),
+    }
+    if (opts.clear === true) {
+      this.#dialogEntries.length = 0
+      this.#dialogOverflowed = 0
+    }
+    return result
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

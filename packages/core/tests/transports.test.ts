@@ -43,6 +43,8 @@ const FAKE_SESSION: TransportSession = {
   screenshot: async () => Buffer.alloc(0),
   windowsList: async () => [],
   consoleLogs: async () => ({ entries: [], overflowed: 0 }),
+  setDialogPolicy: async () => undefined,
+  dialogEvents: async () => ({ entries: [], overflowed: 0, policy: { action: 'dismiss' } }),
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -62,6 +64,7 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
   // actionability options ({ force, timeoutMs } -> { force, timeout }).
   const interactions: { readonly method: string; readonly args: readonly unknown[] }[] = []
   const consoleHandlers: ((message: unknown) => void)[] = []
+  const dialogHandlers: ((dialog: unknown) => void)[] = []
   return {
     get screenshotCalls() {
       return screenshotCalls
@@ -130,11 +133,13 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
         interactions.push({ method: 'mouse.wheel', args: [deltaX, deltaY] })
       },
     },
-    // Console-event capture: store the listener and expose an emitter so tests
-    // can drive PlaywrightSession's console buffer without a real renderer.
+    // Console- and dialog-event capture: store each listener and expose emitters so
+    // tests can drive PlaywrightSession's buffers without a real renderer.
     consoleHandlers,
-    on(event: 'console', handler: (message: unknown) => void) {
+    dialogHandlers,
+    on(event: 'console' | 'dialog', handler: (arg: unknown) => void) {
       if (event === 'console') consoleHandlers.push(handler)
+      else if (event === 'dialog') dialogHandlers.push(handler)
     },
     emitConsole(message: { type: string; text: string; location?: unknown }) {
       const msg = {
@@ -143,6 +148,41 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
         location: () => message.location ?? {},
       }
       for (const handler of consoleHandlers) handler(msg)
+    },
+    /**
+     * Drive a native dialog through the attached listener. Returns a record of how
+     * the session resolved it (accept/dismiss + any prompt text) for assertions.
+     */
+    emitDialog(spec: {
+      type: string
+      message?: string
+      defaultValue?: string
+      throwOnRead?: boolean
+    }) {
+      const record: { accepted: boolean; dismissed: boolean; promptText: string | undefined } = {
+        accepted: false,
+        dismissed: false,
+        promptText: undefined,
+      }
+      const dialog = {
+        type: () => {
+          // Simulate a malformed dialog handle whose getter throws, to exercise the
+          // listener's fire-and-forget rejection guard.
+          if (spec.throwOnRead === true) throw new Error('broken dialog handle')
+          return spec.type
+        },
+        message: () => spec.message ?? '',
+        defaultValue: () => spec.defaultValue ?? '',
+        accept: async (promptText?: string) => {
+          record.accepted = true
+          record.promptText = promptText
+        },
+        dismiss: async () => {
+          record.dismissed = true
+        },
+      }
+      for (const handler of dialogHandlers) handler(dialog)
+      return record
     },
   }
 }
@@ -784,5 +824,156 @@ describe('PlaywrightSession console buffer', () => {
     expect(overflowed).toBe(5)
     expect(entries[0]?.text).toBe('m5')
     expect(entries.at(-1)?.text).toBe('m1004')
+  })
+})
+
+describe('PlaywrightSession dialog handling', () => {
+  // The dialog listener is fire-and-forget (`void handleDialog`), so a macrotask
+  // tick lets its microtasks settle before we assert. The fake dialog's
+  // accept/dismiss resolve synchronously and real dialogs are modal (a new one
+  // cannot arrive until the current resolves), so a single tick is sufficient;
+  // multi-dialog tests still flush between emits to keep ordering deterministic.
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  async function launchWithPage() {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    return { page, session }
+  }
+
+  it('dismisses by default and records the event so dialogs never hang', async () => {
+    const { page, session } = await launchWithPage()
+    const record = page.emitDialog({ type: 'confirm', message: 'proceed?' })
+    await flush()
+    expect(record.dismissed).toBe(true)
+    expect(record.accepted).toBe(false)
+
+    const { entries, policy } = await session.dialogEvents()
+    expect(policy).toEqual({ action: 'dismiss' })
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ type: 'confirm', message: 'proceed?', action: 'dismiss' })
+    expect(typeof entries[0]?.timestamp).toBe('number')
+  })
+
+  it('accepts when armed and submits promptText to prompt() dialogs', async () => {
+    const { page, session } = await launchWithPage()
+    await session.setDialogPolicy({ action: 'accept', promptText: 'LIC-123' })
+
+    const promptRec = page.emitDialog({ type: 'prompt', message: 'key?', defaultValue: 'x' })
+    const confirmRec = page.emitDialog({ type: 'confirm', message: 'ok?' })
+    await flush()
+
+    expect(promptRec.accepted).toBe(true)
+    expect(promptRec.promptText).toBe('LIC-123')
+    // promptText is only meaningful for prompt(); confirm accepts without it.
+    expect(confirmRec.accepted).toBe(true)
+    expect(confirmRec.promptText).toBeUndefined()
+
+    const { entries } = await session.dialogEvents()
+    expect(entries[0]).toMatchObject({
+      type: 'prompt',
+      action: 'accept',
+      defaultValue: 'x',
+      promptText: 'LIC-123',
+    })
+    expect(entries[1]).toMatchObject({ type: 'confirm', action: 'accept' })
+    expect(entries[1]?.promptText).toBeUndefined()
+  })
+
+  it('honours per-type overrides, falling back to the default action', async () => {
+    const { page, session } = await launchWithPage()
+    await session.setDialogPolicy({
+      action: 'accept',
+      perType: { beforeunload: 'dismiss' },
+    })
+
+    const confirmRec = page.emitDialog({ type: 'confirm', message: 'ok?' })
+    const beforeRec = page.emitDialog({ type: 'beforeunload', message: 'leave?' })
+    await flush()
+
+    expect(confirmRec.accepted).toBe(true)
+    expect(beforeRec.dismissed).toBe(true)
+  })
+
+  it('reverts to dismiss after one dialog when oneShot is set', async () => {
+    const { page, session } = await launchWithPage()
+    await session.setDialogPolicy({ action: 'accept', oneShot: true })
+
+    const first = page.emitDialog({ type: 'confirm', message: 'first?' })
+    await flush()
+    const second = page.emitDialog({ type: 'confirm', message: 'second?' })
+    await flush()
+
+    expect(first.accepted).toBe(true)
+    expect(second.dismissed).toBe(true)
+    const { policy } = await session.dialogEvents()
+    expect(policy).toEqual({ action: 'dismiss' })
+  })
+
+  it('returns a defensive copy of the active dialog policy', async () => {
+    const { page, session } = await launchWithPage()
+    await session.setDialogPolicy({ action: 'accept', perType: { confirm: 'dismiss' } })
+
+    const observed = await session.dialogEvents()
+    const observedPolicy = observed.policy as { perType: Record<string, string> }
+    observedPolicy.perType.confirm = 'accept'
+
+    const record = page.emitDialog({ type: 'confirm', message: 'should stay dismissed' })
+    await flush()
+
+    expect(record.dismissed).toBe(true)
+    expect(record.accepted).toBe(false)
+  })
+
+  it('drops the oldest events past the cap and counts the overflow', async () => {
+    const { page, session } = await launchWithPage()
+    for (let i = 0; i < 205; i++) page.emitDialog({ type: 'alert', message: `d${i}` })
+    await flush()
+
+    const { entries, overflowed } = await session.dialogEvents()
+    expect(entries).toHaveLength(200)
+    expect(overflowed).toBe(5)
+    expect(entries[0]?.message).toBe('d5')
+    expect(entries.at(-1)?.message).toBe('d204')
+  })
+
+  it('clears the buffer after reading when asked', async () => {
+    const { page, session } = await launchWithPage()
+    page.emitDialog({ type: 'alert', message: 'hi' })
+    await flush()
+
+    const first = await session.dialogEvents({ clear: true })
+    expect(first.entries).toHaveLength(1)
+    const second = await session.dialogEvents()
+    expect(second.entries).toHaveLength(0)
+    expect(second.overflowed).toBe(0)
+  })
+
+  it('rejects dialog methods after dispose with NOT_RUNNING', async () => {
+    const { session } = await launchWithPage()
+    await session.dispose()
+    await expect(session.dialogEvents()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+    await expect(session.setDialogPolicy({ action: 'accept' })).rejects.toMatchObject({
+      code: 'NOT_RUNNING',
+    })
+  })
+
+  it('survives a malformed dialog handle and keeps capturing later dialogs', async () => {
+    const { page, session } = await launchWithPage()
+    // A throwing getter would otherwise become an unhandled rejection (the listener
+    // is fire-and-forget) and crash the process under Node's default policy. vitest
+    // surfaces unhandled rejections as failures, so this also guards the `.catch()`.
+    page.emitDialog({ type: 'confirm', message: 'boom', throwOnRead: true })
+    await flush()
+    page.emitDialog({ type: 'alert', message: 'ok' })
+    await flush()
+
+    const { entries } = await session.dialogEvents()
+    // The broken dialog was not recorded (it threw before push); the next one was.
+    expect(entries.map((e) => e.type)).toEqual(['alert'])
   })
 })

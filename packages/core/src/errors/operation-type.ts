@@ -61,6 +61,7 @@ import { StagewrightError } from './registry.js'
  * - `eval`: arbitrary JS evaluation (eval_main, eval_renderer). Routed through stricter validation.
  * - `screenshot`: image capture, generally allowed without keyword checks.
  * - `logs`: console / network / IPC log retrieval.
+ * - `dialog`: native JS dialog auto-response policy + capture (dialog_handler).
  * - `window_info`: structural inspection (windows_list, focused_element, get_bbox).
  *
  * Kept as a Zod schema for boot-time manifest validation: the dispatcher uses
@@ -75,6 +76,7 @@ export const OperationTypeSchema = z.enum([
   'eval',
   'screenshot',
   'logs',
+  'dialog',
   'window_info',
 ])
 
