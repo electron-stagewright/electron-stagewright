@@ -9,6 +9,7 @@
  */
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
+import type { ErrorCode } from '../../errors/registry.js'
 import { assertCapability } from '../../transports/index.js'
 import { buildMissError, handleTargetFailure, refFreshnessError, refName } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
@@ -43,14 +44,32 @@ export interface WaitRaw {
 
 /** Options for {@link runWait}. */
 export interface RunWaitOptions {
-  /** Message used for the `WAIT_TIMEOUT` envelope (the tool interpolates the budget). */
+  /** Message used for the timeout envelope (the tool interpolates the budget). */
   readonly timeoutMessage: string
+  /**
+   * Error code emitted when the poll never satisfies. Defaults to `WAIT_TIMEOUT`
+   * (synchronisation). The `expect_*` assertions pass `EXPECTATION_FAILED` so a
+   * never-met expectation reads as an assertion failure, not a sync timeout.
+   */
+  readonly timeoutCode?: ErrorCode
+  /**
+   * Build the `details` object attached to the timeout error from the final poll
+   * result. Defaults to `{ last_state }` when the body reported a `state`. The
+   * `expect_*` tools override this to surface `{ expected, actual }`.
+   */
+  readonly buildTimeoutDetails?: (raw: WaitRaw) => Record<string, unknown> | undefined
+}
+
+/** Default `details` builder: surface the last observed state, as the wait tools do. */
+function defaultTimeoutDetails(raw: WaitRaw): Record<string, unknown> | undefined {
+  return raw?.state !== undefined && raw.state !== null ? { last_state: raw.state } : undefined
 }
 
 /**
  * Run a bounded renderer wait. `mapSuccess` shapes the success payload from a
- * satisfied result; a timeout becomes `WAIT_TIMEOUT` with the last observed state
- * (when the body provided one) under `details.last_state`.
+ * satisfied result; a never-satisfied poll becomes `opts.timeoutCode`
+ * (`WAIT_TIMEOUT` by default) carrying `opts.buildTimeoutDetails(raw)` under
+ * `details` (the last observed state by default).
  */
 export async function runWait(
   ctx: ToolContext,
@@ -87,13 +106,12 @@ export async function runWait(
     if (raw?.satisfied === true) {
       return makeSuccess({ session_id: managed.id, ...mapSuccess(raw) }, meta)
     }
-    return makeError('WAIT_TIMEOUT', {
+    const details = (opts.buildTimeoutDetails ?? defaultTimeoutDetails)(raw)
+    return makeError(opts.timeoutCode ?? 'WAIT_TIMEOUT', {
       ...meta,
       message: opts.timeoutMessage,
       next_actions: ['electron_snapshot()'],
-      ...(raw?.state !== undefined && raw.state !== null
-        ? { details: { last_state: raw.state } }
-        : {}),
+      ...(details !== undefined ? { details } : {}),
     })
   } catch (err) {
     return handleTargetFailure(err, {

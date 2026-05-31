@@ -41,6 +41,22 @@ describe('default tool surface contract', () => {
     expect(byName.get('electron_dialog_handler')).toBe('dialog')
   })
 
+  it('exposes the expect_* assertion family as query tools', () => {
+    const byName = new Map(DEFAULT_TOOLS.map((tool) => [tool.name, tool.operationType]))
+    const expectNames = [
+      'electron_expect_text',
+      'electron_expect_value',
+      'electron_expect_visible',
+      'electron_expect_state',
+      'electron_expect_count',
+      'electron_expect_url',
+      'electron_assert_pattern',
+    ]
+    for (const name of expectNames) {
+      expect(byName.get(name), name).toBe('query')
+    }
+  })
+
   it('registers into the dispatcher with JSON-schema-renderable input manifests', () => {
     // allowEval: true so the eval-gated tools register too — otherwise the
     // dispatcher hides them and the manifest is short of DEFAULT_TOOLS. (The
