@@ -25,8 +25,9 @@ export interface WaitForStateDeps {
 /**
  * Desired state predicate — a subset of the snapshot state envelope. At least one
  * flag must be supplied; the wait resolves when every supplied flag matches.
+ * Exported so `electron_expect_state` shares the exact same predicate shape.
  */
-const stateWant = z
+export const stateWant = z
   .object({
     visible: z.boolean().optional(),
     enabled: z.boolean().optional(),

@@ -17,13 +17,13 @@
  */
 
 /** Shared loop preamble: read a finite, non-negative `timeoutMs` and start the clock. */
-const POLL_PREAMBLE = `
+export const POLL_PREAMBLE = `
 const timeoutMs =
   typeof arg.timeoutMs === 'number' && Number.isFinite(arg.timeoutMs) ? Math.max(0, arg.timeoutMs) : 0;
 const startedAt = Date.now();`
 
 /** Shared loop tail: sleep up to 50ms, or bail when the budget is exhausted. */
-function pollTail(timedOutReturn: string): string {
+export function pollTail(timedOutReturn: string): string {
   return `  const remaining = timeoutMs - (Date.now() - startedAt);
   if (remaining <= 0) return ${timedOutReturn};
   await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));`

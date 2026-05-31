@@ -95,6 +95,13 @@ export const ERROR_CODES = {
     hint: 'The awaited condition did not hold within timeoutMs; raise timeoutMs or recheck the condition.',
   },
 
+  // Assertions (expect_* / assert_pattern)
+  EXPECTATION_FAILED: {
+    http: 417,
+    retryable: true,
+    hint: 'The expectation did not hold; details carry expected vs actual. Re-check state or raise timeoutMs.',
+  },
+
   // Transports
   TRANSPORT_UNSUPPORTED: {
     http: 501,

@@ -57,6 +57,12 @@ describe('ERROR_CODES registry', () => {
     }
   })
 
+  it('registers EXPECTATION_FAILED as a retryable 417 for the expect_* family', () => {
+    expect(ERROR_CODES.EXPECTATION_FAILED).toBeDefined()
+    expect(ERROR_CODES.EXPECTATION_FAILED.http).toBe(417)
+    expect(ERROR_CODES.EXPECTATION_FAILED.retryable).toBe(true)
+  })
+
   it('isErrorCode narrows correctly for registered and unregistered strings', () => {
     expect(isErrorCode('NOT_RUNNING')).toBe(true)
     expect(isErrorCode('REF_NOT_FOUND')).toBe(true)
