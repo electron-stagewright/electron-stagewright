@@ -1,6 +1,6 @@
 # Contributing to Electron Stagewright
 
-This project is in its earliest days. The architecture is locked; the implementation is underway.
+This project is pre-alpha. The core server can already launch and drive real Electron apps; plugin packages and the first npm release are still ahead.
 
 If you're reading this before the first release ships: thanks for stopping by. The most useful contribution right now is **opening a discussion** with use cases or pain points from your own Electron testing experience — that input shapes which plugins land first.
 
@@ -31,7 +31,8 @@ electron-stagewright/
 ├── examples/                 # Example Electron apps + scripted scenarios
 ├── packages/
 │   └── core/                 # @electron-stagewright/core — MCP server
-└── scripts/                  # Build / release tooling
+│       └── scripts/          # Package-local build helpers
+└── .github/workflows/        # CI
 ```
 
 Future plugin packages live under `packages/plugin-*/` and publish as `@electron-stagewright/plugin-*`.

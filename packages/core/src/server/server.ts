@@ -42,7 +42,7 @@ export interface CreateServerOptions {
   readonly logger?: Logger
   /** Level for the default logger when no `logger` is supplied. Defaults to `info`. */
   readonly logLevel?: LogLevel
-  /** Tools to register. Defaults to the core lifecycle tools. */
+  /** Tools to register. Defaults to the full core tool surface exported by DEFAULT_TOOLS. */
   readonly tools?: Iterable<AnyToolDefinition>
   /** Transport registry. Defaults to the built-in set (Playwright/CDP/Injector). */
   readonly transports?: TransportRegistry

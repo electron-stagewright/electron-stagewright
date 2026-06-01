@@ -421,4 +421,5 @@ export const SnapshotJsonSchema = {
   },
 } as const
 
+/** Static type of the JSON schema object used by docs/tests that inspect it. */
 export type SnapshotJsonSchemaShape = typeof SnapshotJsonSchema

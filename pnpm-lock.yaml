@@ -33,6 +33,19 @@ importers:
         specifier: ^4.1.7
         version: 4.1.7(@types/node@24.12.4)(jsdom@29.1.1)(vite@8.0.14(@types/node@24.12.4)(esbuild@0.28.0)(tsx@4.22.3))
 
+  examples/minimal-app:
+    dependencies:
+      '@electron-stagewright/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.3)
+    devDependencies:
+      tsx:
+        specifier: ^4.22.3
+        version: 4.22.3
+
   packages/core:
     dependencies:
       '@modelcontextprotocol/sdk':

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stagewright Minimal Example</title>
+  </head>
+  <body>
+    <h1>Stagewright Minimal Example</h1>
+
+    <!-- A tiny form the scripted session fills in and submits. -->
+    <label>Your name <input id="name" type="text" aria-label="Your name" /></label>
+    <label><input id="subscribe" type="checkbox" /> Subscribe to updates</label>
+    <label>
+      Plan
+      <select id="plan" aria-label="Plan">
+        <option value="free">Free</option>
+        <option value="pro">Pro</option>
+      </select>
+    </label>
+
+    <button id="greet" type="button">Greet</button>
+
+    <!-- The agent reads this line back to verify the interaction landed. -->
+    <p id="status">No greeting yet</p>
+
+    <script>
+      document.getElementById('greet').addEventListener('click', () => {
+        const name = document.getElementById('name').value.trim() || 'stranger'
+        const plan = document.getElementById('plan').value
+        document.getElementById('status').textContent = `Hello, ${name}! Plan: ${plan}.`
+        // Logged so electron_console_logs can confirm the handler ran.
+        console.log(`greeted ${name} on the ${plan} plan`)
+      })
+    </script>
+  </body>
+</html>

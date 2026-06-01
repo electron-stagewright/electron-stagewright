@@ -2,8 +2,11 @@ packages:
   - 'packages/*'
   - 'examples/*'
 
-# Allow native postinstall builds for trusted packages.
-# pnpm 11+ blocks all postinstall scripts by default as a supply-chain
-# safeguard; this map opts back in for the packages we actually need.
+# Approve native postinstall builds for trusted packages. pnpm 11+ blocks all
+# postinstall scripts by default as a supply-chain safeguard; `allowBuilds` opts
+# them back in. electron runs a postinstall that downloads its prebuilt binary —
+# without approval that binary is never fetched and a launch fails with a missing
+# path.txt (the CI failure this fixes). esbuild needs its build approved the same way.
 allowBuilds:
   esbuild: true
+  electron: true
