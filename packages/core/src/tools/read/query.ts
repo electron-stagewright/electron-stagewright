@@ -97,4 +97,5 @@ export function makeElementsListTool(deps: ReadProbeDeps = {}): AnyToolDefinitio
 
 /** The default document-level read tools registered by the server. */
 export const focusedElementTool: AnyToolDefinition = makeFocusedElementTool()
+/** Default `electron_elements_list` instance registered by the server. */
 export const elementsListTool: AnyToolDefinition = makeElementsListTool()

@@ -10,9 +10,10 @@
  * - The dispatcher runs every eval payload through the keyword blocklist
  *   (`EVAL_BLOCKED_KEYWORD`) before the handler — the `code` field is scanned.
  *
- * Full eval hardening (AST inspection, an authorisation policy, a real audit
- * log) is documented as deferred to the forthcoming threat-model ADR; this slice
- * ships the safe default plus a stderr audit breadcrumb and a result-size cap.
+ * Full eval hardening (AST inspection, an authorisation policy, a richer audit
+ * log) is deferred to a future threat-model hardening pass; the current
+ * implementation ships the safe default plus a stderr audit breadcrumb and a
+ * result-size cap.
  *
  * @module
  */

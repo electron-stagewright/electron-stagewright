@@ -7,7 +7,8 @@
  * - Server registers MCP stdio transport with @modelcontextprotocol/sdk.
  * - Tools dispatch through an ITransport abstraction with three implementations
  *   (Playwright `_electron`, CDP direct, Inspector inject).
- * - Plugins are dynamically loaded by package name from @electron-stagewright/plugin-*.
+ * - Domain plugins are planned as separate @electron-stagewright/plugin-* packages;
+ *   the current package intentionally ships only the core tool surface.
  *
  * @packageDocumentation
  */
@@ -36,7 +37,8 @@ export * from './snapshot/index.js'
 
 /**
  * Tools — the {@link ToolDefinition} contract every tool is expressed in, plus
- * the concrete tool families (lifecycle, snapshot, interaction, read, wait, eval, observe).
+ * the concrete tool families (lifecycle, snapshot, interaction, read, wait, eval,
+ * observe, and expect).
  */
 export * from './tools/index.js'
 

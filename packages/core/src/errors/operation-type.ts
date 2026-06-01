@@ -80,6 +80,7 @@ export const OperationTypeSchema = z.enum([
   'window_info',
 ])
 
+/** TypeScript view of the closed operation-type enum. */
 export type OperationType = z.infer<typeof OperationTypeSchema>
 
 /**

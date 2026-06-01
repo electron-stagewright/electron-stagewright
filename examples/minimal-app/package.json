@@ -1,0 +1,19 @@
+{
+  "name": "@electron-stagewright/example-minimal-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal Electron app plus a scripted MCP session that shows how an agent drives it with Electron Stagewright.",
+  "license": "MIT",
+  "scripts": {
+    "scenario": "tsx scenario.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3"
+  }
+}
