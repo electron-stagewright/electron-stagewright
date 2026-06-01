@@ -71,11 +71,14 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      # electron is approved in pnpm-workspace.yaml onlyBuiltDependencies, so this
-      # install runs its postinstall and downloads the binary. Playwright ships the
-      # canonical installer for the OS libraries Electron/Chromium need, and Xvfb
-      # provides the virtual display the scenario launches into.
       - run: pnpm install --frozen-lockfile
+      # electron is approved in pnpm-workspace.yaml (allowBuilds), but the cached
+      # pnpm store can restore it with its postinstall already skipped, so the
+      # install does not always fetch the binary. Run electron's own installer
+      # directly — it checks the filesystem and downloads when absent, bypassing
+      # the pnpm cache, and writes the path.txt the launcher needs. Playwright
+      # ships the OS-library installer Electron/Chromium need, and Xvfb the display.
+      - run: node node_modules/.pnpm/electron@*/node_modules/electron/install.js
       - run: pnpm --filter @electron-stagewright/core exec playwright install-deps
       - run: pnpm build
       - name: Run the minimal-app scenario under a virtual display
