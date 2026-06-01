@@ -72,14 +72,21 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # electron is approved in pnpm-workspace.yaml (allowBuilds), but the cached
-      # pnpm store can restore it with its postinstall already skipped, so the
-      # install does not always fetch the binary. Run electron's own installer
-      # directly — it checks the filesystem and downloads when absent, bypassing
-      # the pnpm cache, and writes the path.txt the launcher needs. Playwright
-      # ships the OS-library installer Electron/Chromium need, and Xvfb the display.
-      - run: node node_modules/.pnpm/electron@*/node_modules/electron/install.js
       - run: pnpm --filter @electron-stagewright/core exec playwright install-deps
       - run: pnpm build
+      # electron is approved in pnpm-workspace.yaml (allowBuilds), but pnpm's build
+      # and store caches can restore it without a usable binary, so its postinstall
+      # is skipped on a cache hit. Resolve electron the same way the server does,
+      # remove any stale dist/path.txt to force a clean download, run its installer,
+      # and assert the path.txt the launcher reads now exists. Playwright supplies
+      # the OS libraries Electron/Chromium need; Xvfb provides the display.
+      - name: Ensure the Electron binary
+        run: |
+          set -eux
+          ELEC=$(cd packages/core && node -e "process.stdout.write(require('node:path').dirname(require.resolve('electron')))")
+          test -n "$ELEC"
+          rm -rf "$ELEC/dist" "$ELEC/path.txt"
+          node "$ELEC/install.js"
+          test -f "$ELEC/path.txt"
       - name: Run the minimal-app scenario under a virtual display
         run: xvfb-run --auto-servernum pnpm --filter @electron-stagewright/example-minimal-app scenario
