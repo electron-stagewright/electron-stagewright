@@ -10,3 +10,7 @@ The four shapes are chosen to cover distinct stress profiles so the MCP design i
 - **[`pos-app-shape/`](./pos-app-shape/)** — available now. Recreation of a Point of Sale UI inspired by the maintainer's Puntovivo project. Its scripted scenario stresses an authentication gate (failure then success), multi-tenant context carried from login into the dashboard, a dense line-item form submitted repeatedly, and table scanning by selector count with a derived-total assertion. See its [README](./pos-app-shape/README.md) to run it.
 
 If you have an Electron app whose shape these don't cover, open an issue. The matrix of "what shapes have we tested against" is part of the project's defensive coverage against regression.
+
+## Cross-framework robustness matrix
+
+- **[`framework-matrix/`](./framework-matrix/)** — available now. A separate axis from the app shapes above: minimal fixtures that all implement **one** UI contract, each in a different renderer framework (vanilla, React, …), driven by **one** shared real-MCP harness. It proves the snapshot walker and tools are framework-agnostic — a React-rendered button is found and clicked by the same scenario as a vanilla one. One command (`pnpm matrix`) runs every fixture and fails if any does. See its [README](./framework-matrix/README.md).

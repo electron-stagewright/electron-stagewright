@@ -1,0 +1,23 @@
+{
+  "name": "@electron-stagewright/framework-matrix",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-framework robustness matrix: minimal renderer fixtures (vanilla, React, ...) that all implement one UI contract, driven by a shared real-MCP harness to prove the snapshot walker and tools are framework-agnostic.",
+  "license": "MIT",
+  "scripts": {
+    "build:fixtures": "node build-fixtures.mjs",
+    "matrix": "pnpm build:fixtures && tsx run-matrix.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.22.3"
+  }
+}
