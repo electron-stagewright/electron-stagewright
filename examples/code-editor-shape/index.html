@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stagewright Code-Editor Example</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        display: grid;
+        grid-template-columns: 1fr 280px;
+        grid-template-rows: 1fr auto;
+        grid-template-areas: 'editor side' 'status status';
+        height: 100vh;
+      }
+      #editor {
+        grid-area: editor;
+        margin: 0;
+        border: none;
+        padding: 12px;
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
+        resize: none;
+      }
+      #side {
+        grid-area: side;
+        background: #f3f3f3;
+        padding: 12px;
+        border-left: 1px solid #ddd;
+      }
+      #side h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #555;
+      }
+      #side input {
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 6px;
+      }
+      #side button {
+        cursor: pointer;
+      }
+      #statusbar {
+        grid-area: status;
+        background: #1e1e1e;
+        color: #ddd;
+        font-size: 12px;
+        font-family: ui-monospace, monospace;
+        padding: 6px 12px;
+        display: flex;
+        gap: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- The code buffer: keyboard-heavy editing surface, read back as a value. -->
+    <textarea id="editor" aria-label="Code editor" spellcheck="false"></textarea>
+
+    <section id="side">
+      <h2>License</h2>
+      <input id="license-key" type="text" aria-label="License key" placeholder="LINGUA-XXXX" />
+      <button id="activate-license" type="button">Activate License</button>
+
+      <h2 style="margin-top: 20px">Runtime sandbox</h2>
+      <button id="toggle-runtime" type="button">Start Runtime</button>
+    </section>
+
+    <!-- Status lines the scenario reads back. -->
+    <footer id="statusbar">
+      <span id="license-status">License: none</span>
+      <span id="runtime-status">Runtime: stopped</span>
+    </footer>
+
+    <script>
+      const byId = (id) => document.getElementById(id)
+
+      // License activation is a regex stub: keys shaped LINGUA-XXXX (4 alphanumerics)
+      // are accepted; anything else is rejected with an error line.
+      const LICENSE_PATTERN = /^LINGUA-[A-Z0-9]{4}$/
+      let licenseActive = false
+
+      byId('activate-license').addEventListener('click', () => {
+        const key = byId('license-key').value.trim()
+        licenseActive = LICENSE_PATTERN.test(key)
+        if (licenseActive) {
+          byId('license-status').textContent = 'License: active'
+          console.log('license activated')
+        } else {
+          byId('license-status').textContent = 'License: invalid key'
+          console.log('license rejected')
+        }
+      })
+
+      // Runtime sandbox is a simulated async: starting it requires an active license
+      // and only reports "running" after a short delay, mimicking an IPC round-trip to
+      // a sandbox process. This is what makes expect_* (poll-until-settled) shine.
+      let runtimeRunning = false
+      byId('toggle-runtime').addEventListener('click', () => {
+        if (runtimeRunning) {
+          runtimeRunning = false
+          byId('runtime-status').textContent = 'Runtime: stopped'
+          byId('toggle-runtime').textContent = 'Start Runtime'
+          return
+        }
+        if (!licenseActive) {
+          byId('runtime-status').textContent = 'Runtime: requires an active license'
+          return
+        }
+        byId('runtime-status').textContent = 'Runtime: starting...'
+        byId('toggle-runtime').textContent = 'Stop Runtime'
+        setTimeout(() => {
+          runtimeRunning = true
+          byId('runtime-status').textContent = 'Runtime: running'
+          console.log('runtime running')
+        }, 400)
+      })
+    </script>
+  </body>
+</html>
