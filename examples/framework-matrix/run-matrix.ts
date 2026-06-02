@@ -32,6 +32,16 @@ const FIXTURES: ReadonlyArray<FrameworkFixture> = [
     main: path.join(HERE, 'fixtures/react/main.js'),
     notes: 'controlled input + synthetic events, esbuild JSX bundle',
   },
+  {
+    name: 'vue',
+    main: path.join(HERE, 'fixtures/vue/main.js'),
+    notes: 'v-model controlled input + reactivity, esbuild SFC bundle',
+  },
+  {
+    name: 'angular',
+    main: path.join(HERE, 'fixtures/angular/main.js'),
+    notes: 'standalone component + zone.js change detection, esbuild JIT bundle',
+  },
 ]
 
 /** Print one line to stderr (stdout is reserved; nothing prints there). */

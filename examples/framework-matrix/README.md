@@ -30,9 +30,23 @@ keystrokes into the input, `find` the button by role + name and click it by ref,
 | -------------------------------- | ------------------------------------------------------------------------------------- |
 | [`vanilla`](./fixtures/vanilla/) | Baseline — direct DOM, no framework or build step.                                    |
 | [`react`](./fixtures/react/)     | Controlled input + synthetic events through React's virtual DOM (esbuild JSX bundle). |
+| [`vue`](./fixtures/vue/)         | `v-model` controlled input + reactivity (esbuild SFC bundle via `@vue/compiler-sfc`). |
+| [`angular`](./fixtures/angular/) | Standalone component + zone.js change detection (esbuild JIT bundle, no CLI/AOT).     |
 
-More frameworks (Vue, Angular) are added by dropping a `fixtures/<name>/` directory that
-implements the contract and adding a row to the runner's fixture list.
+## How to add a framework
+
+The matrix is built to grow. To add a framework:
+
+1. Create `fixtures/<name>/` with a `main.js` (an Electron window loading `index.html`)
+   and a renderer that implements the UI contract above (`#name` input, "Greet" button,
+   `#status` line, `greeted <name>` console log).
+2. If the renderer needs a build step, author its entry and add one `BUNDLED` entry to
+   `build-fixtures.mjs` with any framework-specific esbuild overrides; the bundle goes to
+   `fixtures/<name>/dist/` (gitignored). Buildless fixtures (like vanilla) skip this.
+3. Add a row to the `FIXTURES` list in `run-matrix.ts`.
+
+The shared scenario in `harness.ts` does not change — a new framework proves itself by
+satisfying the same contract.
 
 ## Run it
 
@@ -54,8 +68,8 @@ session (a display): each fixture launches a real Electron window.
 
 The matrix documents what it does **not** yet cover, rather than hiding it:
 
-- **Frameworks covered**: vanilla and React. Vue and Angular fixtures are not in this
-  slice; the harness is structured to add them without changes.
+- **Frameworks covered**: vanilla, React, Vue, and Angular. Other stacks (Svelte, Solid,
+  …) are not present; the harness is structured to add them without changes.
 - **Single renderer document**: fixtures render in one document. Content inside a real
   `<webview>` or cross-document `<iframe>` is out of scope (the walker does not yet
   traverse frame boundaries).
