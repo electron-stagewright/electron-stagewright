@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vanilla fixture</title>
+  </head>
+  <body>
+    <h1>Vanilla fixture</h1>
+
+    <!-- The shared UI contract: a name input, a Greet button, and a status line. -->
+    <label>Your name <input id="name" type="text" aria-label="Your name" /></label>
+    <button id="greet" type="button">Greet</button>
+    <p id="status">No greeting yet</p>
+
+    <script>
+      document.getElementById('greet').addEventListener('click', () => {
+        const who = document.getElementById('name').value.trim() || 'stranger'
+        document.getElementById('status').textContent = `Hello, ${who}!`
+        console.log(`greeted ${who}`)
+      })
+    </script>
+  </body>
+</html>
