@@ -1,0 +1,19 @@
+{
+  "name": "@electron-stagewright/example-code-editor-shape",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A code-editor-shaped Electron app (editor buffer, license activation, async runtime sandbox) plus a scripted MCP session that drives its keyboard-heavy, async, error-path flows with Electron Stagewright.",
+  "license": "MIT",
+  "scripts": {
+    "scenario": "tsx scenario.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3"
+  }
+}
