@@ -1,0 +1,19 @@
+{
+  "name": "@electron-stagewright/example-pos-app-shape",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A point-of-sale-shaped Electron app (tenant login, dense item form, sales table, running total) plus a scripted MCP session that drives its auth, form, and table flows with Electron Stagewright.",
+  "license": "MIT",
+  "scripts": {
+    "scenario": "tsx scenario.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3"
+  }
+}

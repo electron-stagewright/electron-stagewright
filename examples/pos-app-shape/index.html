@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stagewright POS Example</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        color: #1e1e1e;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 18px;
+      }
+      label {
+        display: block;
+        margin: 6px 0;
+        font-size: 13px;
+      }
+      input,
+      select {
+        font-size: 13px;
+        padding: 3px 5px;
+      }
+      button {
+        cursor: pointer;
+        padding: 4px 10px;
+      }
+      #login-error {
+        color: #b00020;
+        min-height: 1em;
+        font-size: 13px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: end;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 8px;
+        font-size: 13px;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #ddd;
+        text-align: left;
+        padding: 5px 8px;
+      }
+      td.num,
+      th.num {
+        text-align: right;
+      }
+      #total {
+        margin-top: 12px;
+        font-weight: 600;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <!-- Login gate: a tenant is chosen here and carried into the dashboard. -->
+      <section id="login">
+        <h1>Sign in</h1>
+        <label>Username <input id="username" type="text" aria-label="Username" /></label>
+        <label>Password <input id="password" type="password" aria-label="Password" /></label>
+        <label>
+          Store
+          <select id="tenant" aria-label="Store">
+            <option value="downtown">Downtown Store</option>
+            <option value="airport">Airport Kiosk</option>
+          </select>
+        </label>
+        <button id="sign-in" type="button">Sign in</button>
+        <p id="login-error"></p>
+      </section>
+
+      <!-- Dashboard: revealed only after a successful sign-in. -->
+      <section id="dashboard" hidden>
+        <h1 id="tenant-banner">Store: —</h1>
+
+        <!-- Dense data-entry form: one line item per submission. -->
+        <div class="row">
+          <label>Item <input id="item-name" type="text" aria-label="Item name" /></label>
+          <label
+            >Qty <input id="item-qty" type="number" aria-label="Quantity" value="1" min="1"
+          /></label>
+          <label
+            >Unit price <input id="item-price" type="number" aria-label="Unit price" step="0.01"
+          /></label>
+          <label>
+            Category
+            <select id="item-category" aria-label="Category">
+              <option value="food">Food</option>
+              <option value="drink">Drink</option>
+              <option value="retail">Retail</option>
+            </select>
+          </label>
+          <button id="add-item" type="button">Add item</button>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th class="num">Qty</th>
+              <th class="num">Unit price</th>
+              <th>Category</th>
+              <th class="num">Subtotal</th>
+            </tr>
+          </thead>
+          <tbody id="sales-body"></tbody>
+        </table>
+
+        <p id="total">Total: $0.00</p>
+      </section>
+    </main>
+
+    <script>
+      const byId = (id) => document.getElementById(id)
+
+      // Auth is a stub: one hardcoded credential. The selected store is the tenant
+      // context carried into the dashboard banner.
+      const TENANTS = { downtown: 'Downtown Store', airport: 'Airport Kiosk' }
+      byId('sign-in').addEventListener('click', () => {
+        const user = byId('username').value.trim()
+        const password = byId('password').value
+        if (user === 'cashier' && password === 'pos1234') {
+          const tenant = TENANTS[byId('tenant').value] ?? 'Unknown'
+          byId('tenant-banner').textContent = `Store: ${tenant}`
+          byId('login-error').textContent = ''
+          byId('login').hidden = true
+          byId('dashboard').hidden = false
+          console.log(`signed in to ${tenant}`)
+        } else {
+          byId('login-error').textContent = 'Invalid credentials'
+          console.log('sign-in rejected')
+        }
+      })
+
+      // Each "Add item" appends a row and updates the running total.
+      let total = 0
+      byId('add-item').addEventListener('click', () => {
+        const name = byId('item-name').value.trim()
+        const qty = Number.parseInt(byId('item-qty').value, 10) || 0
+        const price = Number.parseFloat(byId('item-price').value) || 0
+        // Show the human-readable category label in the table, not the option value
+        // (the dropdown presents "Food"/"Drink"/"Retail"; the cell should match).
+        const select = byId('item-category')
+        const category = select.selectedOptions[0]?.textContent ?? select.value
+        if (name === '' || qty <= 0) return
+        const subtotal = qty * price
+        total += subtotal
+
+        const tr = document.createElement('tr')
+        const cell = (text, num) => {
+          const td = document.createElement('td')
+          td.textContent = text
+          if (num) td.className = 'num'
+          return td
+        }
+        tr.append(
+          cell(name, false),
+          cell(String(qty), true),
+          cell(`$${price.toFixed(2)}`, true),
+          cell(category, false),
+          cell(`$${subtotal.toFixed(2)}`, true),
+        )
+        byId('sales-body').append(tr)
+        byId('total').textContent = `Total: $${total.toFixed(2)}`
+        console.log(`item added: ${name} x${qty}`)
+
+        // Clear the entry fields for the next line item.
+        byId('item-name').value = ''
+        byId('item-qty').value = '1'
+        byId('item-price').value = ''
+      })
+    </script>
+  </body>
+</html>

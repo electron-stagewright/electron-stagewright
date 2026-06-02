@@ -59,6 +59,19 @@ importers:
         specifier: ^4.22.3
         version: 4.22.3
 
+  examples/pos-app-shape:
+    dependencies:
+      '@electron-stagewright/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.3)
+    devDependencies:
+      tsx:
+        specifier: ^4.22.3
+        version: 4.22.3
+
   examples/vscode-extension-shape:
     dependencies:
       '@electron-stagewright/core':
