@@ -1,0 +1,19 @@
+{
+  "name": "@electron-stagewright/example-vscode-extension-shape",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A VSCode-shaped Electron shell (activity bar, sidebar, webview-like panel, command palette) plus a scripted MCP session that drives its nested surfaces with Electron Stagewright.",
+  "license": "MIT",
+  "scripts": {
+    "scenario": "tsx scenario.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3"
+  }
+}

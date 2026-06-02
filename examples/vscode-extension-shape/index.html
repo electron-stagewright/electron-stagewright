@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stagewright VSCode-Shaped Example</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        display: grid;
+        grid-template-columns: 48px 220px 1fr;
+        grid-template-rows: 1fr 24px;
+        grid-template-areas: 'activity sidebar editor' 'status status status';
+        height: 100vh;
+      }
+      #activity-bar {
+        grid-area: activity;
+        background: #333;
+        display: flex;
+        flex-direction: column;
+      }
+      #activity-bar button {
+        background: none;
+        border: none;
+        color: #bbb;
+        padding: 12px 0;
+        cursor: pointer;
+      }
+      #activity-bar button[aria-pressed='true'] {
+        color: #fff;
+        border-left: 2px solid #fff;
+      }
+      #sidebar {
+        grid-area: sidebar;
+        background: #252526;
+        color: #ccc;
+        padding: 8px;
+        overflow: auto;
+      }
+      #sidebar h2 {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      #sidebar ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #sidebar li button {
+        width: 100%;
+        text-align: left;
+        background: none;
+        border: none;
+        color: #ccc;
+        padding: 4px 6px;
+        cursor: pointer;
+      }
+      #editor {
+        grid-area: editor;
+        padding: 16px;
+      }
+      .webview {
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 12px;
+      }
+      #statusbar {
+        grid-area: status;
+        background: #007acc;
+        color: #fff;
+        font-size: 12px;
+        padding: 4px 12px;
+      }
+      #palette {
+        position: fixed;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 420px;
+        background: #fff;
+        border: 1px solid #888;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        padding: 8px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Activity bar: ref-clickable chrome that switches the sidebar panel. -->
+    <nav id="activity-bar" aria-label="Activity bar">
+      <button id="act-explorer" type="button" aria-label="Explorer" aria-pressed="true">Exp</button>
+      <button id="act-extensions" type="button" aria-label="Extensions" aria-pressed="false">
+        Ext
+      </button>
+    </nav>
+
+    <!-- Sidebar: two panels, one visible at a time. Explorer lists files. -->
+    <aside id="sidebar">
+      <h2 id="sidebar-title">Explorer</h2>
+      <ul id="explorer-panel">
+        <li><button type="button">intro.md</button></li>
+        <li><button type="button">guide.md</button></li>
+        <li><button type="button">api.md</button></li>
+      </ul>
+      <ul id="extensions-panel" hidden>
+        <li><button type="button">Prettier</button></li>
+        <li><button type="button">ESLint</button></li>
+      </ul>
+    </aside>
+
+    <!-- Editor area hosting a webview-like surface (same document; see README). -->
+    <main id="editor">
+      <h1>Welcome</h1>
+      <section class="webview" role="region" aria-label="Extension webview">
+        <h2>Greeter extension</h2>
+        <p id="webview-status">Inactive</p>
+        <button id="activate" type="button">Activate Extension</button>
+      </section>
+    </main>
+
+    <!-- Command palette: hidden until Ctrl+Shift+P; runs the typed command on Enter. -->
+    <div id="palette" hidden>
+      <input
+        id="command-input"
+        type="text"
+        aria-label="Command palette"
+        placeholder="Type a command and press Enter"
+      />
+    </div>
+
+    <!-- Bottom status bar the scenario reads back. -->
+    <footer id="statusbar">Ready</footer>
+
+    <script>
+      const byId = (id) => document.getElementById(id)
+
+      // Activity bar switches which sidebar panel + title is visible.
+      function showPanel(panel) {
+        const explorer = panel === 'explorer'
+        byId('explorer-panel').hidden = !explorer
+        byId('extensions-panel').hidden = explorer
+        byId('sidebar-title').textContent = explorer ? 'Explorer' : 'Extensions'
+        byId('act-explorer').setAttribute('aria-pressed', String(explorer))
+        byId('act-extensions').setAttribute('aria-pressed', String(!explorer))
+      }
+      byId('act-explorer').addEventListener('click', () => showPanel('explorer'))
+      byId('act-extensions').addEventListener('click', () => showPanel('extensions'))
+
+      // Webview-like panel: activating the extension flips its status line.
+      byId('activate').addEventListener('click', () => {
+        byId('webview-status').textContent = 'Extension active'
+        console.log('extension activated')
+      })
+
+      // Command palette: Ctrl+Shift+P reveals + focuses it; Enter runs the command.
+      document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.shiftKey && e.code === 'KeyP') {
+          e.preventDefault()
+          byId('palette').hidden = false
+          byId('command-input').focus()
+        }
+      })
+      byId('command-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const command = byId('command-input').value.trim()
+          byId('statusbar').textContent = `Ran: ${command}`
+          console.log(`command executed: ${command}`)
+          byId('palette').hidden = true
+        }
+      })
+    </script>
+  </body>
+</html>
