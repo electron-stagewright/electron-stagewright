@@ -13,8 +13,21 @@
  * @module
  */
 
-import { ERROR_CODES, type ErrorCode } from './registry.js'
+import {
+  ERROR_CODES,
+  type ErrorCode,
+  type ErrorCodeDefinition,
+  lookupErrorCodeDefinition,
+} from './registry.js'
 import { currentSessionId } from './session-context.js'
+
+/**
+ * The `code` carried by an error envelope: either a core {@link ErrorCode} or a
+ * namespaced plugin code (`<plugin>.CODE`, e.g. `production.NOTARIZATION_FAILED`).
+ * The `(string & {})` member keeps editor autocomplete for the core union while
+ * still accepting the open set of plugin codes registered at load time.
+ */
+export type ResponseCode = ErrorCode | (string & {})
 
 /** Metadata block attached to every response — success or error. */
 export interface ResponseMeta {
@@ -42,8 +55,8 @@ export interface ErrorResponse {
   readonly ok: false
   /** Human-readable error message. May change between releases; agents should branch on `code`. */
   readonly error: string
-  /** Stable machine-readable error code, registered in {@link ERROR_CODES}. */
-  readonly code: ErrorCode
+  /** Stable machine-readable error code — a core {@link ERROR_CODES} key or a namespaced plugin code. */
+  readonly code: ResponseCode
   /** Default hint from the registry, optionally overridden per-call. */
   readonly hint: string
   /** Concrete tool calls the agent might try next to recover. */
@@ -131,14 +144,17 @@ export interface MakeErrorOptions {
 }
 
 /**
- * Build an {@link ErrorResponse} from a registered error code. Pulls `http`, `retryable`,
- * and the default `hint` from the registry; allows per-call overrides for message and
- * agent-recovery hints.
+ * Build an {@link ErrorResponse} from a code and its resolved definition. Shared by
+ * {@link makeError} (core codes) and {@link makePluginError} (namespaced plugin codes)
+ * so both produce an identically-shaped envelope from one code path.
  *
  * @throws if `details` contains values that {@link JSON.stringify} cannot serialise.
  */
-export function makeError(code: ErrorCode, opts: MakeErrorOptions = {}): ErrorResponse {
-  const def = ERROR_CODES[code]
+function buildErrorEnvelope(
+  code: string,
+  def: ErrorCodeDefinition,
+  opts: MakeErrorOptions,
+): ErrorResponse {
   const now = opts.now ?? Date.now
   const startedAt = opts.startedAt ?? now()
   const elapsed_ms = Math.max(0, now() - startedAt)
@@ -196,6 +212,41 @@ export function makeError(code: ErrorCode, opts: MakeErrorOptions = {}): ErrorRe
     ...(opts.similar_refs !== undefined ? { similar_refs: opts.similar_refs } : {}),
     ...(opts.details !== undefined ? { details: opts.details } : {}),
   } satisfies ErrorResponse
+}
+
+/**
+ * Build an {@link ErrorResponse} from a registered CORE error code. Pulls `http`,
+ * `retryable`, and the default `hint` from {@link ERROR_CODES}; allows per-call
+ * overrides for message and agent-recovery hints.
+ *
+ * @throws if `details` contains values that {@link JSON.stringify} cannot serialise.
+ */
+export function makeError(code: ErrorCode, opts: MakeErrorOptions = {}): ErrorResponse {
+  return buildErrorEnvelope(code, ERROR_CODES[code], opts)
+}
+
+/**
+ * Build an {@link ErrorResponse} from a namespaced plugin code (`<plugin>.CODE`). The
+ * code's definition is resolved from the runtime plugin registry (populated by the
+ * plugin loader via `registerPluginErrorCodes`). Plugin tool handlers use this instead
+ * of {@link makeError}, whose argument is the closed core {@link ErrorCode} union.
+ *
+ * Plugin handlers must RETURN this envelope, not throw it: `StagewrightError` (the only
+ * throw the dispatcher maps to a specific code) accepts core {@link ErrorCode}s only, so
+ * a thrown plugin code would fall through to `INTERNAL_ERROR`. Returning matches how every
+ * core tool surfaces failures.
+ *
+ * @throws if the code is not registered (a plugin bug — surfaced as INTERNAL_ERROR by
+ * the dispatcher backstop) or if `details` is not JSON-serialisable.
+ */
+export function makePluginError(code: string, opts: MakeErrorOptions = {}): ErrorResponse {
+  const def = lookupErrorCodeDefinition(code)
+  if (def === undefined) {
+    throw new Error(
+      `makePluginError: error code "${code}" is not registered. Declare it in the plugin's errorCodes.`,
+    )
+  }
+  return buildErrorEnvelope(code, def, opts)
 }
 
 /** Options accepted by {@link makeSuccess}. */

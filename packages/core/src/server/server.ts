@@ -14,6 +14,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
+import { loadPlugins } from '../plugins/index.js'
+import type { StagewrightPlugin } from '../plugins/index.js'
 import { DEFAULT_TOOLS } from '../tools/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 import { Dispatcher } from './dispatcher.js'
@@ -44,6 +46,13 @@ export interface CreateServerOptions {
   readonly logLevel?: LogLevel
   /** Tools to register. Defaults to the full core tool surface exported by DEFAULT_TOOLS. */
   readonly tools?: Iterable<AnyToolDefinition>
+  /**
+   * First-party plugins to load (ADR-004). Each is validated, its tools registered under
+   * `<plugin>_<tool>` and its error codes under `<plugin>.CODE`, its `setup` run, and its
+   * `teardown` invoked on {@link StagewrightServer.close}. Plugins are passed explicitly —
+   * the server never auto-scans for them.
+   */
+  readonly plugins?: Iterable<StagewrightPlugin>
   /** Transport registry. Defaults to the built-in set (Playwright/CDP/Injector). */
   readonly transports?: TransportRegistry
   /** Default directory the screenshot tool writes into; falls back to the OS temp dir. */
@@ -71,11 +80,15 @@ export interface StagewrightServer {
 }
 
 /**
- * Assemble a server: build a {@link SessionManager} and {@link Dispatcher},
- * register the tool set, and bind the tools onto a fresh `McpServer`. No
- * transport is connected until {@link StagewrightServer.connectStdio} is called.
+ * Assemble a server: build a {@link SessionManager} and {@link Dispatcher}, load any
+ * configured plugins, register the core + plugin tool set, and bind the tools onto a
+ * fresh `McpServer`. No transport is connected until {@link StagewrightServer.connectStdio}.
+ *
+ * Async because a plugin's `setup` hook may be async; loading fails CLOSED, so a bad
+ * plugin rejects `createServer` (and tears down any already-loaded plugins) rather than
+ * yielding a half-initialised server.
  */
-export function createServer(opts: CreateServerOptions = {}): StagewrightServer {
+export async function createServer(opts: CreateServerOptions = {}): Promise<StagewrightServer> {
   const logger = opts.logger ?? new StderrLogger({ level: opts.logLevel ?? 'info' })
   const sessions = new SessionManager()
   const transports = opts.transports ?? new TransportRegistry()
@@ -89,7 +102,22 @@ export function createServer(opts: CreateServerOptions = {}): StagewrightServer 
     ...(opts.screenshotDir !== undefined ? { screenshotDir: opts.screenshotDir } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
   })
-  dispatcher.registerAll(opts.tools ?? DEFAULT_TOOLS)
+
+  // Load plugins first (validates, namespaces, registers codes, runs setup). On any
+  // failure the loader has already torn down the partial set, so we just propagate.
+  const pluginResult = opts.plugins
+    ? await loadPlugins(opts.plugins, { coreVersion: SERVER_VERSION })
+    : undefined
+
+  // Register core tools, then plugin tools. If registration throws after plugins loaded
+  // (e.g. a defensive duplicate-name guard), tear the plugins back down before failing.
+  try {
+    dispatcher.registerAll(opts.tools ?? DEFAULT_TOOLS)
+    if (pluginResult) dispatcher.registerAll(pluginResult.tools)
+  } catch (err) {
+    if (pluginResult) await pluginResult.teardownAll()
+    throw err
+  }
 
   const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION })
   dispatcher.bindToMcpServer(mcp)
@@ -104,13 +132,15 @@ export function createServer(opts: CreateServerOptions = {}): StagewrightServer 
       await mcp.connect(new StdioServerTransport())
     },
     async close(): Promise<void> {
-      // Dispose sessions even if the MCP close rejects — a failed protocol
-      // shutdown must never leave a launched Electron process orphaned.
+      // Dispose sessions and tear down plugins even if the MCP close rejects — a failed
+      // protocol shutdown must never leave a launched Electron process orphaned or leak
+      // a plugin's registered error codes.
       try {
         await mcp.close()
       } finally {
         snapshots.clearAll()
         await sessions.disposeAll()
+        if (pluginResult) await pluginResult.teardownAll()
       }
     },
   }

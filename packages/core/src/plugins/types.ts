@@ -1,0 +1,84 @@
+/**
+ * Plugin contract (ADR-004). A plugin is plain data plus optional lifecycle hooks — the
+ * same "tool is data, not a function" stance the dispatcher takes (ADR-008). A plugin
+ * contributes namespaced tools and namespaced error codes to a core server; the loader
+ * (see `loader.ts`) validates the manifest, namespaces the tools and codes, runs setup,
+ * and returns a teardown handle. The core NEVER auto-scans for plugins — they are passed
+ * to `createServer({ plugins })` (or named explicitly on the CLI), trusted and in-process.
+ *
+ * @module
+ */
+
+import type { ErrorCodeDefinition } from '../errors/index.js'
+import type { AnyToolDefinition } from '../tools/types.js'
+
+/**
+ * A first-party plugin. Authored with SHORT tool names and BARE error-code keys; the
+ * loader namespaces them — tool `start` under plugin `trace` is registered as
+ * `trace_start`, and error code key `BUFFER_FULL` becomes `trace.BUFFER_FULL`.
+ */
+export interface StagewrightPlugin {
+  /**
+   * Plugin namespace. Must be a lowercase identifier (`^[a-z][a-z0-9]*$`) and must not be
+   * the reserved core namespace `electron`. Used as the prefix for every tool and code.
+   */
+  readonly name: string
+  /** Plugin package version (informational; surfaced in introspection). */
+  readonly version: string
+  /**
+   * Optional core-version requirement. v1 supports `*` (any) or an exact match against the
+   * running core version; a mismatch fails the load with `PLUGIN_VERSION_MISMATCH`. Richer
+   * semver-range matching is a forthcoming follow-up.
+   */
+  readonly coreVersionRange?: string
+  /**
+   * Tools the plugin contributes, with SHORT names (e.g. `start`). The loader rewrites each
+   * to `<name>_<short>` before registering, so authors never hard-code the namespace. Since
+   * a plugin `name` cannot contain `_`, the FIRST underscore in a registered tool name is
+   * always the namespace/tool boundary.
+   */
+  readonly tools?: readonly AnyToolDefinition[]
+  /**
+   * Error codes the plugin contributes, keyed by BARE SCREAMING_SNAKE_CASE keys (e.g.
+   * `BUFFER_FULL`). The loader registers each as `<name>.<KEY>`; handlers RETURN them via
+   * `makePluginError('<name>.<KEY>', …)` (return, do not throw — see `makePluginError`).
+   */
+  readonly errorCodes?: Readonly<Record<string, ErrorCodeDefinition>>
+  /** Optional async setup, run once at load (after tools + codes are registered). */
+  readonly setup?: () => void | Promise<void>
+  /** Optional async teardown, run once at server close. Made idempotent by the loader. */
+  readonly teardown?: () => void | Promise<void>
+}
+
+/**
+ * The result of loading one plugin: its namespaced tools (already prefixed), the full
+ * namespaced error codes it registered, and an idempotent teardown that runs the plugin's
+ * hook and unregisters its codes.
+ */
+export interface LoadedPlugin {
+  readonly name: string
+  readonly version: string
+  /** Namespaced tools, ready to register with the dispatcher. */
+  readonly tools: readonly AnyToolDefinition[]
+  /** Full namespaced codes (e.g. `['trace.BUFFER_FULL']`) registered for this plugin. */
+  readonly errorCodes: readonly string[]
+  /** Run the plugin's teardown hook and unregister its codes. Safe to call more than once. */
+  teardown(): Promise<void>
+}
+
+/** Options for {@link loadPlugins}. */
+export interface LoadPluginsOptions {
+  /** The running core version, checked against each plugin's `coreVersionRange`. */
+  readonly coreVersion: string
+}
+
+/**
+ * The aggregate result of loading a set of plugins: every namespaced tool to register,
+ * the per-plugin load records, and a teardown that tears every plugin down (in reverse
+ * load order) and is safe to call more than once.
+ */
+export interface LoadPluginsResult {
+  readonly tools: readonly AnyToolDefinition[]
+  readonly loaded: readonly LoadedPlugin[]
+  teardownAll(): Promise<void>
+}

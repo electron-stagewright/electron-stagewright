@@ -179,9 +179,119 @@ export function assertNever(value: never): never {
   throw new Error(`Unhandled ErrorCode at runtime: ${JSON.stringify(value)}`)
 }
 
-/** Returns true when the given string is a registered error code. */
+/** Returns true when the given string is a registered CORE error code. */
 export function isErrorCode(value: string): value is ErrorCode {
   return Object.prototype.hasOwnProperty.call(ERROR_CODES, value)
+}
+
+/**
+ * Runtime registry of plugin-contributed error codes, keyed by the full
+ * `<namespace>.CODE` string (e.g. `production.NOTARIZATION_FAILED`).
+ *
+ * Core codes live in the closed compile-time {@link ERROR_CODES} union; plugin codes
+ * cannot extend that union (it is `keyof typeof ERROR_CODES`), so they live here in a
+ * parallel runtime map. Registrations are reference-counted because the map is
+ * process-global while tests or embedders can create more than one server with the same
+ * plugin loaded. The error-envelope builder resolves a code's metadata from either
+ * source. See ADR-004 (Plugin model) and ADR-006 (Error code registry).
+ */
+interface PluginErrorCodeRegistration {
+  readonly definition: ErrorCodeDefinition
+  count: number
+}
+
+const pluginErrorCodes = new Map<string, PluginErrorCodeRegistration>()
+
+/**
+ * A plugin error-code KEY (the un-namespaced part) must be SCREAMING_SNAKE_CASE:
+ * uppercase-alnum words joined by single underscores, no leading/trailing/double `_`.
+ */
+const PLUGIN_ERROR_CODE_KEY = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/
+
+/**
+ * Resolve an error code's definition from the core registry first, then the plugin
+ * registry. Returns `undefined` for an unknown code. This is the single lookup the
+ * envelope builder uses so core and plugin codes share one resolution path.
+ */
+export function lookupErrorCodeDefinition(code: string): ErrorCodeDefinition | undefined {
+  if (Object.prototype.hasOwnProperty.call(ERROR_CODES, code)) {
+    return (ERROR_CODES as Record<string, ErrorCodeDefinition>)[code]
+  }
+  return pluginErrorCodes.get(code)?.definition
+}
+
+/** True when `code` is a registered code — core OR plugin. */
+export function isKnownErrorCode(code: string): boolean {
+  return lookupErrorCodeDefinition(code) !== undefined
+}
+
+/**
+ * Register a plugin's error codes under its namespace. Each entry's key is namespaced
+ * to `<namespace>.<key>` and stored in the runtime plugin registry. Throws on a
+ * malformed key or a conflicting already-registered code (core or plugin) so a
+ * misconfigured plugin fails closed at load time rather than shadowing a code silently.
+ * Registration is atomic: validation and collision checks finish before the registry is
+ * mutated, so a later invalid key cannot leak earlier keys.
+ *
+ * @returns the full namespaced codes registered (e.g. `['production.NOTARIZATION_FAILED']`).
+ */
+export function registerPluginErrorCodes(
+  namespace: string,
+  codes: Readonly<Record<string, ErrorCodeDefinition>>,
+): readonly string[] {
+  const entries: Array<readonly [string, ErrorCodeDefinition]> = []
+  for (const [key, definition] of Object.entries(codes)) {
+    if (!PLUGIN_ERROR_CODE_KEY.test(key)) {
+      throw new Error(`Plugin "${namespace}" error code "${key}" must be SCREAMING_SNAKE_CASE.`)
+    }
+    const full = `${namespace}.${key}`
+    const existing = pluginErrorCodes.get(full)
+    if (existing !== undefined && !samePluginErrorCodeDefinition(existing.definition, definition)) {
+      throw new Error(`Duplicate error code registration for "${full}".`)
+    }
+    entries.push([full, definition])
+  }
+
+  for (const [full, definition] of entries) {
+    const existing = pluginErrorCodes.get(full)
+    if (existing === undefined) {
+      pluginErrorCodes.set(full, { definition, count: 1 })
+    } else {
+      existing.count += 1
+    }
+  }
+  return entries.map(([full]) => full)
+}
+
+/**
+ * Remove a specific set of namespaced plugin codes (the value returned by
+ * {@link registerPluginErrorCodes}). Used by a plugin's teardown so it removes exactly
+ * the codes it registered, leaving any other server's codes in the process-global
+ * registry intact. Unknown codes are ignored. Idempotent.
+ */
+export function unregisterPluginErrorCodes(codes: Iterable<string>): void {
+  for (const code of codes) {
+    const existing = pluginErrorCodes.get(code)
+    if (existing === undefined) continue
+    existing.count -= 1
+    if (existing.count <= 0) pluginErrorCodes.delete(code)
+  }
+}
+
+/**
+ * Remove ALL registered plugin error codes. Coarse reset for test isolation; production
+ * teardown uses {@link unregisterPluginErrorCodes} to scope removal to one plugin set.
+ * Idempotent.
+ */
+export function clearPluginErrorCodes(): void {
+  pluginErrorCodes.clear()
+}
+
+function samePluginErrorCodeDefinition(
+  left: ErrorCodeDefinition,
+  right: ErrorCodeDefinition,
+): boolean {
+  return left.http === right.http && left.retryable === right.retryable && left.hint === right.hint
 }
 
 /** Typed error class — carry a registered code plus optional structured details. */
