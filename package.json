@@ -28,6 +28,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "matrix": "pnpm --filter @electron-stagewright/framework-matrix matrix",
+    "bench": "pnpm --filter @electron-stagewright/bench bench",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check"
   },
   "devDependencies": {

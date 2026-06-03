@@ -1,0 +1,19 @@
+{
+  "name": "@electron-stagewright/bench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent-task benchmark harness: drives scenarios over the real MCP protocol and records tool-call count, estimated tokens, latency, and memory to quantify the token-economy thesis.",
+  "license": "MIT",
+  "scripts": {
+    "bench": "tsx src/run-bench.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3"
+  }
+}
