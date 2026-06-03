@@ -7,8 +7,9 @@
  * - Server registers MCP stdio transport with @modelcontextprotocol/sdk.
  * - Tools dispatch through an ITransport abstraction with three implementations
  *   (Playwright `_electron`, CDP direct, Inspector inject).
- * - Domain plugins are planned as separate @electron-stagewright/plugin-* packages;
- *   the current package intentionally ships only the core tool surface.
+ * - The core ships an in-process plugin model (manifest, loader, namespaced tools and
+ *   error codes — see ADR-004); domain plugins ship as separate
+ *   @electron-stagewright/plugin-* packages and are loaded explicitly, never auto-scanned.
  *
  * @packageDocumentation
  */
@@ -44,8 +45,16 @@ export * from './tools/index.js'
 
 /**
  * Server — the tool dispatcher, session manager, logger, and the `createServer`
- * assembly entry point. `createServer().connectStdio()` is the production path;
- * the executable entry lives in `cli.ts` (published as the `electron-stagewright`
- * bin).
+ * assembly entry point. `await createServer()` followed by `connectStdio()` is the
+ * production path; the executable entry lives in `cli.ts` (published as the
+ * `electron-stagewright` bin).
  */
 export * from './server/index.js'
+
+/**
+ * Plugins — the in-process extension model (ADR-004). `StagewrightPlugin` is the
+ * contract a first-party plugin exports; `loadPlugins` validates and namespaces a set of
+ * them; `createServer({ plugins })` wires them into a server. Plugin tools register as
+ * `<plugin>_<tool>` and plugin error codes as `<plugin>.CODE`.
+ */
+export * from './plugins/index.js'

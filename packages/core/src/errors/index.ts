@@ -11,11 +11,17 @@ export {
   type ErrorCode,
   assertNever,
   isErrorCode,
+  isKnownErrorCode,
+  lookupErrorCodeDefinition,
+  registerPluginErrorCodes,
+  unregisterPluginErrorCodes,
+  clearPluginErrorCodes,
   StagewrightError,
 } from './registry.js'
 
 export {
   type ResponseMeta,
+  type ResponseCode,
   type SimilarRef,
   type ErrorResponse,
   type SuccessResponse,
@@ -25,6 +31,7 @@ export {
   estimateTokens,
   getSessionId,
   makeError,
+  makePluginError,
   makeSuccess,
 } from './envelope.js'
 

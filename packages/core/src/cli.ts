@@ -47,7 +47,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
 async function main(): Promise<void> {
   const { allowEval, screenshotDir } = parseCliArgs(process.argv.slice(2))
   const logger = new StderrLogger({ level: 'info' })
-  const server = createServer({
+  const server = await createServer({
     allowEval,
     logger,
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
