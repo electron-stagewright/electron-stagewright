@@ -27,6 +27,7 @@
  * @module
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import path from 'node:path'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -56,6 +57,21 @@ import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
 import { TransportRegistry } from './transport-registry.js'
+
+/**
+ * Re-dispatch depth, carried through the async call chain (ADR-009). A top-level dispatch runs at
+ * depth 0; each `ctx.dispatch` runs its nested call one deeper. Held in `AsyncLocalStorage` (not a
+ * field) so concurrent dispatch chains never share a counter. Bounded by
+ * {@link MAX_REDISPATCH_DEPTH}.
+ */
+const REDISPATCH_DEPTH = new AsyncLocalStorage<number>()
+
+/**
+ * Deepest re-dispatch allowed. 1 lets a tool re-dispatch other tools (e.g. `trace_replay` driving
+ * a recorded session) while stopping a re-dispatched tool from re-dispatching again — a backstop
+ * against an accidental dispatch cycle becoming unbounded recursion.
+ */
+const MAX_REDISPATCH_DEPTH = 1
 
 /** Options for constructing a {@link Dispatcher}. */
 export interface DispatcherOptions {
@@ -212,51 +228,93 @@ export class Dispatcher {
   }
 
   /**
-   * Execute a tool by name with raw (unvalidated) arguments. Always resolves to a
-   * response envelope — never throws — so the transport layer can serialise the
-   * result uniformly.
+   * Check whether a call would be accepted — tool exists AND `args` satisfy its current input
+   * schema — WITHOUT running the handler (no side effects). Returns `null` when it would be
+   * accepted, else the `BAD_ARGUMENT` envelope the dispatcher would have produced. Exposed to
+   * handlers via {@link ToolContext.validate} (ADR-009) so `trace_replay`'s dry-run can detect a
+   * recorded call that no longer matches its tool's schema without launching an app.
+   */
+  validate(name: string, rawArgs: unknown): ErrorResponse | null {
+    const startedAt = this.#now()
+    const def = this.#tools.get(name)
+    if (def === undefined) return this.#unknownToolError(name, startedAt)
+    const parsed = def.inputSchema.safeParse(rawArgs ?? {})
+    return parsed.success ? null : this.#invalidArgsError(name, parsed.error, startedAt)
+  }
+
+  /** The `BAD_ARGUMENT` envelope for an unregistered tool name. */
+  #unknownToolError(name: string, startedAt: number): ErrorResponse {
+    return makeError('BAD_ARGUMENT', {
+      message: `Unknown tool: ${name}`,
+      startedAt,
+      now: this.#now,
+    })
+  }
+
+  /**
+   * Re-shape a Zod failure into the agent-UX `BAD_ARGUMENT` envelope: every issue names the
+   * offending `field` and (for type errors) what was `expected`, and next_actions points the agent
+   * back at the schema. This is the BAD_ARGUMENT an agent sees when it calls a tool with a
+   * wrong/missing arg over MCP (see bindToMcpServer).
+   */
+  #invalidArgsError(name: string, error: z.ZodError, startedAt: number): ErrorResponse {
+    const issues = error.issues.map((issue) => ({
+      field: issue.path.length > 0 ? issue.path.join('.') : '(root)',
+      code: issue.code,
+      ...('expected' in issue && issue.expected !== undefined ? { expected: issue.expected } : {}),
+      message: issue.message,
+    }))
+    const primary = issues[0]
+    return makeError('BAD_ARGUMENT', {
+      message: primary
+        ? `Invalid arguments for ${name}: ${primary.field} — ${primary.message}.`
+        : `Invalid arguments for ${name}.`,
+      details: { issues },
+      next_actions: [
+        `Re-read the ${name} input schema in tools/list, then retry with a corrected "${primary?.field ?? 'argument'}".`,
+      ],
+      startedAt,
+      now: this.#now,
+    })
+  }
+
+  /**
+   * Re-dispatch from inside a tool handler (the active half of the ADR-009 seam, wired into
+   * {@link ToolContext.dispatch}). Tracks re-dispatch depth in {@link REDISPATCH_DEPTH}; past
+   * {@link MAX_REDISPATCH_DEPTH} it returns a `BAD_ARGUMENT` envelope instead of recursing, so an
+   * accidental dispatch cycle cannot blow the stack. Never throws.
+   */
+  #redispatch(tool: string, args: unknown): Promise<ToolResult> {
+    const depth = (REDISPATCH_DEPTH.getStore() ?? 0) + 1
+    if (depth > MAX_REDISPATCH_DEPTH) {
+      return Promise.resolve(
+        makeError('BAD_ARGUMENT', {
+          message: `Re-dispatch depth limit (${MAX_REDISPATCH_DEPTH}) exceeded calling "${tool}"; a re-dispatched tool may not itself re-dispatch.`,
+          startedAt: this.#now(),
+          now: this.#now,
+        }),
+      )
+    }
+    return REDISPATCH_DEPTH.run(depth, () => this.dispatch(tool, args))
+  }
+
+  /**
+   * Execute a tool by name with raw (unvalidated) arguments. Always resolves to a response envelope
+   * — never throws — so the transport layer can serialise the result uniformly.
    */
   async dispatch(name: string, rawArgs: unknown): Promise<ToolResult> {
     const startedAt = this.#now()
     const def = this.#tools.get(name)
     if (def === undefined) {
-      return this.#complete(
-        name,
-        rawArgs,
-        makeError('BAD_ARGUMENT', { message: `Unknown tool: ${name}`, startedAt, now: this.#now }),
-        startedAt,
-      )
+      return this.#complete(name, rawArgs, this.#unknownToolError(name, startedAt), startedAt)
     }
 
     const parsed = def.inputSchema.safeParse(rawArgs ?? {})
     if (!parsed.success) {
-      // Re-shape the Zod failure into the agent-UX envelope: every issue names the
-      // offending `field` and (for type errors) what was `expected`, and next_actions
-      // points the agent back at the schema. This is the BAD_ARGUMENT an agent sees
-      // when it calls a tool with a wrong/missing arg over MCP (see bindToMcpServer).
-      const issues = parsed.error.issues.map((issue) => ({
-        field: issue.path.length > 0 ? issue.path.join('.') : '(root)',
-        code: issue.code,
-        ...('expected' in issue && issue.expected !== undefined
-          ? { expected: issue.expected }
-          : {}),
-        message: issue.message,
-      }))
-      const primary = issues[0]
       return this.#complete(
         name,
         rawArgs,
-        makeError('BAD_ARGUMENT', {
-          message: primary
-            ? `Invalid arguments for ${name}: ${primary.field} — ${primary.message}.`
-            : `Invalid arguments for ${name}.`,
-          details: { issues },
-          next_actions: [
-            `Re-read the ${name} input schema in tools/list, then retry with a corrected "${primary?.field ?? 'argument'}".`,
-          ],
-          startedAt,
-          now: this.#now,
-        }),
+        this.#invalidArgsError(name, parsed.error, startedAt),
         startedAt,
       )
     }
@@ -282,6 +340,8 @@ export class Dispatcher {
       startedAt,
       now: this.#now,
       addDispatchObserver: (observer) => this.addObserver(observer),
+      dispatch: (tool, dispatchArgs) => this.#redispatch(tool, dispatchArgs),
+      validate: (tool, validateArgs) => this.validate(tool, validateArgs),
     }
 
     try {

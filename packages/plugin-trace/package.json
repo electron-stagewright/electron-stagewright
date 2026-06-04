@@ -1,7 +1,7 @@
 {
   "name": "@electron-stagewright/plugin-trace",
   "version": "0.0.0",
-  "description": "Trace plugin for Electron Stagewright: record a driving session (tool inputs, outputs, timing, token estimates) to a JSONL artifact and report where the token budget went.",
+  "description": "Trace plugin for Electron Stagewright: record a driving session to JSONL, report token usage, and replay the recorded tool calls.",
   "type": "module",
   "license": "MIT",
   "author": "johnny4young <johnny.iv.young@gmail.com>",

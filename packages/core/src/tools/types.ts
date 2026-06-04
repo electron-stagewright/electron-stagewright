@@ -119,6 +119,27 @@ export interface ToolContext {
    * cheap and must not throw (see {@link DispatchObserver}).
    */
   readonly addDispatchObserver: (observer: DispatchObserver) => () => void
+  /**
+   * Re-dispatch another tool by name through the same dispatcher and resolve to its envelope.
+   * The active half of the ADR-009 seam (its passive half is {@link addDispatchObserver}): it
+   * lets a tool drive other tools — `trace_replay` re-runs a recorded session through it. The
+   * call takes the FULL dispatch path (Zod validation, operation-type routing, session context,
+   * and observer notification), so a re-dispatched call is indistinguishable from a top-level one.
+   *
+   * Bounded against runaway recursion: a re-dispatched tool that itself re-dispatches past a small
+   * fixed depth receives a `BAD_ARGUMENT` envelope instead of recursing. Never throws — resolves
+   * to an envelope exactly like the dispatcher's own `dispatch`.
+   */
+  readonly dispatch: (tool: string, args: unknown) => Promise<ToolResult>
+  /**
+   * Check whether a call WOULD be accepted — the tool exists and `args` satisfy its current input
+   * schema — without running its handler (no side effects). Returns `null` when the call would be
+   * accepted, or the `BAD_ARGUMENT` {@link ToolResult} the dispatcher would have produced
+   * otherwise. The read-only complement to {@link dispatch}: `trace_replay`'s dry-run mode uses it
+   * to detect that a recorded call no longer matches the tool's schema (a tool changed signature
+   * since the trace was recorded) without launching an app.
+   */
+  readonly validate: (tool: string, args: unknown) => ErrorResponse | null
 }
 
 /**

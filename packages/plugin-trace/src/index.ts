@@ -8,8 +8,8 @@
  * the first session-observing plugin: it adds tools AND watches the whole run, without the core
  * depending on it.
  *
- * Tools (namespaced by the loader): `trace_start`, `trace_stop`, `trace_tokens`, `trace_status`.
- * `trace_replay` (re-dispatch) and a visual viewer are forthcoming.
+ * Tools (namespaced by the loader): `trace_start`, `trace_stop`, `trace_tokens`, `trace_status`,
+ * and `trace_replay`. A visual viewer is forthcoming.
  *
  * PRIVACY: a trace captures tool inputs/outputs, which may include typed text or eval payloads.
  * It is opt-in (only records between start/stop) and writes to an operator-chosen path — the
@@ -29,10 +29,12 @@ import {
   makeSuccess,
   type AnyToolDefinition,
   type StagewrightPlugin,
+  type ToolResult,
 } from '@electron-stagewright/core'
 import { z } from 'zod'
 
-import { Recorder, readTrace, summarizeTrace } from './recorder.js'
+import { Recorder, readTrace, summarizeTrace, type ParsedTrace } from './recorder.js'
+import { replayTrace } from './replay.js'
 
 /** The in-flight recording: its recorder plus the dispatch-observer unsubscribe handle. */
 interface ActiveRecording {
@@ -70,6 +72,49 @@ const DEFAULT_CONFIG: TraceConfig = { maxRecords: 10000, redact: [] }
 // would share this — an accepted limitation for v1, as with other first-party plugins).
 let config: TraceConfig = DEFAULT_CONFIG
 let active: ActiveRecording | undefined
+
+/** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
+interface PluginMeta {
+  readonly startedAt: number
+  readonly now: () => number
+}
+
+/**
+ * Read a trace artifact at `target`, or return the appropriate plugin-error envelope so a bad path
+ * is classified identically wherever it is loaded: a missing file → `trace.ARTIFACT_NOT_FOUND`,
+ * any other read/parse failure (e.g. malformed JSONL) → `trace.ARTIFACT_INVALID`. Shared by
+ * `trace_tokens` and `trace_replay`.
+ */
+async function loadTrace(
+  target: string,
+  meta: PluginMeta,
+): Promise<{ readonly parsed: ParsedTrace } | { readonly error: ToolResult }> {
+  try {
+    return { parsed: await readTrace(target) }
+  } catch (err) {
+    const missing =
+      err !== null &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { readonly code?: unknown }).code === 'ENOENT'
+    if (missing) {
+      return {
+        error: makePluginError('trace.ARTIFACT_NOT_FOUND', {
+          ...meta,
+          message: `No trace artifact at ${target}.`,
+          details: { path: target },
+        }),
+      }
+    }
+    return {
+      error: makePluginError('trace.ARTIFACT_INVALID', {
+        ...meta,
+        message: `Trace artifact at ${target} is not valid JSONL.`,
+        details: { path: target },
+      }),
+    }
+  }
+}
 
 const startTool: AnyToolDefinition = defineTool({
   name: 'start',
@@ -190,30 +235,13 @@ const tokensTool: AnyToolDefinition = defineTool({
       )
     }
     const target = path.resolve(args.path)
-    let parsed
-    try {
-      parsed = await readTrace(target)
-    } catch (err) {
-      const missing =
-        err !== null &&
-        typeof err === 'object' &&
-        'code' in err &&
-        (err as { readonly code?: unknown }).code === 'ENOENT'
-      if (missing) {
-        return makePluginError('trace.ARTIFACT_NOT_FOUND', {
-          ...meta,
-          message: `No trace artifact at ${target}.`,
-          details: { path: target },
-        })
-      }
-      return makePluginError('trace.ARTIFACT_INVALID', {
-        ...meta,
-        message: `Trace artifact at ${target} is not valid JSONL.`,
-        details: { path: target },
-      })
-    }
+    const loaded = await loadTrace(target, meta)
+    if ('error' in loaded) return loaded.error
     return makeSuccess(
-      { path: target, ...summarizeTrace(parsed.calls, 10, parsed.meta?.overflowed ?? false) },
+      {
+        path: target,
+        ...summarizeTrace(loaded.parsed.calls, 10, loaded.parsed.meta?.overflowed ?? false),
+      },
       meta,
     )
   },
@@ -240,6 +268,64 @@ const statusTool: AnyToolDefinition = defineTool({
       },
       meta,
     )
+  },
+})
+
+const replayTool: AnyToolDefinition = defineTool({
+  name: 'replay',
+  title: 'Replay a recorded trace',
+  description: [
+    'Re-run the tool calls a written trace artifact recorded, in order, against the current server,',
+    'and report which steps reproduce. Session ids are remapped automatically (the replayed launch',
+    'creates a fresh session; later calls are rewritten to it). A call "diverged" when its ok/code',
+    'differs from the recording; diverged calls carry a bounded field-level diff. Options: dryRun',
+    '(re-validate against current schemas WITHOUT launching — detects a tool whose signature',
+    'changed), stopOnError, include/exclude (tool-name filters), maxCalls. Note: a trace recorded',
+    'with redaction cannot be faithfully replayed — redacted arg values diverge (recorded ok →',
+    'replayed BAD_ARGUMENT); re-record without redaction to replay. Returns: { ok, path, replayed,',
+    'matched, diverged, skipped, dry_run, calls }. Errors: trace.ARTIFACT_NOT_FOUND (no artifact at',
+    'path), trace.ARTIFACT_INVALID (bad JSONL).',
+  ].join(' '),
+  inputSchema: z.object({
+    path: z.string().describe('Path to a written trace artifact (JSONL) to replay.'),
+    dryRun: z
+      .boolean()
+      .optional()
+      .describe(
+        'Re-validate each call against current schemas without dispatching (schema drift).',
+      ),
+    stopOnError: z
+      .boolean()
+      .optional()
+      .describe('Halt after the first diverging call; remaining calls are reported skipped.'),
+    include: z
+      .array(z.string())
+      .optional()
+      .describe('Only replay calls whose tool is in this list.'),
+    exclude: z.array(z.string()).optional().describe('Skip calls whose tool is in this list.'),
+    maxCalls: z.number().int().positive().optional().describe('Replay at most this many calls.'),
+  }),
+  operationType: 'command',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const target = path.resolve(args.path)
+    const loaded = await loadTrace(target, meta)
+    if ('error' in loaded) return loaded.error
+    const report = await replayTrace(
+      loaded.parsed.calls,
+      { dispatch: ctx.dispatch, validate: ctx.validate },
+      {
+        ...(args.dryRun !== undefined ? { dryRun: args.dryRun } : {}),
+        ...(args.stopOnError !== undefined ? { stopOnError: args.stopOnError } : {}),
+        ...(args.include !== undefined ? { include: args.include } : {}),
+        ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
+        ...(args.maxCalls !== undefined ? { maxCalls: args.maxCalls } : {}),
+        // Never re-dispatch the trace plugin's own tools (defensive: the recorder already excludes
+        // them, so a well-formed artifact has none — this guards hand-made / foreign artifacts).
+        skipTool: (tool) => tool.startsWith(`${TRACE_NAMESPACE}_`),
+      },
+    )
+    return makeSuccess({ path: target, ...report }, meta)
   },
 })
 
@@ -280,7 +366,7 @@ export const tracePlugin: StagewrightPlugin = {
       hint: 'The trace artifact could not be written; check the path and permissions, then retry trace_stop.',
     },
   },
-  tools: [startTool, stopTool, tokensTool, statusTool],
+  tools: [startTool, stopTool, tokensTool, statusTool, replayTool],
   setup: (raw) => {
     config = raw as TraceConfig
   },
@@ -307,3 +393,11 @@ export type {
   TokensReport,
   ParsedTrace,
 } from './recorder.js'
+export { replayTrace } from './replay.js'
+export type {
+  ReplayOptions,
+  ReplayDeps,
+  ReplayReport,
+  ReplayCallOutcome,
+  ResultDiff,
+} from './replay.js'

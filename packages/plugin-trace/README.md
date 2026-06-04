@@ -1,12 +1,13 @@
 # @electron-stagewright/plugin-trace
 
-Record a driving session to a portable artifact and see where the token budget went. The
-first session-observing plugin (ADR-009, built on the ADR-004 plugin contract): between
-`trace_start` and `trace_stop` it subscribes to the server's dispatch-observer seam and
-captures every tool call — input, output envelope, timing, and token estimate — to a JSONL
-file, then `trace_tokens` summarises the cost.
+Record a driving session to a portable artifact, see where the token budget went, and replay
+the session against a fresh app instance. The first session-observing plugin (ADR-009, built on
+the ADR-004 plugin contract): between `trace_start` and `trace_stop` it subscribes to the
+server's dispatch-observer seam and captures every tool call — input, output envelope, timing,
+and token estimate — to a JSONL file, then `trace_tokens` summarises the cost and
+`trace_replay` re-dispatches the calls.
 
-`trace_replay` (re-dispatch a recorded session) and a visual viewer are forthcoming.
+A visual viewer is forthcoming.
 
 ## Load it
 
@@ -46,6 +47,11 @@ overflowed }`.
   individual responses, and whether the trace overflowed. With no path it reports the live
   recording; otherwise reads a written artifact.
 - **`trace_status`** — `{ recording, path?, records?, overflowed? }`.
+- **`trace_replay`** `{ path, dryRun?, stopOnError?, include?, exclude?, maxCalls? }` — replay a
+  written artifact by re-dispatching its calls, remap recorded session ids to the fresh replayed
+  session, and report `{ replayed, matched, diverged, skipped, dry_run, calls }`. Divergence is
+  judged on stable `ok`/`code` outcomes; diverged calls include bounded field-level diffs.
+  `dryRun` validates the recorded calls against current schemas without dispatching them.
 
 Error codes: `trace.ALREADY_RECORDING`, `trace.NOT_RECORDING`, `trace.ARTIFACT_NOT_FOUND`,
 `trace.ARTIFACT_INVALID`, `trace.ARTIFACT_WRITE_FAILED`.
@@ -66,6 +72,14 @@ core_version, overflowed }`); each subsequent line is a `call` record (`{ kind: 
 ok, code?, started_at, finished_at, elapsed_ms, estimated_tokens, args, result }`). Records are
 buffered in memory and written on `trace_stop`, so a crash before stop loses the buffer
 (streaming is a forthcoming improvement).
+
+## Replay limits
+
+Replay is deterministic only for traces whose arguments remain meaningful in a fresh app run.
+`trace_replay` automatically remaps session ids created by `electron_launch` / attach-style
+calls, but it cannot reconstruct values removed by `redact`: a redacted argument such as
+`"[redacted]"` is replayed exactly as recorded and may diverge. Use `dryRun` to check schema
+drift without launching an app, and `include` / `exclude` / `maxCalls` to narrow a replay.
 
 ## Privacy
 
