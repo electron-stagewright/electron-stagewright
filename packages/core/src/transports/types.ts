@@ -270,9 +270,9 @@ export interface PressOptions {
   readonly selector?: string
   /**
    * Bypass actionability checks on `selector` (visibility/stability). Default false. Set
-   * true to type into intentionally offscreen / aria-hidden inputs such as a code editor's
-   * hidden textarea (e.g. Monaco), which a normal visibility-gated type would reject with
-   * `ELEMENT_NOT_VISIBLE`. No effect when `selector` is absent (global keystrokes).
+   * true only for offscreen / aria-hidden inputs that really accept keyboard input. Modern
+   * code-editor hidden hosts can swallow text; use `electron_type_into_editor` on the visible
+   * editor content area instead. No effect when `selector` is absent (global keystrokes).
    */
   readonly force?: boolean
   /** Max wait for the element to receive the key / text, in ms. */

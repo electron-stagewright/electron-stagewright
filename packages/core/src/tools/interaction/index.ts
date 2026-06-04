@@ -14,6 +14,7 @@ import {
   keyTool,
   keyboardTypeTool,
   pressSequenceTool,
+  typeIntoEditorTool,
   typeTool,
 } from './keyboard.js'
 import { checkTool, selectOptionTool, setFilesTool, uncheckTool } from './form.js'
@@ -25,6 +26,7 @@ export {
   keyTool,
   keyboardTypeTool,
   pressSequenceTool,
+  typeIntoEditorTool,
   typeTool,
 } from './keyboard.js'
 export { checkTool, selectOptionTool, setFilesTool, uncheckTool } from './form.js'
@@ -37,6 +39,7 @@ export const INTERACTION_TOOLS: readonly AnyToolDefinition[] = [
   dragTool,
   typeTool,
   keyboardTypeTool,
+  typeIntoEditorTool,
   keyTool,
   pressSequenceTool,
   clearInputTool,

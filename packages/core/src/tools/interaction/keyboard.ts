@@ -6,14 +6,16 @@
  *
  * `type` vs `keyboard_type`: `type` sets `.value` and fires one input event (fast,
  * the common case); `keyboard_type` emits a real keystroke per character, for
- * inputs with per-keystroke handlers (editors, autocompletes).
+ * inputs with per-keystroke handlers (autocompletes, search boxes). Code editors
+ * whose hidden hosts swallow text should use `electron_type_into_editor`.
  *
  * @module
  */
 
 import { z } from 'zod'
 
-import type { PressOptions } from '../../transports/index.js'
+import { StagewrightError } from '../../errors/registry.js'
+import type { PressOptions, TransportSession } from '../../transports/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { refField, selectorField, sessionIdField, forceField, timeoutField } from './schema.js'
 import {
@@ -39,16 +41,65 @@ function pressOptionsFor(args: {
   }
 }
 
+/** Short settle delay before checking whether editor text visibly changed. */
+const EDITOR_TYPE_SETTLE_MS = 10
+
+/** Renderer body returning a visible editor area's text signature, or null if it cannot be read. */
+const EDITOR_SIGNATURE_BODY = `
+const settleMs = typeof arg.settleMs === 'number' ? arg.settleMs : 0;
+if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
+let el = null;
+try {
+  el = document.querySelector(String(arg.selector));
+} catch {
+  return null;
+}
+if (el === null) return null;
+return typeof el.value === 'string' ? el.value : (el.textContent || '');
+`
+
+async function readEditorSignature(
+  session: TransportSession,
+  selector: string,
+  settleMs: number,
+): Promise<string | null> {
+  const value = await session.evaluate<unknown>('renderer', EDITOR_SIGNATURE_BODY, {
+    selector,
+    settleMs,
+  })
+  return typeof value === 'string' ? value : null
+}
+
+async function assertEditorTyped(
+  session: TransportSession,
+  selector: string,
+  text: string,
+  before: string | null,
+): Promise<void> {
+  if (text.length === 0) return
+  const after = await readEditorSignature(session, selector, EDITOR_TYPE_SETTLE_MS)
+  if (after === null) return
+  const landed = after !== before || after.includes(text)
+  if (!landed) {
+    throw new StagewrightError(
+      'TYPE_NO_EFFECT',
+      `Text did not land in "${selector}": the editor content area did not change.`,
+      { selector },
+    )
+  }
+}
+
 /** `electron_type` — set the value of an input/textarea (fires one input event). */
 export const typeTool: AnyToolDefinition = defineTool({
   name: 'electron_type',
   title: 'Type text into an input',
   description: [
     'Set the value of the input/textarea identified by ref or selector (fires an input event).',
-    'For inputs with per-keystroke handlers (code editors, autocompletes) use electron_keyboard_type',
-    'instead. Set force:true for an intentionally offscreen / aria-hidden input. Options: force, timeoutMs.',
+    'For a code editor (Monaco / EditContext, CodeMirror) use electron_type_into_editor — setting',
+    '.value on an editor host does not update its model. Options: force, timeoutMs.',
     'Returns: { ok, session_id, target }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries similar_refs),',
-    'ELEMENT_NOT_VISIBLE (retryable; try force:true for editor inputs), ELEMENT_DISABLED, NOT_RUNNING, BAD_ARGUMENT.',
+    'ELEMENT_NOT_VISIBLE (retryable), ELEMENT_DISABLED, TYPE_NO_EFFECT (value did not change — wrong target),',
+    'NOT_RUNNING, BAD_ARGUMENT.',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,
@@ -73,11 +124,13 @@ export const keyboardTypeTool: AnyToolDefinition = defineTool({
   description: [
     'Type text as real per-character keystrokes (fires keydown/keypress/input/keyup per char), unlike',
     'electron_type which sets the value directly. Focuses ref/selector first when given; otherwise types',
-    'into the active element. Set force:true to type into an intentionally offscreen / aria-hidden input',
-    "such as a code editor's hidden textarea (e.g. selector '.monaco-editor textarea'), which a normal",
-    'visibility-gated type rejects with ELEMENT_NOT_VISIBLE. Options: force, timeoutMs.',
-    'Returns: { ok, session_id, typed }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs),',
-    'ELEMENT_NOT_VISIBLE (retryable; try force:true for editor inputs), NOT_RUNNING, BAD_ARGUMENT.',
+    'into the active element. For a code editor (Monaco / EditContext), the reliable path is',
+    "electron_type_into_editor (it clicks the editor content area, e.g. '.monaco-editor .view-lines',",
+    'then types into the focused editor) — do NOT target the hidden textarea, which modern editors',
+    'ignore. force:true focuses an offscreen/aria-hidden input but a swallowed keystroke returns',
+    'TYPE_NO_EFFECT. Options: force, timeoutMs. Returns: { ok, session_id, typed }.',
+    'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
+    'TYPE_NO_EFFECT (typing changed nothing — use electron_type_into_editor), NOT_RUNNING, BAD_ARGUMENT.',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,
@@ -95,14 +148,47 @@ export const keyboardTypeTool: AnyToolDefinition = defineTool({
     }),
 })
 
+/** `electron_type_into_editor` — click an editor's content area, then type into the focused editor. */
+export const typeIntoEditorTool: AnyToolDefinition = defineTool({
+  name: 'electron_type_into_editor',
+  title: 'Type into a code editor',
+  description: [
+    'Type into a code editor (Monaco / EditContext, CodeMirror, contenteditable) the reliable way:',
+    "click the editor's content area identified by ref or selector (e.g. '.monaco-editor .view-lines'),",
+    'then type the text into the now-focused editor as real keystrokes. Use this instead of typing into',
+    "an editor's hidden textarea, which modern EditContext editors ignore (returns TYPE_NO_EFFECT).",
+    'Returns: { ok, session_id, target, typed }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries',
+    'similar_refs), ELEMENT_NOT_VISIBLE (retryable), TYPE_NO_EFFECT, NOT_RUNNING, BAD_ARGUMENT.',
+  ].join(' '),
+  inputSchema: z.object({
+    ref: refField,
+    selector: selectorField,
+    text: z.string().describe('The text to type into the focused editor.'),
+    timeoutMs: timeoutField,
+    sessionId: sessionIdField,
+  }),
+  operationType: 'command',
+  handler: (args, ctx) =>
+    runTargetedInteraction(ctx, args, async (session, selector, opts) => {
+      // Click the visible content area to focus the editor's real input (the path that engages
+      // an EditContext editor), then type into the active element with no selector.
+      const before = await readEditorSignature(session, selector, 0)
+      await session.click(selector, opts)
+      await session.typeText(args.text)
+      await assertEditorTyped(session, selector, args.text, before)
+      return { target: selector, typed: args.text.length }
+    }),
+})
+
 /** `electron_key` — press a single key or chord, optionally focusing a target first. */
 export const keyTool: AnyToolDefinition = defineTool({
   name: 'electron_key',
   title: 'Press a key or chord',
   description: [
     "Press a key or chord (e.g. 'Enter', 'Control+A', 'ArrowDown'). Focuses ref/selector first when given;",
-    'otherwise presses against the active element. Set force:true to focus an offscreen / aria-hidden',
-    'editor input first (e.g. Monaco). Options: force, timeoutMs. Returns: { ok, session_id, key }.',
+    'otherwise presses against the active element. For editors, click the visible content area first;',
+    'reserve force:true for offscreen inputs that truly accept focus. Options: force, timeoutMs.',
+    'Returns: { ok, session_id, key }.',
     'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
     'NOT_RUNNING, BAD_ARGUMENT (ref+selector both).',
   ].join(' '),
@@ -128,7 +214,8 @@ export const pressSequenceTool: AnyToolDefinition = defineTool({
   title: 'Press a sequence of keys',
   description: [
     "Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focuses ref/selector",
-    'first when given; set force:true for an offscreen / aria-hidden editor input (e.g. Monaco).',
+    'first when given. For editors, click the visible content area first; reserve force:true for',
+    'offscreen inputs that truly accept focus.',
     'Options: force, timeoutMs. Returns: { ok, session_id, keys }.',
     'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
     'NOT_RUNNING, BAD_ARGUMENT (empty keys or ref+selector both).',
@@ -145,7 +232,7 @@ export const pressSequenceTool: AnyToolDefinition = defineTool({
   handler: (args, ctx) =>
     runInteraction(ctx, args, async (session) => {
       const opts = pressOptionsFor(args)
-      // When forcing focus on an offscreen selector (e.g. Monaco), focus ONCE via the first
+      // When forcing focus on an offscreen selector, focus ONCE via the first
       // key, then press the rest against the active element. Re-focusing the selector
       // between keys would fight editors that move focus to a transient popup mid-sequence
       // (e.g. an autocomplete list opened by the first key). Non-force sequences keep their

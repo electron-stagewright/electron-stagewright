@@ -25,8 +25,16 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { PlaywrightElectronTransport } from '../src/transports/index.js'
-import { checkTool, clickTool, selectOptionTool, typeTool } from '../src/tools/interaction/index.js'
+import {
+  checkTool,
+  clickTool,
+  keyboardTypeTool,
+  selectOptionTool,
+  typeIntoEditorTool,
+  typeTool,
+} from '../src/tools/interaction/index.js'
 import { launchTool, stopTool } from '../src/tools/lifecycle/index.js'
+import { getTextTool } from '../src/tools/read/index.js'
 import { snapshotTool } from '../src/tools/snapshot/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
@@ -102,6 +110,57 @@ describe('interaction smoke (real Electron)', () => {
       const stopped = await dispatcher.dispatch('electron_stop', { sessionId })
       expect(stopped.ok).toBe(true)
       expect(sessions.size).toBe(0)
+    },
+    60_000,
+  )
+
+  it.skipIf(!RUN_E2E)(
+    'rejects a swallowed editor input with TYPE_NO_EFFECT and lands text via type_into_editor',
+    async () => {
+      const snapshots = new SnapshotStore()
+      const transports = new TransportRegistry({ transports: [new PlaywrightElectronTransport()] })
+      const dispatcher = new Dispatcher({ sessions, snapshots, transports })
+      dispatcher.registerAll([
+        launchTool,
+        snapshotTool,
+        clickTool,
+        keyboardTypeTool,
+        typeIntoEditorTool,
+        getTextTool,
+        stopTool,
+      ])
+
+      const launched = await dispatcher.dispatch('electron_launch', { main: FIXTURE_MAIN })
+      const sessionId = (launched as SuccessResponse & { session_id: string }).session_id
+      await dispatcher.dispatch('electron_snapshot', { sessionId })
+
+      // Force-focus typing into the self-clearing hidden textarea must NOT report a false
+      // success: the keystrokes are swallowed, so the effect-check surfaces TYPE_NO_EFFECT.
+      const swallowed = await dispatcher.dispatch('electron_keyboard_type', {
+        sessionId,
+        selector: '#dead-editor',
+        text: 'ignored',
+        force: true,
+      })
+      expect(swallowed.ok).toBe(false)
+      expect((swallowed as { code: string }).code).toBe('TYPE_NO_EFFECT')
+
+      // The reliable path: click the editor content area, then type into the focused element.
+      const typed = await dispatcher.dispatch('electron_type_into_editor', {
+        sessionId,
+        selector: '#editor',
+        text: 'hello',
+      })
+      expect(typed.ok).toBe(true)
+
+      const content = (await dispatcher.dispatch('electron_get_text', {
+        sessionId,
+        selector: '#editor',
+      })) as SuccessResponse & { text: string }
+      expect(content.text).toContain('hello')
+
+      const stopped = await dispatcher.dispatch('electron_stop', { sessionId })
+      expect(stopped.ok).toBe(true)
     },
     60_000,
   )

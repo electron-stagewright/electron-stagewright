@@ -87,6 +87,11 @@ export const ERROR_CODES = {
     retryable: false,
     hint: 'Element is disabled; address the disabled state via app-level interaction.',
   },
+  TYPE_NO_EFFECT: {
+    http: 422,
+    retryable: false,
+    hint: "Typing changed nothing — the target ignored the input (e.g. a code editor's hidden textarea). Use electron_type_into_editor on the editor's content area.",
+  },
 
   // Waits
   WAIT_TIMEOUT: {
