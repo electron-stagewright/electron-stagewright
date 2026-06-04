@@ -189,6 +189,53 @@ describe('text + keyboard tools', () => {
     ])
   })
 
+  it('electron_type_into_editor clicks the content area then types into the active element', async () => {
+    const { dispatcher, session } = setup()
+    await dispatcher.dispatch('electron_type_into_editor', {
+      selector: '.monaco-editor .view-lines',
+      text: 'hello',
+    })
+    expect(session.interactions).toEqual<Recorded[]>([
+      { method: 'click', args: ['.monaco-editor .view-lines', { timeoutMs: 5000 }] },
+      { method: 'typeText', args: ['hello', undefined] },
+    ])
+  })
+
+  it('electron_type_into_editor rejects when click-then-type leaves the editor unchanged', async () => {
+    const { dispatcher } = setup({
+      evaluate: async (_target, _body, arg) => {
+        const input = arg as { readonly selector?: unknown; readonly settleMs?: unknown }
+        if (input.selector === '.monaco-editor .view-lines' && 'settleMs' in input) return ''
+        return undefined
+      },
+    })
+    const res = (await dispatcher.dispatch('electron_type_into_editor', {
+      selector: '.monaco-editor .view-lines',
+      text: 'hello',
+    })) as ErrorResponse
+    expect(res.code).toBe('TYPE_NO_EFFECT')
+    expect(res.retryable).toBe(false)
+  })
+
+  it('maps a TYPE_NO_EFFECT transport failure to the envelope with recovery next_actions', async () => {
+    const { dispatcher } = setup({
+      interactionError: new StagewrightError('TYPE_NO_EFFECT', 'editable content did not change', {
+        selector: '.monaco-editor textarea',
+      }),
+    })
+    const res = (await dispatcher.dispatch('electron_keyboard_type', {
+      selector: '.monaco-editor textarea',
+      text: 'x',
+      force: true,
+    })) as ErrorResponse
+    expect(res.code).toBe('TYPE_NO_EFFECT')
+    expect(res.retryable).toBe(false)
+    expect(res.next_actions).toEqual([
+      'electron_type_into_editor({ selector: "<editor content area, e.g. \'.monaco-editor .view-lines\'>", text })',
+      'If custom focus is needed: electron_click({ selector: "<editor content area>" }) then electron_keyboard_type({ text }) with no selector.',
+    ])
+  })
+
   it('electron_key presses globally; focusing a ref when given', async () => {
     const { dispatcher, session } = setup()
     await dispatcher.dispatch('electron_key', { key: 'Enter' })

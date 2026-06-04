@@ -14,6 +14,26 @@
       <option value="apple">Apple</option>
       <option value="pear">Pear</option>
     </select>
+    <!-- Editor simulation for the gated editor-typing smoke. #dead-editor mimics a
+         code editor's hidden textarea: it is offscreen + aria-hidden and clears
+         itself on every input event, so any value routed straight to it (the fill
+         electron_type does, or a force-focused electron_keyboard_type) is swallowed
+         — exercising the TYPE_NO_EFFECT effect-check. #editor is the visible content
+         area: clicking focuses it and real keystrokes land in its textContent —
+         exercising electron_type_into_editor's click-then-type-active recovery. -->
+    <textarea
+      id="dead-editor"
+      aria-hidden="true"
+      style="position: absolute; left: -9999px; width: 1px; height: 1px"
+      oninput="this.value = ''"
+    ></textarea>
+    <div
+      id="editor"
+      contenteditable="true"
+      role="textbox"
+      aria-label="Editor"
+      style="border: 1px solid #ccc; min-height: 2em"
+    ></div>
     <!-- Logs on click, so the gated observe smoke can capture a console entry
          reliably (after the session's console listener has attached). -->
     <button id="log" onclick="console.log('stagewright-console-probe')">Log</button>

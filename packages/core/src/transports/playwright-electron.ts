@@ -86,6 +86,32 @@ function toTimeoutOptions(opts: { readonly timeoutMs?: number }): { timeout?: nu
   }
 }
 
+/**
+ * Settle delay (ms) before re-reading an element's editable content for the type-effect check.
+ * Editors like Monaco process input asynchronously (read + clear their hidden textarea on the
+ * input event), so reading immediately can catch a transient pre-clear value; a short settle
+ * lets that resolve before we decide whether the type landed.
+ */
+const TYPE_EFFECT_SETTLE_MS = 10
+
+/**
+ * Renderer body returning an element's editable content (a form control's `value`, else its
+ * `textContent`), or `null` when the element is absent. Optionally settles first (see
+ * {@link TYPE_EFFECT_SETTLE_MS}). Used to verify a type actually landed.
+ */
+const EDITABLE_SIGNATURE_BODY = `
+const settleMs = typeof arg.settleMs === 'number' ? arg.settleMs : 0;
+if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
+let el = null;
+try {
+  el = document.querySelector(String(arg.selector));
+} catch {
+  return null;
+}
+if (el === null) return null;
+return typeof el.value === 'string' ? el.value : (el.textContent || '');
+`
+
 /** Renderer body for selector-based scroll. Waits only when `timeoutMs` is set. */
 function buildScrollIntoViewBody(): string {
   return `
@@ -547,7 +573,9 @@ class PlaywrightSession implements TransportSession {
   }
 
   async fill(selector: string, value: string, opts: InteractionOptions = {}): Promise<void> {
+    const before = await this.readEditableSignature(selector, 0)
     await (await this.activePage()).fill(selector, value, toActionOptions(opts))
+    await this.assertTyped(selector, value, before)
   }
 
   async hover(selector: string, opts: InteractionOptions = {}): Promise<void> {
@@ -578,13 +606,56 @@ class PlaywrightSession implements TransportSession {
       return
     }
     if (opts.force === true) {
-      // See press(): focus tolerates offscreen / aria-hidden inputs, then type globally.
+      // See press(): focus tolerates offscreen / aria-hidden inputs, then type globally. But a
+      // focused-yet-inert input (e.g. a modern Monaco editor's hidden textarea, whose real input
+      // is an EditContext element) silently swallows the keystrokes — so verify the content
+      // actually changed and surface TYPE_NO_EFFECT instead of a false success.
+      const before = await this.readEditableSignature(opts.selector, 0)
       await page.focus(opts.selector, toTimeoutOptions(opts))
       await page.keyboard.type(text)
+      await this.assertTyped(opts.selector, text, before)
       return
     }
     // page.type focuses the selector and emits a real keystroke per character.
+    const before = await this.readEditableSignature(opts.selector, 0)
     await page.type(opts.selector, text, toTimeoutOptions(opts))
+    await this.assertTyped(opts.selector, text, before)
+  }
+
+  /** Read an element's editable content (value or textContent), or null when absent. */
+  private async readEditableSignature(selector: string, settleMs: number): Promise<string | null> {
+    return this.evaluate<string | null>('renderer', EDITABLE_SIGNATURE_BODY, { selector, settleMs })
+  }
+
+  /**
+   * After a fill/type, confirm the text landed: the editable content changed, or already equals
+   * the typed text (an idempotent re-fill). When non-empty text leaves the content unchanged and
+   * not equal to it, the target ignored the input — throw `TYPE_NO_EFFECT`.
+   *
+   * Deliberately errs toward NOT throwing — a missed swallow is cheaper than a false rejection
+   * that blocks a type that actually worked:
+   * - empty text is a no-op (clearing / typing nothing is a legitimate no-change);
+   * - an unreadable signature (`null`: the element is gone, or not reachable via
+   *   `document.querySelector` — e.g. inside a shadow root Playwright pierced but our eval cannot)
+   *   skips the check rather than risk a spurious failure;
+   * - an editor whose model updates asynchronously gets {@link TYPE_EFFECT_SETTLE_MS} to settle
+   *   before the re-read. A model slower than that settle is the residual false-negative this
+   *   check accepts to keep the common (synchronous) case honest.
+   */
+  private async assertTyped(selector: string, text: string, before: string | null): Promise<void> {
+    if (text.length === 0) return
+    const after = await this.readEditableSignature(selector, TYPE_EFFECT_SETTLE_MS)
+    if (after === null) return
+    const landed = after !== before || after === text
+    if (!landed) {
+      throw new StagewrightError(
+        'TYPE_NO_EFFECT',
+        `Text did not land in "${selector}": its editable content did not change. The target ` +
+          "likely ignores input routed to it (a code editor's hidden textarea). Click the " +
+          'editor content area, then type into the active element with no selector.',
+        { selector },
+      )
+    }
   }
 
   async selectOption(

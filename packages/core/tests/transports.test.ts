@@ -57,7 +57,14 @@ const FAKE_SESSION: TransportSession = {
   dispose: async () => undefined,
 }
 
-function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
+function createFakePage(
+  title: string,
+  opts: {
+    evalResult?: unknown
+    inertSelectors?: readonly string[]
+    goneSelectors?: readonly string[]
+  } = {},
+) {
   let screenshotCalls = 0
   // Records every interaction method invocation, in order, so tests can assert
   // PlaywrightSession routed the call to the right page method with the mapped
@@ -65,6 +72,23 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
   const interactions: { readonly method: string; readonly args: readonly unknown[] }[] = []
   const consoleHandlers: ((message: unknown) => void)[] = []
   const dialogHandlers: ((dialog: unknown) => void)[] = []
+  // Editable-content model backing the type-effect check: fill/type/keyboard-type update a
+  // selector's content; the type-effect signature read (evaluate with arg.settleMs) reads it.
+  // Selectors in `inertSelectors` swallow input (content never changes), simulating a modern
+  // editor's hidden textarea that ignores keystrokes — so a force-type into them is a no-op.
+  const inert = new Set(opts.inertSelectors ?? [])
+  // Selectors whose editable signature reads back as null — the element is gone or not reachable
+  // via document.querySelector (e.g. inside a shadow root Playwright pierced but our eval cannot).
+  // The effect check must skip (not throw) for these, even if input was routed to them.
+  const gone = new Set(opts.goneSelectors ?? [])
+  const editable = new Map<string, string>()
+  let focused: string | undefined
+  const setContent = (selector: string, value: string): void => {
+    if (!inert.has(selector)) editable.set(selector, value)
+  }
+  const appendContent = (selector: string, text: string): void => {
+    if (!inert.has(selector)) editable.set(selector, (editable.get(selector) ?? '') + text)
+  }
   return {
     get screenshotCalls() {
       return screenshotCalls
@@ -76,6 +100,14 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
       fn: (payload: { readonly body: string; readonly arg?: unknown }) => T | Promise<T>,
       arg?: { readonly body: string; readonly arg?: unknown },
     ) => {
+      // The type-effect check reads an editable signature: arg carries { selector, settleMs }.
+      // Serve it from the editable-content model so fill/type effect verification can be tested
+      // without a real DOM.
+      const inner = arg?.arg as { selector?: unknown; settleMs?: unknown } | undefined
+      if (inner && 'settleMs' in inner && typeof inner.selector === 'string') {
+        if (gone.has(inner.selector)) return null as T
+        return (editable.get(inner.selector) ?? '') as T
+      }
       // The scroll-into-view body queries `document`, which does not exist in the
       // Node test environment. When a test supplies `evalResult`, short-circuit to
       // it so the transport's found/not-found handling can be exercised without a
@@ -90,12 +122,15 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
     },
     isVisible: async () => true,
     focus: async (selector: string, opts?: unknown) => {
+      focused = selector
       interactions.push({ method: 'focus', args: [selector, opts] })
     },
     click: async (selector: string, opts?: unknown) => {
+      focused = selector
       interactions.push({ method: 'click', args: [selector, opts] })
     },
     fill: async (selector: string, value: string, opts?: unknown) => {
+      setContent(selector, value)
       interactions.push({ method: 'fill', args: [selector, value, opts] })
     },
     hover: async (selector: string, opts?: unknown) => {
@@ -105,6 +140,7 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
       interactions.push({ method: 'press', args: [selector, key, opts] })
     },
     type: async (selector: string, text: string, opts?: unknown) => {
+      appendContent(selector, text)
       interactions.push({ method: 'type', args: [selector, text, opts] })
     },
     selectOption: async (selector: string, values: readonly string[], opts?: unknown) => {
@@ -128,6 +164,8 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
         interactions.push({ method: 'keyboard.press', args: [key] })
       },
       type: async (text: string) => {
+        // Global keystrokes land in the focused element (the force path focuses first).
+        if (focused !== undefined) appendContent(focused, text)
         interactions.push({ method: 'keyboard.type', args: [text] })
       },
     },
@@ -542,6 +580,94 @@ describe('PlaywrightElectronTransport', () => {
       { method: 'focus', args: ['.monaco-editor textarea', {}] },
       { method: 'keyboard.press', args: ['Control+A'] },
     ])
+  })
+
+  it('force-typing into an input that ignores it returns TYPE_NO_EFFECT (no false ok)', async () => {
+    // The selector is inert — it swallows keystrokes (a modern Monaco editor's hidden textarea
+    // whose real input is an EditContext element). The content never changes, so the type-effect
+    // check must reject instead of reporting success.
+    const page = createFakePage('A', { inertSelectors: ['.monaco-editor textarea'] })
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(
+      session.typeText('hello', { selector: '.monaco-editor textarea', force: true }),
+    ).rejects.toMatchObject({ code: 'TYPE_NO_EFFECT' })
+  })
+
+  it('fill into an input that ignores it returns TYPE_NO_EFFECT', async () => {
+    const page = createFakePage('A', { inertSelectors: ['#readonly'] })
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(session.fill('#readonly', 'value', { force: true })).rejects.toMatchObject({
+      code: 'TYPE_NO_EFFECT',
+    })
+  })
+
+  it('fill that lands (content changes) resolves without error', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(session.fill('#name', 'Ada')).resolves.toBeUndefined()
+  })
+
+  it('force-typing into an editable that accepts it resolves (content lands)', async () => {
+    // Force-path success symmetry: when the focused target DOES accept keystrokes (a
+    // contenteditable / EditContext content area, modelled here by a non-inert selector whose
+    // content grows), the effect check sees the change and reports success — it only rejects a
+    // genuine swallow. Without this case, only the failing force path was exercised.
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(
+      session.typeText('hello', { selector: '#editable', force: true }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('non-force typing into an input that ignores it returns TYPE_NO_EFFECT', async () => {
+    // The non-force path (page.type, real per-character keystrokes) runs the same effect check
+    // as the force path — a swallowed keystroke must reject, not report a false success.
+    const page = createFakePage('A', { inertSelectors: ['#inert'] })
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(session.typeText('hello', { selector: '#inert' })).rejects.toMatchObject({
+      code: 'TYPE_NO_EFFECT',
+    })
+  })
+
+  it('typing a selector whose content cannot be read back does not block (null signature)', async () => {
+    // A null signature read means the element is gone / unreachable via document.querySelector;
+    // the effect check skips rather than risk a spurious TYPE_NO_EFFECT, even though input was
+    // routed to it (here keyboard.type after focus). Errs toward not-throwing by design.
+    const page = createFakePage('A', { goneSelectors: ['#gone'] })
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(
+      session.typeText('hello', { selector: '#gone', force: true }),
+    ).resolves.toBeUndefined()
   })
 
   it('scrolls via the mouse wheel when no selector is supplied', async () => {
