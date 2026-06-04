@@ -45,7 +45,13 @@ import {
 } from '../errors/operation-type.js'
 import { StagewrightError } from '../errors/registry.js'
 import { runWithSessionContext } from '../errors/session-context.js'
-import type { AnyToolDefinition, ToolContext, ToolResult } from '../tools/types.js'
+import type {
+  AnyToolDefinition,
+  DispatchObserver,
+  DispatchRecord,
+  ToolContext,
+  ToolResult,
+} from '../tools/types.js'
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
@@ -114,6 +120,8 @@ export class Dispatcher {
   readonly #screenshotDir?: string
   readonly #now: () => number
   readonly #slowMs: number
+  /** Best-effort dispatch observers (ADR-009). Empty by default — zero overhead per call. */
+  readonly #observers = new Set<DispatchObserver>()
 
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
@@ -129,6 +137,20 @@ export class Dispatcher {
   /** Whether the eval opt-in flag was set for this dispatcher. */
   get allowEval(): boolean {
     return this.#allowEval
+  }
+
+  /**
+   * Register a {@link DispatchObserver} notified after every subsequent dispatch (ADR-009),
+   * returning an idempotent unsubscribe. Exposed both directly (for embedders/tests) and to
+   * tool handlers via {@link ToolContext.addDispatchObserver}, so a session-observing plugin
+   * (the trace plugin) can record calls. Observers are best-effort: a throw is caught and
+   * logged, never propagated to the agent.
+   */
+  addObserver(observer: DispatchObserver): () => void {
+    this.#observers.add(observer)
+    return () => {
+      this.#observers.delete(observer)
+    }
   }
 
   /**
@@ -198,11 +220,12 @@ export class Dispatcher {
     const startedAt = this.#now()
     const def = this.#tools.get(name)
     if (def === undefined) {
-      return makeError('BAD_ARGUMENT', {
-        message: `Unknown tool: ${name}`,
+      return this.#complete(
+        name,
+        rawArgs,
+        makeError('BAD_ARGUMENT', { message: `Unknown tool: ${name}`, startedAt, now: this.#now }),
         startedAt,
-        now: this.#now,
-      })
+      )
     }
 
     const parsed = def.inputSchema.safeParse(rawArgs ?? {})
@@ -220,17 +243,22 @@ export class Dispatcher {
         message: issue.message,
       }))
       const primary = issues[0]
-      return makeError('BAD_ARGUMENT', {
-        message: primary
-          ? `Invalid arguments for ${name}: ${primary.field} — ${primary.message}.`
-          : `Invalid arguments for ${name}.`,
-        details: { issues },
-        next_actions: [
-          `Re-read the ${name} input schema in tools/list, then retry with a corrected "${primary?.field ?? 'argument'}".`,
-        ],
+      return this.#complete(
+        name,
+        rawArgs,
+        makeError('BAD_ARGUMENT', {
+          message: primary
+            ? `Invalid arguments for ${name}: ${primary.field} — ${primary.message}.`
+            : `Invalid arguments for ${name}.`,
+          details: { issues },
+          next_actions: [
+            `Re-read the ${name} input schema in tools/list, then retry with a corrected "${primary?.field ?? 'argument'}".`,
+          ],
+          startedAt,
+          now: this.#now,
+        }),
         startedAt,
-        now: this.#now,
-      })
+      )
     }
     const args = parsed.data
 
@@ -240,7 +268,7 @@ export class Dispatcher {
       // not per-payload safety.
       routeByOperationType(def.operationType, args)
     } catch (err) {
-      return this.#mapThrown(err, startedAt)
+      return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
     }
 
     const sessionId = readSessionId(args)
@@ -253,16 +281,40 @@ export class Dispatcher {
       ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
       startedAt,
       now: this.#now,
+      addDispatchObserver: (observer) => this.addObserver(observer),
     }
 
     try {
       const result = await runWithSessionContext(sessionId, () => def.handler(args, ctx))
       this.#warnIfSlow(name, this.#now() - startedAt)
-      return result
+      return this.#complete(name, args, result, startedAt)
     } catch (err) {
       this.#warnIfSlow(name, this.#now() - startedAt)
-      return this.#mapThrown(err, startedAt)
+      return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
     }
+  }
+
+  /**
+   * Finalise a dispatch: notify observers (best-effort) with the completed {@link
+   * DispatchRecord}, then return the envelope unchanged. The single funnel for every dispatch
+   * outcome, so observers see ALL calls — success, validation failure, or thrown-and-mapped —
+   * exactly once. A throwing observer is caught and logged; it never affects the agent result.
+   */
+  #complete(tool: string, args: unknown, result: ToolResult, startedAt: number): ToolResult {
+    if (this.#observers.size > 0) {
+      const record: DispatchRecord = { tool, args, result, startedAt, finishedAt: this.#now() }
+      for (const observer of this.#observers) {
+        try {
+          observer(record)
+        } catch (err) {
+          this.#logger.warn('Dispatch observer threw; ignored', {
+            tool,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+    }
+    return result
   }
 
   /**

@@ -21,6 +21,8 @@ export {
   type ToolContext,
   type ToolHandler,
   type ToolResult,
+  type DispatchRecord,
+  type DispatchObserver,
   defineTool,
 } from './types.js'
 

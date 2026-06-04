@@ -35,6 +35,39 @@ import type { TransportRegistry } from '../server/transport-registry.js'
 export type ToolResult = ErrorResponse | SuccessResponse<Record<string, unknown>>
 
 /**
+ * A completed tool dispatch, handed to every {@link DispatchObserver} after the dispatcher
+ * resolves a call (success OR error). It is the seam a session-observing plugin uses to record
+ * the whole run — the trace plugin (ADR-009) writes these to an artifact.
+ *
+ * `args` is the parsed, validated input (or the raw input when validation itself failed);
+ * `result` is the exact envelope the agent received. `startedAt` / `finishedAt` are epoch-ms
+ * from the dispatcher's injected clock, so elapsed time is `finishedAt - startedAt`. Every
+ * field is JSON-serialisable (it is built from the agent-facing envelope), so an observer may
+ * persist it directly — no `Map`/`Set`/`Date` leaks in.
+ */
+export interface DispatchRecord {
+  /** The registered tool name that was dispatched (e.g. `electron_click`). */
+  readonly tool: string
+  /** Parsed validated input, or the raw input when input validation failed. */
+  readonly args: unknown
+  /** The exact response envelope the agent received (success or error). */
+  readonly result: ToolResult
+  /** Epoch-ms when the dispatcher began the call. */
+  readonly startedAt: number
+  /** Epoch-ms when the dispatcher finished the call. */
+  readonly finishedAt: number
+}
+
+/**
+ * A best-effort sink notified once per completed dispatch, registered via
+ * {@link ToolContext.addDispatchObserver} (or `Dispatcher.addObserver`). It MUST be cheap and
+ * MUST NOT throw: it runs synchronously in the dispatch path, so a throw is caught and logged
+ * (never propagated to the agent) but slow work here slows every tool call. Persist-and-return
+ * is the intended shape; do heavy I/O off the hot path.
+ */
+export type DispatchObserver = (record: DispatchRecord) => void
+
+/**
  * Per-call execution context handed to every tool handler by the dispatcher.
  * The handler never constructs these collaborators itself; it receives them so
  * the dispatcher stays the single owner of session and logging lifecycle.
@@ -74,6 +107,18 @@ export interface ToolContext {
   readonly startedAt: number
   /** Clock used for elapsed-time measurement. Injectable for deterministic tests. */
   readonly now: () => number
+  /**
+   * Register a {@link DispatchObserver} and return a function that unregisters it. The seam a
+   * session-observing plugin (e.g. the trace plugin, ADR-009) uses to record tool calls without
+   * the core depending on it.
+   *
+   * The observer fires for every dispatch that COMPLETES while it is registered — INCLUDING the
+   * call that registered it (the registering handler runs before the dispatcher's notify step,
+   * so that same call's record is delivered). An observer that should not see its own plugin's
+   * tools must filter them (the trace plugin skips its `trace_*` calls). The observer must be
+   * cheap and must not throw (see {@link DispatchObserver}).
+   */
+  readonly addDispatchObserver: (observer: DispatchObserver) => () => void
 }
 
 /**

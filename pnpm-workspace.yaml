@@ -10,3 +10,8 @@ packages:
 allowBuilds:
   esbuild: true
   electron: true
+  # simple-git-hooks ships a postinstall that auto-installs git hooks. We do NOT run it
+  # (false) — the root `prepare` script installs the hooks explicitly, the pnpm-friendly
+  # path. Listing it here (even as false) acknowledges the skipped build so
+  # `pnpm install --frozen-lockfile` exits 0 in CI instead of erroring on an unapproved build.
+  simple-git-hooks: false

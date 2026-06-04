@@ -1,0 +1,75 @@
+# @electron-stagewright/plugin-trace
+
+Record a driving session to a portable artifact and see where the token budget went. The
+first session-observing plugin (ADR-009, built on the ADR-004 plugin contract): between
+`trace_start` and `trace_stop` it subscribes to the server's dispatch-observer seam and
+captures every tool call — input, output envelope, timing, and token estimate — to a JSONL
+file, then `trace_tokens` summarises the cost.
+
+`trace_replay` (re-dispatch a recorded session) and a visual viewer are forthcoming.
+
+## Load it
+
+By package name (once installed) or file path, like any plugin — the server never auto-scans:
+
+```sh
+# By package name:
+node packages/core/dist/cli.js --plugin @electron-stagewright/plugin-trace
+
+# Configure (optional): default dir, record cap, redacted arg fields:
+node packages/core/dist/cli.js --plugin @electron-stagewright/plugin-trace \
+  --plugin-config trace='{"dir":"/tmp/traces","maxRecords":5000,"redact":["text"]}'
+```
+
+Programmatically:
+
+```js
+import { createServer } from '@electron-stagewright/core'
+import tracePlugin from '@electron-stagewright/plugin-trace'
+
+const server = await createServer({
+  plugins: [tracePlugin],
+  pluginConfigs: { trace: { redact: ['text'] } },
+})
+```
+
+## Tools
+
+The loader namespaces each tool under the plugin name `trace`:
+
+- **`trace_start`** `{ path?, dir? }` — begin recording to a JSONL artifact (path takes
+  precedence over dir; both default to the configured dir or the OS temp dir). Returns
+  `{ recording, path }`. The plugin's own `trace_*` calls are not recorded.
+- **`trace_stop`** — flush the artifact and return `{ path, records, total_estimated_tokens,
+overflowed }`.
+- **`trace_tokens`** `{ path? }` — summarise token usage: total, per-tool totals, largest
+  individual responses, and whether the trace overflowed. With no path it reports the live
+  recording; otherwise reads a written artifact.
+- **`trace_status`** — `{ recording, path?, records?, overflowed? }`.
+
+Error codes: `trace.ALREADY_RECORDING`, `trace.NOT_RECORDING`, `trace.ARTIFACT_NOT_FOUND`,
+`trace.ARTIFACT_INVALID`, `trace.ARTIFACT_WRITE_FAILED`.
+
+## Config
+
+`trace` plugin config (all optional):
+
+- **`dir`** — default directory for artifacts when `trace_start` gets no `path`/`dir`.
+- **`maxRecords`** — cap on buffered call records (default 10000); later calls are dropped and
+  `overflowed` is reported.
+- **`redact`** — argument property names to replace with `"[redacted]"` before recording.
+
+## Artifact format
+
+JSONL, schema version 1. The first line is a `meta` record (`{ v, kind: "meta", started_at,
+core_version, overflowed }`); each subsequent line is a `call` record (`{ kind: "call", tool,
+ok, code?, started_at, finished_at, elapsed_ms, estimated_tokens, args, result }`). Records are
+buffered in memory and written on `trace_stop`, so a crash before stop loses the buffer
+(streaming is a forthcoming improvement).
+
+## Privacy
+
+A trace captures tool inputs and outputs, which can include typed text or evaluated code. It is
+opt-in (records only between `trace_start` and `trace_stop`) and writes to a path you choose —
+the same trust model as screenshots and console logs. Use the `redact` config to drop sensitive
+argument fields.
