@@ -1,8 +1,8 @@
 /**
  * Integration tests for the trace plugin (ADR-009) loaded into a real server. The in-process
  * block drives the plugin through `createServer(...).dispatcher` (start -> tool calls -> stop ->
- * read artifact, plus tokens/status and the error paths); the MCP block (fold B) loads it over
- * a real Client<->Server pair (InMemoryTransport) and confirms a tools/call session is captured.
+ * read artifact, plus tokens/status and the error paths); the MCP block loads it over a real
+ * Client<->Server pair (InMemoryTransport) and confirms a tools/call session is captured.
  */
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -179,6 +179,84 @@ describe('trace plugin (in-process)', () => {
       })
     } finally {
       await server.close().catch(() => undefined)
+    }
+  })
+})
+
+describe('trace plugin replay (in-process)', () => {
+  it('replays a recorded session and reports all calls matched', async () => {
+    const file = await tmpFile()
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file })
+      await server.dispatcher.dispatch('demo_echo', { value: 'a' })
+      await server.dispatcher.dispatch('demo_echo', { value: 'b' })
+      await server.dispatcher.dispatch('trace_stop', {})
+
+      expect(await server.dispatcher.dispatch('trace_replay', { path: file })).toMatchObject({
+        ok: true,
+        replayed: 2,
+        matched: 2,
+        diverged: 0,
+        skipped: 0,
+        dry_run: false,
+      })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('dry-run re-validates without dispatching', async () => {
+    const file = await tmpFile()
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file })
+      await server.dispatcher.dispatch('demo_echo', { value: 'a' })
+      await server.dispatcher.dispatch('trace_stop', {})
+      expect(
+        await server.dispatcher.dispatch('trace_replay', { path: file, dryRun: true }),
+      ).toMatchObject({ ok: true, replayed: 1, matched: 1, dry_run: true })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('rejects replay of a missing or invalid artifact', async () => {
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      expect(
+        await server.dispatcher.dispatch('trace_replay', { path: '/no/such/trace-xyz.jsonl' }),
+      ).toMatchObject({ ok: false, code: 'trace.ARTIFACT_NOT_FOUND' })
+      const invalid = await tmpFile()
+      await writeFile(invalid, 'not-json\n', 'utf8')
+      expect(await server.dispatcher.dispatch('trace_replay', { path: invalid })).toMatchObject({
+        ok: false,
+        code: 'trace.ARTIFACT_INVALID',
+      })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('detects schema drift in dry-run (a recorded tool no longer registered)', async () => {
+    // Record a demo_echo call, then dry-run replay against a server WHERE demo_echo is absent: the
+    // call no longer validates (unknown tool), so it diverges — without any dispatch.
+    const file = await tmpFile()
+    const recordServer = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await recordServer.dispatcher.dispatch('trace_start', { path: file })
+      await recordServer.dispatcher.dispatch('demo_echo', { value: 'a' })
+      await recordServer.dispatcher.dispatch('trace_stop', {})
+    } finally {
+      await recordServer.close().catch(() => undefined)
+    }
+    const replayServer = await createServer({ plugins: [tracePlugin] })
+    try {
+      expect(
+        await replayServer.dispatcher.dispatch('trace_replay', { path: file, dryRun: true }),
+      ).toMatchObject({ ok: true, replayed: 1, diverged: 1, dry_run: true })
+    } finally {
+      await replayServer.close().catch(() => undefined)
     }
   })
 })
