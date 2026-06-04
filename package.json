@@ -29,7 +29,11 @@
     "format:check": "prettier --check .",
     "matrix": "pnpm --filter @electron-stagewright/framework-matrix matrix",
     "bench": "pnpm --filter @electron-stagewright/bench bench",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check"
+    "verify": "pnpm build && pnpm lint && pnpm typecheck && pnpm test && pnpm format:check",
+    "prepare": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-push": "pnpm verify"
   },
   "devDependencies": {
     "@types/node": "^24.12.4",
@@ -37,6 +41,7 @@
     "@typescript-eslint/parser": "^8.60.0",
     "eslint": "^10.4.0",
     "prettier": "^3.8.3",
+    "simple-git-hooks": "^2.13.0",
     "tsx": "^4.22.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"
