@@ -23,16 +23,18 @@ import {
   runTargetedInteraction,
 } from './target.js'
 
-/** Build {@link PressOptions} (optional focus target + bounded timeout) for keyboard tools. */
+/** Build {@link PressOptions} (optional focus target + bounded timeout + force) for keyboard tools. */
 function pressOptionsFor(args: {
   readonly ref?: number | undefined
   readonly selector?: string | undefined
+  readonly force?: boolean | undefined
   readonly timeoutMs?: number | undefined
 }): PressOptions {
   const selector = resolveOptionalTarget(args)
-  const { timeoutMs } = resolveActionOptions(args)
+  const { force, timeoutMs } = resolveActionOptions(args)
   return {
     ...(selector !== undefined ? { selector } : {}),
+    ...(force !== undefined ? { force } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   }
 }
@@ -43,9 +45,10 @@ export const typeTool: AnyToolDefinition = defineTool({
   title: 'Type text into an input',
   description: [
     'Set the value of the input/textarea identified by ref or selector (fires an input event).',
-    'For inputs with per-keystroke handlers use electron_keyboard_type instead. Options: force, timeoutMs.',
+    'For inputs with per-keystroke handlers (code editors, autocompletes) use electron_keyboard_type',
+    'instead. Set force:true for an intentionally offscreen / aria-hidden input. Options: force, timeoutMs.',
     'Returns: { ok, session_id, target }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries similar_refs),',
-    'ELEMENT_NOT_VISIBLE (retryable), ELEMENT_DISABLED, NOT_RUNNING, BAD_ARGUMENT.',
+    'ELEMENT_NOT_VISIBLE (retryable; try force:true for editor inputs), ELEMENT_DISABLED, NOT_RUNNING, BAD_ARGUMENT.',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,
@@ -70,14 +73,17 @@ export const keyboardTypeTool: AnyToolDefinition = defineTool({
   description: [
     'Type text as real per-character keystrokes (fires keydown/keypress/input/keyup per char), unlike',
     'electron_type which sets the value directly. Focuses ref/selector first when given; otherwise types',
-    'into the active element. Options: timeoutMs. Returns: { ok, session_id, typed }.',
-    'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
-    'NOT_RUNNING, BAD_ARGUMENT (ref+selector both).',
+    'into the active element. Set force:true to type into an intentionally offscreen / aria-hidden input',
+    "such as a code editor's hidden textarea (e.g. selector '.monaco-editor textarea'), which a normal",
+    'visibility-gated type rejects with ELEMENT_NOT_VISIBLE. Options: force, timeoutMs.',
+    'Returns: { ok, session_id, typed }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs),',
+    'ELEMENT_NOT_VISIBLE (retryable; try force:true for editor inputs), NOT_RUNNING, BAD_ARGUMENT.',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,
     selector: selectorField,
     text: z.string().describe('The text to type, character by character.'),
+    force: forceField,
     timeoutMs: timeoutField,
     sessionId: sessionIdField,
   }),
@@ -95,7 +101,8 @@ export const keyTool: AnyToolDefinition = defineTool({
   title: 'Press a key or chord',
   description: [
     "Press a key or chord (e.g. 'Enter', 'Control+A', 'ArrowDown'). Focuses ref/selector first when given;",
-    'otherwise presses against the active element. Options: timeoutMs. Returns: { ok, session_id, key }.',
+    'otherwise presses against the active element. Set force:true to focus an offscreen / aria-hidden',
+    'editor input first (e.g. Monaco). Options: force, timeoutMs. Returns: { ok, session_id, key }.',
     'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
     'NOT_RUNNING, BAD_ARGUMENT (ref+selector both).',
   ].join(' '),
@@ -103,6 +110,7 @@ export const keyTool: AnyToolDefinition = defineTool({
     ref: refField,
     selector: selectorField,
     key: z.string().describe("Key or chord, e.g. 'Enter' or 'Control+A'."),
+    force: forceField,
     timeoutMs: timeoutField,
     sessionId: sessionIdField,
   }),
@@ -120,7 +128,8 @@ export const pressSequenceTool: AnyToolDefinition = defineTool({
   title: 'Press a sequence of keys',
   description: [
     "Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focuses ref/selector",
-    'first when given. Options: timeoutMs. Returns: { ok, session_id, keys }.',
+    'first when given; set force:true for an offscreen / aria-hidden editor input (e.g. Monaco).',
+    'Options: force, timeoutMs. Returns: { ok, session_id, keys }.',
     'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
     'NOT_RUNNING, BAD_ARGUMENT (empty keys or ref+selector both).',
   ].join(' '),
@@ -128,6 +137,7 @@ export const pressSequenceTool: AnyToolDefinition = defineTool({
     ref: refField,
     selector: selectorField,
     keys: z.array(z.string()).min(1).describe('Ordered keys/chords to press.'),
+    force: forceField,
     timeoutMs: timeoutField,
     sessionId: sessionIdField,
   }),
@@ -135,8 +145,16 @@ export const pressSequenceTool: AnyToolDefinition = defineTool({
   handler: (args, ctx) =>
     runInteraction(ctx, args, async (session) => {
       const opts = pressOptionsFor(args)
+      // When forcing focus on an offscreen selector (e.g. Monaco), focus ONCE via the first
+      // key, then press the rest against the active element. Re-focusing the selector
+      // between keys would fight editors that move focus to a transient popup mid-sequence
+      // (e.g. an autocomplete list opened by the first key). Non-force sequences keep their
+      // per-key page.press(selector) behaviour unchanged.
+      const focusOncePerSequence = opts.selector !== undefined && opts.force === true
+      let pressed = 0
       for (const key of args.keys) {
-        await session.press(key, opts)
+        await session.press(key, focusOncePerSequence && pressed > 0 ? {} : opts)
+        pressed += 1
       }
       return { keys: args.keys }
     }),

@@ -118,8 +118,10 @@ const DESCRIPTION = [
   'Capture a screenshot to an image file and return its path (the image is written on the server',
   'host; the bytes are NOT returned inline). With ref/selector, captures just that element; otherwise',
   'the targeted window (windowId > windowTitle > windowIndex, default the active window) with optional',
-  'fullPage or clip. Options: format (png|jpeg), quality (jpeg), path (absolute; defaults to a temp file).',
-  'Returns: { ok, session_id, path, bytes, format, width?, height? }.',
+  'fullPage or clip. Options: format (png|jpeg), quality (jpeg), path (absolute file) or dir (absolute',
+  'directory, generated filename). With neither, writes to the server --screenshot-dir if configured,',
+  'else the OS temp dir — pass dir or set --screenshot-dir for a stable, retrievable artifact location.',
+  'Returns: { ok, session_id, path, bytes, format, width?, height? } (path is the absolute file written).',
   'Errors: ABSOLUTE_PATH_REQUIRED (relative path), REF_NOT_FOUND (no such window),',
   'SELECTOR_NO_MATCH (element not found), NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).',
 ].join(' ')
@@ -158,7 +160,13 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
       path: z
         .string()
         .optional()
-        .describe('Absolute output path. Defaults to a generated temp file.'),
+        .describe('Absolute output file path. Takes precedence over dir / the server default.'),
+      dir: z
+        .string()
+        .optional()
+        .describe(
+          'Absolute output DIRECTORY; the filename is generated. Use this (or the server --screenshot-dir default) for a stable, per-session artifact location instead of the OS temp dir. Mutually exclusive with path.',
+        ),
       windowId: z.string().optional().describe('Target window transport id (highest precedence).'),
       windowTitle: z.string().optional().describe('Target window by exact title.'),
       windowIndex: z
@@ -181,6 +189,20 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
           ...meta,
           message: `Screenshot path must be absolute: ${args.path}`,
           details: { path: args.path },
+        })
+      }
+      if (args.dir !== undefined && !path.isAbsolute(args.dir)) {
+        return makeError('ABSOLUTE_PATH_REQUIRED', {
+          ...meta,
+          message: `Screenshot dir must be absolute: ${args.dir}`,
+          details: { dir: args.dir },
+        })
+      }
+      if (args.path !== undefined && args.dir !== undefined) {
+        return makeError('BAD_ARGUMENT', {
+          ...meta,
+          message: 'Provide at most one of path (full file) or dir (directory).',
+          details: { path: args.path, dir: args.dir },
         })
       }
       if (args.quality !== undefined && format !== 'jpeg') {
@@ -261,9 +283,12 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
       // A bad window ref throws REF_NOT_FOUND from the transport; the dispatcher maps it.
       const buffer = await managed.session.screenshot(toWindowRef(args), opts)
 
+      // Output path precedence: explicit file `path` > explicit `dir` (generated name) >
+      // the server-configured default dir (--screenshot-dir) > the OS temp dir. Preferring
+      // dir/screenshotDir over the temp dir gives agents a stable artifact location.
       const ext = format === 'jpeg' ? 'jpg' : 'png'
-      const outPath =
-        args.path ?? path.join(ctx.screenshotDir ?? tmpdir(), `stagewright-${randomUUID()}.${ext}`)
+      const baseDir = args.dir ?? ctx.screenshotDir ?? tmpdir()
+      const outPath = args.path ?? path.join(baseDir, `stagewright-${randomUUID()}.${ext}`)
       await mkdir(path.dirname(outPath), { recursive: true })
       await writeFile(outPath, buffer)
 

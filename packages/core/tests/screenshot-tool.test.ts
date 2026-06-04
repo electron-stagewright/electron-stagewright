@@ -95,6 +95,101 @@ describe('electron_screenshot', () => {
     expect(await readFile(res.path)).toHaveLength(24)
   })
 
+  it('writes a generated filename into an explicit dir', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'sw-shot-dir-'))
+    created.push(dir)
+    const { dispatcher } = setup({ screenshotResult: pngBuffer(10, 10) })
+    const res = (await dispatcher.dispatch('electron_screenshot', { dir })) as SuccessResponse & {
+      path: string
+    }
+    expect(path.dirname(res.path)).toBe(dir)
+    expect(await readFile(res.path)).toHaveLength(24)
+  })
+
+  it('prefers an explicit dir over the server screenshotDir default', async () => {
+    const serverDir = await mkdtemp(path.join(tmpdir(), 'sw-shot-server-'))
+    const callDir = await mkdtemp(path.join(tmpdir(), 'sw-shot-call-'))
+    created.push(serverDir, callDir)
+    const sessions = new SessionManager()
+    sessions.register(
+      new FakeTransport(),
+      new FakeSession({ id: 'sess', screenshotResult: pngBuffer(10, 10) }),
+    )
+    const dispatcher = new Dispatcher({
+      sessions,
+      snapshots: new SnapshotStore(),
+      screenshotDir: serverDir,
+    })
+    dispatcher.registerAll(OBSERVE_TOOLS)
+    const res = (await dispatcher.dispatch('electron_screenshot', {
+      dir: callDir,
+    })) as SuccessResponse & {
+      path: string
+    }
+    expect(path.dirname(res.path)).toBe(callDir)
+  })
+
+  it('falls back to the server screenshotDir when no path/dir is given', async () => {
+    const serverDir = await mkdtemp(path.join(tmpdir(), 'sw-shot-server-'))
+    created.push(serverDir)
+    const sessions = new SessionManager()
+    sessions.register(
+      new FakeTransport(),
+      new FakeSession({ id: 'sess', screenshotResult: pngBuffer(10, 10) }),
+    )
+    const dispatcher = new Dispatcher({
+      sessions,
+      snapshots: new SnapshotStore(),
+      screenshotDir: serverDir,
+    })
+    dispatcher.registerAll(OBSERVE_TOOLS)
+    const res = (await dispatcher.dispatch('electron_screenshot', {})) as SuccessResponse & {
+      path: string
+    }
+    expect(path.dirname(res.path)).toBe(serverDir)
+  })
+
+  it('resolves a relative server screenshotDir before returning generated paths', async () => {
+    const serverDir = await mkdtemp(path.join(tmpdir(), 'sw-shot-server-relative-'))
+    created.push(serverDir)
+    const relativeServerDir = path.relative(process.cwd(), serverDir)
+    const sessions = new SessionManager()
+    sessions.register(
+      new FakeTransport(),
+      new FakeSession({ id: 'sess', screenshotResult: pngBuffer(10, 10) }),
+    )
+    const dispatcher = new Dispatcher({
+      sessions,
+      snapshots: new SnapshotStore(),
+      screenshotDir: relativeServerDir,
+    })
+    dispatcher.registerAll(OBSERVE_TOOLS)
+    const res = (await dispatcher.dispatch('electron_screenshot', {})) as SuccessResponse & {
+      path: string
+    }
+    expect(path.isAbsolute(res.path)).toBe(true)
+    expect(path.dirname(res.path)).toBe(path.resolve(relativeServerDir))
+  })
+
+  it('rejects a relative dir with ABSOLUTE_PATH_REQUIRED', async () => {
+    const { dispatcher } = setup({ screenshotResult: pngBuffer(10, 10) })
+    const res = (await dispatcher.dispatch('electron_screenshot', {
+      dir: 'relative/dir',
+    })) as ErrorResponse
+    expect(res.code).toBe('ABSOLUTE_PATH_REQUIRED')
+  })
+
+  it('rejects path and dir supplied together with BAD_ARGUMENT', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'sw-shot-both-'))
+    created.push(dir)
+    const { dispatcher } = setup({ screenshotResult: pngBuffer(10, 10) })
+    const res = (await dispatcher.dispatch('electron_screenshot', {
+      path: path.join(dir, 'a.png'),
+      dir,
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
   it('rejects a relative path with ABSOLUTE_PATH_REQUIRED', async () => {
     const { dispatcher } = setup()
     const res = (await dispatcher.dispatch('electron_screenshot', {
