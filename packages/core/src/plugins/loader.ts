@@ -7,8 +7,8 @@
  * already loaded in this call, so a half-initialised set never reaches the dispatcher.
  *
  * The loader does NOT import or discover packages — callers pass already-imported
- * {@link StagewrightPlugin} objects. (The CLI's `--plugin` path, when added, does the
- * dynamic import of an explicitly-named package and hands the result here.)
+ * {@link StagewrightPlugin} objects. The CLI's `--plugin` path does the dynamic import of
+ * an explicitly-named package or file (see `resolve.ts`) and hands the result here.
  *
  * @module
  */
@@ -56,6 +56,26 @@ function validateManifest(plugin: StagewrightPlugin): void {
       )
     }
   }
+}
+
+/**
+ * Resolve and validate a plugin's config. Returns the parsed config when the plugin
+ * declares a `configSchema` (defaulting the raw value to `{}` so schema defaults apply),
+ * or `undefined` when it has no schema. Throws `PLUGIN_CONFIG_INVALID` when the supplied
+ * config does not match the schema.
+ */
+function resolveConfig(plugin: StagewrightPlugin, configs: LoadPluginsOptions['configs']): unknown {
+  if (plugin.configSchema === undefined) return undefined
+  const raw = configs?.[plugin.name] ?? {}
+  const result = plugin.configSchema.safeParse(raw)
+  if (!result.success) {
+    throw new StagewrightError(
+      'PLUGIN_CONFIG_INVALID',
+      `Plugin "${plugin.name}" config is invalid: ${result.error.message}`,
+      { plugin: plugin.name },
+    )
+  }
+  return result.data
 }
 
 /**
@@ -149,12 +169,14 @@ export async function loadPlugins(
         ? registerPluginErrorCodes(plugin.name, plugin.errorCodes)
         : []
       const record = makeLoadedPlugin(plugin, tools, codes)
-      // Record BEFORE setup so a throwing setup still gets its codes unregistered by
-      // teardown. allTools accumulates only AFTER setup succeeds, so a plugin whose setup
-      // throws never contributes its tools to the aggregate — and on the success path the
-      // aggregate always equals the concatenation of every loaded plugin's tools.
+      // Record BEFORE setup so a throwing setup (or invalid config) still gets its codes
+      // unregistered by teardown. allTools accumulates only AFTER setup succeeds, so a
+      // plugin whose setup throws never contributes its tools to the aggregate — and on
+      // the success path the aggregate always equals the concatenation of every loaded
+      // plugin's tools.
       loaded.push(record)
-      await plugin.setup?.()
+      const config = resolveConfig(plugin, opts.configs)
+      await plugin.setup?.(config)
       allTools.push(...tools)
     }
   } catch (err) {

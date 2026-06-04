@@ -14,7 +14,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
-import { loadPlugins } from '../plugins/index.js'
+import { definePluginsInfoTool, loadPlugins } from '../plugins/index.js'
 import type { StagewrightPlugin } from '../plugins/index.js'
 import { DEFAULT_TOOLS } from '../tools/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
@@ -53,6 +53,11 @@ export interface CreateServerOptions {
    * the server never auto-scans for them.
    */
   readonly plugins?: Iterable<StagewrightPlugin>
+  /**
+   * Raw config values per plugin name (ADR-004). A plugin with a `configSchema` validates
+   * `pluginConfigs[plugin.name]` against it and receives the parsed result in `setup`.
+   */
+  readonly pluginConfigs?: Readonly<Record<string, unknown>>
   /** Transport registry. Defaults to the built-in set (Playwright/CDP/Injector). */
   readonly transports?: TransportRegistry
   /** Default directory the screenshot tool writes into; falls back to the OS temp dir. */
@@ -106,14 +111,43 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
   // Load plugins first (validates, namespaces, registers codes, runs setup). On any
   // failure the loader has already torn down the partial set, so we just propagate.
   const pluginResult = opts.plugins
-    ? await loadPlugins(opts.plugins, { coreVersion: SERVER_VERSION })
+    ? await loadPlugins(opts.plugins, {
+        coreVersion: SERVER_VERSION,
+        ...(opts.pluginConfigs !== undefined ? { configs: opts.pluginConfigs } : {}),
+      })
     : undefined
 
-  // Register core tools, then plugin tools. If registration throws after plugins loaded
-  // (e.g. a defensive duplicate-name guard), tear the plugins back down before failing.
+  // Surface likely operator mistakes: configs are keyed by plugin name, so a typo (or a
+  // forgotten --plugin) would silently fall back to the plugin's default config otherwise.
+  // Warn rather than throw — an extra config key is not fatal.
+  if (opts.pluginConfigs !== undefined) {
+    const loadedNames = new Set((pluginResult?.loaded ?? []).map((plugin) => plugin.name))
+    const orphanedKeys = Object.keys(opts.pluginConfigs).filter((key) => !loadedNames.has(key))
+    if (orphanedKeys.length > 0) {
+      logger.warn('Plugin config supplied for unloaded plugins; the config was ignored', {
+        configKeys: orphanedKeys,
+      })
+    }
+  }
+
+  // Register core tools, then plugin tools. When plugins are present, also register the
+  // plugins-introspection tool — only then, so a plugin-free server keeps its tool surface
+  // minimal. If registration throws after plugins loaded (e.g. a defensive duplicate-name
+  // guard), tear the plugins back down before failing.
   try {
     dispatcher.registerAll(opts.tools ?? DEFAULT_TOOLS)
-    if (pluginResult) dispatcher.registerAll(pluginResult.tools)
+    if (pluginResult && pluginResult.loaded.length > 0) {
+      dispatcher.register(
+        definePluginsInfoTool(
+          pluginResult.loaded.map((plugin) => ({
+            name: plugin.name,
+            version: plugin.version,
+            tools: plugin.tools.map((tool) => tool.name),
+          })),
+        ),
+      )
+      dispatcher.registerAll(pluginResult.tools)
+    }
   } catch (err) {
     if (pluginResult) await pluginResult.teardownAll()
     throw err

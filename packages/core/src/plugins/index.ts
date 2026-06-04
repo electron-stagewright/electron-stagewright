@@ -7,8 +7,11 @@
 export {
   type StagewrightPlugin,
   type LoadedPlugin,
+  type LoadedPluginInfo,
   type LoadPluginsOptions,
   type LoadPluginsResult,
 } from './types.js'
 
 export { loadPlugins } from './loader.js'
+export { importPlugin } from './resolve.js'
+export { definePluginsInfoTool } from './info-tool.js'

@@ -135,6 +135,11 @@ export const ERROR_CODES = {
     retryable: false,
     hint: 'Plugin default export does not match the PluginManifest schema.',
   },
+  PLUGIN_CONFIG_INVALID: {
+    http: 400,
+    retryable: false,
+    hint: 'Plugin config did not match the plugin configSchema.',
+  },
 
   // Evaluation
   EVAL_SYNTAX_ERROR: {
