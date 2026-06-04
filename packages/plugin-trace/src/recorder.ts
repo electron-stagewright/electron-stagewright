@@ -1,0 +1,258 @@
+/**
+ * Trace artifact recorder + reader (ADR-009).
+ *
+ * The artifact is JSONL: a single `meta` header record followed by one `call` record per tool
+ * dispatch. Records are buffered in memory while recording and written once on `stop()` — this
+ * keeps the dispatch-path observer a cheap array push (it must not block tool calls; durability
+ * is traded for that, a crash before stop loses the buffer — streaming is a forthcoming
+ * improvement). The buffer is bounded by `maxRecords`; on overflow further calls are dropped
+ * and `overflowed` is set so the summary can disclose the truncation.
+ *
+ * Everything written is JSON-serialisable (records are built from the agent-facing envelope),
+ * so the artifact round-trips through `JSON.parse` without data loss.
+ *
+ * @module
+ */
+
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+
+import type { DispatchRecord } from '@electron-stagewright/core'
+
+/** Schema version of the trace artifact format. Bumped when the record shape changes. */
+export const TRACE_FORMAT_VERSION = 1 as const
+
+/** The first line of a trace artifact: format version + when/what produced it. */
+export interface TraceMetaRecord {
+  readonly v: typeof TRACE_FORMAT_VERSION
+  readonly kind: 'meta'
+  readonly started_at: number
+  readonly core_version: string
+  /** Whether the trace hit its call-record cap and dropped later calls. */
+  readonly overflowed: boolean
+}
+
+/** One recorded tool dispatch. `args`/`result` are the agent-facing values (redaction applied). */
+export interface TraceCallRecord {
+  readonly kind: 'call'
+  readonly tool: string
+  readonly ok: boolean
+  /** Error code when `ok` is false; absent on success. */
+  readonly code?: string
+  readonly started_at: number
+  readonly finished_at: number
+  readonly elapsed_ms: number
+  readonly estimated_tokens: number
+  readonly args: unknown
+  readonly result: unknown
+}
+
+/** A line of a trace artifact. */
+export type TraceRecord = TraceMetaRecord | TraceCallRecord
+
+/** Summary returned by `Recorder.stop()` (and `trace_stop`). */
+export interface TraceSummary {
+  readonly path: string
+  readonly records: number
+  readonly total_estimated_tokens: number
+  /** True when the record cap was hit and later calls were dropped. */
+  readonly overflowed: boolean
+}
+
+/** Replace any property whose key is in `keys` with `'[redacted]'`, recursively. */
+function redactValue(value: unknown, keys: ReadonlySet<string>): unknown {
+  if (keys.size === 0) return value
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, keys))
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, val] of Object.entries(value)) {
+      out[key] = keys.has(key) ? '[redacted]' : redactValue(val, keys)
+    }
+    return out
+  }
+  return value
+}
+
+/** Options for {@link Recorder}. */
+export interface RecorderOptions {
+  /** Absolute output file path for the JSONL artifact. */
+  readonly path: string
+  /** Max `call` records buffered; further calls are dropped and `overflowed` set. */
+  readonly maxRecords: number
+  /** Argument property names to redact (replaced with `'[redacted]'`) before recording. */
+  readonly redact: readonly string[]
+  /** Core version stamped into the meta header. */
+  readonly coreVersion: string
+  /** Epoch-ms the recording started (meta header). */
+  readonly startedAt: number
+}
+
+/**
+ * Buffers tool-dispatch records and writes them to a JSONL artifact on stop. A single
+ * recorder backs one active `trace_start`/`trace_stop` cycle. `stop()` is idempotent.
+ */
+export class Recorder {
+  readonly path: string
+  readonly #maxRecords: number
+  readonly #redact: ReadonlySet<string>
+  readonly #coreVersion: string
+  readonly #startedAt: number
+  readonly #calls: TraceCallRecord[] = []
+  #overflowed = false
+  #closed = false
+
+  constructor(opts: RecorderOptions) {
+    this.path = opts.path
+    this.#maxRecords = opts.maxRecords
+    this.#redact = new Set(opts.redact)
+    this.#coreVersion = opts.coreVersion
+    this.#startedAt = opts.startedAt
+  }
+
+  /** Number of `call` records buffered so far. */
+  get count(): number {
+    return this.#calls.length
+  }
+
+  /** Whether the record cap has been hit. */
+  get overflowed(): boolean {
+    return this.#overflowed
+  }
+
+  /** The buffered call records (for summarising a live recording before it is written). */
+  get calls(): readonly TraceCallRecord[] {
+    return this.#calls
+  }
+
+  /**
+   * Buffer one completed dispatch. Best-effort and cheap (an array push). The trace plugin's
+   * OWN tools are filtered out by the caller, not here. No-op once stopped or once the cap is
+   * reached (sets `overflowed`).
+   */
+  record(rec: DispatchRecord): void {
+    if (this.#closed) return
+    if (this.#calls.length >= this.#maxRecords) {
+      this.#overflowed = true
+      return
+    }
+    const elapsed = Math.max(0, rec.finishedAt - rec.startedAt)
+    this.#calls.push({
+      kind: 'call',
+      tool: rec.tool,
+      ok: rec.result.ok,
+      ...(rec.result.ok ? {} : { code: rec.result.code }),
+      started_at: rec.startedAt,
+      finished_at: rec.finishedAt,
+      elapsed_ms: elapsed,
+      // `_meta.estimated_tokens` is always present on a ToolResult, but guard defensively so a
+      // future result shape can't silently poison the token total with NaN.
+      estimated_tokens: rec.result._meta?.estimated_tokens ?? 0,
+      args: redactValue(rec.args, this.#redact),
+      result: rec.result,
+    })
+  }
+
+  /** Flush the buffer to the JSONL artifact and return a summary. Idempotent. */
+  async stop(): Promise<TraceSummary> {
+    if (!this.#closed) {
+      this.#closed = true
+      try {
+        const meta: TraceMetaRecord = {
+          v: TRACE_FORMAT_VERSION,
+          kind: 'meta',
+          started_at: this.#startedAt,
+          core_version: this.#coreVersion,
+          overflowed: this.#overflowed,
+        }
+        const lines = [meta, ...this.#calls].map((r) => JSON.stringify(r)).join('\n')
+        await mkdir(path.dirname(this.path), { recursive: true })
+        await writeFile(this.path, `${lines}\n`, 'utf8')
+      } catch (err) {
+        this.#closed = false
+        throw err
+      }
+    }
+    return this.#summary()
+  }
+
+  #summary(): TraceSummary {
+    return {
+      path: this.path,
+      records: this.#calls.length,
+      total_estimated_tokens: this.#calls.reduce((sum, c) => sum + c.estimated_tokens, 0),
+      overflowed: this.#overflowed,
+    }
+  }
+}
+
+/** Aggregated token usage over a trace's call records (backs `trace_tokens`). */
+export interface TokensReport {
+  readonly total_estimated_tokens: number
+  readonly calls: number
+  /** True when the trace hit its call-record cap and later calls were dropped. */
+  readonly overflowed: boolean
+  /** Per-tool totals, descending by estimated tokens. */
+  readonly by_tool: ReadonlyArray<{ tool: string; calls: number; estimated_tokens: number }>
+  /** The single most expensive responses, descending by estimated tokens. */
+  readonly largest: ReadonlyArray<{
+    tool: string
+    estimated_tokens: number
+    started_at: number
+    ok: boolean
+  }>
+}
+
+/** Aggregate token usage from a trace's `call` records. */
+export function summarizeTrace(
+  records: readonly TraceCallRecord[],
+  topN = 10,
+  overflowed = false,
+): TokensReport {
+  const byTool = new Map<string, { calls: number; estimated_tokens: number }>()
+  let total = 0
+  for (const call of records) {
+    total += call.estimated_tokens
+    const agg = byTool.get(call.tool) ?? { calls: 0, estimated_tokens: 0 }
+    agg.calls += 1
+    agg.estimated_tokens += call.estimated_tokens
+    byTool.set(call.tool, agg)
+  }
+  const by_tool = [...byTool.entries()]
+    .map(([tool, agg]) => ({ tool, calls: agg.calls, estimated_tokens: agg.estimated_tokens }))
+    .sort((a, b) => b.estimated_tokens - a.estimated_tokens)
+  const largest = [...records]
+    .sort((a, b) => b.estimated_tokens - a.estimated_tokens)
+    .slice(0, topN)
+    .map((c) => ({
+      tool: c.tool,
+      estimated_tokens: c.estimated_tokens,
+      started_at: c.started_at,
+      ok: c.ok,
+    }))
+  return { total_estimated_tokens: total, calls: records.length, overflowed, by_tool, largest }
+}
+
+/** Parsed contents of a trace artifact. */
+export interface ParsedTrace {
+  readonly meta?: TraceMetaRecord
+  readonly calls: readonly TraceCallRecord[]
+}
+
+/** Read + parse a JSONL trace artifact. Throws (ENOENT) when the file does not exist. */
+export async function readTrace(filePath: string): Promise<ParsedTrace> {
+  const text = await readFile(filePath, 'utf8')
+  const calls: TraceCallRecord[] = []
+  let meta: TraceMetaRecord | undefined
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.length === 0) continue
+    const rec = JSON.parse(trimmed) as unknown
+    if (rec === null || typeof rec !== 'object' || !('kind' in rec)) {
+      throw new Error('Invalid trace record: missing kind')
+    }
+    if (rec.kind === 'meta') meta = rec as TraceMetaRecord
+    else if (rec.kind === 'call') calls.push(rec as TraceCallRecord)
+    else throw new Error(`Invalid trace record kind: ${String(rec.kind)}`)
+  }
+  return meta !== undefined ? { meta, calls } : { calls }
+}
