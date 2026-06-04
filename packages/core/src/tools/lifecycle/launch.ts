@@ -17,10 +17,69 @@ import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import { StagewrightError } from '../../errors/registry.js'
-import type { LaunchOptions } from '../../transports/index.js'
+import type { LaunchOptions, TransportSession } from '../../transports/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { diagnoseLaunchError } from './diagnose.js'
 import { registerWithWindows } from './session-init.js'
+
+/** Default budget for the post-launch renderer-ready wait (ms). */
+const DEFAULT_READY_TIMEOUT_MS = 5000
+
+/**
+ * Renderer-evaluable, self-bounded poll: resolve as soon as the document has finished its
+ * initial parse AND its body contains meaningful rendered content (not just an empty app
+ * root container), or `{ ready: false }` once the `arg.timeoutMs` budget elapses. Runs
+ * inside the transport's `(async () => { … })()` wrapper, so `await` / `return` work and
+ * Date.now/setTimeout are the renderer's.
+ */
+const RENDERER_READY_BODY = `
+const deadline = Date.now() + (typeof arg.timeoutMs === 'number' ? arg.timeoutMs : 0);
+function ready() {
+  if (typeof document === 'undefined') return false;
+  if (document.readyState === 'loading' || !document.body) return false;
+  // Short-circuit on the FIRST non-whitespace text node (skipping script/style/template)
+  // rather than concatenating the whole subtree — a ready large DOM returns on the first
+  // hit instead of materialising all its text.
+  function hasMeaningfulText(node) {
+    if (!node) return false;
+    if (node.nodeType === 3) return (node.textContent || '').trim().length > 0;
+    if (node.nodeType !== 1) return false;
+    var tagName = (node.tagName || '').toLowerCase();
+    if (tagName === 'script' || tagName === 'style' || tagName === 'template') return false;
+    for (var i = 0; i < node.childNodes.length; i += 1) {
+      if (hasMeaningfulText(node.childNodes.item(i))) return true;
+    }
+    return false;
+  }
+  if (hasMeaningfulText(document.body)) return true;
+  return !!document.body.querySelector(
+    'button,input,textarea,select,a[href],[role],[aria-label],[aria-labelledby],img,svg,canvas,video,table,ul,ol,li,h1,h2,h3,h4,h5,h6,[data-testid],[data-test]'
+  );
+}
+for (;;) {
+  if (ready()) return { ready: true };
+  if (Date.now() >= deadline) return { ready: ready() };
+  await new Promise((r) => setTimeout(r, 50));
+}
+`
+
+/**
+ * Wait (up to `timeoutMs`) for the session's active renderer to finish its initial render,
+ * returning whether it became ready. Best-effort: a transport that cannot evaluate in the
+ * renderer, or a renderer that rejects the probe, yields `false` rather than failing the
+ * launch — the session is still usable, the agent just learns the DOM was not confirmed
+ * populated. `timeoutMs: 0` performs a single instantaneous check.
+ */
+async function awaitRendererReady(session: TransportSession, timeoutMs: number): Promise<boolean> {
+  try {
+    const result = await session.evaluate<{ ready?: boolean }>('renderer', RENDERER_READY_BODY, {
+      timeoutMs,
+    })
+    return result?.ready === true
+  } catch {
+    return false
+  }
+}
 
 const inputSchema = z.object({
   main: z
@@ -40,6 +99,14 @@ const inputSchema = z.object({
     .describe('Environment variables for the spawned process.'),
   cwd: z.string().optional().describe('Working directory for the spawned process.'),
   timeoutMs: z.number().int().positive().optional().describe('Max wait for the first window.'),
+  readyTimeoutMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      'Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state.',
+    ),
   allowMultiple: z
     .boolean()
     .optional()
@@ -48,7 +115,10 @@ const inputSchema = z.object({
 
 const DESCRIPTION = [
   'Launch an Electron app and start a driving session. Provide main (absolute path to the',
-  'main-process entry) or executablePath. Returns: { ok, session_id, transport, windows }.',
+  'main-process entry) or executablePath. Returns: { ok, session_id, transport, windows, renderer_ready }.',
+  'Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a',
+  'snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed',
+  'in time (the session is still usable — retry the read, or wait_for_selector on an expected element).',
   'By default refuses a second launch while a session is live (pass allowMultiple: true to override).',
   'Errors: ALREADY_RUNNING (a session is live — stop it or pass allowMultiple; not retryable),',
   'ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not retryable), BAD_ARGUMENT (neither main',
@@ -141,8 +211,16 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
       // registerWithWindows deregisters the session if the window-list call
       // fails, so a post-launch error never leaves an orphaned session.
       const { managed, windows } = await registerWithWindows(ctx, transport, session)
+      // The transport resolves launch once the first window FRAME exists, which is before
+      // the renderer has parsed + populated its DOM — so a naive launch -> snapshot -> find
+      // would see a near-empty tree. Wait for the renderer to finish its initial render
+      // (best-effort, bounded) and report renderer_ready so the agent need not guess.
+      const renderer_ready = await awaitRendererReady(
+        managed.session,
+        args.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+      )
       return makeSuccess(
-        { session_id: managed.id, transport: transport.id, windows },
+        { session_id: managed.id, transport: transport.id, windows, renderer_ready },
         { ...meta, session_id: managed.id },
       )
     },

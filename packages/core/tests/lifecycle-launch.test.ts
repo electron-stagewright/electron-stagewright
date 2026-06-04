@@ -5,6 +5,7 @@
  * registration, and wire-serialisability.
  */
 
+import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 
 import { type ErrorResponse, type SuccessResponse } from '../src/errors/envelope.js'
@@ -39,6 +40,16 @@ function setup(opts: { fileExists?: boolean; transport?: FakeTransport } = {}) {
   return { sessions, transport, dispatcher }
 }
 
+/** Execute the renderer-ready body in a browser-like document after JSDOM completes parse. */
+async function runRendererReadyProbe(body: string, html: string, arg: unknown): Promise<unknown> {
+  const dom = new JSDOM(`<!doctype html>${html}`, { runScripts: 'outside-only' })
+  await new Promise<void>((resolve) => dom.window.setTimeout(resolve, 0))
+  const probe = dom.window.eval(`(async function(arg) { ${body} })`) as (
+    payload: unknown,
+  ) => Promise<unknown>
+  return probe(arg)
+}
+
 describe('electron_launch', () => {
   it('launches, registers the session, and returns the window list', async () => {
     const { sessions, transport, dispatcher } = setup()
@@ -52,6 +63,86 @@ describe('electron_launch', () => {
     expect(transport.launchCount).toBe(1)
     expect(sessions.size).toBe(1)
     expect((res as SuccessResponse)._meta.session_id).toBe('launched')
+  })
+
+  it('reports renderer_ready true once the renderer DOM has rendered', async () => {
+    const sessions = new SessionManager()
+    const session = new FakeSession({
+      id: 'launched',
+      windows: [WIN],
+      // The launch tool probes the renderer for readiness via evaluate('renderer', …).
+      evaluate: async () => ({ ready: true }),
+    })
+    const transport = new FakeTransport({ session })
+    const dispatcher = new Dispatcher({
+      sessions,
+      transports: new TransportRegistry({ transports: [transport] }),
+    })
+    dispatcher.register(makeLaunchTool({ fileExists: () => true }))
+    const res = await dispatcher.dispatch('electron_launch', { main: '/abs/main.js' })
+    expect(res).toMatchObject({ ok: true, renderer_ready: true })
+  })
+
+  it('does not treat an empty app root as renderer-ready', async () => {
+    const sessions = new SessionManager()
+    const session = new FakeSession({
+      id: 'launched',
+      windows: [WIN],
+      evaluate: async (_target, body, arg) =>
+        runRendererReadyProbe(
+          body,
+          '<body><div id="root"></div><script>window.booted = true</script></body>',
+          arg,
+        ),
+    })
+    const transport = new FakeTransport({ session })
+    const dispatcher = new Dispatcher({
+      sessions,
+      transports: new TransportRegistry({ transports: [transport] }),
+    })
+    dispatcher.register(makeLaunchTool({ fileExists: () => true }))
+    const res = await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      readyTimeoutMs: 0,
+    })
+    expect(res).toMatchObject({ ok: true, renderer_ready: false })
+  })
+
+  it('treats accessible controls inside the app root as renderer-ready', async () => {
+    const sessions = new SessionManager()
+    const session = new FakeSession({
+      id: 'launched',
+      windows: [WIN],
+      evaluate: async (_target, body, arg) =>
+        runRendererReadyProbe(
+          body,
+          '<body><div id="root"><button aria-label="Save"></button></div></body>',
+          arg,
+        ),
+    })
+    const transport = new FakeTransport({ session })
+    const dispatcher = new Dispatcher({
+      sessions,
+      transports: new TransportRegistry({ transports: [transport] }),
+    })
+    dispatcher.register(makeLaunchTool({ fileExists: () => true }))
+    const res = await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      readyTimeoutMs: 0,
+    })
+    expect(res).toMatchObject({ ok: true, renderer_ready: true })
+  })
+
+  it('still succeeds with renderer_ready false when readiness is not confirmed', async () => {
+    // The default fake session does not resolve the readiness probe (evaluate → undefined),
+    // so launch reports renderer_ready:false but the session is registered and usable.
+    const { sessions, dispatcher } = setup()
+    const res = await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      readyTimeoutMs: 0,
+    })
+    expect(res).toMatchObject({ ok: true, renderer_ready: false })
+    expect(sessions.size).toBe(1)
   })
 
   it('rejects a relative main path with ABSOLUTE_PATH_REQUIRED', async () => {

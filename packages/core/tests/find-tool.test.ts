@@ -100,9 +100,12 @@ describe('electron_find', () => {
       name_exact: 'Save',
     })) as ErrorResponse
     expect(res.code).toBe('BAD_ARGUMENT')
+    // The dispatcher now names the offending field as `field` (was `path`) and adds
+    // next_actions, so the BAD_ARGUMENT envelope is agent-actionable (ADR-006/ADR-007).
     expect(res.details?.['issues']).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: 'name_exact' })]),
+      expect.arrayContaining([expect.objectContaining({ field: 'name_exact' })]),
     )
+    expect(res.next_actions?.length ?? 0).toBeGreaterThan(0)
   })
 
   it('returns an empty match set when nothing matches', async () => {

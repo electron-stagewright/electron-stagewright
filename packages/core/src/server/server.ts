@@ -60,7 +60,7 @@ export interface CreateServerOptions {
   readonly pluginConfigs?: Readonly<Record<string, unknown>>
   /** Transport registry. Defaults to the built-in set (Playwright/CDP/Injector). */
   readonly transports?: TransportRegistry
-  /** Default directory the screenshot tool writes into; falls back to the OS temp dir. */
+  /** Default directory the screenshot tool writes into; relative paths resolve at startup. */
   readonly screenshotDir?: string
   /** Clock injection for deterministic timing in tests. */
   readonly now?: () => number
@@ -153,7 +153,15 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     throw err
   }
 
-  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION })
+  // Declare the `tools` capability explicitly: the dispatcher serves tools/list and
+  // tools/call via its own low-level request handlers (so validation failures become
+  // agent-UX envelopes, not raw -32602), bypassing registerTool — which is what would
+  // otherwise declare this capability. listChanged is false: the tool set is fixed once
+  // plugins are loaded, before any transport connects.
+  const mcp = new McpServer(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    { capabilities: { tools: { listChanged: false } } },
+  )
   dispatcher.bindToMcpServer(mcp)
 
   return {

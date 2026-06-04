@@ -27,10 +27,12 @@ export const waitForSelectorTool: AnyToolDefinition = defineTool({
   description: [
     'Wait until the element identified by ref or selector reaches state:',
     'attached (in the DOM), visible (laid out + not visibility:hidden), hidden (absent or not visible),',
-    'or detached (removed). Default state: visible. Returns: { ok, session_id, matched, state }.',
-    'Errors: WAIT_TIMEOUT (condition not met within timeoutMs; retryable), REF_NOT_FOUND',
-    '(stale ref; carries similar_refs), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT',
-    '(invalid selector, or ref+selector both/neither).',
+    'or detached (removed). Default state: visible. For an intentionally offscreen / aria-hidden element',
+    "(e.g. a code editor's hidden textarea like Monaco), wait for state:'attached' — state:'visible'",
+    'will time out because the element is never laid out. Returns: { ok, session_id, matched, state }.',
+    'Errors: WAIT_TIMEOUT (condition not met within timeoutMs; retryable — for offscreen editor inputs',
+    "use state:'attached'), REF_NOT_FOUND (stale ref; carries similar_refs), TRANSPORT_UNSUPPORTED,",
+    'NOT_RUNNING, BAD_ARGUMENT (invalid selector, or ref+selector both/neither).',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,

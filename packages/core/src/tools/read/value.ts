@@ -9,6 +9,7 @@
 
 import { z } from 'zod'
 
+import { ACCESSIBLE_TEXT_FN } from '../accessible-text.js'
 import { refField, selectorField, sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { type ReadRaw, runTargetedRead } from './probe.js'
@@ -26,7 +27,10 @@ export const getTextTool: AnyToolDefinition = defineTool({
   name: 'electron_get_text',
   title: 'Get an element’s text',
   description: [
-    'Return the trimmed textContent of the element identified by ref or selector.',
+    'Return the text of the element identified by ref or selector: its trimmed textContent, or — when',
+    'that is empty — the accessible label that electron_find matches on (aria-labelledby/aria-label,',
+    'native labels, alt, title, placeholder), so a find-by-name then get_text chain works on labelled',
+    'controls.',
     'Returns: { ok, session_id, text }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (no such element;',
     'carries similar_refs), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (invalid selector or',
     'ref+selector both/neither).',
@@ -38,7 +42,7 @@ export const getTextTool: AnyToolDefinition = defineTool({
       ctx,
       args,
       (selector) => ({
-        body: inlineRead("return { found: true, text: (el.textContent || '').trim() };"),
+        body: `${ACCESSIBLE_TEXT_FN}\n${inlineRead('return { found: true, text: __swAccessibleText(el) };')}`,
         arg: { selector },
       }),
       (raw: ReadRaw) => ({ text: raw['text'] }),

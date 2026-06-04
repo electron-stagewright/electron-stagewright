@@ -89,6 +89,9 @@ function createFakePage(title: string, opts: { evalResult?: unknown } = {}) {
       return Buffer.from(title)
     },
     isVisible: async () => true,
+    focus: async (selector: string, opts?: unknown) => {
+      interactions.push({ method: 'focus', args: [selector, opts] })
+    },
     click: async (selector: string, opts?: unknown) => {
       interactions.push({ method: 'click', args: [selector, opts] })
     },
@@ -512,6 +515,32 @@ describe('PlaywrightElectronTransport', () => {
     expect(page.interactions).toEqual([
       { method: 'press', args: ['#input', 'Enter', { timeout: 100 }] },
       { method: 'keyboard.press', args: ['Escape'] },
+    ])
+  })
+
+  it('force routes typeText/press through focus + the active keyboard (offscreen editor inputs)', async () => {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    // force:true must NOT call page.type/page.press (which enforce visibility and would
+    // reject Monaco's aria-hidden textarea); instead focus the selector (focus tolerates
+    // non-visible elements) then drive the global keyboard.
+    await session.typeText('hi', {
+      selector: '.monaco-editor textarea',
+      force: true,
+      timeoutMs: 300,
+    })
+    await session.press('Control+A', { selector: '.monaco-editor textarea', force: true })
+
+    expect(page.interactions).toEqual([
+      { method: 'focus', args: ['.monaco-editor textarea', { timeout: 300 }] },
+      { method: 'keyboard.type', args: ['hi'] },
+      { method: 'focus', args: ['.monaco-editor textarea', {}] },
+      { method: 'keyboard.press', args: ['Control+A'] },
     ])
   })
 

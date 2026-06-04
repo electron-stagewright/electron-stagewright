@@ -141,6 +141,10 @@ interface PWPage {
     quality?: number
   }): Promise<Buffer>
   isVisible(selector: string): Promise<boolean>
+  // focus() waits only for the element to be ATTACHED, not visible (hence no `force`
+  // option in Playwright) — so it can focus an intentionally offscreen / aria-hidden
+  // input that press()/type() would reject on their visibility actionability.
+  focus(selector: string, opts?: { timeout?: number }): Promise<void>
   click(selector: string, opts?: PWClickOptions): Promise<void>
   fill(selector: string, value: string, opts?: PWActionOptions): Promise<void>
   hover(selector: string, opts?: PWActionOptions): Promise<void>
@@ -552,21 +556,35 @@ class PlaywrightSession implements TransportSession {
 
   async press(key: string, opts: PressOptions = {}): Promise<void> {
     const page = await this.activePage()
-    if (opts.selector !== undefined) {
-      await page.press(opts.selector, key, toTimeoutOptions(opts))
-    } else {
+    if (opts.selector === undefined) {
       await page.keyboard.press(key)
+      return
     }
+    if (opts.force === true) {
+      // Editor-aware path: focus the (possibly offscreen / aria-hidden) selector — focus
+      // tolerates non-visible elements — then emit the key globally so editors like Monaco
+      // receive it. Avoids page.press' visibility actionability (ELEMENT_NOT_VISIBLE).
+      await page.focus(opts.selector, toTimeoutOptions(opts))
+      await page.keyboard.press(key)
+      return
+    }
+    await page.press(opts.selector, key, toTimeoutOptions(opts))
   }
 
   async typeText(text: string, opts: PressOptions = {}): Promise<void> {
     const page = await this.activePage()
-    if (opts.selector !== undefined) {
-      // page.type focuses the selector and emits a real keystroke per character.
-      await page.type(opts.selector, text, toTimeoutOptions(opts))
-    } else {
+    if (opts.selector === undefined) {
       await page.keyboard.type(text)
+      return
     }
+    if (opts.force === true) {
+      // See press(): focus tolerates offscreen / aria-hidden inputs, then type globally.
+      await page.focus(opts.selector, toTimeoutOptions(opts))
+      await page.keyboard.type(text)
+      return
+    }
+    // page.type focuses the selector and emits a real keystroke per character.
+    await page.type(opts.selector, text, toTimeoutOptions(opts))
   }
 
   async selectOption(

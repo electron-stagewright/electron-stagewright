@@ -174,6 +174,21 @@ describe('text + keyboard tools', () => {
     ])
   })
 
+  it('electron_keyboard_type forwards force to the transport (offscreen editor inputs)', async () => {
+    const { dispatcher, session } = setup()
+    await dispatcher.dispatch('electron_keyboard_type', {
+      selector: '.monaco-editor textarea',
+      text: 'x',
+      force: true,
+    })
+    expect(session.interactions).toEqual<Recorded[]>([
+      {
+        method: 'typeText',
+        args: ['x', { selector: '.monaco-editor textarea', force: true, timeoutMs: 5000 }],
+      },
+    ])
+  })
+
   it('electron_key presses globally; focusing a ref when given', async () => {
     const { dispatcher, session } = setup()
     await dispatcher.dispatch('electron_key', { key: 'Enter' })
@@ -181,6 +196,25 @@ describe('text + keyboard tools', () => {
     expect(session.interactions).toEqual<Recorded[]>([
       { method: 'press', args: ['Enter', { timeoutMs: 5000 }] },
       { method: 'press', args: ['Tab', { selector: '[data-sw-ref="3"]', timeoutMs: 5000 }] },
+    ])
+  })
+
+  it('electron_press_sequence with force focuses the selector once, then presses globally', async () => {
+    const { dispatcher, session } = setup()
+    await dispatcher.dispatch('electron_press_sequence', {
+      selector: '.monaco-editor textarea',
+      keys: ['Control+A', 'Delete', 'Enter'],
+      force: true,
+    })
+    // First key carries the focus target; the rest press the active element so a popup
+    // opened mid-sequence is not dismissed by re-focusing the editor textarea.
+    expect(session.interactions).toEqual<Recorded[]>([
+      {
+        method: 'press',
+        args: ['Control+A', { selector: '.monaco-editor textarea', force: true, timeoutMs: 5000 }],
+      },
+      { method: 'press', args: ['Delete', {}] },
+      { method: 'press', args: ['Enter', {}] },
     ])
   })
 

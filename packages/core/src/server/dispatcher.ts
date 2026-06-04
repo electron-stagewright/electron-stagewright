@@ -27,8 +27,14 @@
  * @module
  */
 
+import path from 'node:path'
+
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import {
+  type CallToolResult,
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 
 import { type ErrorResponse, makeError } from '../errors/envelope.js'
@@ -60,7 +66,7 @@ export interface DispatcherOptions {
    * eval-gated tools register at all. Defaults to false (eval tools hidden).
    */
   readonly allowEval?: boolean
-  /** Default directory the screenshot tool writes into when no explicit path is given. */
+  /** Default directory the screenshot tool writes into; relative paths resolve at startup. */
   readonly screenshotDir?: string
   /** Clock injection for deterministic `_meta.elapsed_ms` in tests. */
   readonly now?: () => number
@@ -115,7 +121,7 @@ export class Dispatcher {
     this.#snapshots = opts.snapshots ?? new SnapshotStore()
     this.#logger = opts.logger ?? NOOP_LOGGER
     this.#allowEval = opts.allowEval ?? false
-    if (opts.screenshotDir !== undefined) this.#screenshotDir = opts.screenshotDir
+    if (opts.screenshotDir !== undefined) this.#screenshotDir = path.resolve(opts.screenshotDir)
     this.#now = opts.now ?? Date.now
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
   }
@@ -201,15 +207,27 @@ export class Dispatcher {
 
     const parsed = def.inputSchema.safeParse(rawArgs ?? {})
     if (!parsed.success) {
+      // Re-shape the Zod failure into the agent-UX envelope: every issue names the
+      // offending `field` and (for type errors) what was `expected`, and next_actions
+      // points the agent back at the schema. This is the BAD_ARGUMENT an agent sees
+      // when it calls a tool with a wrong/missing arg over MCP (see bindToMcpServer).
+      const issues = parsed.error.issues.map((issue) => ({
+        field: issue.path.length > 0 ? issue.path.join('.') : '(root)',
+        code: issue.code,
+        ...('expected' in issue && issue.expected !== undefined
+          ? { expected: issue.expected }
+          : {}),
+        message: issue.message,
+      }))
+      const primary = issues[0]
       return makeError('BAD_ARGUMENT', {
-        message: `Invalid arguments for ${name}.`,
-        details: {
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join('.'),
-            code: issue.code,
-            message: issue.message,
-          })),
-        },
+        message: primary
+          ? `Invalid arguments for ${name}: ${primary.field} — ${primary.message}.`
+          : `Invalid arguments for ${name}.`,
+        details: { issues },
+        next_actions: [
+          `Re-read the ${name} input schema in tools/list, then retry with a corrected "${primary?.field ?? 'argument'}".`,
+        ],
         startedAt,
         now: this.#now,
       })
@@ -248,25 +266,44 @@ export class Dispatcher {
   }
 
   /**
-   * Register every visible tool with an MCP server so `tools/list` and
-   * `tools/call` are served from this dispatcher. Each call is routed through
-   * {@link dispatch} and the envelope serialised into the MCP content shape.
+   * Serve `tools/list` and `tools/call` from this dispatcher by owning the two MCP
+   * request handlers directly, rather than per-tool `McpServer.registerTool`.
+   *
+   * `registerTool` makes the SDK pre-validate each call's arguments against the tool's
+   * Zod schema and reject a bad call with a raw JSON-RPC `-32602` (surfaced as opaque
+   * error text) BEFORE our handler runs — bypassing the agent-UX error envelope. By
+   * owning the handlers, a validation failure instead flows through {@link dispatch}'s
+   * own parse into a structured `BAD_ARGUMENT` envelope (ADR-006 / ADR-007), while
+   * `tools/list` still advertises each tool's JSON Schema for discovery.
+   *
+   * The server must declare the `tools` capability at construction (see `createServer`)
+   * since this path does not go through `registerTool`, which would declare it.
    */
   bindToMcpServer(server: McpServer): void {
-    for (const def of this.#tools.values()) {
-      server.registerTool(
-        def.name,
-        {
-          ...(def.title !== undefined ? { title: def.title } : {}),
-          description: def.description,
-          inputSchema: def.inputSchema.shape,
-        },
-        async (args: Record<string, unknown>): Promise<CallToolResult> => {
-          const result = await this.dispatch(def.name, args)
-          return toCallToolResult(result)
-        },
-      )
-    }
+    // Read the tool map LIVE on each tools/list (not a bind-time snapshot) so that
+    // tools/list and tools/call — which routes through dispatch(), also live — can never
+    // disagree if a tool is registered after binding.
+    server.server.setRequestHandler(ListToolsRequestSchema, () => ({
+      tools: [...this.#tools.values()].map((def) => ({
+        name: def.name,
+        ...(def.title !== undefined ? { title: def.title } : {}),
+        description: def.description,
+        // z.toJSONSchema yields `{ type: 'object', … }`; the MCP Tool shape wants that
+        // literal type, so we assert it rather than widen the whole result to unknown.
+        inputSchema: z.toJSONSchema(def.inputSchema) as { type: 'object' } & Record<
+          string,
+          unknown
+        >,
+      })),
+    }))
+
+    server.server.setRequestHandler(
+      CallToolRequestSchema,
+      async (request): Promise<CallToolResult> => {
+        const result = await this.dispatch(request.params.name, request.params.arguments)
+        return toCallToolResult(result)
+      },
+    )
   }
 
   /** Map a thrown value to an error envelope. */

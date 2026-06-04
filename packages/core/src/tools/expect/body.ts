@@ -17,6 +17,7 @@
  * @module
  */
 
+import { ACCESSIBLE_TEXT_FN } from '../accessible-text.js'
 import { POLL_PREAMBLE, pollTail } from '../wait/body.js'
 import { COUNT_MATCH_FN, STRING_MATCH_FN } from './match.js'
 
@@ -37,6 +38,7 @@ import { COUNT_MATCH_FN, STRING_MATCH_FN } from './match.js'
  */
 export function buildExpectTextBody(): string {
   return `${STRING_MATCH_FN}
+${ACCESSIBLE_TEXT_FN}
 const selector = String(arg.selector);
 const source = arg.source === 'value' ? 'value' : (arg.source === 'attribute' ? 'attribute' : 'text');
 const attribute = typeof arg.attribute === 'string' ? arg.attribute : '';
@@ -54,7 +56,7 @@ for (;;) {
   if (el !== null) {
     if (source === 'value') actual = (typeof el.value === 'string' ? el.value : '');
     else if (source === 'attribute') actual = el.getAttribute(attribute);
-    else actual = ((el.textContent || '').trim());
+    else actual = __swAccessibleText(el);
   }
   if (el !== null && __swMatchString(actual, arg.match)) return { satisfied: true, actual };
 ${pollTail('{ satisfied: false, actual }')}

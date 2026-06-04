@@ -61,8 +61,8 @@ export interface ToolContext {
   readonly allowEval: boolean
   /**
    * Directory the screenshot tool writes captures into when the caller does not
-   * pass an explicit absolute `path`. Configured by the server; `undefined` means
-   * the tool falls back to the OS temp dir.
+   * pass an explicit absolute `path`/`dir`. Configured by the server and already
+   * resolved to an absolute path; `undefined` means the tool falls back to the OS temp dir.
    */
   readonly screenshotDir?: string | undefined
   /**
