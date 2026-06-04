@@ -1,0 +1,20 @@
+{
+  "name": "@electron-stagewright/example-plugin-sample",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A minimal Electron Stagewright plugin (one tool, one error code, config + lifecycle) plus a scripted session that loads it over the real MCP protocol via the CLI --plugin flag.",
+  "license": "MIT",
+  "scripts": {
+    "scenario": "tsx scenario.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3"
+  }
+}

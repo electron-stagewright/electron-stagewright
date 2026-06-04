@@ -9,6 +9,8 @@
  * @module
  */
 
+import type { z } from 'zod'
+
 import type { ErrorCodeDefinition } from '../errors/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 
@@ -44,8 +46,20 @@ export interface StagewrightPlugin {
    * `makePluginError('<name>.<KEY>', …)` (return, do not throw — see `makePluginError`).
    */
   readonly errorCodes?: Readonly<Record<string, ErrorCodeDefinition>>
-  /** Optional async setup, run once at load (after tools + codes are registered). */
-  readonly setup?: () => void | Promise<void>
+  /**
+   * Optional Zod schema for the plugin's deployment config. When present, the loader
+   * validates the config value supplied for this plugin (via `createServer`'s
+   * `pluginConfigs` or the CLI's `--plugin-config`) against it and passes the parsed
+   * result to `setup`; an invalid config fails the load with `PLUGIN_CONFIG_INVALID`.
+   * Defaulting belongs in the schema (`z.object({…}).default({})`), so a plugin with a
+   * schema always receives a fully-formed config even when none is supplied.
+   */
+  readonly configSchema?: z.ZodTypeAny
+  /**
+   * Optional async setup, run once at load (after tools + codes are registered). Receives
+   * the validated config when `configSchema` is set, otherwise `undefined`.
+   */
+  readonly setup?: (config: unknown) => void | Promise<void>
   /** Optional async teardown, run once at server close. Made idempotent by the loader. */
   readonly teardown?: () => void | Promise<void>
 }
@@ -70,6 +84,20 @@ export interface LoadedPlugin {
 export interface LoadPluginsOptions {
   /** The running core version, checked against each plugin's `coreVersionRange`. */
   readonly coreVersion: string
+  /**
+   * Raw config values per plugin name. A plugin with a `configSchema` validates
+   * `configs[plugin.name]` (defaulting to `{}`) against it and receives the parsed result
+   * in `setup`. Plugins without a schema ignore config.
+   */
+  readonly configs?: Readonly<Record<string, unknown>>
+}
+
+/** Public metadata for one loaded plugin, surfaced by the plugins-introspection tool. */
+export interface LoadedPluginInfo {
+  readonly name: string
+  readonly version: string
+  /** The plugin's namespaced tool names (e.g. `['sample_greet']`). */
+  readonly tools: readonly string[]
 }
 
 /**

@@ -14,3 +14,7 @@ If you have an Electron app whose shape these don't cover, open an issue. The ma
 ## Cross-framework robustness matrix
 
 - **[`framework-matrix/`](./framework-matrix/)** — available now. A separate axis from the app shapes above: minimal fixtures that all implement **one** UI contract, each in a different renderer framework (vanilla, React, …), driven by **one** shared real-MCP harness. It proves the snapshot walker and tools are framework-agnostic — a React-rendered button is found and clicked by the same scenario as a vanilla one. One command (`pnpm matrix`) runs every fixture and fails if any does. See its [README](./framework-matrix/README.md).
+
+## Writing a plugin
+
+- **[`plugin-sample/`](./plugin-sample/)** — available now. A minimal plugin (one tool, one error code, a config schema, lifecycle hooks) you can copy from, plus a scripted session that loads it over the real MCP protocol via the CLI `--plugin` flag. Shows tool/error-code namespacing, `makePluginError`, plugin config, and the `electron_plugins` introspection tool. See its [README](./plugin-sample/README.md).

@@ -215,7 +215,14 @@ describe('createServer({ plugins })', () => {
     const server = await createServer({ plugins: [samplePlugin({ teardown })], tools: [] })
 
     expect(server.dispatcher.has('sample_greet')).toBe(true)
-    expect(server.dispatcher.list().map((t) => t.name)).toEqual(['sample_greet'])
+    // With plugins present, createServer also registers the electron_plugins
+    // introspection tool (ADR-004). Both — and only both — make up the surface.
+    expect(
+      server.dispatcher
+        .list()
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual(['electron_plugins', 'sample_greet'])
 
     const ok = await server.dispatcher.dispatch('sample_greet', { name: 'Ada' })
     expect(ok).toMatchObject({ ok: true, greeting: 'Hello, Ada!' })
