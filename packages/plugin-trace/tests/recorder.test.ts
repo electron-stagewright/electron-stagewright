@@ -49,7 +49,12 @@ async function tmpFile(): Promise<string> {
 
 function newRecorder(
   file: string,
-  overrides: { maxRecords?: number; redact?: string[] } = {},
+  overrides: {
+    maxRecords?: number
+    redact?: string[]
+    budget?: number
+    warnThreshold?: number
+  } = {},
 ): Recorder {
   return new Recorder({
     path: file,
@@ -57,6 +62,8 @@ function newRecorder(
     redact: overrides.redact ?? [],
     coreVersion: '0.0.0',
     startedAt: 1000,
+    ...(overrides.budget !== undefined ? { budget: overrides.budget } : {}),
+    ...(overrides.warnThreshold !== undefined ? { warnThreshold: overrides.warnThreshold } : {}),
   })
 }
 
@@ -188,5 +195,63 @@ describe('summarizeTrace', () => {
 
   it('carries overflow through token reports', () => {
     expect(summarizeTrace(calls, 10, true).overflowed).toBe(true)
+  })
+})
+
+describe('Recorder budget', () => {
+  it('tracks spent and flips near_budget then over_budget', async () => {
+    const rec = newRecorder(await tmpFile(), { budget: 100, warnThreshold: 0.8 })
+    rec.record(record('a', 50))
+    expect(rec.budgetStatus()).toMatchObject({
+      budget_tokens: 100,
+      spent: 50,
+      remaining: 50,
+      near_budget: false,
+      over_budget: false,
+    })
+    rec.record(record('b', 35)) // spent 85 -> near (>= 80) but not over
+    expect(rec.budgetStatus()).toMatchObject({ spent: 85, near_budget: true, over_budget: false })
+    rec.record(record('c', 40)) // spent 125 -> over
+    expect(rec.budgetStatus()).toMatchObject({
+      spent: 125,
+      remaining: 0,
+      near_budget: false,
+      over_budget: true,
+    })
+  })
+
+  it('persists budget, warn_threshold, and exact spent to the meta header', async () => {
+    const file = await tmpFile()
+    const rec = newRecorder(file, { budget: 200, warnThreshold: 0.5 })
+    rec.record(record('a', 120))
+    const summary = await rec.stop()
+    expect(summary.budget).toMatchObject({ budget_tokens: 200, spent: 120, over_budget: false })
+
+    const { meta } = await readTrace(file)
+    expect(meta).toMatchObject({ budget: 200, warn_threshold: 0.5, spent: 120 })
+  })
+
+  it('counts overflow-dropped calls in spent so over_budget stays exact', async () => {
+    const file = await tmpFile()
+    const rec = newRecorder(file, { maxRecords: 1, budget: 100 })
+    rec.record(record('a', 50))
+    rec.record(record('b', 50)) // dropped from the buffer (cap 1) but still counted in spent
+    rec.record(record('c', 50)) // dropped too
+    expect(rec.count).toBe(1)
+    expect(rec.overflowed).toBe(true)
+    expect(rec.budgetStatus()).toMatchObject({ spent: 150, over_budget: true })
+    await rec.stop()
+    // The buffered calls undercount (only 1 survived); meta.spent carries the exact total.
+    expect((await readTrace(file)).meta?.spent).toBe(150)
+  })
+
+  it('reports no budget status when started without a budget', async () => {
+    const file = await tmpFile()
+    const rec = newRecorder(file)
+    rec.record(record('a', 10))
+    expect(rec.budgetStatus()).toBeUndefined()
+    const summary = await rec.stop()
+    expect(summary.budget).toBeUndefined()
+    expect((await readTrace(file)).meta?.budget).toBeUndefined()
   })
 })

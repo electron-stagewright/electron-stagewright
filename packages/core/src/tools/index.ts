@@ -23,6 +23,8 @@ export {
   type ToolResult,
   type DispatchRecord,
   type DispatchObserver,
+  type DispatchGuard,
+  type DispatchGuardCall,
   defineTool,
 } from './types.js'
 

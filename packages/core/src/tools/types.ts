@@ -67,6 +67,30 @@ export interface DispatchRecord {
  */
 export type DispatchObserver = (record: DispatchRecord) => void
 
+/** The about-to-run call handed to a {@link DispatchGuard}, before its handler executes. */
+export interface DispatchGuardCall {
+  /** The registered tool name about to be dispatched (e.g. `electron_click`). */
+  readonly tool: string
+  /** The parsed, validated arguments the handler would receive. */
+  readonly args: unknown
+  /** Epoch-ms the dispatch began — pass to `makeError`/`makePluginError` for a veto envelope. */
+  readonly startedAt: number
+  /** The dispatcher's clock — pass alongside `startedAt` when building a veto envelope. */
+  readonly now: () => number
+}
+
+/**
+ * A pre-dispatch veto (ADR-009), registered via {@link ToolContext.addDispatchGuard}. It runs for
+ * every dispatch BEFORE the tool handler, with the about-to-run call: returning a {@link ToolResult}
+ * vetoes it (the dispatcher returns that envelope and the handler never runs); returning `null`
+ * allows it. Guards run in registration order and the first veto wins. A guard MUST be cheap and
+ * synchronous; a throw is caught, logged, and treated as "allow" (fail-open) so a guard bug cannot
+ * wedge the tool surface. The active-enforcement counterpart to {@link DispatchObserver} (which
+ * only watches) — use it for a cross-cutting budget or policy (the trace plugin's token-budget
+ * enforcement).
+ */
+export type DispatchGuard = (call: DispatchGuardCall) => ToolResult | null
+
 /**
  * Per-call execution context handed to every tool handler by the dispatcher.
  * The handler never constructs these collaborators itself; it receives them so
@@ -140,6 +164,16 @@ export interface ToolContext {
    * since the trace was recorded) without launching an app.
    */
   readonly validate: (tool: string, args: unknown) => ErrorResponse | null
+  /**
+   * Register a {@link DispatchGuard} that can VETO subsequent dispatches before their handler runs,
+   * returning an idempotent unregister. The active-enforcement counterpart to
+   * {@link addDispatchObserver} (which only watches): the trace plugin uses it for token-budget
+   * enforcement. The guard fires for every dispatch while registered — INCLUDING the plugin's own
+   * tools, so a guard that must not block its plugin's tools has to filter them (the budget guard
+   * skips `trace_*`, or an over-budget agent could never call `trace_stop` to recover). A guard
+   * MUST be cheap, synchronous, and must not throw (a throw is caught and treated as allow).
+   */
+  readonly addDispatchGuard: (guard: DispatchGuard) => () => void
 }
 
 /**
