@@ -16,6 +16,7 @@ pnpm install
 pnpm build        # builds packages/core/dist/cli.js, which the harness spawns
 pnpm bench        # human table to stderr, JSON report to stdout
 pnpm bench --json report.json   # also write the JSON report to a file
+pnpm bench:check  # same run, but exit non-zero on a deterministic-metric regression
 ```
 
 or scoped: `pnpm --filter @electron-stagewright/bench bench`.
@@ -76,14 +77,36 @@ Two are **environment-dependent** — reported as observed, never asserted:
   `electron_eval_main` (so the harness starts the server with `--allow-eval`). A coarse
   point sample, not a peak or a leak measurement.
 
+## Regression thresholds
+
+`src/thresholds.ts` holds a spec over the two deterministic metrics: each scenario's exact
+tool-call count, and each contrast's minimum saving (tool calls saved, and a token-saving
+**floor**). The runner always reports the threshold result; `--check` (or `pnpm bench:check`)
+makes a regression exit non-zero, so the run can gate a release:
+
+```sh
+pnpm bench:check   # exits 1 if a tool-call count drifts or a saving collapses below its floor
+```
+
+Savings are floors, not exact targets — a better run never trips, and the token floor sits a
+margin below the observed baseline so normal jitter does not false-trip while a real collapse
+does. `checkThresholds` is a pure function, so it also runs as a fast unit test in `pnpm test`
+(no Electron) — that test is the CI-side guard; `--check` is the real-run guard.
+
+When the bench app or a response shape legitimately changes, re-baseline with
+`pnpm bench --update-thresholds`: it prints a fresh spec derived from the current run (to stderr,
+alongside the table — this mode writes no JSON report to stdout) for you to paste into
+`DEFAULT_THRESHOLDS`. In a normal run the machine JSON report carries the threshold outcome under
+`thresholds` (`{ passed, violations }`), versioned by `schema_version`.
+
 ## Scope and limitations
 
 - **Local only.** Like the other real-Electron smokes in this repo, the benchmark runs on
   demand on a machine with a display; it is not wired into CI.
 - **No competitor comparison yet.** Comparing against other Electron MCP servers is
   intentionally deferred — it needs those servers installed and a fair shared task.
-- **No regression thresholds yet.** The JSON report is versioned (`schema_version`) and
-  stamped with the environment so a later pass can assert thresholds on the deterministic
-  metrics; this slice establishes the baseline harness, not the gate.
+- **Regression thresholds enforce the deterministic metrics only** (tool-call counts +
+  contrast savings) — see above. Latency and memory are never asserted. Enforcement against a
+  real run is local/on-demand (`pnpm bench:check`); the pure checker runs in CI via `pnpm test`.
 - The estimated-token figure uses core's char/4 heuristic, not a model tokenizer; treat
   it as a comparable proxy across scenarios, not an absolute token cost.
