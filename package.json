@@ -29,6 +29,7 @@
     "format:check": "prettier --check .",
     "matrix": "pnpm --filter @electron-stagewright/framework-matrix matrix",
     "bench": "pnpm --filter @electron-stagewright/bench bench",
+    "bench:check": "pnpm --filter @electron-stagewright/bench bench:check",
     "verify": "pnpm build && pnpm lint && pnpm typecheck && pnpm test && pnpm format:check",
     "prepare": "simple-git-hooks"
   },
