@@ -30,6 +30,20 @@ export interface TraceMetaRecord {
   readonly core_version: string
   /** Whether the trace hit its call-record cap and dropped later calls. */
   readonly overflowed: boolean
+  /**
+   * Token budget the recording was started with, if any. Persisted so an offline `trace_tokens`
+   * can report budget status. Absent when the recording had no budget. (Additive optional field —
+   * a `v: 1` reader ignores it; no format-version bump needed.)
+   */
+  readonly budget?: number
+  /** Warn-threshold fraction (`0 < warnThreshold <= 1`) used to derive `near_budget`. */
+  readonly warn_threshold?: number
+  /**
+   * Exact estimated tokens spent across ALL observed calls — including calls dropped after the
+   * record cap (`overflowed`), which the buffered `call` records undercount. Present only with
+   * `budget`, so an offline budget report stays exact under overflow.
+   */
+  readonly spent?: number
 }
 
 /** One recorded tool dispatch. `args`/`result` are the agent-facing values (redaction applied). */
@@ -50,6 +64,46 @@ export interface TraceCallRecord {
 /** A line of a trace artifact. */
 export type TraceRecord = TraceMetaRecord | TraceCallRecord
 
+/** Default warn-threshold fraction: `near_budget` trips once spent reaches 80% of the budget. */
+export const DEFAULT_WARN_THRESHOLD = 0.8
+
+/**
+ * Token-budget status, surfaced (nested under `budget`) on `trace_status` / `trace_tokens` /
+ * `trace_stop` / `trace_budget` whenever a recording or artifact carries a budget. All counts are
+ * estimated tokens (char/4, per ADR-006), so the budget inherits that approximation.
+ */
+export interface BudgetStatus {
+  /** The configured budget ceiling, in estimated tokens. */
+  readonly budget_tokens: number
+  /** Estimated tokens spent so far — exact across overflow-dropped calls. */
+  readonly spent: number
+  /** Budget remaining, floored at 0. */
+  readonly remaining: number
+  /** True once `spent` exceeds `budget_tokens`. Sticky (spent never decreases). */
+  readonly over_budget: boolean
+  /** True once `spent` reaches `warn_threshold * budget_tokens` but is not yet over budget. */
+  readonly near_budget: boolean
+  /** The warn-threshold fraction (`0 < warnThreshold <= 1`) used to derive `near_budget`. */
+  readonly warn_threshold: number
+}
+
+/** Derive a {@link BudgetStatus} from a budget ceiling, tokens spent, and a warn threshold. */
+export function budgetStatusOf(
+  budgetTokens: number,
+  spent: number,
+  warnThreshold: number,
+): BudgetStatus {
+  const overBudget = spent > budgetTokens
+  return {
+    budget_tokens: budgetTokens,
+    spent,
+    remaining: Math.max(0, budgetTokens - spent),
+    over_budget: overBudget,
+    near_budget: !overBudget && spent >= budgetTokens * warnThreshold,
+    warn_threshold: warnThreshold,
+  }
+}
+
 /** Summary returned by `Recorder.stop()` (and `trace_stop`). */
 export interface TraceSummary {
   readonly path: string
@@ -57,6 +111,8 @@ export interface TraceSummary {
   readonly total_estimated_tokens: number
   /** True when the record cap was hit and later calls were dropped. */
   readonly overflowed: boolean
+  /** Token-budget status — present only when the recording was started with a budget. */
+  readonly budget?: BudgetStatus
 }
 
 /** Replace any property whose key is in `keys` with `'[redacted]'`, recursively. */
@@ -85,6 +141,10 @@ export interface RecorderOptions {
   readonly coreVersion: string
   /** Epoch-ms the recording started (meta header). */
   readonly startedAt: number
+  /** Token budget for this recording, if any. Enables budget status on the reports. */
+  readonly budget?: number
+  /** Warn-threshold fraction (`0 < warnThreshold <= 1`); defaults to {@link DEFAULT_WARN_THRESHOLD}. */
+  readonly warnThreshold?: number
 }
 
 /**
@@ -98,6 +158,9 @@ export class Recorder {
   readonly #coreVersion: string
   readonly #startedAt: number
   readonly #calls: TraceCallRecord[] = []
+  readonly #budget?: number
+  readonly #warnThreshold: number
+  #spent = 0
   #overflowed = false
   #closed = false
 
@@ -107,6 +170,8 @@ export class Recorder {
     this.#redact = new Set(opts.redact)
     this.#coreVersion = opts.coreVersion
     this.#startedAt = opts.startedAt
+    if (opts.budget !== undefined) this.#budget = opts.budget
+    this.#warnThreshold = opts.warnThreshold ?? DEFAULT_WARN_THRESHOLD
   }
 
   /** Number of `call` records buffered so far. */
@@ -124,6 +189,22 @@ export class Recorder {
     return this.#calls
   }
 
+  /** Exact estimated tokens spent across ALL observed calls (includes overflow-dropped calls). */
+  get spent(): number {
+    return this.#spent
+  }
+
+  /** The configured budget ceiling, or `undefined` when the recording has no budget. */
+  get budget(): number | undefined {
+    return this.#budget
+  }
+
+  /** Live token-budget status, or `undefined` when the recording has no budget. */
+  budgetStatus(): BudgetStatus | undefined {
+    if (this.#budget === undefined) return undefined
+    return budgetStatusOf(this.#budget, this.#spent, this.#warnThreshold)
+  }
+
   /**
    * Buffer one completed dispatch. Best-effort and cheap (an array push). The trace plugin's
    * OWN tools are filtered out by the caller, not here. No-op once stopped or once the cap is
@@ -131,6 +212,12 @@ export class Recorder {
    */
   record(rec: DispatchRecord): void {
     if (this.#closed) return
+    // `_meta.estimated_tokens` is always present on a ToolResult, but guard defensively so a
+    // future result shape can't silently poison the total with NaN.
+    const tokens = rec.result._meta?.estimated_tokens ?? 0
+    // Count spent BEFORE the cap check so the budget reflects EVERY observed call, including ones
+    // dropped after overflow — otherwise an over-budget run could look in-budget once truncated.
+    this.#spent += tokens
     if (this.#calls.length >= this.#maxRecords) {
       this.#overflowed = true
       return
@@ -144,9 +231,7 @@ export class Recorder {
       started_at: rec.startedAt,
       finished_at: rec.finishedAt,
       elapsed_ms: elapsed,
-      // `_meta.estimated_tokens` is always present on a ToolResult, but guard defensively so a
-      // future result shape can't silently poison the token total with NaN.
-      estimated_tokens: rec.result._meta?.estimated_tokens ?? 0,
+      estimated_tokens: tokens,
       args: redactValue(rec.args, this.#redact),
       result: rec.result,
     })
@@ -163,6 +248,11 @@ export class Recorder {
           started_at: this.#startedAt,
           core_version: this.#coreVersion,
           overflowed: this.#overflowed,
+          // Persist the budget (and the exact spent, which the buffered calls undercount under
+          // overflow) so an offline trace_tokens can report budget status accurately.
+          ...(this.#budget !== undefined
+            ? { budget: this.#budget, warn_threshold: this.#warnThreshold, spent: this.#spent }
+            : {}),
         }
         const lines = [meta, ...this.#calls].map((r) => JSON.stringify(r)).join('\n')
         await mkdir(path.dirname(this.path), { recursive: true })
@@ -176,11 +266,13 @@ export class Recorder {
   }
 
   #summary(): TraceSummary {
+    const budget = this.budgetStatus()
     return {
       path: this.path,
       records: this.#calls.length,
       total_estimated_tokens: this.#calls.reduce((sum, c) => sum + c.estimated_tokens, 0),
       overflowed: this.#overflowed,
+      ...(budget !== undefined ? { budget } : {}),
     }
   }
 }
@@ -200,13 +292,19 @@ export interface TokensReport {
     started_at: number
     ok: boolean
   }>
+  /** Token-budget status — present only when the trace carries a budget. */
+  readonly budget?: BudgetStatus
 }
 
-/** Aggregate token usage from a trace's `call` records. */
+/**
+ * Aggregate token usage from a trace's `call` records. `budget`, when supplied (derived by the
+ * caller from the live recorder or the artifact's meta), is attached to the report.
+ */
 export function summarizeTrace(
   records: readonly TraceCallRecord[],
   topN = 10,
   overflowed = false,
+  budget?: BudgetStatus,
 ): TokensReport {
   const byTool = new Map<string, { calls: number; estimated_tokens: number }>()
   let total = 0
@@ -229,7 +327,14 @@ export function summarizeTrace(
       started_at: c.started_at,
       ok: c.ok,
     }))
-  return { total_estimated_tokens: total, calls: records.length, overflowed, by_tool, largest }
+  return {
+    total_estimated_tokens: total,
+    calls: records.length,
+    overflowed,
+    by_tool,
+    largest,
+    ...(budget !== undefined ? { budget } : {}),
+  }
 }
 
 /** Parsed contents of a trace artifact. */

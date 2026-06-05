@@ -183,6 +183,83 @@ describe('trace plugin (in-process)', () => {
   })
 })
 
+describe('trace plugin budget (in-process)', () => {
+  it('reports budget status live (status/tokens/budget) and persists it to the artifact', async () => {
+    const file = await tmpFile()
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file, budgetTokens: 1 })
+      await server.dispatcher.dispatch('demo_echo', { value: 'hello world' })
+      expect(await server.dispatcher.dispatch('trace_status', {})).toMatchObject({
+        ok: true,
+        budget: { budget_tokens: 1, over_budget: true },
+      })
+      expect(await server.dispatcher.dispatch('trace_budget', {})).toMatchObject({
+        ok: true,
+        recording: true,
+        budget: { over_budget: true },
+      })
+      expect(await server.dispatcher.dispatch('trace_tokens', {})).toMatchObject({
+        ok: true,
+        budget: { over_budget: true },
+      })
+      await server.dispatcher.dispatch('trace_stop', {})
+      // The artifact carries the budget so an offline token report stays budget-aware.
+      expect(await server.dispatcher.dispatch('trace_tokens', { path: file })).toMatchObject({
+        ok: true,
+        budget: { budget_tokens: 1, over_budget: true },
+      })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('advisory budget (no enforce) does not block calls', async () => {
+    const file = await tmpFile()
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file, budgetTokens: 1 })
+      await server.dispatcher.dispatch('demo_echo', { value: 'over budget now' })
+      expect(await server.dispatcher.dispatch('demo_echo', { value: 'again' })).toMatchObject({
+        ok: true,
+      })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('enforce blocks over-budget calls with trace.BUDGET_EXCEEDED but never the trace tools', async () => {
+    const file = await tmpFile()
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', {
+        path: file,
+        budgetTokens: 1,
+        enforce: true,
+      })
+      // The first call tips the budget over (its cost is unknown until it runs), so it is allowed.
+      expect(await server.dispatcher.dispatch('demo_echo', { value: 'first' })).toMatchObject({
+        ok: true,
+      })
+      // The next non-trace call is now vetoed before its handler runs.
+      const blocked = await server.dispatcher.dispatch('demo_echo', { value: 'second' })
+      expect(blocked).toMatchObject({ ok: false, code: 'trace.BUDGET_EXCEEDED', retryable: false })
+      // The trace plugin's own tools are never blocked, so the agent can still stop/inspect.
+      expect(await server.dispatcher.dispatch('trace_status', {})).toMatchObject({
+        ok: true,
+        recording: true,
+      })
+      expect(await server.dispatcher.dispatch('trace_stop', {})).toMatchObject({ ok: true })
+      // The guard is released on stop — calls run again.
+      expect(await server.dispatcher.dispatch('demo_echo', { value: 'after' })).toMatchObject({
+        ok: true,
+      })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+})
+
 describe('trace plugin replay (in-process)', () => {
   it('replays a recorded session and reports all calls matched', async () => {
     const file = await tmpFile()

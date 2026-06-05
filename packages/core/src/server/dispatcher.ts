@@ -48,6 +48,7 @@ import { StagewrightError } from '../errors/registry.js'
 import { runWithSessionContext } from '../errors/session-context.js'
 import type {
   AnyToolDefinition,
+  DispatchGuard,
   DispatchObserver,
   DispatchRecord,
   ToolContext,
@@ -138,6 +139,8 @@ export class Dispatcher {
   readonly #slowMs: number
   /** Best-effort dispatch observers (ADR-009). Empty by default — zero overhead per call. */
   readonly #observers = new Set<DispatchObserver>()
+  /** Pre-dispatch guards that can veto a call (ADR-009). Empty by default — zero overhead per call. */
+  readonly #guards = new Set<DispatchGuard>()
 
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
@@ -167,6 +170,41 @@ export class Dispatcher {
     return () => {
       this.#observers.delete(observer)
     }
+  }
+
+  /**
+   * Register a {@link DispatchGuard} that can veto a call before its handler runs (ADR-009),
+   * returning an idempotent unregister. Exposed to tool handlers as
+   * {@link ToolContext.addDispatchGuard}. Guards run in registration order, first veto wins; a
+   * throwing guard is caught, logged, and treated as allow (fail-open).
+   */
+  addGuard(guard: DispatchGuard): () => void {
+    this.#guards.add(guard)
+    return () => {
+      this.#guards.delete(guard)
+    }
+  }
+
+  /**
+   * Run the registered guards against an about-to-dispatch call. Returns the first guard's veto
+   * envelope, or `null` to allow. A guard that throws is caught and skipped (fail-open) — a guard
+   * bug must never wedge the whole tool surface.
+   */
+  #runGuards(tool: string, args: unknown, startedAt: number): ToolResult | null {
+    if (this.#guards.size === 0) return null
+    const call = { tool, args, startedAt, now: this.#now }
+    for (const guard of this.#guards) {
+      try {
+        const veto = guard(call)
+        if (veto !== null) return veto
+      } catch (err) {
+        this.#logger.warn('Dispatch guard threw; allowing the call (fail-open)', {
+          tool,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    return null
   }
 
   /**
@@ -329,6 +367,15 @@ export class Dispatcher {
       return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
     }
 
+    // Pre-dispatch guards (ADR-009) run AFTER validation/routing but BEFORE the handler, so a
+    // vetoed call never executes. A veto is still a completed dispatch — funnel it through
+    // #complete so observers (the trace recorder) see it like any other outcome.
+    const veto = this.#runGuards(name, args, startedAt)
+    if (veto !== null) {
+      this.#warnIfSlow(name, this.#now() - startedAt)
+      return this.#complete(name, args, veto, startedAt)
+    }
+
     const sessionId = readSessionId(args)
     const ctx: ToolContext = {
       sessions: this.#sessions,
@@ -342,6 +389,7 @@ export class Dispatcher {
       addDispatchObserver: (observer) => this.addObserver(observer),
       dispatch: (tool, dispatchArgs) => this.#redispatch(tool, dispatchArgs),
       validate: (tool, validateArgs) => this.validate(tool, validateArgs),
+      addDispatchGuard: (guard) => this.addGuard(guard),
     }
 
     try {

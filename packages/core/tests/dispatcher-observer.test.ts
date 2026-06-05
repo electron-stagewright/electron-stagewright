@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
-import { makeSuccess } from '../src/errors/envelope.js'
+import { makeError, makeSuccess } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { type DispatchRecord, defineTool } from '../src/tools/types.js'
@@ -167,5 +167,91 @@ describe('Dispatcher re-dispatch seam (ctx.dispatch + ctx.validate)', () => {
     expect(d.validate('test_effect', { value: 123 })?.code).toBe('BAD_ARGUMENT')
     expect(d.validate('unknown_tool', {})?.code).toBe('BAD_ARGUMENT')
     expect(ran).toBe(0)
+  })
+})
+
+describe('Dispatcher pre-dispatch guards (ctx.addDispatchGuard)', () => {
+  function countingTool(name: string, counter: { runs: number }) {
+    return defineTool({
+      name,
+      description: 'Counts handler runs.',
+      inputSchema: z.object({}),
+      operationType: 'query',
+      handler: async (_args, ctx) => {
+        counter.runs += 1
+        return makeSuccess({}, { startedAt: ctx.startedAt, now: ctx.now })
+      },
+    })
+  }
+
+  it('vetoes a call before its handler runs', async () => {
+    const d = newDispatcher()
+    const counter = { runs: 0 }
+    d.register(countingTool('test_guarded', counter))
+    d.addGuard((call) =>
+      call.tool === 'test_guarded'
+        ? makeError('BAD_ARGUMENT', {
+            message: 'blocked',
+            startedAt: call.startedAt,
+            now: call.now,
+          })
+        : null,
+    )
+    const res = await d.dispatch('test_guarded', {})
+    expect(res.ok).toBe(false)
+    expect(counter.runs).toBe(0)
+  })
+
+  it('allows the call when the guard returns null', async () => {
+    const d = newDispatcher()
+    d.addGuard(() => null)
+    expect((await d.dispatch('test_echo', { value: 'x' })).ok).toBe(true)
+  })
+
+  it('fails open when a guard throws (the call still runs)', async () => {
+    const d = newDispatcher()
+    d.addGuard(() => {
+      throw new Error('guard boom')
+    })
+    expect((await d.dispatch('test_echo', { value: 'x' })).ok).toBe(true)
+  })
+
+  it('first guard to veto wins, and the vetoed call still notifies observers', async () => {
+    const d = newDispatcher()
+    const seen: string[] = []
+    d.addObserver((r) => seen.push(`${r.tool}:${r.result.ok}`))
+    d.addGuard(() => null)
+    d.addGuard((call) =>
+      makeError('BAD_ARGUMENT', { message: 'no', startedAt: call.startedAt, now: call.now }),
+    )
+    const res = await d.dispatch('test_echo', { value: 'x' })
+    expect(res.ok).toBe(false)
+    expect(seen).toEqual(['test_echo:false'])
+  })
+
+  it('lets a handler register a guard via ctx.addDispatchGuard', async () => {
+    const d = newDispatcher()
+    d.register(
+      defineTool({
+        name: 'test_arm_guard',
+        description: 'Arms a guard that vetoes test_echo.',
+        inputSchema: z.object({}),
+        operationType: 'query',
+        handler: async (_args, ctx) => {
+          ctx.addDispatchGuard((call) =>
+            call.tool === 'test_echo'
+              ? makeError('BAD_ARGUMENT', {
+                  message: 'armed',
+                  startedAt: call.startedAt,
+                  now: call.now,
+                })
+              : null,
+          )
+          return makeSuccess({}, { startedAt: ctx.startedAt, now: ctx.now })
+        },
+      }),
+    )
+    await d.dispatch('test_arm_guard', {})
+    expect((await d.dispatch('test_echo', { value: 'x' })).ok).toBe(false)
   })
 })
