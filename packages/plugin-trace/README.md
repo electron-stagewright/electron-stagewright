@@ -6,9 +6,8 @@ budget, and replay the session against a fresh app instance. The first session-o
 subscribes to the server's dispatch-observer seam and captures every tool call — input, output
 envelope, timing, and token estimate — to a JSONL file, then `trace_tokens` summarises the cost
 and `trace_replay` re-dispatches the calls. Give a recording a `budgetTokens` to track spend
-live, and `enforce` to block over-budget calls.
-
-A visual viewer is forthcoming.
+live, and `enforce` to block over-budget calls. `trace_view` renders a recorded trace to a
+self-contained HTML report you can open in any browser, offline.
 
 ## Load it
 
@@ -58,6 +57,10 @@ warn_threshold }`. For an agent to self-limit mid-session without the full token
   session, and report `{ replayed, matched, diverged, skipped, dry_run, calls }`. Divergence is
   judged on stable `ok`/`code` outcomes; diverged calls include bounded field-level diffs.
   `dryRun` validates the recorded calls against current schemas without dispatching them.
+- **`trace_view`** `{ path, out? }` — render a written artifact to a single self-contained HTML
+  report (inline CSS/JS, no external assets) and return `{ path, source, calls, bytes }`, where
+  `path` is the written report. With no `out` the report is written next to the trace with a
+  `.html` extension.
 
 Error codes: `trace.ALREADY_RECORDING`, `trace.NOT_RECORDING`, `trace.ARTIFACT_NOT_FOUND`,
 `trace.ARTIFACT_INVALID`, `trace.ARTIFACT_WRITE_FAILED`, `trace.BUDGET_EXCEEDED`.
@@ -105,6 +108,17 @@ Replay is deterministic only for traces whose arguments remain meaningful in a f
 calls, but it cannot reconstruct values removed by `redact`: a redacted argument such as
 `"[redacted]"` is replayed exactly as recorded and may diverge. Use `dryRun` to check schema
 drift without launching an app, and `include` / `exclude` / `maxCalls` to narrow a replay.
+
+## Offline viewer
+
+`trace_view` renders a written artifact to a **single self-contained HTML file** — inline CSS and
+JS, no external assets, no CDN, no server. Open it by double-clicking; it works offline and is
+easy to attach to a bug report. The report shows summary cards (calls, ok/error counts, total
+estimated tokens), a token-budget bar when the trace was budgeted, the largest-response and
+per-tool token tables, and an expandable timeline of every call with its args and result. A small
+inline script adds tool-name filtering and expand/collapse-all, but the report is fully readable
+without JS (it uses native `<details>`). Every captured value is HTML-escaped on render, so a
+trace that captured markup or script-like text cannot inject it into the report.
 
 ## Privacy
 

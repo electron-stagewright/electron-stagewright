@@ -9,7 +9,7 @@
  * depending on it.
  *
  * Tools (namespaced by the loader): `trace_start`, `trace_stop`, `trace_tokens`, `trace_status`,
- * `trace_budget`, and `trace_replay`. A visual viewer is forthcoming.
+ * `trace_budget`, `trace_replay`, and `trace_view` (render a trace to a self-contained HTML report).
  *
  * PRIVACY: a trace captures tool inputs/outputs, which may include typed text or eval payloads.
  * It is opt-in (only records between start/stop) and writes to an operator-chosen path — the
@@ -19,6 +19,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -43,6 +44,7 @@ import {
   type ParsedTrace,
 } from './recorder.js'
 import { replayTrace } from './replay.js'
+import { renderTraceHtml } from './viewer.js'
 
 /**
  * The in-flight recording: its recorder plus the unsubscribe handles for the dispatch-observer
@@ -469,6 +471,66 @@ const replayTool: AnyToolDefinition = defineTool({
   },
 })
 
+const viewTool: AnyToolDefinition = defineTool({
+  name: 'view',
+  title: 'Render a trace to an HTML report',
+  description: [
+    'Render a written trace artifact to a single self-contained HTML report (inline CSS/JS, no',
+    'external assets) that opens in any browser offline. Shows a summary (calls, ok/error counts,',
+    'total estimated tokens, a budget bar when the trace carries a budget), the largest-response and',
+    'per-tool token tables, and an expandable timeline of every call with its args and result. With',
+    'no out path the report is written next to the trace with a .html extension. Returns: { ok,',
+    'path, source, calls, bytes } where path is the written HTML file. Errors: trace.ARTIFACT_NOT_FOUND',
+    '(no artifact at path), trace.ARTIFACT_INVALID (bad JSONL), trace.ARTIFACT_WRITE_FAILED (the report',
+    'could not be written).',
+  ].join(' '),
+  inputSchema: z.object({
+    path: z.string().describe('Path to a written trace artifact (JSONL) to render.'),
+    out: z
+      .string()
+      .optional()
+      .describe(
+        'Output path for the HTML report. Defaults to the trace path with a .html extension.',
+      ),
+  }),
+  operationType: 'command',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const target = path.resolve(args.path)
+    const loaded = await loadTrace(target, meta)
+    if ('error' in loaded) return loaded.error
+    // Default the report path next to the trace: swap a trailing `.jsonl` (the canonical artifact
+    // extension) for `.html`, otherwise just append `.html`. Done by suffix rather than
+    // path.parse so a multi-dot name (e.g. trace.2026.tar) is not silently mis-stripped.
+    const out =
+      args.out !== undefined
+        ? path.resolve(args.out)
+        : target.endsWith('.jsonl')
+          ? `${target.slice(0, -'.jsonl'.length)}.html`
+          : `${target}.html`
+    const html = renderTraceHtml(loaded.parsed, { generatedAt: ctx.now() })
+    try {
+      await mkdir(path.dirname(out), { recursive: true })
+      await writeFile(out, html, 'utf8')
+    } catch (err) {
+      return makePluginError('trace.ARTIFACT_WRITE_FAILED', {
+        ...meta,
+        message: `Could not write the HTML report to ${out}: ${err instanceof Error ? err.message : String(err)}.`,
+        details: { path: out },
+      })
+    }
+    return makeSuccess(
+      {
+        path: out,
+        source: target,
+        calls: loaded.parsed.calls.length,
+        bytes: Buffer.byteLength(html, 'utf8'),
+      },
+      meta,
+    )
+  },
+})
+
 /**
  * The trace plugin. Load with `--plugin @electron-stagewright/plugin-trace` or
  * `createServer({ plugins: [tracePlugin] })`. Configure via `pluginConfigs.trace`
@@ -511,7 +573,7 @@ export const tracePlugin: StagewrightPlugin = {
       hint: 'The recording’s token budget is exhausted; call trace_stop or start a new trace with a higher budgetTokens.',
     },
   },
-  tools: [startTool, stopTool, tokensTool, statusTool, budgetTool, replayTool],
+  tools: [startTool, stopTool, tokensTool, statusTool, budgetTool, replayTool, viewTool],
   setup: (raw) => {
     config = raw as TraceConfig
   },
@@ -554,3 +616,5 @@ export type {
   ReplayCallOutcome,
   ResultDiff,
 } from './replay.js'
+export { renderTraceHtml, escapeHtml } from './viewer.js'
+export type { RenderOptions } from './viewer.js'
