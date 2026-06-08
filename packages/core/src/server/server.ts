@@ -64,6 +64,13 @@ export interface CreateServerOptions {
   readonly screenshotDir?: string
   /** Clock injection for deterministic timing in tests. */
   readonly now?: () => number
+  /**
+   * Backstop timeout (ms) for a single tool dispatch (ADR-011): a handler that does not settle
+   * within this budget resolves with a retryable `OPERATION_TIMEOUT` instead of hanging the agent
+   * on a frozen app. Must exceed the longest per-tool budget (the wait family's 60s clamp); `0`
+   * disables the backstop. Defaults to the dispatcher's `DEFAULT_OPERATION_TIMEOUT_MS` (120s).
+   */
+  readonly operationTimeoutMs?: number
 }
 
 /** The assembled server and its collaborators. */
@@ -106,6 +113,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     allowEval: opts.allowEval ?? false,
     ...(opts.screenshotDir !== undefined ? { screenshotDir: opts.screenshotDir } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
+    ...(opts.operationTimeoutMs !== undefined
+      ? { operationTimeoutMs: opts.operationTimeoutMs }
+      : {}),
   })
 
   // Load plugins first (validates, namespaces, registers codes, runs setup). On any

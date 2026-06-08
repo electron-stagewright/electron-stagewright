@@ -14,8 +14,16 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { StderrLogger } from '../src/server/logger.js'
 import { type AnyToolDefinition, defineTool } from '../src/tools/types.js'
 
-function newDispatcher(opts: { allowEval?: boolean } = {}): Dispatcher {
-  return new Dispatcher({ sessions: new SessionManager(), allowEval: opts.allowEval ?? false })
+function newDispatcher(
+  opts: { allowEval?: boolean; operationTimeoutMs?: number } = {},
+): Dispatcher {
+  return new Dispatcher({
+    sessions: new SessionManager(),
+    allowEval: opts.allowEval ?? false,
+    ...(opts.operationTimeoutMs !== undefined
+      ? { operationTimeoutMs: opts.operationTimeoutMs }
+      : {}),
+  })
 }
 
 const echoTool = defineTool({
@@ -248,5 +256,69 @@ describe('Dispatcher session correlation (AsyncLocalStorage)', () => {
     d.register(sidTool)
     const res = await d.dispatch('test_sid', {})
     expect((res as SuccessResponse)._meta.session_id).toBeUndefined()
+  })
+})
+
+describe('Dispatcher operation-timeout backstop (ADR-011)', () => {
+  const hangTool = defineTool({
+    name: 'test_hang',
+    description: 'Never settles — simulates a hung app whose transport call never returns.',
+    inputSchema: z.object({}),
+    operationType: 'query',
+    handler: () => new Promise<never>(() => undefined),
+  })
+
+  it('resolves a hung handler as a retryable OPERATION_TIMEOUT instead of hanging', async () => {
+    const d = newDispatcher({ operationTimeoutMs: 20 })
+    d.register(hangTool)
+    const res = (await d.dispatch('test_hang', {})) as ErrorResponse & {
+      details?: { timeout_ms?: number }
+    }
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('OPERATION_TIMEOUT')
+    expect(res.retryable).toBe(true)
+    expect(res.details?.timeout_ms).toBe(20)
+  })
+
+  it('does not wedge the dispatcher: a normal call still works after a timeout', async () => {
+    const d = newDispatcher({ operationTimeoutMs: 20 })
+    d.register(hangTool)
+    d.register(echoTool)
+    expect((await d.dispatch('test_hang', {})).ok).toBe(false)
+    const ok = (await d.dispatch('test_echo', { value: 'hi' })) as SuccessResponse & {
+      echo: string
+    }
+    expect(ok.ok).toBe(true)
+    expect(ok.echo).toBe('hi')
+  })
+
+  it('disables the backstop when operationTimeoutMs is 0 (a fast handler still returns)', async () => {
+    const d = newDispatcher({ operationTimeoutMs: 0 })
+    d.register(echoTool)
+    expect((await d.dispatch('test_echo', { value: 'x' })).ok).toBe(true)
+  })
+
+  it('rejects negative or fractional operation-timeout budgets at construction', () => {
+    expect(() => newDispatcher({ operationTimeoutMs: -1 })).toThrow(/non-negative integer/)
+    expect(() => newDispatcher({ operationTimeoutMs: 1.5 })).toThrow(/non-negative integer/)
+  })
+
+  it('warns at construction when the budget could preempt a legitimate maximum-length wait', () => {
+    const lines: string[] = []
+    new Dispatcher({
+      sessions: new SessionManager(),
+      operationTimeoutMs: 5000,
+      logger: new StderrLogger({ level: 'warn', sink: (l) => lines.push(l) }),
+    })
+    expect(lines.some((l) => /could be preempted/.test(l))).toBe(true)
+  })
+
+  it('does not warn for the safe default budget', () => {
+    const lines: string[] = []
+    new Dispatcher({
+      sessions: new SessionManager(),
+      logger: new StderrLogger({ level: 'warn', sink: (l) => lines.push(l) }),
+    })
+    expect(lines.some((l) => /could be preempted/.test(l))).toBe(false)
   })
 })
