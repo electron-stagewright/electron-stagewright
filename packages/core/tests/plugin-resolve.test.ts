@@ -74,6 +74,18 @@ describe('parseCliArgs (plugin flags)', () => {
     expect(opts.pluginSpecs).toEqual([])
     expect(opts.pluginConfigs).toEqual({})
   })
+
+  it('parses --operation-timeout-ms into a number (0 disables the backstop)', () => {
+    expect(parseCliArgs(['--operation-timeout-ms', '5000']).operationTimeoutMs).toBe(5000)
+    expect(parseCliArgs(['--operation-timeout-ms', '0']).operationTimeoutMs).toBe(0)
+    expect(parseCliArgs([]).operationTimeoutMs).toBeUndefined()
+  })
+
+  it('throws on a non-numeric, fractional, or negative --operation-timeout-ms', () => {
+    expect(() => parseCliArgs(['--operation-timeout-ms', 'soon'])).toThrow(/non-negative integer/)
+    expect(() => parseCliArgs(['--operation-timeout-ms', '1.5'])).toThrow(/non-negative integer/)
+    expect(() => parseCliArgs(['--operation-timeout-ms', '-1'])).toThrow(/non-negative integer/)
+  })
 })
 
 describe('isMainEntryPoint', () => {

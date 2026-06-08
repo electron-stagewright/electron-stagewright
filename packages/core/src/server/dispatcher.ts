@@ -74,6 +74,20 @@ const REDISPATCH_DEPTH = new AsyncLocalStorage<number>()
  */
 const MAX_REDISPATCH_DEPTH = 1
 
+/**
+ * Default operation-timeout backstop (ms) for a single dispatch (ADR-011). 120s is deliberately
+ * well above the longest legitimate per-tool budget (the wait family clamps to 60s) so the
+ * backstop only ever fires on a genuine hang, never on a valid long wait/action.
+ */
+export const DEFAULT_OPERATION_TIMEOUT_MS = 120_000
+
+/**
+ * Below this, an operation-timeout budget could preempt a legitimate maximum-length wait (the wait
+ * family clamps to 60s). Mirrors the wait family's `MAX_WAIT_TIMEOUT_MS`; kept as a local literal
+ * to avoid a server -> tools import cycle. A configured budget at or under this logs a warning.
+ */
+const MIN_SAFE_OPERATION_TIMEOUT_MS = 60_000
+
 /** Options for constructing a {@link Dispatcher}. */
 export interface DispatcherOptions {
   /** Session registry threaded into every tool context. */
@@ -95,6 +109,14 @@ export interface DispatcherOptions {
   readonly now?: () => number
   /** Elapsed-ms threshold above which a dispatch logs a slow-op warning. */
   readonly slowOpThresholdMs?: number
+  /**
+   * Backstop timeout (ms) for a single tool dispatch (ADR-011). If a handler does not settle
+   * within this budget the dispatch resolves with a retryable `OPERATION_TIMEOUT` envelope instead
+   * of hanging — a guard against a frozen renderer whose `evaluate` never returns. Must exceed the
+   * longest legitimate per-tool budget (the wait family's 60s clamp) or it would preempt a valid
+   * long wait; `0` disables the backstop. Defaults to {@link DEFAULT_OPERATION_TIMEOUT_MS}.
+   */
+  readonly operationTimeoutMs?: number
 }
 
 /**
@@ -137,6 +159,8 @@ export class Dispatcher {
   readonly #screenshotDir?: string
   readonly #now: () => number
   readonly #slowMs: number
+  /** Per-dispatch backstop timeout (ms); `0` disables it (ADR-011). */
+  readonly #operationTimeoutMs: number
   /** Best-effort dispatch observers (ADR-009). Empty by default — zero overhead per call. */
   readonly #observers = new Set<DispatchObserver>()
   /** Pre-dispatch guards that can veto a call (ADR-009). Empty by default — zero overhead per call. */
@@ -151,6 +175,23 @@ export class Dispatcher {
     if (opts.screenshotDir !== undefined) this.#screenshotDir = path.resolve(opts.screenshotDir)
     this.#now = opts.now ?? Date.now
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
+    this.#operationTimeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
+    if (!Number.isInteger(this.#operationTimeoutMs) || this.#operationTimeoutMs < 0) {
+      throw new Error(
+        `operationTimeoutMs must be a non-negative integer number of milliseconds, got ${String(
+          opts.operationTimeoutMs,
+        )}`,
+      )
+    }
+    if (this.#operationTimeoutMs > 0 && this.#operationTimeoutMs <= MIN_SAFE_OPERATION_TIMEOUT_MS) {
+      this.#logger.warn(
+        'operationTimeoutMs is at or below the maximum wait budget; a legitimate long wait could be preempted',
+        {
+          operation_timeout_ms: this.#operationTimeoutMs,
+          min_safe_ms: MIN_SAFE_OPERATION_TIMEOUT_MS,
+        },
+      )
+    }
   }
 
   /** Whether the eval opt-in flag was set for this dispatcher. */
@@ -393,12 +434,48 @@ export class Dispatcher {
     }
 
     try {
-      const result = await runWithSessionContext(sessionId, () => def.handler(args, ctx))
+      const result = await this.#withTimeout(() =>
+        runWithSessionContext(sessionId, () => def.handler(args, ctx)),
+      )
       this.#warnIfSlow(name, this.#now() - startedAt)
       return this.#complete(name, args, result, startedAt)
     } catch (err) {
       this.#warnIfSlow(name, this.#now() - startedAt)
       return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
+    }
+  }
+
+  /**
+   * Race a handler against the operation-timeout backstop (ADR-011): resolve to the handler's
+   * result if it settles first, otherwise throw a retryable `OPERATION_TIMEOUT` (mapped to an
+   * envelope by {@link Dispatcher.#mapThrown}). A budget of `0` disables the backstop. The losing
+   * (hung) promise is ABANDONED — a Playwright `evaluate` cannot be cancelled — so a no-op `catch`
+   * swallows its eventual rejection to avoid an unhandledRejection after we have already returned;
+   * the timer is `unref`-ed and cleared so it never keeps the process alive.
+   */
+  async #withTimeout<T>(run: () => Promise<T>): Promise<T> {
+    const budget = this.#operationTimeoutMs
+    const work = run()
+    if (budget <= 0) return work
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new StagewrightError(
+            'OPERATION_TIMEOUT',
+            `Operation exceeded the ${budget}ms dispatch timeout; the app may be hung.`,
+            { timeout_ms: budget },
+          ),
+        )
+      }, budget)
+      timer.unref?.()
+    })
+    try {
+      return await Promise.race([work, timeout])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+      // The handler may still be pending (it lost the race); swallow its eventual rejection.
+      void work.catch(() => undefined)
     }
   }
 

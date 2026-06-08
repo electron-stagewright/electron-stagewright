@@ -11,14 +11,15 @@
  * `INTERNAL_ERROR` (`dispatcher.#mapThrown`), and interaction failures are pattern-classified
  * (`classifyTargetError`). Codes come from the ADR-006 registry; dispatch is ADR-008.
  *
- * DOCUMENTED GAP (not covered here, by design): the only timeout the server enforces is inside
- * tools that own one — the wait family self-bounds its poll in the renderer, and an eval/interaction
- * transport timeout surfaces as a clean retryable code (asserted below). There is NO general
- * per-operation timeout around a transport call, so a tool like `electron_click` / `electron_snapshot`
- * against a genuinely HUNG app (a call that never settles) would hang the dispatch indefinitely.
- * Adding a transport-call timeout is a deliberate design change (it needs a policy: budget, default,
- * and cancellation semantics), so it is surfaced as a follow-up rather than built or faked here — a
- * test that "proves" a hang is bounded against a fake with no real timer would assert nothing.
+ * HUNG APP (now covered): a genuinely hung app — a transport call that never settles, e.g. a frozen
+ * renderer whose `evaluate` never returns — is bounded by the dispatch-level operation-timeout
+ * backstop (ADR-011). When a handler exceeds the configured budget the dispatch resolves with a
+ * retryable `OPERATION_TIMEOUT` instead of hanging; the asserted case below drives a never-settling
+ * `evaluate` against a short budget so a REAL timer fires. The backstop cannot cancel the underlying
+ * op (a Playwright `evaluate` is not cancellable) — it ABANDONS the pending promise and unblocks the
+ * agent — which is the trade-off ADR-011 records. (Per-tool timeouts still apply first: the wait
+ * family self-bounds in the renderer and an eval/interaction transport timeout surfaces as its own
+ * clean retryable code, asserted below; the backstop is the last-resort bound above all of them.)
  */
 
 import { describe, expect, it } from 'vitest'
@@ -64,6 +65,7 @@ function chaosSetup(
     readonly tools?: readonly AnyToolDefinition[]
     readonly allowEval?: boolean
     readonly register?: boolean
+    readonly operationTimeoutMs?: number
   } = {},
 ): { dispatcher: Dispatcher; session: FakeSession } {
   const sessions = new SessionManager()
@@ -75,6 +77,9 @@ function chaosSetup(
     sessions,
     snapshots,
     ...(opts.allowEval !== undefined ? { allowEval: opts.allowEval } : {}),
+    ...(opts.operationTimeoutMs !== undefined
+      ? { operationTimeoutMs: opts.operationTimeoutMs }
+      : {}),
   })
   dispatcher.registerAll(opts.tools ?? [...INTERACTION_TOOLS, findTool])
   return { dispatcher, session }
@@ -232,6 +237,23 @@ describe('resilience: a transport timeout surfaces as a clean retryable code', (
       'electron_eval_renderer',
       { code: 'document.title' },
       { code: 'EVAL_TIMEOUT', retryable: true },
+    )
+  })
+})
+
+describe('resilience: a hung app is bounded by the operation-timeout backstop (ADR-011)', () => {
+  it('maps a never-settling transport call to a retryable OPERATION_TIMEOUT, not an infinite hang', async () => {
+    // A frozen renderer: evaluate never resolves. With a short backstop budget a REAL timer fires
+    // and the dispatch resolves instead of hanging — the gap the rest of this suite documented.
+    const { dispatcher } = chaosSetup({
+      session: new FakeSession({ id: 'sess', evaluate: () => new Promise<never>(() => undefined) }),
+      operationTimeoutMs: 30,
+    })
+    await expectCleanError(
+      dispatcher,
+      'electron_find',
+      { role: 'button' },
+      { code: 'OPERATION_TIMEOUT', retryable: true },
     )
   })
 })

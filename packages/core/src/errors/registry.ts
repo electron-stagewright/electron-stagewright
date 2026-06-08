@@ -168,6 +168,13 @@ export const ERROR_CODES = {
     hint: 'Remove the blocked keyword, or use an explicit trusted-eval opt-in for this session.',
   },
 
+  // Dispatch backstop (ADR-011)
+  OPERATION_TIMEOUT: {
+    http: 408,
+    retryable: true,
+    hint: 'The operation exceeded the dispatch timeout budget (the app may be hung); retry, or raise the operation timeout (--operation-timeout-ms).',
+  },
+
   // Catch-all
   NOT_IMPLEMENTED: {
     http: 501,

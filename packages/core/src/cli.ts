@@ -16,6 +16,9 @@
  *   server never auto-scans. An unresolvable plugin aborts startup.
  * - `--plugin-config <name>=<json>` — supply a plugin's config as inline JSON,
  *   validated against the plugin's configSchema. Repeatable, keyed by plugin name.
+ * - `--operation-timeout-ms <n>` — backstop timeout for a single tool dispatch (ADR-011); a
+ *   handler that does not settle within it returns a retryable OPERATION_TIMEOUT instead of
+ *   hanging the agent on a frozen app. Default 120000; `0` disables it.
  *
  * On SIGINT / SIGTERM the server is closed and every live session disposed, so a
  * Ctrl-C never leaves a launched Electron process orphaned.
@@ -38,6 +41,8 @@ interface CliOptions {
   readonly pluginSpecs: readonly string[]
   /** Per-plugin config parsed from `--plugin-config <name>=<json>`, keyed by plugin name. */
   readonly pluginConfigs: Readonly<Record<string, unknown>>
+  /** Dispatch backstop timeout (ms) from `--operation-timeout-ms` (ADR-011); absent → the default. */
+  readonly operationTimeoutMs?: number
 }
 
 /** Read the value following a `--flag <value>` argument, or `undefined` when absent. */
@@ -79,9 +84,26 @@ function parsePluginConfigs(argv: readonly string[]): Record<string, unknown> {
   return configs
 }
 
+/**
+ * Parse the optional `--operation-timeout-ms <n>` flag into a non-negative integer. Throws on a
+ * non-numeric, non-integer, or negative value so a typo fails startup loudly rather than silently
+ * disabling the dispatch backstop.
+ */
+function parseOperationTimeout(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(
+      `--operation-timeout-ms expects a non-negative integer number of milliseconds, got "${raw}"`,
+    )
+  }
+  return value
+}
+
 /** Parse the supported flags from argv (excluding `node` and the script path). */
 export function parseCliArgs(argv: readonly string[]): CliOptions {
   const screenshotDir = readFlagValue(argv, '--screenshot-dir')
+  const operationTimeoutMs = parseOperationTimeout(readFlagValue(argv, '--operation-timeout-ms'))
   // `--plugin` is repeatable and each value may be comma-separated.
   const pluginSpecs = readFlagValues(argv, '--plugin')
     .flatMap((value) => value.split(','))
@@ -90,13 +112,14 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
   return {
     allowEval: argv.includes('--allow-eval'),
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
+    ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
     pluginSpecs,
     pluginConfigs: parsePluginConfigs(argv),
   }
 }
 
 async function main(): Promise<void> {
-  const { allowEval, screenshotDir, pluginSpecs, pluginConfigs } = parseCliArgs(
+  const { allowEval, screenshotDir, pluginSpecs, pluginConfigs, operationTimeoutMs } = parseCliArgs(
     process.argv.slice(2),
   )
   const logger = new StderrLogger({ level: 'info' })
@@ -112,6 +135,7 @@ async function main(): Promise<void> {
     allowEval,
     logger,
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
+    ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
     ...(plugins.length > 0 ? { plugins } : {}),
     ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
   })
