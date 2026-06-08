@@ -5,7 +5,7 @@
  * Client<->Server pair (InMemoryTransport) and confirms a tools/call session is captured.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -334,6 +334,74 @@ describe('trace plugin replay (in-process)', () => {
       ).toMatchObject({ ok: true, replayed: 1, diverged: 1, dry_run: true })
     } finally {
       await replayServer.close().catch(() => undefined)
+    }
+  })
+})
+
+describe('trace plugin view (in-process)', () => {
+  it('renders a recorded trace to a self-contained HTML report next to the artifact', async () => {
+    const file = await tmpFile()
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file })
+      await server.dispatcher.dispatch('demo_echo', { value: 'a' })
+      await server.dispatcher.dispatch('demo_echo', { value: 'b' })
+      await server.dispatcher.dispatch('trace_stop', {})
+
+      const out = file.replace(/\.jsonl$/, '.html')
+      const view = await server.dispatcher.dispatch('trace_view', { path: file })
+      expect(view).toMatchObject({ ok: true, path: out, source: file, calls: 2 })
+
+      const html = await readFile(out, 'utf8')
+      expect(html.startsWith('<!doctype html>')).toBe(true)
+      expect(html).toContain('demo_echo')
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('honours an explicit out path', async () => {
+    const file = await tmpFile()
+    const out = path.join(path.dirname(file), 'report.html')
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file })
+      await server.dispatcher.dispatch('demo_echo', { value: 'a' })
+      await server.dispatcher.dispatch('trace_stop', {})
+      expect(await server.dispatcher.dispatch('trace_view', { path: file, out })).toMatchObject({
+        ok: true,
+        path: out,
+      })
+      expect((await readFile(out, 'utf8')).length).toBeGreaterThan(0)
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('rejects rendering a missing artifact', async () => {
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      expect(
+        await server.dispatcher.dispatch('trace_view', { path: '/no/such/trace-xyz.jsonl' }),
+      ).toMatchObject({ ok: false, code: 'trace.ARTIFACT_NOT_FOUND' })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('reports a write failure when the out path cannot be written', async () => {
+    const file = await tmpFile()
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file })
+      await server.dispatcher.dispatch('demo_echo', { value: 'a' })
+      await server.dispatcher.dispatch('trace_stop', {})
+      // `out` is an existing directory (the trace's parent), so writeFile fails with EISDIR.
+      expect(
+        await server.dispatcher.dispatch('trace_view', { path: file, out: path.dirname(file) }),
+      ).toMatchObject({ ok: false, code: 'trace.ARTIFACT_WRITE_FAILED' })
+    } finally {
+      await server.close().catch(() => undefined)
     }
   })
 })
