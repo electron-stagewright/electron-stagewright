@@ -14,6 +14,7 @@ import {
   checkBundleStructure,
   checkCodeSigning,
   checkGatekeeper,
+  checkNotarization,
   runChecks,
   CHECK_IDS,
 } from '../src/checks.js'
@@ -47,11 +48,14 @@ const NOT_FOUND: CommandResult = {
  * A {@link RunCommand} returning canned results. `codesign --verify` and `codesign -dvvv` (the
  * identity read) are DISTINCT invocations, so they are keyed separately — the pass path must
  * exercise the real extraction (verify succeeds; the authority comes from the -dvvv call), not one
- * stub replayed for both. Anything unconfigured resolves to command-not-found.
+ * stub replayed for both. `xcrun stapler validate` (notarization) is keyed as `staplerValidate`;
+ * `spctl` doubles as the gatekeeper check AND the notarization-pass evidence read. Anything
+ * unconfigured resolves to command-not-found.
  */
 function fakeRun(plan: {
   codesignVerify?: CommandResult
   codesignDisplay?: CommandResult
+  staplerValidate?: CommandResult
   spctl?: CommandResult
 }): RunCommand {
   return (command, args) => {
@@ -59,6 +63,9 @@ function fakeRun(plan: {
       return Promise.resolve(
         (args.includes('-dvvv') ? plan.codesignDisplay : plan.codesignVerify) ?? NOT_FOUND,
       )
+    }
+    if (command === 'xcrun' && args.includes('stapler')) {
+      return Promise.resolve(plan.staplerValidate ?? NOT_FOUND)
     }
     if (command === 'spctl') return Promise.resolve(plan.spctl ?? NOT_FOUND)
     return Promise.resolve(NOT_FOUND)
@@ -174,6 +181,99 @@ describe('checkGatekeeper', () => {
   })
 })
 
+describe('checkNotarization', () => {
+  it('passes when a ticket is stapled and reports the spctl source as evidence', async () => {
+    const run = fakeRun({
+      staplerValidate: { ok: true, code: 0, stdout: 'The validate action worked!', stderr: '' },
+      spctl: {
+        ok: true,
+        code: 0,
+        stdout: '',
+        stderr:
+          '/x/Demo.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Acme (TEAMID)',
+      },
+    })
+    const result = await checkNotarization('/x/Demo.app', run)
+    expect(result.status).toBe('pass')
+    expect(result.evidence).toBe('source=Notarized Developer ID')
+  })
+
+  it('still passes (without evidence) when the source read fails', async () => {
+    // stapler validate succeeds, but the spctl source read is unconfigured -> command-not-found, so
+    // the verdict is unchanged and no evidence is attached.
+    const run = fakeRun({
+      staplerValidate: { ok: true, code: 0, stdout: 'The validate action worked!', stderr: '' },
+    })
+    const result = await checkNotarization('/x/Demo.app', run)
+    expect(result.status).toBe('pass')
+    expect(result.evidence).toBeUndefined()
+  })
+
+  it('fails when no ticket is stapled, with remediation', async () => {
+    const run = fakeRun({
+      staplerValidate: {
+        ok: false,
+        code: 65,
+        stdout: 'Processing: /x/Demo.app\nThe validate action failed! Error 65.',
+        stderr: 'CloudKit query failed: the app does not have a ticket stapled to it.',
+      },
+    })
+    const result = await checkNotarization('/x/Demo.app', run)
+    expect(result.status).toBe('fail')
+    expect(result.evidence).toContain('ticket stapled')
+    expect(result.next_actions?.length).toBeGreaterThan(0)
+  })
+
+  it('reads fail evidence from stdout when stderr is empty (stream varies by toolchain)', async () => {
+    const run = fakeRun({
+      staplerValidate: {
+        ok: false,
+        code: 65,
+        stdout: 'The validate action failed! Error 65.',
+        stderr: '',
+      },
+    })
+    const result = await checkNotarization('/x/Demo.app', run)
+    expect(result.status).toBe('fail')
+    expect(result.evidence).toContain('validate action failed')
+  })
+
+  it('is unknown when xcrun cannot run (absent / non-macOS)', async () => {
+    const result = await checkNotarization('/x/Demo.app', fakeRun({}))
+    expect(result.status).toBe('unknown')
+    expect(result.detail).toContain('macOS')
+  })
+
+  it('is unknown when xcrun runs but cannot find stapler', async () => {
+    const run = fakeRun({
+      staplerValidate: {
+        ok: false,
+        code: 72,
+        stdout: '',
+        stderr: 'xcrun: error: unable to find utility "stapler", not a developer tool or in PATH',
+      },
+    })
+    const result = await checkNotarization('/x/Demo.app', run)
+    expect(result.status).toBe('unknown')
+    expect(result.evidence).toContain('unable to find utility')
+  })
+
+  it('is unknown when the active developer path is invalid', async () => {
+    const run = fakeRun({
+      staplerValidate: {
+        ok: false,
+        code: 1,
+        stdout: '',
+        stderr:
+          'xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun',
+      },
+    })
+    const result = await checkNotarization('/x/Demo.app', run)
+    expect(result.status).toBe('unknown')
+    expect(result.evidence).toContain('invalid active developer path')
+  })
+})
+
 describe('runChecks', () => {
   it('runs all checks in canonical order by default', async () => {
     const results = await runChecks(await makeApp(), fakeRun({}))
@@ -187,5 +287,10 @@ describe('runChecks', () => {
       'gatekeeper',
     ])
     expect(results.map((r) => r.id)).toEqual(['bundle-structure', 'gatekeeper'])
+  })
+
+  it('runs notarization alone, independent of the other checks', async () => {
+    const results = await runChecks(await makeApp(), fakeRun({}), ['notarization'])
+    expect(results.map((r) => r.id)).toEqual(['notarization'])
   })
 })

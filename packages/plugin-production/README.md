@@ -40,14 +40,14 @@ The loader namespaces the tool under the plugin name `production`:
 
 - **`production_validate`** `{ appPath, checks? }` — validate the packaged `.app` at `appPath`
   (absolute path). `checks` optionally names a subset (`bundle-structure`, `code-signing`,
-  `gatekeeper`); omit to run all. Returns:
+  `notarization`, `gatekeeper`); omit to run all. Returns:
 
   ```json
   {
     "ok": true,
     "app_path": "/path/to/My.app",
     "passed": false,
-    "summary": { "pass": 1, "fail": 1, "unknown": 1 },
+    "summary": { "pass": 1, "fail": 2, "unknown": 1 },
     "checks": [
       {
         "id": "bundle-structure",
@@ -61,6 +61,13 @@ The loader namespaces the tool under the plugin name `production`:
         "status": "fail",
         "detail": "…",
         "evidence": "…",
+        "next_actions": ["…"]
+      },
+      {
+        "id": "notarization",
+        "title": "Notarization",
+        "status": "fail",
+        "detail": "…",
         "next_actions": ["…"]
       },
       { "id": "gatekeeper", "title": "Gatekeeper assessment", "status": "unknown", "detail": "…" }
@@ -80,14 +87,22 @@ The loader namespaces the tool under the plugin name `production`:
 | ------------------ | ----------------------------------------------------------------------- | ----------------------------------- |
 | `bundle-structure` | The `.app` has `Contents/Info.plist` and a `Contents/MacOS/` executable | Filesystem (cross-platform)         |
 | `code-signing`     | The signature is present and valid                                      | `codesign --verify --deep --strict` |
+| `notarization`     | A valid notarization ticket is stapled to the bundle                    | `xcrun stapler validate`            |
 | `gatekeeper`       | Gatekeeper will accept the app for execution                            | `spctl --assess --type execute`     |
 
-Forthcoming: notarization (stapled ticket), updater feeds, custom protocol schemes, crash-reporter
-configuration, and field-level `Info.plist` checks (bundle id / version).
+Forthcoming: updater feeds, custom protocol schemes, crash-reporter configuration, and field-level
+`Info.plist` checks (bundle id / version).
 
 ## Platform
 
 macOS is the first-class target — that is where signing/notarization pain lives. On a non-macOS
-host the `codesign` / `spctl` checks report `unknown` (the tools are absent), not `fail`; the
-bundle-structure check still runs everywhere. Each external command is timeout-bounded
+host the `codesign` / `xcrun stapler` / `spctl` checks report `unknown` (the tools are absent), not
+`fail`; the bundle-structure check still runs everywhere. Notarization is also `unknown` on macOS
+when the developer toolchain is incomplete — `xcrun` runs but cannot find `stapler`, or
+`xcode-select` points at an invalid path — since the ticket cannot be verified. Each external
+command is timeout-bounded
 (`commandTimeoutMs`) so a hung tool cannot wedge the call.
+
+`xcrun stapler validate` inspects the notarization ticket **embedded** in the bundle and needs no
+network, so a notarization `fail` is authoritative — the ticket is genuinely missing or invalid,
+not a transient online lookup.

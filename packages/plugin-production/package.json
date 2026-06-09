@@ -1,7 +1,7 @@
 {
   "name": "@electron-stagewright/plugin-production",
-  "version": "0.0.0",
-  "description": "Production validation plugin for Electron Stagewright: validate a packaged macOS app (bundle structure, code signing, Gatekeeper) and return structured pass/fail/unknown results.",
+  "version": "0.1.0",
+  "description": "Production validation plugin for Electron Stagewright: validate a packaged macOS app (bundle structure, code signing, notarization, Gatekeeper) and return structured pass/fail/unknown results.",
   "type": "module",
   "license": "MIT",
   "author": "johnny4young <johnny.iv.young@gmail.com>",
