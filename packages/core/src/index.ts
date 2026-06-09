@@ -58,3 +58,9 @@ export * from './server/index.js'
  * `<plugin>_<tool>` and plugin error codes as `<plugin>.CODE`.
  */
 export * from './plugins/index.js'
+
+/**
+ * Manifest tooling — project the dispatcher's machine-readable tool manifest into other formats.
+ * `renderToolReference` emits the Markdown tool catalog committed as `TOOL-REFERENCE.md`.
+ */
+export * from './manifest/index.js'

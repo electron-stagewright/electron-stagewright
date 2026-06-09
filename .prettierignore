@@ -17,3 +17,7 @@ examples/**/dist/
 
 # Node tooling that has its own format
 node_modules/
+
+# Generated docs — produced byte-for-byte by `pnpm docs:tools` and guarded by a sync test;
+# Prettier must not reformat it or it would fight the generator.
+TOOL-REFERENCE.md

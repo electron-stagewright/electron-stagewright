@@ -130,6 +130,12 @@ export interface ToolManifestEntry {
   readonly description: string
   readonly operationType: OperationType
   readonly inputJsonSchema: Record<string, unknown>
+  /**
+   * True when the tool is eval-gated (`requiresEvalFlag`) and therefore registers only when the
+   * server was started with `--allow-eval`. Absent for ordinary tools. Surfaced so offline
+   * documentation can mark which tools the eval opt-in unlocks.
+   */
+  readonly requiresEvalFlag?: boolean
 }
 
 /** Read a `sessionId` string field off arbitrary parsed args, if present. */
@@ -303,6 +309,7 @@ export class Dispatcher {
       description: def.description,
       operationType: def.operationType,
       inputJsonSchema: z.toJSONSchema(def.inputSchema) as Record<string, unknown>,
+      ...(def.requiresEvalFlag === true ? { requiresEvalFlag: true } : {}),
     }))
   }
 
