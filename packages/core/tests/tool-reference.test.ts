@@ -114,7 +114,10 @@ describe('TOOL-REFERENCE.md is in sync with the live manifest', () => {
     const server = await createServer({ allowEval: true })
     try {
       const expected = renderToolReference(server.dispatcher.listManifest())
-      const onDisk = await readFile(REFERENCE_PATH, 'utf8')
+      // Normalise CRLF -> LF: git may check the committed file out with CRLF on Windows
+      // (core.autocrlf=true), but line-ending representation is not content drift. (`.gitattributes`
+      // also pins the file to LF; this keeps the assertion correct regardless of git config.)
+      const onDisk = (await readFile(REFERENCE_PATH, 'utf8')).replace(/\r\n/g, '\n')
       expect(onDisk).toBe(expected)
     } finally {
       await server.close().catch(() => undefined)
