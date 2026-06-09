@@ -1,9 +1,10 @@
 /**
- * Gated real-CLI smoke (ADR-012). Runs the ACTUAL `codesign` / `spctl` through the real
- * {@link makeRunCommand} against a synthetic unsigned `.app`, exercising the execFile path the
- * unit tests fake. Opt-in via `STAGEWRIGHT_E2E=1` so the default suite never depends on the macOS
- * toolchain. Proves classification is sane: the bundle passes, every check yields a registered
- * status, and on macOS an unsigned app is correctly a code-signing FAIL (the real codesign ran).
+ * Gated real-CLI smoke (ADR-012). Runs the ACTUAL `codesign` / `xcrun stapler` / `spctl` through
+ * the real {@link makeRunCommand} against a synthetic unsigned `.app`, exercising the execFile path
+ * the unit tests fake. Opt-in via `STAGEWRIGHT_E2E=1` so the default suite never depends on the
+ * macOS toolchain. Proves classification is sane: the bundle passes, every check yields a
+ * registered status, and on macOS an unsigned, un-notarized app is correctly a code-signing AND a
+ * notarization FAIL (the real codesign / stapler ran).
  *
  * @module
  */
@@ -38,9 +39,11 @@ describe('production plugin smoke (real CLIs)', () => {
       const results = await runChecks(app, makeRunCommand(10_000))
       expect(results.find((r) => r.id === 'bundle-structure')?.status).toBe('pass')
       for (const r of results) expect(['pass', 'fail', 'unknown']).toContain(r.status)
-      // On macOS the real codesign ran against an unsigned bundle — that must be a fail.
+      // On macOS the real codesign / stapler ran against an unsigned, un-notarized bundle — both
+      // must be a fail.
       if (process.platform === 'darwin') {
         expect(results.find((r) => r.id === 'code-signing')?.status).toBe('fail')
+        expect(results.find((r) => r.id === 'notarization')?.status).toBe('fail')
       }
     },
     30_000,

@@ -58,10 +58,11 @@ describe('production plugin (in-process)', () => {
       })) as ValidateResult
       expect(res.ok).toBe(true)
       expect(res.app_path).toBe(app)
-      expect(res.checks).toHaveLength(3)
-      // Host-agnostic: a well-formed bundle always passes structure; codesign/gatekeeper vary.
+      expect(res.checks).toHaveLength(4)
+      // Host-agnostic: a well-formed bundle always passes structure; the shell-out checks
+      // (code-signing/notarization/gatekeeper) vary with the macOS toolchain's presence.
       expect(res.checks.find((c) => c.id === 'bundle-structure')?.status).toBe('pass')
-      expect(res.summary.pass + res.summary.fail + res.summary.unknown).toBe(3)
+      expect(res.summary.pass + res.summary.fail + res.summary.unknown).toBe(4)
     } finally {
       await server.close().catch(() => undefined)
     }

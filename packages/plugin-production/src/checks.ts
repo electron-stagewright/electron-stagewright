@@ -15,7 +15,7 @@
 import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 
-import type { RunCommand } from './command.js'
+import type { CommandResult, RunCommand } from './command.js'
 
 /** Outcome class of a check: verified good, verified bad, or could-not-determine. */
 export type CheckStatus = 'pass' | 'fail' | 'unknown'
@@ -39,8 +39,11 @@ export interface CheckResult {
   readonly next_actions?: readonly string[]
 }
 
-/** The checks this plugin runs, in a stable display order. Doubles as the `checks` argument enum. */
-export const CHECK_IDS = ['bundle-structure', 'code-signing', 'gatekeeper'] as const
+/**
+ * The checks this plugin runs, in a stable display order that mirrors the real build pipeline
+ * (structure → sign → notarize → the Gatekeeper launch gate). Doubles as the `checks` argument enum.
+ */
+export const CHECK_IDS = ['bundle-structure', 'code-signing', 'notarization', 'gatekeeper'] as const
 
 /** A check identifier — one of {@link CHECK_IDS}. */
 export type CheckId = (typeof CHECK_IDS)[number]
@@ -179,6 +182,104 @@ export async function checkCodeSigning(appPath: string, run: RunCommand): Promis
   }
 }
 
+const NOTARIZATION_TITLE = 'Notarization'
+
+/**
+ * Detect the "toolchain unavailable" outcome of `xcrun stapler validate`: xcrun itself ran (so it
+ * is not a `spawnError`) but could not find the `stapler` utility, or the active developer
+ * directory is invalid (a misconfigured `xcode-select`). That is MISSING evidence — an incomplete
+ * developer toolchain → `unknown`, not a real "no stapled ticket" defect → `fail`. Both share a
+ * non-zero exit, so they are told apart by the xcrun diagnostic text rather than the exit code.
+ */
+function isStaplerToolchainUnavailable(res: CommandResult): boolean {
+  const output = `${res.stderr}\n${res.stdout}`.toLowerCase()
+  return (
+    output.includes('unable to find utility "stapler"') ||
+    output.includes("unable to find utility 'stapler'") ||
+    output.includes('invalid active developer path')
+  )
+}
+
+/**
+ * Best-effort notarization source from `spctl --assess --type execute --verbose` (printed on
+ * stderr), for `evidence` on a pass — the `source=Notarized Developer ID` line corroborates that
+ * the stapled ticket is Apple-issued.
+ */
+async function readNotarizationSource(
+  appPath: string,
+  run: RunCommand,
+): Promise<string | undefined> {
+  const res = await run('spctl', ['--assess', '--type', 'execute', '--verbose', appPath])
+  return res.stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('source='))
+}
+
+/**
+ * Verify a valid notarization ticket is STAPLED to the bundle via `xcrun stapler validate`. A clean
+ * run is `pass` (with the spctl notarization source as evidence when readable); a non-zero exit is
+ * `fail` (no/invalid stapled ticket); a spawn failure — `xcrun` absent (non-macOS) or a timeout —
+ * is `unknown`.
+ *
+ * `stapler validate` is OFFLINE — it inspects the ticket embedded in the bundle, with no network
+ * lookup — so a non-zero exit reliably means "no valid stapled ticket" (a real defect) and is
+ * classified `fail`, never softened to `unknown`. The output stream varies by toolchain version, so
+ * the verdict is driven purely by the exit code and `evidence` reads whichever stream is non-empty.
+ *
+ * The `pass` path makes a SECOND `spctl` call for the notarization source, so a pass costs up to 2×
+ * the command timeout; that read is best-effort — if it fails, the `pass` simply carries no
+ * `evidence`.
+ */
+export async function checkNotarization(appPath: string, run: RunCommand): Promise<CheckResult> {
+  const id = 'notarization' as const
+  const res = await run('xcrun', ['stapler', 'validate', appPath])
+  if (res.spawnError !== undefined) {
+    return {
+      id,
+      title: NOTARIZATION_TITLE,
+      status: 'unknown',
+      detail: `xcrun stapler could not run (${res.spawnError}); notarization is only verifiable on macOS with the developer toolchain installed.`,
+    }
+  }
+  if (isStaplerToolchainUnavailable(res)) {
+    return {
+      id,
+      title: NOTARIZATION_TITLE,
+      status: 'unknown',
+      detail:
+        'xcrun ran, but stapler is unavailable or the active developer directory is invalid; notarization is only verifiable with a working macOS developer toolchain.',
+      ...(res.stderr.trim() !== '' ? { evidence: firstLine(res.stderr) } : {}),
+    }
+  }
+  if (res.ok) {
+    const source = await readNotarizationSource(appPath, run)
+    return {
+      id,
+      title: NOTARIZATION_TITLE,
+      status: 'pass',
+      detail: 'A valid notarization ticket is stapled to the app (xcrun stapler validate passed).',
+      ...(source !== undefined ? { evidence: source } : {}),
+    }
+  }
+  // stapler prints to stdout in some toolchain versions and stderr in others; read whichever is
+  // non-empty so the evidence survives either.
+  const failOutput = res.stderr.trim() !== '' ? res.stderr : res.stdout
+  return {
+    id,
+    title: NOTARIZATION_TITLE,
+    status: 'fail',
+    detail:
+      'No valid notarization ticket is stapled to the app (xcrun stapler validate failed): it was never notarized, or the ticket was not stapled into the bundle.',
+    ...(failOutput.trim() !== '' ? { evidence: firstLine(failOutput) } : {}),
+    next_actions: [
+      'Notarize the app with the Apple notary service (xcrun notarytool submit --wait).',
+      'Staple the issued ticket into the bundle (xcrun stapler staple) so it validates offline.',
+      'Re-run xcrun stapler validate to confirm the ticket is attached.',
+    ],
+  }
+}
+
 const GATEKEEPER_TITLE = 'Gatekeeper assessment'
 
 /**
@@ -225,6 +326,7 @@ const RUNNERS: Readonly<
 > = {
   'bundle-structure': (appPath) => checkBundleStructure(appPath),
   'code-signing': (appPath, run) => checkCodeSigning(appPath, run),
+  notarization: (appPath, run) => checkNotarization(appPath, run),
   gatekeeper: (appPath, run) => checkGatekeeper(appPath, run),
 }
 

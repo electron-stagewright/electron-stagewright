@@ -2,7 +2,7 @@
  * `@electron-stagewright/plugin-production` — validate a packaged macOS app for production
  * readiness (ADR-012, built on the ADR-004 plugin contract). Where the rest of Stagewright drives
  * a running app, this plugin inspects the BUILD ARTIFACT on disk: is the `.app` a well-formed
- * bundle, is it code-signed, will Gatekeeper accept it.
+ * bundle, is it code-signed, is it notarized, will Gatekeeper accept it.
  *
  * The single tool `production_validate` runs a set of checks against an `appPath` and returns
  * STRUCTURED results — each a `pass` / `fail` / `unknown` — where the load-bearing distinction is
@@ -10,10 +10,10 @@
  * (verified bad). The tool envelope is `ok: true` whenever validation RAN; the app's own verdict
  * is the `passed` field (no failed checks). Only a bad input (no app at `appPath`) is a tool error.
  *
- * It shells out to the macOS toolchain (`codesign`, `spctl`) rather than evaluating app code, so it
- * needs no `--allow-eval` and no running session — but every spawn is timeout-bounded. On a
- * non-macOS host those tools are absent, so their checks report `unknown`, not `fail`. macOS is the
- * first-class target; other OSes are reported as unverifiable.
+ * It shells out to the macOS toolchain (`codesign`, `xcrun stapler`, `spctl`) rather than evaluating
+ * app code, so it needs no `--allow-eval` and no running session — but every spawn is
+ * timeout-bounded. On a non-macOS host those tools are absent, so their checks report `unknown`, not
+ * `fail`. macOS is the first-class target; other OSes are reported as unverifiable.
  *
  * @module
  */
@@ -44,7 +44,9 @@ const configSchema = z.object({
     .int()
     .positive()
     .default(10_000)
-    .describe('Timeout (ms) for each external validation command (codesign, spctl).'),
+    .describe(
+      'Timeout (ms) for each external validation command (codesign, xcrun stapler, spctl).',
+    ),
 })
 
 /** Resolved plugin configuration — the validated output of {@link configSchema}. */
@@ -62,9 +64,10 @@ const validateTool: AnyToolDefinition = defineTool({
   title: 'Validate a packaged macOS app',
   description: [
     'Validate a packaged macOS .app for production readiness and return structured results. Runs,',
-    'by default, three checks — bundle-structure (a well-formed Contents/Info.plist + Contents/MacOS',
-    'executable), code-signing (codesign --verify --deep --strict), and gatekeeper (spctl --assess)',
-    '— or the subset named in checks. Each result is pass (verified good), fail (verified bad, with',
+    'by default, four checks — bundle-structure (a well-formed Contents/Info.plist + Contents/MacOS',
+    'executable), code-signing (codesign --verify --deep --strict), notarization (a notarization',
+    'ticket stapled to the bundle, via xcrun stapler validate), and gatekeeper (spctl --assess) — or',
+    'the subset named in checks. Each result is pass (verified good), fail (verified bad, with',
     'next_actions), or unknown (could not verify — a macOS tool is absent, e.g. on a non-macOS host).',
     'Returns: { ok, app_path, passed, summary: { pass, fail, unknown }, checks }, where passed is',
     'true when no check failed (unknown checks do not fail it but are reported). Errors:',
@@ -82,7 +85,7 @@ const validateTool: AnyToolDefinition = defineTool({
       .min(1)
       .optional()
       .describe(
-        'Subset of checks to run by id; omit to run all (bundle-structure, code-signing, gatekeeper).',
+        'Subset of checks to run by id; omit to run all (bundle-structure, code-signing, notarization, gatekeeper).',
       ),
   }),
   operationType: 'query',
