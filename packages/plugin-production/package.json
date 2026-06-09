@@ -1,0 +1,50 @@
+{
+  "name": "@electron-stagewright/plugin-production",
+  "version": "0.0.0",
+  "description": "Production validation plugin for Electron Stagewright: validate a packaged macOS app (bundle structure, code signing, Gatekeeper) and return structured pass/fail/unknown results.",
+  "type": "module",
+  "license": "MIT",
+  "author": "johnny4young <johnny.iv.young@gmail.com>",
+  "homepage": "https://github.com/electron-stagewright/electron-stagewright",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electron-stagewright/electron-stagewright.git",
+    "directory": "packages/plugin-production"
+  },
+  "bugs": {
+    "url": "https://github.com/electron-stagewright/electron-stagewright/issues"
+  },
+  "keywords": [
+    "electron",
+    "mcp",
+    "stagewright",
+    "code-signing",
+    "notarization",
+    "production",
+    "ai-agent"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
