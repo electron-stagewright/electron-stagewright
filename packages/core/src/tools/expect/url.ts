@@ -13,7 +13,13 @@ import { sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { type WaitRaw, clampWaitTimeout, runWait } from '../wait/poll.js'
 import { buildExpectUrlBody } from './body.js'
-import { type StringMatch, describeStringMatch, expectTimeoutField } from './match.js'
+import {
+  type StringMatch,
+  describeRegexFlags,
+  describeStringMatch,
+  expectTimeoutField,
+  regexFlagsField,
+} from './match.js'
 import { expectBadArgument } from './run.js'
 
 /** `electron_expect_url` — assert the active window URL contains / matches a value. */
@@ -23,9 +29,10 @@ export const expectUrlTool: AnyToolDefinition = defineTool({
   description: [
     "Assert the active window's URL (location.href) satisfies a predicate, polling until it does or",
     'timeoutMs elapses. Provide exactly one of: contains (substring) or matches (JavaScript regex).',
+    'Optional flags (any of i, m, s, u) apply to matches; g and y are rejected as stateful.',
     'Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (URL did not match within',
     'timeoutMs — details carry expected + actual; retryable), TRANSPORT_UNSUPPORTED, NOT_RUNNING,',
-    'BAD_ARGUMENT (no/both predicates, or invalid regex).',
+    'BAD_ARGUMENT (no/both predicates, or invalid regex or flags).',
   ].join(' '),
   inputSchema: z.object({
     contains: z.string().optional().describe('The URL must contain this substring.'),
@@ -34,6 +41,7 @@ export const expectUrlTool: AnyToolDefinition = defineTool({
       .max(MAX_USER_REGEX_LENGTH)
       .optional()
       .describe('The URL must match this JavaScript regular expression.'),
+    flags: regexFlagsField,
     timeoutMs: expectTimeoutField,
     sessionId: sessionIdField,
   }),
@@ -42,17 +50,27 @@ export const expectUrlTool: AnyToolDefinition = defineTool({
     if ((args.contains === undefined) === (args.matches === undefined)) {
       return expectBadArgument(ctx, args.sessionId, 'Provide exactly one of contains or matches.')
     }
+    // flags only refines a regex; reject it on contains rather than silently ignoring it.
+    if (args.matches === undefined && args.flags !== undefined) {
+      return expectBadArgument(ctx, args.sessionId, 'flags is only valid with matches.')
+    }
     let match: StringMatch
     if (args.contains !== undefined) {
       match = { kind: 'contains', value: args.contains }
     } else {
       const pattern = args.matches as string
+      if (args.flags !== undefined) {
+        const badFlag = describeRegexFlags(args.flags)
+        if (badFlag !== null) {
+          return expectBadArgument(ctx, args.sessionId, `Invalid regex flags: ${badFlag}.`)
+        }
+      }
       const unsafe = describeRegexSafety(pattern)
       if (unsafe !== null) {
         return expectBadArgument(ctx, args.sessionId, `Unsafe regular expression: ${unsafe}`)
       }
       try {
-        new RegExp(pattern)
+        new RegExp(pattern, args.flags)
       } catch (err) {
         return expectBadArgument(
           ctx,
@@ -60,7 +78,11 @@ export const expectUrlTool: AnyToolDefinition = defineTool({
           `Invalid regular expression: ${err instanceof Error ? err.message : String(err)}`,
         )
       }
-      match = { kind: 'regex', value: pattern }
+      match = {
+        kind: 'regex',
+        value: pattern,
+        ...(args.flags !== undefined ? { flags: args.flags } : {}),
+      }
     }
     const timeoutMs = clampWaitTimeout(args.timeoutMs)
     return runWait(

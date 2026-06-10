@@ -28,6 +28,20 @@ import { randomUUID } from 'node:crypto'
 
 import { StagewrightError } from '../errors/registry.js'
 import type {
+  EvalPayload,
+  PWConsoleMessage,
+  PWDialog,
+  PWElectron,
+  PWElectronApp,
+  PWModule,
+  PWPage,
+} from './playwright-electron-api.js'
+import {
+  EDITABLE_SIGNATURE_BODY,
+  TYPE_EFFECT_SETTLE_MS,
+  buildScrollIntoViewBody,
+} from './playwright-electron-bodies.js'
+import type {
   AttachOptions,
   ClickOptions,
   ConsoleEntry,
@@ -84,162 +98,6 @@ function toTimeoutOptions(opts: { readonly timeoutMs?: number }): { timeout?: nu
   return {
     ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
   }
-}
-
-/**
- * Settle delay (ms) before re-reading an element's editable content for the type-effect check.
- * Editors like Monaco process input asynchronously (read + clear their hidden textarea on the
- * input event), so reading immediately can catch a transient pre-clear value; a short settle
- * lets that resolve before we decide whether the type landed.
- */
-const TYPE_EFFECT_SETTLE_MS = 10
-
-/**
- * Renderer body returning an element's editable content (a form control's `value`, else its
- * `textContent`), or `null` when the element is absent. Optionally settles first (see
- * {@link TYPE_EFFECT_SETTLE_MS}). Used to verify a type actually landed.
- */
-const EDITABLE_SIGNATURE_BODY = `
-const settleMs = typeof arg.settleMs === 'number' ? arg.settleMs : 0;
-if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
-let el = null;
-try {
-  el = document.querySelector(String(arg.selector));
-} catch {
-  return null;
-}
-if (el === null) return null;
-return typeof el.value === 'string' ? el.value : (el.textContent || '');
-`
-
-/** Renderer body for selector-based scroll. Waits only when `timeoutMs` is set. */
-function buildScrollIntoViewBody(): string {
-  return `
-const selector = String(arg.selector);
-const timeoutMs =
-  typeof arg.timeoutMs === 'number' && Number.isFinite(arg.timeoutMs)
-    ? Math.max(0, arg.timeoutMs)
-    : 0;
-const startedAt = Date.now();
-for (;;) {
-  let element = null;
-  try {
-    element = document.querySelector(selector);
-  } catch {
-    return false;
-  }
-  if (element !== null) {
-    element.scrollIntoView({ block: 'center', inline: 'center' });
-    return true;
-  }
-  const remaining = timeoutMs - (Date.now() - startedAt);
-  if (remaining <= 0) return false;
-  await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));
-}
-`
-}
-
-/**
- * Local opaque interfaces describing the slice of Playwright's API we use. We
- * avoid `import type { ElectronApplication } from 'playwright'` because the
- * optional peerDep may not be installed at typecheck time on consumer projects.
- */
-/** The slice of Playwright's actionability options the interaction methods use. */
-interface PWActionOptions {
-  force?: boolean
-  timeout?: number
-}
-
-/** Playwright's click options — actionability plus pointer-button + multi-click. */
-interface PWClickOptions extends PWActionOptions {
-  button?: 'left' | 'right' | 'middle'
-  clickCount?: number
-}
-
-interface PWPage {
-  url(): string
-  title(): Promise<string>
-  evaluate<T = unknown>(fn: (payload: EvalPayload) => unknown, arg?: EvalPayload): Promise<T>
-  screenshot(opts?: {
-    fullPage?: boolean
-    clip?: ScreenshotOptions['clip']
-    type?: 'png' | 'jpeg'
-    quality?: number
-  }): Promise<Buffer>
-  isVisible(selector: string): Promise<boolean>
-  // focus() waits only for the element to be ATTACHED, not visible (hence no `force`
-  // option in Playwright) — so it can focus an intentionally offscreen / aria-hidden
-  // input that press()/type() would reject on their visibility actionability.
-  focus(selector: string, opts?: { timeout?: number }): Promise<void>
-  click(selector: string, opts?: PWClickOptions): Promise<void>
-  fill(selector: string, value: string, opts?: PWActionOptions): Promise<void>
-  hover(selector: string, opts?: PWActionOptions): Promise<void>
-  press(selector: string, key: string, opts?: PWActionOptions): Promise<void>
-  type(selector: string, text: string, opts?: PWActionOptions): Promise<void>
-  selectOption(
-    selector: string,
-    values: readonly string[],
-    opts?: PWActionOptions,
-  ): Promise<readonly string[]>
-  check(selector: string, opts?: PWActionOptions): Promise<void>
-  uncheck(selector: string, opts?: PWActionOptions): Promise<void>
-  setInputFiles(selector: string, files: readonly string[], opts?: PWActionOptions): Promise<void>
-  dragAndDrop(source: string, target: string, opts?: PWActionOptions): Promise<void>
-  keyboard: { press(key: string): Promise<void>; type(text: string): Promise<void> }
-  mouse: { wheel(deltaX: number, deltaY: number): Promise<void> }
-  on(event: 'console', handler: (message: PWConsoleMessage) => void): void
-  on(event: 'dialog', handler: (dialog: PWDialog) => void): void
-}
-
-/** The slice of Playwright's ConsoleMessage we read into a {@link ConsoleEntry}. */
-interface PWConsoleMessage {
-  type(): string
-  text(): string
-  location(): { url?: string; lineNumber?: number; columnNumber?: number }
-}
-
-/**
- * The slice of Playwright's Dialog we read + resolve. Once a `dialog` listener is
- * attached, Playwright stops auto-dismissing dialogs, so the handler MUST call
- * `accept`/`dismiss` or the renderer hangs.
- */
-interface PWDialog {
-  type(): string
-  message(): string
-  defaultValue(): string
-  accept(promptText?: string): Promise<void>
-  dismiss(): Promise<void>
-}
-
-interface PWElectronApp {
-  windows(): readonly PWPage[]
-  firstWindow(opts?: { timeout?: number }): Promise<PWPage>
-  evaluate<T = unknown>(
-    fn: (electronApp: unknown, payload: EvalPayload) => unknown,
-    arg?: EvalPayload,
-  ): Promise<T>
-  close(): Promise<void>
-  process(): { pid: number | undefined; kill(signal: string): boolean }
-}
-
-interface PWElectron {
-  launch(opts: {
-    executablePath?: string
-    args?: readonly string[]
-    cwd?: string
-    env?: Record<string, string>
-    timeout?: number
-  }): Promise<PWElectronApp>
-}
-
-interface PWModule {
-  _electron?: PWElectron
-  default?: { _electron?: PWElectron }
-}
-
-interface EvalPayload {
-  readonly body: string
-  readonly arg?: unknown
 }
 
 export interface PlaywrightElectronTransportOptions {

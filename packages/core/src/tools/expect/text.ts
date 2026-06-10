@@ -39,10 +39,11 @@ function makeStringContentExpect(spec: StringContentSpec): AnyToolDefinition {
     description: [
       `Assert the ${spec.subject} of the element identified by ref or selector matches a predicate,`,
       'polling until it holds or timeoutMs elapses. Provide exactly one of: equals, contains, regex,',
-      'not_equals, not_contains. Returns: { ok, session_id, matched, actual }.',
+      'not_equals, not_contains. Optional flags (any of i, m, s, u) apply to regex; g and y are rejected',
+      'as stateful. Returns: { ok, session_id, matched, actual }.',
       'Errors: EXPECTATION_FAILED (predicate not met within timeoutMs — details carry expected + actual;',
       'retryable), REF_NOT_FOUND (stale ref; carries similar_refs), TRANSPORT_UNSUPPORTED, NOT_RUNNING,',
-      'BAD_ARGUMENT (no/multiple predicates, invalid regex, or ref+selector both/neither).',
+      'BAD_ARGUMENT (no/multiple predicates, invalid regex or flags, or ref+selector both/neither).',
     ].join(' '),
     inputSchema: z.object({
       ref: refField,

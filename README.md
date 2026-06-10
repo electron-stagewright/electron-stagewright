@@ -21,7 +21,7 @@ Electron Stagewright is designed **agent-first from the primitive level up**:
 - **`expect_*` primitives replace read-compare-retry chains** — `electron_expect_text({ ref, equals: 'Welcome', timeoutMs: 5000 })` is one call, not five.
 - **`electron_find` queries the accessibility tree semantically** — `{ role: 'button', name_contains: 'Submit', visible: true }` — no CSS selectors, no XPath, no guessing.
 - **Hot-reload-aware** — snapshot and find responses report when the renderer reloaded since the previous baseline, so agents know refs may need refreshing.
-- **Framework-agnostic snapshot** — built on accessibility roles and ARIA instead of framework-internal properties. Current fixtures cover vanilla, React, Vue, and Lit; the broader renderer matrix is still expanding.
+- **Framework-agnostic snapshot** — built on accessibility roles and ARIA instead of framework-internal properties. Current fixtures cover vanilla, React, Vue, and Angular; the broader renderer matrix is still expanding.
 
 ## What competitors don't cover (yet)
 
@@ -92,6 +92,29 @@ mcp__electron-stagewright__electron_expect_text({ ref: 4, equals: "Welcome back"
 mcp__electron-stagewright__electron_stop()
 ```
 
+The full tool list — every tool, its parameters, and operation type — is in
+[TOOL-REFERENCE.md](TOOL-REFERENCE.md), generated from the live dispatcher manifest
+(`pnpm docs:tools`).
+
+## Server flags
+
+Pass these after the CLI path in your MCP host config (the `args` array). All default to the safe
+option; diagnostics go to stderr (stdout is reserved for the JSON-RPC protocol channel).
+
+| Flag                            | Effect                                                                                                                                                                                                                                     |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--allow-eval`                  | Register the `electron_eval_main` / `electron_eval_renderer` tools, which run arbitrary JavaScript in the main / renderer process. Default off — the eval tools are hidden and uncallable. Also gates the IPC plugin's main-process tools. |
+| `--app-root <dir>`              | Confine `electron_launch`'s `main`, `executablePath`, and `cwd` to within `<dir>`. Default unset (no confinement). Set it to your app/project root so a tool call cannot launch a binary or main script from elsewhere on the host.        |
+| `--screenshot-dir <dir>`        | Default directory `electron_screenshot` writes into when the call gives no explicit path. Default: the OS temp dir.                                                                                                                        |
+| `--operation-timeout-ms <n>`    | Per-dispatch backstop timeout (ms); a handler that never settles resolves as a retryable `OPERATION_TIMEOUT` instead of hanging the agent on a frozen app. Default 120000; `0` disables it.                                                |
+| `--plugin <name\|path>`         | Load a plugin by package name or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin @electron-stagewright/plugin-trace`.                                                                                         |
+| `--plugin-config <name>=<json>` | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name.                                                                                                                                               |
+
+Security defaults worth knowing when wiring this into another project: arbitrary JS (`--allow-eval`)
+and host-path launches (`--app-root`) are opt-in; `electron_launch` refuses runtime-altering env
+vars (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `LD_*`, `DYLD_*`); and user-supplied regex / text /
+key arguments are length- and complexity-bounded so a hostile tool call cannot wedge the server.
+
 ## What each response looks like (the agent-UX detail)
 
 Success, for example from `electron_expect_text`:
@@ -139,7 +162,7 @@ Three transport implementations behind a single `ITransport` interface, so the p
 - **`CDPTransport`** — Chrome DevTools Protocol direct, no Playwright dependency, currently a capability-honest stub.
 - **`InjectorTransport`** — Node Inspector handshake into running process, currently a capability-honest stub.
 
-Plugin model: small core first; planned domain plugins ship later as `@electron-stagewright/plugin-*` packages (`production`, `trace`, `network`, `clock`, `storage`, `ipc`, `macos-native`).
+Plugin model: a small core, with domain capabilities shipped as separate `@electron-stagewright/plugin-*` packages loaded explicitly via `--plugin` (the core never auto-scans). Shipped today: **`plugin-trace`** (session trace + deterministic replay + per-tool token budget), **`plugin-ipc`** (capture / invoke / stub Electron IPC, gated behind `--allow-eval`), and **`plugin-production`** (validate a packaged `.app`: bundle structure, Info.plist identity fields, code signing, notarization, Gatekeeper). Planned: `network`, `clock`, `storage`, `macos-native`.
 
 ## Dogfooding targets
 

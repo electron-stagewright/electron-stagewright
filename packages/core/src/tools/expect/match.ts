@@ -16,9 +16,39 @@ import { MAX_USER_REGEX_LENGTH, describeRegexSafety } from '../regex-safety.js'
 export type StringMatch =
   | { readonly kind: 'equals'; readonly value: string }
   | { readonly kind: 'contains'; readonly value: string }
-  | { readonly kind: 'regex'; readonly value: string }
+  | { readonly kind: 'regex'; readonly value: string; readonly flags?: string }
   | { readonly kind: 'not_equals'; readonly value: string }
   | { readonly kind: 'not_contains'; readonly value: string }
+
+/**
+ * Regex flags an agent may pass with a `regex` / `matches` predicate. Only the stateless flags are
+ * allowed — `i` (case-insensitive), `m` (multiline `^`/`$`), `s` (dotAll), `u` (unicode). The
+ * stateful `g` / `y` flags carry `lastIndex` state that makes a reused `.test()` alternate results,
+ * so they are rejected; `d` / `v` add nothing for a boolean match.
+ */
+const ALLOWED_REGEX_FLAGS = 'imsu'
+
+/** Shared agent-facing optional `flags` field for the regex predicates. */
+export const regexFlagsField = z
+  .string()
+  .max(8)
+  .optional()
+  .describe(
+    'Optional regex flags (any of i, m, s, u) applied to the regex predicate; g and y are rejected as stateful. Only valid alongside a regex predicate.',
+  )
+
+/** Validate agent-supplied regex flags against the safe allowlist; returns a reason, or null when ok. */
+export function describeRegexFlags(flags: string): string | null {
+  const seen = new Set<string>()
+  for (const flag of flags) {
+    if (!ALLOWED_REGEX_FLAGS.includes(flag)) {
+      return `unsupported flag "${flag}"; allowed flags are i, m, s, u (g and y are stateful and rejected)`
+    }
+    if (seen.has(flag)) return `duplicate flag "${flag}"`
+    seen.add(flag)
+  }
+  return null
+}
 
 /** Agent-facing string predicate fields; the tool requires exactly one to be set. */
 export const stringPredicateFields = {
@@ -31,6 +61,7 @@ export const stringPredicateFields = {
     .describe('The text must match this JavaScript regular expression.'),
   not_equals: z.string().optional().describe('The text must NOT equal this.'),
   not_contains: z.string().optional().describe('The text must NOT contain this substring.'),
+  flags: regexFlagsField,
 }
 
 /** The five string-predicate keys, in precedence order for the "exactly one" check. */
@@ -39,7 +70,7 @@ const STRING_KEYS = ['equals', 'contains', 'regex', 'not_equals', 'not_contains'
 /** Optional-with-undefined values, matching what Zod infers for the predicate fields. */
 type StringPredicateArgs = {
   readonly [K in (typeof STRING_KEYS)[number]]?: string | undefined
-}
+} & { readonly flags?: string | undefined }
 
 /** Outcome of {@link resolveStringMatch}: a validated predicate or a `BAD_ARGUMENT` reason. */
 export type StringMatchResult =
@@ -67,6 +98,12 @@ export function resolveStringMatch(args: StringPredicateArgs): StringMatchResult
   const kind = present[0] as StringMatch['kind']
   const value = args[kind] as string
   if (kind === 'regex') {
+    if (args.flags !== undefined) {
+      const badFlag = describeRegexFlags(args.flags)
+      if (badFlag !== null) {
+        return { ok: false, reason: `Invalid regex flags: ${badFlag}.` }
+      }
+    }
     // Refuse a structurally-unsafe pattern (catastrophic backtracking) before it is sent to the
     // renderer matcher, where a single synchronous `.test()` cannot be time-bounded by the poll.
     const unsafe = describeRegexSafety(value)
@@ -74,15 +111,23 @@ export function resolveStringMatch(args: StringPredicateArgs): StringMatchResult
       return { ok: false, reason: `Unsafe regular expression: ${unsafe}` }
     }
     try {
-      // Compile once here so a malformed pattern is BAD_ARGUMENT, not a silent
-      // renderer-side non-match.
-      new RegExp(value)
+      // Compile once here (with the flags) so a malformed pattern/flag is BAD_ARGUMENT, not a
+      // silent renderer-side non-match.
+      new RegExp(value, args.flags)
     } catch (err) {
       return {
         ok: false,
         reason: `Invalid regular expression: ${err instanceof Error ? err.message : String(err)}`,
       }
     }
+    return {
+      ok: true,
+      match: { kind: 'regex', value, ...(args.flags !== undefined ? { flags: args.flags } : {}) },
+    }
+  }
+  // flags is meaningless without a regex predicate; reject it rather than silently ignoring it.
+  if (args.flags !== undefined) {
+    return { ok: false, reason: 'flags is only valid with the regex predicate.' }
   }
   return { ok: true, match: { kind, value } }
 }
@@ -96,7 +141,8 @@ export function describeStringMatch(match: StringMatch, subject = 'text'): strin
     not_equals: 'does not equal',
     not_contains: 'does not contain',
   }
-  return `${subject} ${verb[match.kind]} ${JSON.stringify(match.value)}`
+  const flagsSuffix = match.kind === 'regex' && match.flags ? ` (flags: ${match.flags})` : ''
+  return `${subject} ${verb[match.kind]} ${JSON.stringify(match.value)}${flagsSuffix}`
 }
 
 /**
@@ -112,7 +158,7 @@ function __swMatchString(actual, m) {
     case 'not_equals': return s !== m.value;
     case 'contains': return s.indexOf(m.value) !== -1;
     case 'not_contains': return s.indexOf(m.value) === -1;
-    case 'regex': try { return new RegExp(m.value).test(s); } catch (e) { return false; }
+    case 'regex': try { return new RegExp(m.value, m.flags || '').test(s); } catch (e) { return false; }
     default: return false;
   }
 }`

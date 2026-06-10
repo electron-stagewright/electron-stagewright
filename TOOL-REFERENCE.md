@@ -440,7 +440,7 @@ Read the captured renderer console output for the session, newest-relevant entri
 
 **Assert a text or attribute pattern**
 
-Validate, in a single check (no polling), that an element's text or a named attribute matches a pattern. Target by ref or selector. With `attribute` set, reads that attribute; otherwise reads the element's trimmed text. Provide exactly one of: equals, contains, matches_regex. Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (element found but its value did not match the pattern — details carry expected + actual; a missing attribute reads as actual: null), SELECTOR_NO_MATCH (no element matched — this is one-shot, so a missing element is a precondition failure, not a retry; carries similar_refs), REF_NOT_FOUND (stale ref), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (no/multiple predicates, invalid regex, or ref+selector both/neither).
+Validate, in a single check (no polling), that an element's text or a named attribute matches a pattern. Target by ref or selector. With `attribute` set, reads that attribute; otherwise reads the element's trimmed text. Provide exactly one of: equals, contains, matches_regex. Optional flags (any of i, m, s, u) apply to matches_regex; g and y are rejected as stateful. Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (element found but its value did not match the pattern — details carry expected + actual; a missing attribute reads as actual: null), SELECTOR_NO_MATCH (no element matched — this is one-shot, so a missing element is a precondition failure, not a retry; carries similar_refs), REF_NOT_FOUND (stale ref), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (no/multiple predicates, invalid regex or flags, or ref+selector both/neither).
 
 - Operation: `query`
 
@@ -452,6 +452,7 @@ Validate, in a single check (no polling), that an element's text or a named attr
 | `equals` | string | no | The value must equal this exactly. |
 | `contains` | string | no | The value must contain this substring. |
 | `matches_regex` | string | no | The value must match this JavaScript regular expression. |
+| `flags` | string | no | Optional regex flags (any of i, m, s, u) applied to the regex predicate; g and y are rejected as stateful. Only valid alongside a regex predicate. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ### `electron_discover_running`
@@ -539,7 +540,7 @@ Assert the element identified by ref or selector matches the given state flags (
 
 **Expect element text**
 
-Assert the text of the element identified by ref or selector matches a predicate, polling until it holds or timeoutMs elapses. Provide exactly one of: equals, contains, regex, not_equals, not_contains. Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (predicate not met within timeoutMs — details carry expected + actual; retryable), REF_NOT_FOUND (stale ref; carries similar_refs), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (no/multiple predicates, invalid regex, or ref+selector both/neither).
+Assert the text of the element identified by ref or selector matches a predicate, polling until it holds or timeoutMs elapses. Provide exactly one of: equals, contains, regex, not_equals, not_contains. Optional flags (any of i, m, s, u) apply to regex; g and y are rejected as stateful. Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (predicate not met within timeoutMs — details carry expected + actual; retryable), REF_NOT_FOUND (stale ref; carries similar_refs), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (no/multiple predicates, invalid regex or flags, or ref+selector both/neither).
 
 - Operation: `query`
 
@@ -552,6 +553,7 @@ Assert the text of the element identified by ref or selector matches a predicate
 | `regex` | string | no | The text must match this JavaScript regular expression. |
 | `not_equals` | string | no | The text must NOT equal this. |
 | `not_contains` | string | no | The text must NOT contain this substring. |
+| `flags` | string | no | Optional regex flags (any of i, m, s, u) applied to the regex predicate; g and y are rejected as stateful. Only valid alongside a regex predicate. |
 | `timeoutMs` | integer | no | Max poll time in ms before EXPECTATION_FAILED (default 5000, clamped to 60000). 0 = check once. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
@@ -559,7 +561,7 @@ Assert the text of the element identified by ref or selector matches a predicate
 
 **Expect the window URL**
 
-Assert the active window's URL (location.href) satisfies a predicate, polling until it does or timeoutMs elapses. Provide exactly one of: contains (substring) or matches (JavaScript regex). Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (URL did not match within timeoutMs — details carry expected + actual; retryable), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (no/both predicates, or invalid regex).
+Assert the active window's URL (location.href) satisfies a predicate, polling until it does or timeoutMs elapses. Provide exactly one of: contains (substring) or matches (JavaScript regex). Optional flags (any of i, m, s, u) apply to matches; g and y are rejected as stateful. Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (URL did not match within timeoutMs — details carry expected + actual; retryable), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (no/both predicates, or invalid regex or flags).
 
 - Operation: `query`
 
@@ -567,6 +569,7 @@ Assert the active window's URL (location.href) satisfies a predicate, polling un
 | --- | --- | --- | --- |
 | `contains` | string | no | The URL must contain this substring. |
 | `matches` | string | no | The URL must match this JavaScript regular expression. |
+| `flags` | string | no | Optional regex flags (any of i, m, s, u) applied to the regex predicate; g and y are rejected as stateful. Only valid alongside a regex predicate. |
 | `timeoutMs` | integer | no | Max poll time in ms before EXPECTATION_FAILED (default 5000, clamped to 60000). 0 = check once. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
@@ -574,7 +577,7 @@ Assert the active window's URL (location.href) satisfies a predicate, polling un
 
 **Expect form control value**
 
-Assert the value of the element identified by ref or selector matches a predicate, polling until it holds or timeoutMs elapses. Provide exactly one of: equals, contains, regex, not_equals, not_contains. Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (predicate not met within timeoutMs — details carry expected + actual; retryable), REF_NOT_FOUND (stale ref; carries similar_refs), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (no/multiple predicates, invalid regex, or ref+selector both/neither).
+Assert the value of the element identified by ref or selector matches a predicate, polling until it holds or timeoutMs elapses. Provide exactly one of: equals, contains, regex, not_equals, not_contains. Optional flags (any of i, m, s, u) apply to regex; g and y are rejected as stateful. Returns: { ok, session_id, matched, actual }. Errors: EXPECTATION_FAILED (predicate not met within timeoutMs — details carry expected + actual; retryable), REF_NOT_FOUND (stale ref; carries similar_refs), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (no/multiple predicates, invalid regex or flags, or ref+selector both/neither).
 
 - Operation: `query`
 
@@ -587,6 +590,7 @@ Assert the value of the element identified by ref or selector matches a predicat
 | `regex` | string | no | The text must match this JavaScript regular expression. |
 | `not_equals` | string | no | The text must NOT equal this. |
 | `not_contains` | string | no | The text must NOT contain this substring. |
+| `flags` | string | no | Optional regex flags (any of i, m, s, u) applied to the regex predicate; g and y are rejected as stateful. Only valid alongside a regex predicate. |
 | `timeoutMs` | integer | no | Max poll time in ms before EXPECTATION_FAILED (default 5000, clamped to 60000). 0 = check once. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 

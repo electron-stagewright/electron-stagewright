@@ -441,6 +441,153 @@ describe('electron_assert_pattern', () => {
   })
 })
 
+describe('regex flags (safe allowlist i/m/s/u, stateful g/y rejected)', () => {
+  it('threads a safe flag through to the renderer matcher (expect_text)', async () => {
+    let seenMatch: { kind?: string; value?: string; flags?: string } | undefined
+    const { dispatcher } = setup({
+      evaluate: async (_target, body, arg) => {
+        if (typeof body === 'string' && body.includes('__swMatchString')) {
+          seenMatch = (arg as { match?: { kind?: string; value?: string; flags?: string } }).match
+        }
+        return { satisfied: true, actual: 'WELCOME' }
+      },
+    })
+    const res = (await dispatcher.dispatch('electron_expect_text', {
+      selector: '#h',
+      regex: '^welcome$',
+      flags: 'i',
+    })) as SuccessResponse & { matched: boolean }
+    expect(res.matched).toBe(true)
+    // The flag must survive into arg.match so the renderer compiles new RegExp(value, flags).
+    expect(seenMatch).toMatchObject({ kind: 'regex', value: '^welcome$', flags: 'i' })
+  })
+
+  it('accepts every safe flag combined (imsu)', async () => {
+    const { dispatcher } = setup({ evaluate: canned({ satisfied: true, actual: 'x' }) })
+    const res = (await dispatcher.dispatch('electron_expect_text', {
+      selector: '#h',
+      regex: 'x',
+      flags: 'imsu',
+    })) as SuccessResponse & { matched: boolean }
+    expect(res.matched).toBe(true)
+  })
+
+  it('rejects the stateful global flag g before any renderer round-trip', async () => {
+    let calls = 0
+    const { dispatcher } = setup({
+      evaluate: async () => {
+        calls += 1
+        return { satisfied: true, actual: '' }
+      },
+    })
+    const res = (await dispatcher.dispatch('electron_expect_text', {
+      selector: '#h',
+      regex: 'x',
+      flags: 'g',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('flag')
+    expect(calls).toBe(0)
+  })
+
+  it('rejects the sticky flag y', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_expect_text', {
+      selector: '#h',
+      regex: 'x',
+      flags: 'y',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('rejects an unknown flag', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_expect_text', {
+      selector: '#h',
+      regex: 'x',
+      flags: 'z',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('rejects a duplicate flag', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_expect_text', {
+      selector: '#h',
+      regex: 'x',
+      flags: 'ii',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('rejects flags supplied without a regex predicate', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_expect_text', {
+      selector: '#h',
+      equals: 'x',
+      flags: 'i',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('assert_pattern accepts a safe flag with matches_regex', async () => {
+    const { dispatcher } = setup({ evaluate: canned({ satisfied: true, actual: 'ABC' }) })
+    const res = (await dispatcher.dispatch('electron_assert_pattern', {
+      selector: '#x',
+      matches_regex: '^abc$',
+      flags: 'i',
+    })) as SuccessResponse & { matched: boolean }
+    expect(res.matched).toBe(true)
+  })
+
+  it('assert_pattern rejects flags without matches_regex', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_assert_pattern', {
+      selector: '#x',
+      contains: 'abc',
+      flags: 'i',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('assert_pattern rejects a stateful flag', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_assert_pattern', {
+      selector: '#x',
+      matches_regex: 'abc',
+      flags: 'g',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('expect_url accepts a safe flag with matches', async () => {
+    const { dispatcher } = setup({ evaluate: canned({ satisfied: true, actual: 'APP://X' }) })
+    const res = (await dispatcher.dispatch('electron_expect_url', {
+      matches: '^app://x$',
+      flags: 'i',
+    })) as SuccessResponse & { matched: boolean }
+    expect(res.matched).toBe(true)
+  })
+
+  it('expect_url rejects flags without matches', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_expect_url', {
+      contains: 'app',
+      flags: 'i',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('expect_url rejects a stateful flag', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_expect_url', {
+      matches: 'app',
+      flags: 'y',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+})
+
 describe('expect_* common contracts', () => {
   it('reports REF_NOT_FOUND for a stale ref before running the assertion poll', async () => {
     let pollCalls = 0
