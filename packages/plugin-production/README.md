@@ -2,12 +2,13 @@
 
 Validate a packaged **macOS** app for production readiness and get back structured results. Where
 the rest of Electron Stagewright drives a _running_ app, this plugin (ADR-012, built on the ADR-004
-plugin contract) inspects the **build artifact on disk** — is the `.app` a well-formed bundle, is it
-code-signed, will Gatekeeper accept it — the failures that only bite on a user's machine.
+plugin contract) inspects the **build artifact on disk** — is the `.app` a well-formed bundle, does
+its Info.plist identify the app, is it code-signed and notarized, will Gatekeeper accept it — the
+failures that only bite on a user's machine.
 
 One tool, `production_validate`, runs a set of checks against an app path and returns each as
 `pass`, `fail`, or `unknown`. The load-bearing distinction is **`unknown` (missing evidence)** —
-a required tool is absent, a file is missing, or the host is not macOS — versus **`fail` (verified
+a required tool is absent, a command times out, or the host is not macOS — versus **`fail` (verified
 bad)**. A green result with `unknown` checks is never silently mistaken for full verification: the
 summary discloses every category.
 
@@ -32,28 +33,35 @@ const server = await createServer({ plugins: [productionPlugin] })
 ```
 
 It needs **no `--allow-eval`** and **no running app session** — it shells out to the macOS toolchain
-(`codesign`, `spctl`) against a path on disk, not into app code.
+(`plutil`, `codesign`, `xcrun stapler`, `spctl`) against a path on disk, not into app code.
 
 ## Tool
 
 The loader namespaces the tool under the plugin name `production`:
 
 - **`production_validate`** `{ appPath, checks? }` — validate the packaged `.app` at `appPath`
-  (absolute path). `checks` optionally names a subset (`bundle-structure`, `code-signing`,
-  `notarization`, `gatekeeper`); omit to run all. Returns:
+  (absolute path). `checks` optionally names a subset (`bundle-structure`, `info-plist`,
+  `code-signing`, `notarization`, `gatekeeper`); omit to run all. Returns:
 
   ```json
   {
     "ok": true,
     "app_path": "/path/to/My.app",
     "passed": false,
-    "summary": { "pass": 1, "fail": 2, "unknown": 1 },
+    "summary": { "pass": 2, "fail": 2, "unknown": 1 },
     "checks": [
       {
         "id": "bundle-structure",
         "title": "macOS app bundle structure",
         "status": "pass",
         "detail": "…"
+      },
+      {
+        "id": "info-plist",
+        "title": "Info.plist metadata",
+        "status": "pass",
+        "detail": "…",
+        "evidence": "com.example.app v1.2.3"
       },
       {
         "id": "code-signing",
@@ -86,22 +94,21 @@ The loader namespaces the tool under the plugin name `production`:
 | id                 | What it verifies                                                        | How                                 |
 | ------------------ | ----------------------------------------------------------------------- | ----------------------------------- |
 | `bundle-structure` | The `.app` has `Contents/Info.plist` and a `Contents/MacOS/` executable | Filesystem (cross-platform)         |
+| `info-plist`       | Info.plist declares the required identity fields                        | `plutil -convert json`              |
 | `code-signing`     | The signature is present and valid                                      | `codesign --verify --deep --strict` |
 | `notarization`     | A valid notarization ticket is stapled to the bundle                    | `xcrun stapler validate`            |
 | `gatekeeper`       | Gatekeeper will accept the app for execution                            | `spctl --assess --type execute`     |
 
-Forthcoming: updater feeds, custom protocol schemes, crash-reporter configuration, and field-level
-`Info.plist` checks (bundle id / version).
+Forthcoming: updater feeds, custom protocol schemes, and crash-reporter configuration.
 
 ## Platform
 
 macOS is the first-class target — that is where signing/notarization pain lives. On a non-macOS
-host the `codesign` / `xcrun stapler` / `spctl` checks report `unknown` (the tools are absent), not
-`fail`; the bundle-structure check still runs everywhere. Notarization is also `unknown` on macOS
-when the developer toolchain is incomplete — `xcrun` runs but cannot find `stapler`, or
-`xcode-select` points at an invalid path — since the ticket cannot be verified. Each external
-command is timeout-bounded
-(`commandTimeoutMs`) so a hung tool cannot wedge the call.
+host the `codesign` / `xcrun stapler` / `spctl` / `plutil` checks report `unknown` (the tools are
+absent), not `fail`; only the pure-filesystem bundle-structure check runs everywhere. Notarization
+is also `unknown` on macOS when the developer toolchain is incomplete — `xcrun` runs but cannot find
+`stapler`, or `xcode-select` points at an invalid path — since the ticket cannot be verified. Each
+external command is timeout-bounded (`commandTimeoutMs`) so a hung tool cannot wedge the call.
 
 `xcrun stapler validate` inspects the notarization ticket **embedded** in the bundle and needs no
 network, so a notarization `fail` is authoritative — the ticket is genuinely missing or invalid,

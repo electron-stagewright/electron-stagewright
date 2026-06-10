@@ -2,16 +2,17 @@
  * `@electron-stagewright/plugin-production` — validate a packaged macOS app for production
  * readiness (ADR-012, built on the ADR-004 plugin contract). Where the rest of Stagewright drives
  * a running app, this plugin inspects the BUILD ARTIFACT on disk: is the `.app` a well-formed
- * bundle, is it code-signed, is it notarized, will Gatekeeper accept it.
+ * bundle, does its Info.plist declare valid identity fields, is it code-signed, is it notarized,
+ * will Gatekeeper accept it.
  *
  * The single tool `production_validate` runs a set of checks against an `appPath` and returns
  * STRUCTURED results — each a `pass` / `fail` / `unknown` — where the load-bearing distinction is
- * `unknown` (missing evidence: a CLI absent, a file missing, a non-macOS host) versus `fail`
+ * `unknown` (missing evidence: a CLI absent, a command timeout, a non-macOS host) versus `fail`
  * (verified bad). The tool envelope is `ok: true` whenever validation RAN; the app's own verdict
  * is the `passed` field (no failed checks). Only a bad input (no app at `appPath`) is a tool error.
  *
- * It shells out to the macOS toolchain (`codesign`, `xcrun stapler`, `spctl`) rather than evaluating
- * app code, so it needs no `--allow-eval` and no running session — but every spawn is
+ * It shells out to the macOS toolchain (`codesign`, `xcrun stapler`, `spctl`, `plutil`) rather than
+ * evaluating app code, so it needs no `--allow-eval` and no running session — but every spawn is
  * timeout-bounded. On a non-macOS host those tools are absent, so their checks report `unknown`, not
  * `fail`. macOS is the first-class target; other OSes are reported as unverifiable.
  *
@@ -45,7 +46,7 @@ const configSchema = z.object({
     .positive()
     .default(10_000)
     .describe(
-      'Timeout (ms) for each external validation command (codesign, xcrun stapler, spctl).',
+      'Timeout (ms) for each external validation command (codesign, xcrun stapler, spctl, plutil).',
     ),
 })
 
@@ -64,11 +65,13 @@ const validateTool: AnyToolDefinition = defineTool({
   title: 'Validate a packaged macOS app',
   description: [
     'Validate a packaged macOS .app for production readiness and return structured results. Runs,',
-    'by default, four checks — bundle-structure (a well-formed Contents/Info.plist + Contents/MacOS',
-    'executable), code-signing (codesign --verify --deep --strict), notarization (a notarization',
-    'ticket stapled to the bundle, via xcrun stapler validate), and gatekeeper (spctl --assess) — or',
-    'the subset named in checks. Each result is pass (verified good), fail (verified bad, with',
-    'next_actions), or unknown (could not verify — a macOS tool is absent, e.g. on a non-macOS host).',
+    'by default, five checks — bundle-structure (a well-formed Contents/Info.plist + Contents/MacOS',
+    'executable), info-plist (Info.plist declares CFBundleIdentifier / CFBundleShortVersionString /',
+    'CFBundleExecutable, via plutil), code-signing (codesign --verify --deep --strict), notarization',
+    '(a notarization ticket stapled to the bundle, via xcrun stapler validate), and gatekeeper',
+    '(spctl --assess) — or the subset named in checks. Each result is pass (verified good), fail',
+    '(verified bad, with next_actions), or unknown (could not verify — a macOS tool is absent, e.g.',
+    'on a non-macOS host).',
     'Returns: { ok, app_path, passed, summary: { pass, fail, unknown }, checks }, where passed is',
     'true when no check failed (unknown checks do not fail it but are reported). Errors:',
     'ABSOLUTE_PATH_REQUIRED (relative appPath), production.APP_NOT_FOUND (no file/dir at appPath),',
@@ -85,7 +88,7 @@ const validateTool: AnyToolDefinition = defineTool({
       .min(1)
       .optional()
       .describe(
-        'Subset of checks to run by id; omit to run all (bundle-structure, code-signing, notarization, gatekeeper).',
+        'Subset of checks to run by id; omit to run all (bundle-structure, info-plist, code-signing, notarization, gatekeeper).',
       ),
   }),
   operationType: 'query',
