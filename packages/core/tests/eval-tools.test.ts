@@ -71,13 +71,24 @@ describe('eval-tool gating (default-deny)', () => {
     expect(names).toContain('electron_eval_renderer')
   })
 
-  it('dispatching a hidden eval tool is an unknown-tool error, never reaching the validator', async () => {
+  it('dispatching a hidden eval tool is a BAD_ARGUMENT that names the gate (not a bare unknown-tool)', async () => {
     const { dispatcher } = setup({ allowEval: false })
     const res = (await dispatcher.dispatch('electron_eval_main', {
       code: '1 + 1',
     })) as ErrorResponse
+    // The handler/validator is never reached; the dispatcher reports the missing tool. The message
+    // distinguishes an intentionally-gated tool from a typo so the caller can recover deliberately.
+    expect(res).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(res.error).toContain('--allow-eval')
+    expect(res.next_actions?.length ?? 0).toBeGreaterThan(0)
+  })
+
+  it('reports a genuinely unknown tool as a plain unknown-tool error (no gate mention)', async () => {
+    const { dispatcher } = setup({ allowEval: false })
+    const res = (await dispatcher.dispatch('electron_not_a_real_tool', {})) as ErrorResponse
     expect(res).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
     expect(res.error).toContain('Unknown tool')
+    expect(res.error).not.toContain('--allow-eval')
   })
 })
 

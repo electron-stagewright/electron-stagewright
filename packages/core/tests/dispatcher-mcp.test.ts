@@ -28,6 +28,15 @@ const echoTool = defineTool({
     makeSuccess({ echo: args.value }, { startedAt: ctx.startedAt, now: ctx.now }),
 })
 
+const dangerTool = defineTool({
+  name: 'test_danger',
+  description: 'A mutating, destructive tool. Errors: none.',
+  inputSchema: z.object({}),
+  operationType: 'command',
+  annotations: { destructiveHint: true },
+  handler: async (_args, ctx) => makeSuccess({}, { startedAt: ctx.startedAt, now: ctx.now }),
+})
+
 const closers: Array<() => Promise<void>> = []
 afterEach(async () => {
   while (closers.length > 0)
@@ -84,6 +93,35 @@ describe('dispatcher MCP binding', () => {
     })) as CallToolResult
     expect(result.isError).toBeFalsy()
     expect(envelopeOf(result)).toMatchObject({ ok: true, echo: 'hi' })
+  })
+
+  it('surfaces MCP tool annotations derived from the operation type (readOnly / destructive)', async () => {
+    const client = await connectClient([echoTool, dangerTool])
+    const { tools } = await client.listTools()
+    const echo = tools.find((t) => t.name === 'test_echo')
+    const danger = tools.find((t) => t.name === 'test_danger')
+    // A query tool is read-only and closed-world.
+    expect(echo?.annotations?.readOnlyHint).toBe(true)
+    expect(echo?.annotations?.openWorldHint).toBe(false)
+    // A command tool is not read-only; its destructive override is surfaced.
+    expect(danger?.annotations?.readOnlyHint).toBe(false)
+    expect(danger?.annotations?.destructiveHint).toBe(true)
+  })
+
+  it('returns the envelope as structuredContent as well as a text block', async () => {
+    const client = await connectClient([echoTool])
+    const result = (await client.callTool({
+      name: 'test_echo',
+      arguments: { value: 'hi' },
+    })) as CallToolResult
+    expect(result.structuredContent).toMatchObject({ ok: true, echo: 'hi' })
+    // The text block is still present (backwards compatibility / non-structured clients).
+    expect(envelopeOf(result)).toMatchObject({ ok: true, echo: 'hi' })
+  })
+
+  it('rejects a tools/list cursor with an Invalid params protocol error (not silent re-listing)', async () => {
+    const client = await connectClient([echoTool])
+    await expect(client.listTools({ cursor: 'not-a-real-cursor' })).rejects.toThrow()
   })
 
   it('returns a BAD_ARGUMENT envelope (not a raw -32602) for invalid arguments', async () => {

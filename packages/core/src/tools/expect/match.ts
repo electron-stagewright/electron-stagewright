@@ -10,6 +10,8 @@
 
 import { z } from 'zod'
 
+import { MAX_USER_REGEX_LENGTH, describeRegexSafety } from '../regex-safety.js'
+
 /** A validated string-comparison predicate — exactly one variant is populated. */
 export type StringMatch =
   | { readonly kind: 'equals'; readonly value: string }
@@ -22,7 +24,11 @@ export type StringMatch =
 export const stringPredicateFields = {
   equals: z.string().optional().describe('The text must equal this exactly.'),
   contains: z.string().optional().describe('The text must contain this substring.'),
-  regex: z.string().optional().describe('The text must match this JavaScript regular expression.'),
+  regex: z
+    .string()
+    .max(MAX_USER_REGEX_LENGTH)
+    .optional()
+    .describe('The text must match this JavaScript regular expression.'),
   not_equals: z.string().optional().describe('The text must NOT equal this.'),
   not_contains: z.string().optional().describe('The text must NOT contain this substring.'),
 }
@@ -61,6 +67,12 @@ export function resolveStringMatch(args: StringPredicateArgs): StringMatchResult
   const kind = present[0] as StringMatch['kind']
   const value = args[kind] as string
   if (kind === 'regex') {
+    // Refuse a structurally-unsafe pattern (catastrophic backtracking) before it is sent to the
+    // renderer matcher, where a single synchronous `.test()` cannot be time-bounded by the poll.
+    const unsafe = describeRegexSafety(value)
+    if (unsafe !== null) {
+      return { ok: false, reason: `Unsafe regular expression: ${unsafe}` }
+    }
     try {
       // Compile once here so a malformed pattern is BAD_ARGUMENT, not a silent
       // renderer-side non-match.

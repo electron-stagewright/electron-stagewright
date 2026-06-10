@@ -35,6 +35,8 @@ export const stopTool: AnyToolDefinition = defineTool({
   ].join(' '),
   inputSchema: sessionOnly,
   operationType: 'command',
+  // Ends the session and closes the app — a destructive, non-undoable action.
+  annotations: { destructiveHint: true },
   handler: async (args, ctx) => {
     const managed = ctx.sessions.resolve(args.sessionId)
     try {
@@ -60,6 +62,8 @@ export const forceKillTool: AnyToolDefinition = defineTool({
   ].join(' '),
   inputSchema: sessionOnly,
   operationType: 'command',
+  // SIGKILLs the app and releases the session — destructive and non-undoable.
+  annotations: { destructiveHint: true },
   handler: async (args, ctx) => {
     const managed = ctx.sessions.resolve(args.sessionId)
     try {

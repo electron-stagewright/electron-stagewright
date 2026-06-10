@@ -8,6 +8,7 @@
 
 import { z } from 'zod'
 
+import { MAX_USER_REGEX_LENGTH, describeRegexSafety } from '../regex-safety.js'
 import { sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { type WaitRaw, clampWaitTimeout, runWait } from '../wait/poll.js'
@@ -30,6 +31,7 @@ export const expectUrlTool: AnyToolDefinition = defineTool({
     contains: z.string().optional().describe('The URL must contain this substring.'),
     matches: z
       .string()
+      .max(MAX_USER_REGEX_LENGTH)
       .optional()
       .describe('The URL must match this JavaScript regular expression.'),
     timeoutMs: expectTimeoutField,
@@ -45,6 +47,10 @@ export const expectUrlTool: AnyToolDefinition = defineTool({
       match = { kind: 'contains', value: args.contains }
     } else {
       const pattern = args.matches as string
+      const unsafe = describeRegexSafety(pattern)
+      if (unsafe !== null) {
+        return expectBadArgument(ctx, args.sessionId, `Unsafe regular expression: ${unsafe}`)
+      }
       try {
         new RegExp(pattern)
       } catch (err) {

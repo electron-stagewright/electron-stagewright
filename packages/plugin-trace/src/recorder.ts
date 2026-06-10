@@ -14,7 +14,7 @@
  * @module
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { DispatchRecord } from '@electron-stagewright/core'
@@ -343,8 +343,28 @@ export interface ParsedTrace {
   readonly calls: readonly TraceCallRecord[]
 }
 
-/** Read + parse a JSONL trace artifact. Throws (ENOENT) when the file does not exist. */
+/**
+ * Max trace-artifact size (bytes) {@link readTrace} will load. The `path` is supplied by the
+ * (untrusted) client, so the read is bounded BEFORE pulling bytes into memory: a non-regular file
+ * (e.g. `/dev/zero`) or an absurdly large artifact would otherwise accumulate unbounded memory —
+ * and because the dispatch operation-timeout ABANDONS rather than cancels, the read would keep
+ * consuming memory after the tool gave up. Far above any real trace.
+ */
+const MAX_TRACE_FILE_BYTES = 64 * 1024 * 1024
+
+/**
+ * Read + parse a JSONL trace artifact. A missing file surfaces ENOENT from `stat` (classified as
+ * `trace.ARTIFACT_NOT_FOUND` upstream); a non-regular or oversize file, or a structurally-malformed
+ * record, throws (classified as `trace.ARTIFACT_INVALID`).
+ */
 export async function readTrace(filePath: string): Promise<ParsedTrace> {
+  const info = await stat(filePath)
+  if (!info.isFile()) {
+    throw new Error('Trace path is not a regular file')
+  }
+  if (info.size > MAX_TRACE_FILE_BYTES) {
+    throw new Error(`Trace file is too large (${info.size} > ${MAX_TRACE_FILE_BYTES} bytes)`)
+  }
   const text = await readFile(filePath, 'utf8')
   const calls: TraceCallRecord[] = []
   let meta: TraceMetaRecord | undefined
@@ -356,8 +376,16 @@ export async function readTrace(filePath: string): Promise<ParsedTrace> {
       throw new Error('Invalid trace record: missing kind')
     }
     if (rec.kind === 'meta') meta = rec as TraceMetaRecord
-    else if (rec.kind === 'call') calls.push(rec as TraceCallRecord)
-    else throw new Error(`Invalid trace record kind: ${String(rec.kind)}`)
+    else if (rec.kind === 'call') {
+      // A call record drives a re-dispatch by `tool`; reject a record whose tool is missing or not a
+      // string here, so a malformed artifact fails as a classified ARTIFACT_INVALID rather than a
+      // TypeError deep inside replay (the path content is untrusted).
+      const tool = (rec as { readonly tool?: unknown }).tool
+      if (typeof tool !== 'string' || tool === '') {
+        throw new Error('Invalid trace call record: missing tool name')
+      }
+      calls.push(rec as TraceCallRecord)
+    } else throw new Error(`Invalid trace record kind: ${String(rec.kind)}`)
   }
   return meta !== undefined ? { meta, calls } : { calls }
 }

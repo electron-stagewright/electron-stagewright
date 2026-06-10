@@ -9,6 +9,7 @@
 
 import { z } from 'zod'
 
+import { MAX_USER_REGEX_LENGTH, describeRegexSafety } from '../regex-safety.js'
 import { refField, selectorField, sessionIdField } from '../schema.js'
 import { resolveTarget } from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -37,6 +38,10 @@ function resolvePatternMatch(args: {
   if (args.contains !== undefined)
     return { ok: true, match: { kind: 'contains', value: args.contains } }
   const pattern = args.matches_regex as string
+  const unsafe = describeRegexSafety(pattern)
+  if (unsafe !== null) {
+    return { ok: false, reason: `Unsafe regular expression: ${unsafe}` }
+  }
   try {
     new RegExp(pattern)
   } catch (err) {
@@ -74,6 +79,7 @@ export const assertPatternTool: AnyToolDefinition = defineTool({
     contains: z.string().optional().describe('The value must contain this substring.'),
     matches_regex: z
       .string()
+      .max(MAX_USER_REGEX_LENGTH)
       .optional()
       .describe('The value must match this JavaScript regular expression.'),
     sessionId: sessionIdField,

@@ -62,6 +62,11 @@ export interface CreateServerOptions {
   readonly transports?: TransportRegistry
   /** Default directory the screenshot tool writes into; relative paths resolve at startup. */
   readonly screenshotDir?: string
+  /**
+   * Optional root directory `electron_launch`'s `main` / `executablePath` / `cwd` are confined to.
+   * Unset means no confinement (paths may be anywhere). Resolved to an absolute path at startup.
+   */
+  readonly appRoot?: string
   /** Clock injection for deterministic timing in tests. */
   readonly now?: () => number
   /**
@@ -112,6 +117,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     logger,
     allowEval: opts.allowEval ?? false,
     ...(opts.screenshotDir !== undefined ? { screenshotDir: opts.screenshotDir } : {}),
+    ...(opts.appRoot !== undefined ? { appRoot: opts.appRoot } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     ...(opts.operationTimeoutMs !== undefined
       ? { operationTimeoutMs: opts.operationTimeoutMs }
@@ -170,7 +176,19 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
   // plugins are loaded, before any transport connects.
   const mcp = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: { listChanged: false } } },
+    {
+      capabilities: { tools: { listChanged: false } },
+      // Surfaced in InitializeResult so a host can prime the model with the cross-tool conventions
+      // every tool would otherwise re-teach — the protocol-native channel for ADR-007's agent-UX rules.
+      instructions: [
+        'Every tool returns a JSON envelope discriminated by `ok`. On failure, branch on the stable',
+        '`code` (not the prose `error`); `retryable` says whether retrying may help and `next_actions`',
+        'suggests the recovery call. Start a session with electron_launch (or electron_attach), then',
+        'thread the returned `session_id` through every later call, and end it with electron_stop.',
+        'Read state with electron_snapshot / electron_find and assert with the expect_* family. The',
+        'electron_eval_* tools appear only when the server was started with --allow-eval.',
+      ].join(' '),
+    },
   )
   dispatcher.bindToMcpServer(mcp)
 

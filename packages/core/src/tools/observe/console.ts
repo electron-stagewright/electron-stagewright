@@ -11,6 +11,7 @@ import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import type { ConsoleEntry } from '../../transports/index.js'
+import { MAX_USER_REGEX_LENGTH, describeRegexSafety } from '../regex-safety.js'
 import { sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 
@@ -18,6 +19,12 @@ import { type AnyToolDefinition, defineTool } from '../types.js'
 const DEFAULT_LIMIT = 200
 /** Hard ceiling on `limit`. */
 const MAX_LIMIT = 1000
+/**
+ * Cap (chars) on the text each entry contributes to the `match` regex test. The `match` pattern is
+ * client-supplied and runs on the SERVER event loop, so the per-entry input is bounded as a second
+ * layer behind {@link describeRegexSafety} — a runaway match cannot scale with one huge log line.
+ */
+const MAX_MATCH_INPUT_CHARS = 20_000
 
 const DESCRIPTION = [
   'Read the captured renderer console output for the session, newest-relevant entries last.',
@@ -39,7 +46,11 @@ export const consoleLogsTool: AnyToolDefinition = defineTool({
       .union([z.string(), z.array(z.string()).min(1)])
       .optional()
       .describe('Console level(s) to include, e.g. "error" or ["warning", "error"].'),
-    match: z.string().optional().describe('Regular expression the entry text must match.'),
+    match: z
+      .string()
+      .max(MAX_USER_REGEX_LENGTH)
+      .optional()
+      .describe('Regular expression the entry text must match.'),
     since: z
       .number()
       .int()
@@ -64,6 +75,17 @@ export const consoleLogsTool: AnyToolDefinition = defineTool({
 
     let matcher: RegExp | undefined
     if (args.match !== undefined) {
+      // The pattern is client-supplied and is tested on the SERVER event loop (not the renderer),
+      // so a catastrophic-backtracking pattern would freeze the protocol channel with no way for
+      // the operation-timeout backstop to fire. Refuse a structurally-unsafe pattern before
+      // compiling it; the matcher additionally only ever sees a length-capped slice of each entry.
+      const unsafe = describeRegexSafety(args.match)
+      if (unsafe !== null) {
+        return makeError('BAD_ARGUMENT', {
+          ...meta,
+          message: `Unsafe match regular expression: ${unsafe}.`,
+        })
+      }
       try {
         matcher = new RegExp(args.match)
       } catch (err) {
@@ -79,7 +101,7 @@ export const consoleLogsTool: AnyToolDefinition = defineTool({
     const filtered = entries.filter(
       (entry: ConsoleEntry) =>
         (types === undefined || types.has(entry.type)) &&
-        (matcher === undefined || matcher.test(entry.text)) &&
+        (matcher === undefined || matcher.test(entry.text.slice(0, MAX_MATCH_INPUT_CHARS))) &&
         (args.since === undefined || entry.timestamp >= args.since),
     )
     const limit = args.limit ?? DEFAULT_LIMIT

@@ -11,6 +11,10 @@
  *   off). When disabled, eval-classified tools are omitted from `tools/list`.
  * - `--screenshot-dir <path>` — directory the screenshot tool writes captures
  *   into when no explicit path is given (default: the OS temp dir).
+ * - `--app-root <path>` — confine `electron_launch`'s `main` / `executablePath` / `cwd` to within
+ *   this directory (default: unset = no confinement). An opt-in allowlist: with it set, a tool call
+ *   cannot spawn an arbitrary host binary or run arbitrary JS as the app main from outside the
+ *   project root. Launching the app within the root is unaffected.
  * - `--plugin <name|path>` — load a plugin by package name or file path (ADR-004).
  *   Repeatable, and a single value may be comma-separated. Loaded explicitly; the
  *   server never auto-scans. An unresolvable plugin aborts startup.
@@ -37,6 +41,8 @@ import { StderrLogger } from './server/logger.js'
 interface CliOptions {
   readonly allowEval: boolean
   readonly screenshotDir?: string
+  /** Optional root directory `electron_launch` paths are confined to (`--app-root`). */
+  readonly appRoot?: string
   /** Plugin specs to load (package names or file paths), in order. */
   readonly pluginSpecs: readonly string[]
   /** Per-plugin config parsed from `--plugin-config <name>=<json>`, keyed by plugin name. */
@@ -103,6 +109,7 @@ function parseOperationTimeout(raw: string | undefined): number | undefined {
 /** Parse the supported flags from argv (excluding `node` and the script path). */
 export function parseCliArgs(argv: readonly string[]): CliOptions {
   const screenshotDir = readFlagValue(argv, '--screenshot-dir')
+  const appRoot = readFlagValue(argv, '--app-root')
   const operationTimeoutMs = parseOperationTimeout(readFlagValue(argv, '--operation-timeout-ms'))
   // `--plugin` is repeatable and each value may be comma-separated.
   const pluginSpecs = readFlagValues(argv, '--plugin')
@@ -112,6 +119,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
   return {
     allowEval: argv.includes('--allow-eval'),
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
+    ...(appRoot !== undefined ? { appRoot } : {}),
     ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
     pluginSpecs,
     pluginConfigs: parsePluginConfigs(argv),
@@ -119,9 +127,8 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
 }
 
 async function main(): Promise<void> {
-  const { allowEval, screenshotDir, pluginSpecs, pluginConfigs, operationTimeoutMs } = parseCliArgs(
-    process.argv.slice(2),
-  )
+  const { allowEval, screenshotDir, appRoot, pluginSpecs, pluginConfigs, operationTimeoutMs } =
+    parseCliArgs(process.argv.slice(2))
   const logger = new StderrLogger({ level: 'info' })
 
   // Resolve plugins before assembling the server. An unresolvable plugin throws (a
@@ -135,6 +142,7 @@ async function main(): Promise<void> {
     allowEval,
     logger,
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
+    ...(appRoot !== undefined ? { appRoot } : {}),
     ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
     ...(plugins.length > 0 ? { plugins } : {}),
     ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),

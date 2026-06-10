@@ -44,6 +44,24 @@ function pressOptionsFor(args: {
 /** Short settle delay before checking whether editor text visibly changed. */
 const EDITOR_TYPE_SETTLE_MS = 10
 
+/**
+ * Cap on a value set in one operation (`electron_type` uses `fill`, a single assignment). Generous
+ * — accommodates pasting a large value — while bounding the argument payload.
+ */
+const MAX_TYPE_TEXT_LENGTH = 100_000
+
+/**
+ * Cap on text typed as REAL per-character keystrokes (`electron_keyboard_type`,
+ * `electron_type_into_editor`). Each character is a separate transport round-trip, so an unbounded
+ * string is an unbounded loop the operation-timeout cannot cancel (it abandons, not cancels). 10k
+ * is far beyond any realistic keystroke-by-keystroke entry while bounding that loop.
+ */
+const MAX_KEYSTROKE_TEXT_LENGTH = 10_000
+
+/** Cap on keys in one press sequence — one transport round-trip per key. Matches the other
+ *  collection caps (set_files 20, computed-style 50, discover ports 64). */
+const MAX_KEY_SEQUENCE = 100
+
 /** Renderer body returning a visible editor area's text signature, or null if it cannot be read. */
 const EDITOR_SIGNATURE_BODY = `
 const settleMs = typeof arg.settleMs === 'number' ? arg.settleMs : 0;
@@ -104,7 +122,7 @@ export const typeTool: AnyToolDefinition = defineTool({
   inputSchema: z.object({
     ref: refField,
     selector: selectorField,
-    text: z.string().describe('The text to set as the element value.'),
+    text: z.string().max(MAX_TYPE_TEXT_LENGTH).describe('The text to set as the element value.'),
     force: forceField,
     timeoutMs: timeoutField,
     sessionId: sessionIdField,
@@ -135,7 +153,10 @@ export const keyboardTypeTool: AnyToolDefinition = defineTool({
   inputSchema: z.object({
     ref: refField,
     selector: selectorField,
-    text: z.string().describe('The text to type, character by character.'),
+    text: z
+      .string()
+      .max(MAX_KEYSTROKE_TEXT_LENGTH)
+      .describe('The text to type, character by character.'),
     force: forceField,
     timeoutMs: timeoutField,
     sessionId: sessionIdField,
@@ -163,7 +184,10 @@ export const typeIntoEditorTool: AnyToolDefinition = defineTool({
   inputSchema: z.object({
     ref: refField,
     selector: selectorField,
-    text: z.string().describe('The text to type into the focused editor.'),
+    text: z
+      .string()
+      .max(MAX_KEYSTROKE_TEXT_LENGTH)
+      .describe('The text to type into the focused editor.'),
     timeoutMs: timeoutField,
     sessionId: sessionIdField,
   }),
@@ -223,7 +247,11 @@ export const pressSequenceTool: AnyToolDefinition = defineTool({
   inputSchema: z.object({
     ref: refField,
     selector: selectorField,
-    keys: z.array(z.string()).min(1).describe('Ordered keys/chords to press.'),
+    keys: z
+      .array(z.string())
+      .min(1)
+      .max(MAX_KEY_SEQUENCE)
+      .describe('Ordered keys/chords to press.'),
     force: forceField,
     timeoutMs: timeoutField,
     sessionId: sessionIdField,

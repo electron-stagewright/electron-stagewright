@@ -93,6 +93,25 @@ describe('electron_console_logs', () => {
     expect(res.code).toBe('BAD_ARGUMENT')
   })
 
+  it('rejects a catastrophic-backtracking match regex before running it (ReDoS guard)', async () => {
+    const { dispatcher } = setup()
+    // This pattern compiles fine but backtracks exponentially; the matcher runs on the SERVER
+    // event loop, so it must be refused at validation time, not executed.
+    const res = (await dispatcher.dispatch('electron_console_logs', {
+      match: '(a+)+$',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('Unsafe match')
+  })
+
+  it('rejects an over-long match regex with BAD_ARGUMENT', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_console_logs', {
+      match: 'a'.repeat(1001),
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
   it('requires a running session', async () => {
     const sessions = new SessionManager()
     const dispatcher = new Dispatcher({ sessions })

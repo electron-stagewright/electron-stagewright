@@ -123,6 +123,12 @@ export interface ToolContext {
    */
   readonly screenshotDir?: string | undefined
   /**
+   * Root directory `electron_launch`'s `main` / `executablePath` / `cwd` must resolve within, when
+   * the operator configured `--app-root`. Already resolved to an absolute path; `undefined` means no
+   * confinement (launch paths may be anywhere).
+   */
+  readonly appRoot?: string | undefined
+  /**
    * Epoch-ms timestamp captured by the dispatcher when the call began. Pass it
    * (with {@link ToolContext.now}) to `makeSuccess` / `makeError` so the
    * response's `_meta.elapsed_ms` reflects the whole dispatch, not just the
@@ -190,6 +196,22 @@ export type ToolHandler<Shape extends z.ZodRawShape> = (
 ) => Promise<ToolResult>
 
 /**
+ * MCP tool behaviour hints (spec `ToolAnnotations`, protocol 2025-03-26+). Advisory metadata an
+ * MCP host uses to decide e.g. whether to prompt for confirmation: `readOnlyHint` marks a tool that
+ * does not modify its environment, `destructiveHint` a tool whose change is hard to undo,
+ * `idempotentHint` a repeatable-without-extra-effect tool, `openWorldHint` a tool reaching an
+ * unbounded external world. The dispatcher derives sensible defaults from {@link OperationType};
+ * a tool may override any field via {@link ToolDefinition.annotations}.
+ */
+export interface ToolAnnotations {
+  readonly title?: string
+  readonly readOnlyHint?: boolean
+  readonly destructiveHint?: boolean
+  readonly idempotentHint?: boolean
+  readonly openWorldHint?: boolean
+}
+
+/**
  * The contract every tool is expressed in.
  *
  * @typeParam Shape - the Zod raw shape of the tool's input object. Defaults to
@@ -231,6 +253,12 @@ export interface ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> {
    * false.
    */
   readonly requiresEvalFlag?: boolean
+  /**
+   * Optional MCP behaviour hints surfaced in `tools/list`. Each field overrides the
+   * dispatcher's {@link OperationType}-derived default (e.g. a `command` tool that is destructive
+   * sets `destructiveHint: true`). See {@link ToolAnnotations}.
+   */
+  readonly annotations?: ToolAnnotations
   /** The work the tool performs. See {@link ToolHandler}. */
   readonly handler: ToolHandler<Shape>
 }
@@ -253,6 +281,7 @@ export interface AnyToolDefinition {
   readonly inputSchema: z.ZodObject
   readonly operationType: OperationType
   readonly requiresEvalFlag?: boolean
+  readonly annotations?: ToolAnnotations
   readonly handler: (args: unknown, ctx: ToolContext) => Promise<ToolResult>
 }
 
@@ -273,6 +302,7 @@ export function defineTool<Shape extends z.ZodRawShape>(
     inputSchema: def.inputSchema,
     operationType: def.operationType,
     ...(def.requiresEvalFlag !== undefined ? { requiresEvalFlag: def.requiresEvalFlag } : {}),
+    ...(def.annotations !== undefined ? { annotations: def.annotations } : {}),
     handler: (args, ctx) => def.handler(args as z.infer<z.ZodObject<Shape>>, ctx),
   }
 }

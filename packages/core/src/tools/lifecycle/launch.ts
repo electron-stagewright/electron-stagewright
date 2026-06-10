@@ -11,7 +11,7 @@
  */
 
 import { existsSync } from 'node:fs'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, relative, resolve } from 'node:path'
 
 import { z } from 'zod'
 
@@ -24,6 +24,42 @@ import { registerWithWindows } from './session-init.js'
 
 /** Default budget for the post-launch renderer-ready wait (ms). */
 const DEFAULT_READY_TIMEOUT_MS = 5000
+
+/**
+ * Upper bound on concurrently-live sessions. Each launch spawns a real Electron process tree
+ * (a parent plus heavyweight Chromium children), so without a cap a client looping
+ * `electron_launch({ allowMultiple: true })` could exhaust host memory/PIDs. The limit is
+ * deliberately generous — far above any realistic driving workload on a single server — so it
+ * only ever stops a runaway loop, never a legitimate use.
+ */
+const MAX_CONCURRENT_SESSIONS = 16
+
+/**
+ * Environment variables the agent must not set on the spawned process. The `env` arg is hostile
+ * tool input, and these keys reprogram the runtime loader/interpreter — turning "launch my Electron
+ * app" into arbitrary host code execution OUTSIDE the renderer/main sandbox:
+ * `ELECTRON_RUN_AS_NODE` makes the Electron binary run as a bare Node interpreter; `NODE_OPTIONS`
+ * (and `NODE_REPL_EXTERNAL_MODULE`) force-load a module at startup; `LD_*` / `DYLD_*` inject native
+ * libraries. A launch that legitimately drives the developer's app never needs them, so a request
+ * setting one is refused with `BAD_ARGUMENT` rather than silently stripped.
+ */
+const DENIED_ENV_KEYS: ReadonlySet<string> = new Set([
+  'ELECTRON_RUN_AS_NODE',
+  'NODE_OPTIONS',
+  'NODE_REPL_EXTERNAL_MODULE',
+])
+
+/** Whether an agent-supplied env key reprograms the loader/interpreter and must be refused. */
+function isDeniedEnvKey(key: string): boolean {
+  const upper = key.toUpperCase()
+  return DENIED_ENV_KEYS.has(upper) || upper.startsWith('LD_') || upper.startsWith('DYLD_')
+}
+
+/** Whether `candidate` resolves inside `root` — blocks `..` escape out of an `--app-root` confinement. */
+function isWithinRoot(root: string, candidate: string): boolean {
+  const rel = relative(root, resolve(candidate))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
 
 /**
  * Renderer-evaluable, self-bounded poll: resolve as soon as the document has finished its
@@ -120,9 +156,11 @@ const DESCRIPTION = [
   'snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed',
   'in time (the session is still usable — retry the read, or wait_for_selector on an expected element).',
   'By default refuses a second launch while a session is live (pass allowMultiple: true to override).',
-  'Errors: ALREADY_RUNNING (a session is live — stop it or pass allowMultiple; not retryable),',
-  'ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not retryable), BAD_ARGUMENT (neither main',
-  'nor executablePath given), SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable),',
+  'Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one',
+  'or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not',
+  'retryable), BAD_ARGUMENT (neither main nor executablePath given; a runtime-altering env var like',
+  'NODE_OPTIONS; or, when the server set --app-root, a main/executablePath/cwd outside that root),',
+  'SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable),',
   'LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).',
 ].join(' ')
 
@@ -192,14 +230,53 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           next_actions: ['electron_stop()', 'electron_launch({ allowMultiple: true })'],
         })
       }
+      // Hard cap on concurrent sessions — a backstop against an allowMultiple launch loop
+      // exhausting the host. allowMultiple bypasses the single-instance guard above, but not this.
+      if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+        return makeError('ALREADY_RUNNING', {
+          ...meta,
+          message: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached; stop a session before launching another.`,
+          next_actions: ['electron_stop({ sessionId })'],
+        })
+      }
       if (args.main === undefined && args.executablePath === undefined) {
         return makeError('BAD_ARGUMENT', {
           ...meta,
           message: 'Provide main (the app entry) or executablePath.',
         })
       }
+      if (args.env !== undefined) {
+        const denied = Object.keys(args.env).filter(isDeniedEnvKey)
+        if (denied.length > 0) {
+          return makeError('BAD_ARGUMENT', {
+            ...meta,
+            message: `env may not set runtime-altering variables (${denied.join(', ')}); they can execute code outside the app sandbox and are refused.`,
+            details: { denied_env_keys: denied },
+          })
+        }
+      }
       // Preflight throws a registered error the dispatcher maps to an envelope.
       preflight(args.main, args.executablePath, fileExists)
+
+      // When the operator configured --app-root, confine the launch surface to it: main and
+      // executablePath both run code (a main.js as the Electron main process, or an arbitrary
+      // binary), so an out-of-root path is how a hostile tool call would escape the project into
+      // arbitrary host execution. cwd is confined too. Without --app-root, paths are unconstrained.
+      if (ctx.appRoot !== undefined) {
+        for (const [label, value] of [
+          ['main', args.main],
+          ['executablePath', args.executablePath],
+          ['cwd', args.cwd],
+        ] as const) {
+          if (value !== undefined && !isWithinRoot(ctx.appRoot, value)) {
+            return makeError('BAD_ARGUMENT', {
+              ...meta,
+              message: `${label} must resolve within the configured --app-root (${ctx.appRoot}); "${value}" is outside it.`,
+              details: { app_root: ctx.appRoot, [label]: value },
+            })
+          }
+        }
+      }
 
       const transport = ctx.transports.requireCapability('canLaunch')
       let session

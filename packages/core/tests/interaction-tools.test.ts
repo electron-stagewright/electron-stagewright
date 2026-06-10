@@ -163,6 +163,22 @@ describe('text + keyboard tools', () => {
     ])
   })
 
+  it('rejects a press sequence longer than the cap (BAD_ARGUMENT, no unbounded loop)', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_press_sequence', {
+      keys: Array.from({ length: 101 }, () => 'a'),
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('rejects keyboard_type text longer than the keystroke cap (BAD_ARGUMENT)', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_keyboard_type', {
+      text: 'a'.repeat(10_001),
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
   it('electron_keyboard_type types globally when no target is given', async () => {
     const { dispatcher, session } = setup()
     const res = (await dispatcher.dispatch('electron_keyboard_type', {

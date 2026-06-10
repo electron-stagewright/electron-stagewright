@@ -124,6 +124,23 @@ describe('electron_expect_text', () => {
     expect(calls).toBe(0)
   })
 
+  it('rejects an unsafe (catastrophic-backtracking) regex before any renderer round-trip', async () => {
+    let calls = 0
+    const { dispatcher } = setup({
+      evaluate: async () => {
+        calls += 1
+        return { satisfied: true, actual: '' }
+      },
+    })
+    const res = (await dispatcher.dispatch('electron_expect_text', {
+      selector: '#h',
+      regex: '(a+)+$',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('Unsafe')
+    expect(calls).toBe(0)
+  })
+
   it('supports negation predicates', async () => {
     const { dispatcher } = setup({ evaluate: canned({ satisfied: true, actual: 'Ready' }) })
     const res = (await dispatcher.dispatch('electron_expect_text', {

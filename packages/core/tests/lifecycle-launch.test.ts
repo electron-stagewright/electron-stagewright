@@ -5,6 +5,8 @@
  * registration, and wire-serialisability.
  */
 
+import path from 'node:path'
+
 import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 
@@ -27,7 +29,7 @@ const WIN: WindowDescriptor = {
   focused: true,
 }
 
-function setup(opts: { fileExists?: boolean; transport?: FakeTransport } = {}) {
+function setup(opts: { fileExists?: boolean; transport?: FakeTransport; appRoot?: string } = {}) {
   const sessions = new SessionManager()
   const transport =
     opts.transport ??
@@ -35,6 +37,7 @@ function setup(opts: { fileExists?: boolean; transport?: FakeTransport } = {}) {
   const dispatcher = new Dispatcher({
     sessions,
     transports: new TransportRegistry({ transports: [transport] }),
+    ...(opts.appRoot !== undefined ? { appRoot: opts.appRoot } : {}),
   })
   dispatcher.register(makeLaunchTool({ fileExists: () => opts.fileExists ?? true }))
   return { sessions, transport, dispatcher }
@@ -63,6 +66,86 @@ describe('electron_launch', () => {
     expect(transport.launchCount).toBe(1)
     expect(sessions.size).toBe(1)
     expect((res as SuccessResponse)._meta.session_id).toBe('launched')
+  })
+
+  it('refuses a runtime-altering env key before spawning (ELECTRON_RUN_AS_NODE)', async () => {
+    const { dispatcher, transport } = setup()
+    const res = (await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('ELECTRON_RUN_AS_NODE')
+    expect(transport.launchCount).toBe(0) // refused before any process is spawned
+  })
+
+  it('refuses loader-injection env keys (NODE_OPTIONS, LD_PRELOAD, DYLD_INSERT_LIBRARIES)', async () => {
+    for (const key of ['NODE_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES']) {
+      const { dispatcher, transport } = setup()
+      const res = (await dispatcher.dispatch('electron_launch', {
+        main: '/abs/main.js',
+        env: { [key]: 'x' },
+      })) as ErrorResponse
+      expect(res.code, key).toBe('BAD_ARGUMENT')
+      expect(transport.launchCount, key).toBe(0)
+    }
+  })
+
+  it('allows a benign application env var', async () => {
+    const { dispatcher, transport } = setup()
+    const res = await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      env: { MY_APP_CONFIG: 'staging' },
+    })
+    expect((res as SuccessResponse).ok).toBe(true)
+    expect(transport.launchCount).toBe(1)
+  })
+
+  it('refuses a launch past the concurrent-session cap even with allowMultiple', async () => {
+    const { sessions, dispatcher, transport } = setup()
+    // Pre-fill to the cap (16) with distinct live sessions, then attempt one more.
+    for (let i = 0; i < 16; i += 1) {
+      sessions.register(new FakeTransport(), new FakeSession({ id: `pre-${i}`, windows: [WIN] }))
+    }
+    const res = (await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      allowMultiple: true,
+    })) as ErrorResponse
+    expect(res.code).toBe('ALREADY_RUNNING')
+    expect(res.error).toContain('Maximum concurrent sessions')
+    expect(transport.launchCount).toBe(0) // refused before spawning
+  })
+
+  it('allows a launch whose main is inside --app-root', async () => {
+    const root = path.resolve('sw-approot-fixture')
+    const { dispatcher, transport } = setup({ appRoot: root })
+    const res = (await dispatcher.dispatch('electron_launch', {
+      main: path.join(root, 'app', 'main.js'),
+    })) as SuccessResponse
+    expect(res.ok).toBe(true)
+    expect(transport.launchCount).toBe(1)
+  })
+
+  it('refuses an executablePath outside --app-root (arbitrary-binary launch)', async () => {
+    const root = path.resolve('sw-approot-fixture')
+    const { dispatcher, transport } = setup({ appRoot: root })
+    const res = (await dispatcher.dispatch('electron_launch', {
+      executablePath: '/usr/bin/python3',
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('app-root')
+    expect(transport.launchCount).toBe(0) // refused before spawning
+  })
+
+  it('refuses a main that traverses outside --app-root', async () => {
+    const root = path.resolve('sw-approot-fixture')
+    const { dispatcher, transport } = setup({ appRoot: root })
+    const res = (await dispatcher.dispatch('electron_launch', {
+      main: path.join(root, '..', 'evil', 'main.js'),
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('app-root')
+    expect(transport.launchCount).toBe(0)
   })
 
   it('reports renderer_ready true once the renderer DOM has rendered', async () => {

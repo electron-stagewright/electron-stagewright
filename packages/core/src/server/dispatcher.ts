@@ -34,7 +34,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import {
   type CallToolResult,
   CallToolRequestSchema,
+  ErrorCode,
   ListToolsRequestSchema,
+  McpError,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 
@@ -51,6 +53,7 @@ import type {
   DispatchGuard,
   DispatchObserver,
   DispatchRecord,
+  ToolAnnotations,
   ToolContext,
   ToolResult,
 } from '../tools/types.js'
@@ -105,6 +108,8 @@ export interface DispatcherOptions {
   readonly allowEval?: boolean
   /** Default directory the screenshot tool writes into; relative paths resolve at startup. */
   readonly screenshotDir?: string
+  /** Optional root confining `electron_launch` paths; relative resolves at startup. Unset = no confinement. */
+  readonly appRoot?: string
   /** Clock injection for deterministic `_meta.elapsed_ms` in tests. */
   readonly now?: () => number
   /** Elapsed-ms threshold above which a dispatch logs a slow-op warning. */
@@ -136,6 +141,35 @@ export interface ToolManifestEntry {
    * documentation can mark which tools the eval opt-in unlocks.
    */
   readonly requiresEvalFlag?: boolean
+  /** MCP behaviour hints (readOnlyHint, destructiveHint, …) surfaced in `tools/list`. */
+  readonly annotations: ToolAnnotations
+}
+
+/**
+ * Operation types that do not mutate the app under test, so their tools advertise `readOnlyHint`
+ * (a host may skip a confirmation prompt). `screenshot` writes only an artifact file, not app
+ * state, and follows the same read-only convention. `command` / `dialog` / `eval` act on the app
+ * and are not read-only.
+ */
+const READ_ONLY_OPERATION_TYPES: ReadonlySet<OperationType> = new Set<OperationType>([
+  'query',
+  'window_info',
+  'logs',
+  'screenshot',
+])
+
+/**
+ * The MCP {@link ToolAnnotations} for a tool: the {@link OperationType}-derived defaults
+ * (`readOnlyHint` for non-mutating types; `openWorldHint: false` everywhere, since every tool acts
+ * on the local driven app, not an unbounded external world) with the tool's own `annotations`
+ * overriding any field (e.g. `electron_stop` sets `destructiveHint: true`).
+ */
+function annotationsFor(def: AnyToolDefinition): ToolAnnotations {
+  return {
+    readOnlyHint: READ_ONLY_OPERATION_TYPES.has(def.operationType),
+    openWorldHint: false,
+    ...def.annotations,
+  }
 }
 
 /** Read a `sessionId` string field off arbitrary parsed args, if present. */
@@ -147,10 +181,16 @@ function readSessionId(args: unknown): string | undefined {
   return undefined
 }
 
-/** Serialise a response envelope into the MCP tool-result content shape. */
+/**
+ * Serialise a response envelope into the MCP tool-result shape. The envelope is returned BOTH as a
+ * JSON text block (for clients that read text, and for backwards compatibility as the spec asks
+ * when structured content is present) AND as `structuredContent`, so a 2025-06-18 host can consume
+ * the machine-readable envelope (ok/code/retryable/next_actions/_meta) natively without re-parsing.
+ */
 function toCallToolResult(envelope: ToolResult): CallToolResult {
   return {
     content: [{ type: 'text', text: JSON.stringify(envelope) }],
+    structuredContent: envelope as Record<string, unknown>,
     isError: !envelope.ok,
   }
 }
@@ -163,6 +203,8 @@ export class Dispatcher {
   readonly #logger: Logger
   readonly #allowEval: boolean
   readonly #screenshotDir?: string
+  /** Resolved `--app-root` confinement directory for launch paths; undefined = no confinement. */
+  readonly #appRoot?: string
   readonly #now: () => number
   readonly #slowMs: number
   /** Per-dispatch backstop timeout (ms); `0` disables it (ADR-011). */
@@ -171,6 +213,12 @@ export class Dispatcher {
   readonly #observers = new Set<DispatchObserver>()
   /** Pre-dispatch guards that can veto a call (ADR-009). Empty by default — zero overhead per call. */
   readonly #guards = new Set<DispatchGuard>()
+  /**
+   * Names of eval-gated tools skipped at registration because the server lacks `--allow-eval`. Kept
+   * so a call to one returns a precise "needs --allow-eval" error instead of a bare "Unknown tool"
+   * an agent cannot distinguish from a typo.
+   */
+  readonly #gatedToolNames = new Set<string>()
 
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
@@ -179,6 +227,7 @@ export class Dispatcher {
     this.#logger = opts.logger ?? NOOP_LOGGER
     this.#allowEval = opts.allowEval ?? false
     if (opts.screenshotDir !== undefined) this.#screenshotDir = path.resolve(opts.screenshotDir)
+    if (opts.appRoot !== undefined) this.#appRoot = path.resolve(opts.appRoot)
     this.#now = opts.now ?? Date.now
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
     this.#operationTimeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
@@ -275,6 +324,7 @@ export class Dispatcher {
       )
     }
     if (def.requiresEvalFlag === true && !this.#allowEval) {
+      this.#gatedToolNames.add(def.name)
       this.#logger.debug('Eval-gated tool hidden (server started without eval flag)', {
         tool: def.name,
       })
@@ -310,6 +360,7 @@ export class Dispatcher {
       operationType: def.operationType,
       inputJsonSchema: z.toJSONSchema(def.inputSchema) as Record<string, unknown>,
       ...(def.requiresEvalFlag === true ? { requiresEvalFlag: true } : {}),
+      annotations: annotationsFor(def),
     }))
   }
 
@@ -328,8 +379,22 @@ export class Dispatcher {
     return parsed.success ? null : this.#invalidArgsError(name, parsed.error, startedAt)
   }
 
-  /** The `BAD_ARGUMENT` envelope for an unregistered tool name. */
+  /**
+   * The `BAD_ARGUMENT` envelope for an unregistered tool name. When the name is a known eval-gated
+   * tool hidden because the server lacks `--allow-eval`, say so explicitly (with a recovery hint) so
+   * the caller does not mistake an intentionally-gated tool for a typo and retry blindly.
+   */
   #unknownToolError(name: string, startedAt: number): ErrorResponse {
+    if (this.#gatedToolNames.has(name)) {
+      return makeError('BAD_ARGUMENT', {
+        message: `Tool "${name}" is gated: it is only registered when the server is started with --allow-eval.`,
+        next_actions: [
+          'Ask the operator to restart the server with --allow-eval to enable this tool, or use a granular non-eval tool instead.',
+        ],
+        startedAt,
+        now: this.#now,
+      })
+    }
     return makeError('BAD_ARGUMENT', {
       message: `Unknown tool: ${name}`,
       startedAt,
@@ -432,6 +497,7 @@ export class Dispatcher {
       logger: this.#logger,
       allowEval: this.#allowEval,
       ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
+      ...(this.#appRoot !== undefined ? { appRoot: this.#appRoot } : {}),
       startedAt,
       now: this.#now,
       addDispatchObserver: (observer) => this.addObserver(observer),
@@ -527,19 +593,28 @@ export class Dispatcher {
     // Read the tool map LIVE on each tools/list (not a bind-time snapshot) so that
     // tools/list and tools/call — which routes through dispatch(), also live — can never
     // disagree if a tool is registered after binding.
-    server.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: [...this.#tools.values()].map((def) => ({
-        name: def.name,
-        ...(def.title !== undefined ? { title: def.title } : {}),
-        description: def.description,
-        // z.toJSONSchema yields `{ type: 'object', … }`; the MCP Tool shape wants that
-        // literal type, so we assert it rather than widen the whole result to unknown.
-        inputSchema: z.toJSONSchema(def.inputSchema) as { type: 'object' } & Record<
-          string,
-          unknown
-        >,
-      })),
-    }))
+    server.server.setRequestHandler(ListToolsRequestSchema, (request) => {
+      // This server does not paginate tools/list (the set is small and fixed once plugins load), so
+      // it never emits a nextCursor. Per the spec, an unrecognised cursor is an Invalid params error
+      // rather than a silent re-listing that could trap a buggy client in an endless pagination loop.
+      if (request.params?.cursor !== undefined) {
+        throw new McpError(ErrorCode.InvalidParams, 'tools/list is not paginated; omit the cursor.')
+      }
+      return {
+        tools: [...this.#tools.values()].map((def) => ({
+          name: def.name,
+          ...(def.title !== undefined ? { title: def.title } : {}),
+          description: def.description,
+          // z.toJSONSchema yields `{ type: 'object', … }`; the MCP Tool shape wants that
+          // literal type, so we assert it rather than widen the whole result to unknown.
+          inputSchema: z.toJSONSchema(def.inputSchema) as { type: 'object' } & Record<
+            string,
+            unknown
+          >,
+          annotations: annotationsFor(def),
+        })),
+      }
+    })
 
     server.server.setRequestHandler(
       CallToolRequestSchema,

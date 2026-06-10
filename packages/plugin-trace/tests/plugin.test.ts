@@ -315,6 +315,60 @@ describe('trace plugin replay (in-process)', () => {
     }
   })
 
+  it('rejects a trace whose call record has no tool name (ARTIFACT_INVALID, never a crash)', async () => {
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      const file = await tmpFile()
+      // A JSON-parseable record of kind "call" but with no `tool` would otherwise reach replay and
+      // TypeError on skipTool(tool); it must fail as a classified artifact error.
+      await writeFile(file, '{"kind":"call","ok":true,"args":{},"result":{}}\n', 'utf8')
+      expect(await server.dispatcher.dispatch('trace_replay', { path: file })).toMatchObject({
+        ok: false,
+        code: 'trace.ARTIFACT_INVALID',
+      })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('never dispatches a hidden eval tool when replaying a crafted trace (allowEval off)', async () => {
+    // The full core surface is registered but eval is hidden (no --allow-eval). A hand-crafted
+    // trace naming electron_eval_main must NOT reach the eval handler on replay: re-dispatch funnels
+    // through the same dispatch() whose tool map omits the hidden tool, so it returns unknown-tool.
+    // This pins the central reason --allow-eval exists, on the re-dispatch path.
+    const file = await tmpFile()
+    await writeFile(
+      file,
+      `${JSON.stringify({
+        kind: 'call',
+        tool: 'electron_eval_main',
+        ok: true,
+        args: { code: 'return 1', sessionId: 's1' },
+        result: { ok: true, _meta: { session_id: 's1' } },
+      })}\n`,
+      'utf8',
+    )
+    const server = await createServer({ plugins: [tracePlugin], allowEval: false })
+    try {
+      const report = (await server.dispatcher.dispatch('trace_replay', { path: file })) as {
+        ok: boolean
+        calls: ReadonlyArray<{
+          tool: string
+          replayed_ok: boolean
+          replayed_code?: string
+          diverged: boolean
+        }>
+      }
+      expect(report.ok).toBe(true)
+      const evalCall = report.calls.find((c) => c.tool === 'electron_eval_main')
+      expect(evalCall?.replayed_ok).toBe(false)
+      expect(evalCall?.replayed_code).toBe('BAD_ARGUMENT') // unknown tool — the gate held
+      expect(evalCall?.diverged).toBe(true)
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
   it('detects schema drift in dry-run (a recorded tool no longer registered)', async () => {
     // Record a demo_echo call, then dry-run replay against a server WHERE demo_echo is absent: the
     // call no longer validates (unknown tool), so it diverges — without any dispatch.
