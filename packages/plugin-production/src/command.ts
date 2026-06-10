@@ -1,12 +1,12 @@
 /**
  * Bounded external-command runner for production checks (ADR-012).
  *
- * The validation checks shell out to platform tools (`codesign`, `xcrun stapler`, `spctl`). Per the
- * bound-every-spawn invariant, each run carries a timeout so a hung tool cannot wedge the
- * dispatch, and the runner NEVER rejects — it always resolves a {@link CommandResult} classifying
- * the outcome (clean exit, non-zero exit, command-not-found, or timeout). A missing command or a
- * non-macOS host therefore surfaces as `spawnError`, which the checks map to an `unknown` status
- * (missing evidence) rather than a failure.
+ * The validation checks shell out to platform tools (`codesign`, `xcrun stapler`, `spctl`,
+ * `plutil`). Per the bound-every-spawn invariant, each run carries a timeout so a hung tool cannot
+ * wedge the dispatch, and the runner NEVER rejects — it always resolves a {@link CommandResult}
+ * classifying the outcome (clean exit, non-zero exit, command-not-found, or timeout). A missing
+ * command or a non-macOS host therefore surfaces as `spawnError`, which the checks map to an
+ * `unknown` status (missing evidence) rather than a failure.
  *
  * @module
  */

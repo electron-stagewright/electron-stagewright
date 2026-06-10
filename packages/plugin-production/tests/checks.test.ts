@@ -14,6 +14,7 @@ import {
   checkBundleStructure,
   checkCodeSigning,
   checkGatekeeper,
+  checkInfoPlist,
   checkNotarization,
   runChecks,
   CHECK_IDS,
@@ -48,14 +49,15 @@ const NOT_FOUND: CommandResult = {
  * A {@link RunCommand} returning canned results. `codesign --verify` and `codesign -dvvv` (the
  * identity read) are DISTINCT invocations, so they are keyed separately — the pass path must
  * exercise the real extraction (verify succeeds; the authority comes from the -dvvv call), not one
- * stub replayed for both. `xcrun stapler validate` (notarization) is keyed as `staplerValidate`;
- * `spctl` doubles as the gatekeeper check AND the notarization-pass evidence read. Anything
- * unconfigured resolves to command-not-found.
+ * stub replayed for both. `xcrun stapler validate` (notarization) is keyed as `staplerValidate`,
+ * `plutil -convert json` (info-plist) as `plutil`; `spctl` doubles as the gatekeeper check AND the
+ * notarization-pass evidence read. Anything unconfigured resolves to command-not-found.
  */
 function fakeRun(plan: {
   codesignVerify?: CommandResult
   codesignDisplay?: CommandResult
   staplerValidate?: CommandResult
+  plutil?: CommandResult
   spctl?: CommandResult
 }): RunCommand {
   return (command, args) => {
@@ -67,6 +69,7 @@ function fakeRun(plan: {
     if (command === 'xcrun' && args.includes('stapler')) {
       return Promise.resolve(plan.staplerValidate ?? NOT_FOUND)
     }
+    if (command === 'plutil') return Promise.resolve(plan.plutil ?? NOT_FOUND)
     if (command === 'spctl') return Promise.resolve(plan.spctl ?? NOT_FOUND)
     return Promise.resolve(NOT_FOUND)
   }
@@ -108,6 +111,146 @@ describe('checkBundleStructure', () => {
     const result = await checkBundleStructure(app)
     expect(result.status).toBe('fail')
     expect(result.detail).toContain('MacOS')
+  })
+})
+
+describe('checkInfoPlist', () => {
+  /** A clean `plutil -convert json` result for a well-formed Info.plist, with optional overrides. */
+  const okPlist = (overrides: Record<string, unknown> = {}): CommandResult => ({
+    ok: true,
+    code: 0,
+    stdout: JSON.stringify({
+      CFBundleIdentifier: 'com.example.demo',
+      CFBundleShortVersionString: '1.2.3',
+      CFBundleExecutable: 'Demo',
+      CFBundleName: 'Demo',
+      CFBundleVersion: '42',
+      ...overrides,
+    }),
+    stderr: '',
+  })
+
+  it('passes when the required fields are present and the executable exists', async () => {
+    const app = await makeApp() // writes Contents/MacOS/Demo
+    const result = await checkInfoPlist(app, fakeRun({ plutil: okPlist() }))
+    expect(result.status).toBe('pass')
+    expect(result.evidence).toContain('com.example.demo')
+    expect(result.evidence).toContain('1.2.3')
+  })
+
+  it('passes a minimal plist with only the required keys (evidence omits build/name)', async () => {
+    const app = await makeApp()
+    const plutil: CommandResult = {
+      ok: true,
+      code: 0,
+      stdout: JSON.stringify({
+        CFBundleIdentifier: 'com.example.demo',
+        CFBundleShortVersionString: '1.2.3',
+        CFBundleExecutable: 'Demo',
+      }),
+      stderr: '',
+    }
+    const result = await checkInfoPlist(app, fakeRun({ plutil }))
+    expect(result.status).toBe('pass')
+    expect(result.evidence).toBe('com.example.demo v1.2.3')
+  })
+
+  it('fails when a required key is missing', async () => {
+    const app = await makeApp()
+    const plutil: CommandResult = {
+      ok: true,
+      code: 0,
+      // No CFBundleShortVersionString.
+      stdout: JSON.stringify({
+        CFBundleIdentifier: 'com.example.demo',
+        CFBundleExecutable: 'Demo',
+      }),
+      stderr: '',
+    }
+    const result = await checkInfoPlist(app, fakeRun({ plutil }))
+    expect(result.status).toBe('fail')
+    expect(result.detail).toContain('CFBundleShortVersionString')
+  })
+
+  it('fails when CFBundleIdentifier is not reverse-DNS', async () => {
+    const app = await makeApp()
+    const result = await checkInfoPlist(
+      app,
+      fakeRun({ plutil: okPlist({ CFBundleIdentifier: 'notreversedns' }) }),
+    )
+    expect(result.status).toBe('fail')
+    expect(result.detail).toContain('reverse-DNS')
+  })
+
+  it('fails when the declared CFBundleExecutable is not on disk', async () => {
+    const app = await makeApp() // has MacOS/Demo, but the plist names Ghost
+    const result = await checkInfoPlist(
+      app,
+      fakeRun({ plutil: okPlist({ CFBundleExecutable: 'Ghost' }) }),
+    )
+    expect(result.status).toBe('fail')
+    expect(result.detail).toContain('Ghost')
+  })
+
+  it('fails when CFBundleExecutable is a path instead of a file name', async () => {
+    const app = await makeApp()
+    await mkdir(path.join(app, 'Contents', 'Resources'), { recursive: true })
+    await writeFile(path.join(app, 'Contents', 'Resources', 'Ghost'), '#!/bin/sh\n')
+    const result = await checkInfoPlist(
+      app,
+      fakeRun({ plutil: okPlist({ CFBundleExecutable: '../Resources/Ghost' }) }),
+    )
+    expect(result.status).toBe('fail')
+    expect(result.detail).toContain('must be a file name')
+  })
+
+  it('fails when plutil cannot parse the plist (missing/malformed)', async () => {
+    const plutil: CommandResult = {
+      ok: false,
+      code: 1,
+      stdout: '',
+      stderr: 'Demo.app/Contents/Info.plist: Property List error: Unexpected character at line 1.',
+    }
+    const result = await checkInfoPlist('/x/Demo.app', fakeRun({ plutil }))
+    expect(result.status).toBe('fail')
+    expect(result.detail).toContain('parse')
+  })
+
+  it('fails when the plist root is not a dictionary', async () => {
+    const plutil: CommandResult = { ok: true, code: 0, stdout: '[1, 2, 3]', stderr: '' }
+    const result = await checkInfoPlist('/x/Demo.app', fakeRun({ plutil }))
+    expect(result.status).toBe('fail')
+    expect(result.detail).toContain('dictionary')
+  })
+
+  it('is unknown when plutil exits cleanly but emits non-JSON', async () => {
+    const plutil: CommandResult = { ok: true, code: 0, stdout: 'not json at all', stderr: '' }
+    const result = await checkInfoPlist('/x/Demo.app', fakeRun({ plutil }))
+    expect(result.status).toBe('unknown')
+  })
+
+  it('is unknown when plutil exits cleanly but writes nothing', async () => {
+    const plutil: CommandResult = { ok: true, code: 0, stdout: '', stderr: '' }
+    const result = await checkInfoPlist('/x/Demo.app', fakeRun({ plutil }))
+    expect(result.status).toBe('unknown')
+  })
+
+  it('fails with stdout evidence when plutil errors only to stdout', async () => {
+    const plutil: CommandResult = {
+      ok: false,
+      code: 1,
+      stdout: 'Info.plist: malformed on stdout',
+      stderr: '',
+    }
+    const result = await checkInfoPlist('/x/Demo.app', fakeRun({ plutil }))
+    expect(result.status).toBe('fail')
+    expect(result.evidence).toContain('malformed on stdout')
+  })
+
+  it('is unknown when plutil cannot run (absent / non-macOS)', async () => {
+    const result = await checkInfoPlist('/x/Demo.app', fakeRun({}))
+    expect(result.status).toBe('unknown')
+    expect(result.detail).toContain('macOS')
   })
 })
 

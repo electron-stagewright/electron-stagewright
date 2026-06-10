@@ -21,12 +21,25 @@ afterEach(async () => {
   await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
 })
 
+/** A realistic XML Info.plist so the in-process info-plist check exercises a real parse on macOS. */
+const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.example.demo</string>
+  <key>CFBundleShortVersionString</key><string>1.2.3</string>
+  <key>CFBundleExecutable</key><string>Demo</string>
+  <key>CFBundleName</key><string>Demo</string>
+  <key>CFBundleVersion</key><string>42</string>
+</dict>
+</plist>
+`
+
 async function makeApp(opts: { info?: boolean } = {}): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'sw-prod-'))
   created.push(dir)
   const app = path.join(dir, 'Demo.app')
   await mkdir(path.join(app, 'Contents', 'MacOS'), { recursive: true })
-  if (opts.info ?? true) await writeFile(path.join(app, 'Contents', 'Info.plist'), '<plist/>\n')
+  if (opts.info ?? true) await writeFile(path.join(app, 'Contents', 'Info.plist'), INFO_PLIST)
   await writeFile(path.join(app, 'Contents', 'MacOS', 'Demo'), '#!/bin/sh\n')
   return app
 }
@@ -58,11 +71,11 @@ describe('production plugin (in-process)', () => {
       })) as ValidateResult
       expect(res.ok).toBe(true)
       expect(res.app_path).toBe(app)
-      expect(res.checks).toHaveLength(4)
+      expect(res.checks).toHaveLength(5)
       // Host-agnostic: a well-formed bundle always passes structure; the shell-out checks
-      // (code-signing/notarization/gatekeeper) vary with the macOS toolchain's presence.
+      // (info-plist/code-signing/notarization/gatekeeper) vary with the macOS toolchain's presence.
       expect(res.checks.find((c) => c.id === 'bundle-structure')?.status).toBe('pass')
-      expect(res.summary.pass + res.summary.fail + res.summary.unknown).toBe(4)
+      expect(res.summary.pass + res.summary.fail + res.summary.unknown).toBe(5)
     } finally {
       await server.close().catch(() => undefined)
     }
