@@ -55,8 +55,12 @@ import type {
   Snapshot,
   SnapshotBbox,
   SnapshotDiff,
+  SnapshotDiffCompact,
   SnapshotEntry,
   SnapshotEntryChange,
+  SnapshotEntryChangeCompact,
+  SnapshotEntryChangedValues,
+  SnapshotEntryRemovedCompact,
   SnapshotState,
 } from './schema.js'
 
@@ -184,6 +188,158 @@ export function diffSnapshots(prev: Snapshot, curr: Snapshot): SnapshotDiff {
       entries_changed: changed.length,
       estimated_tokens: estimated,
     },
+  }
+}
+
+/** Project exactly the changed fields' values out of one entry. */
+function pickChangedValues(
+  entry: SnapshotEntry,
+  fields: readonly ChangedField[],
+): SnapshotEntryChangedValues {
+  const out: { state?: SnapshotState; value?: string; bbox?: SnapshotBbox; name?: string } = {}
+  for (const field of fields) {
+    if (field === 'state') out.state = entry.state
+    else if (field === 'value') out.value = entry.value
+    else if (field === 'bbox') out.bbox = entry.bbox
+    else out.name = entry.name
+  }
+  return out
+}
+
+/**
+ * Project a full {@link SnapshotDiff} into the compact encoding: added entries
+ * stay complete (new UI), removed entries shrink to identity, changed entries
+ * carry only the changed fields' previous/current values. Pure transform;
+ * `estimated_tokens` is recomputed on the compact payload so the agent's
+ * apply-or-rescan decision uses the real cost.
+ */
+export function compactDiff(diff: SnapshotDiff): SnapshotDiffCompact {
+  const removed: SnapshotEntryRemovedCompact[] = diff.removed.map((entry) => ({
+    fingerprint: entry.fingerprint,
+    ref: entry.ref,
+    role: entry.role,
+    name: entry.name,
+  }))
+  const changed: SnapshotEntryChangeCompact[] = diff.changed.map((change) => ({
+    fingerprint: change.fingerprint,
+    ref: change.curr.ref,
+    role: change.curr.role,
+    name: change.curr.name,
+    changed_fields: change.changed_fields,
+    prev: pickChangedValues(change.prev, change.changed_fields),
+    curr: pickChangedValues(change.curr, change.changed_fields),
+  }))
+  return {
+    added: diff.added,
+    removed,
+    changed,
+    ref_map: diff.ref_map,
+    _meta: {
+      ...diff._meta,
+      estimated_tokens: estimateTokens({ added: diff.added, removed, changed }),
+    },
+  }
+}
+
+/** One droppable payload item during budget truncation. */
+interface DroppableItem {
+  readonly kind: 'added' | 'removed' | 'changed'
+  readonly index: number
+  readonly tokens: number
+  readonly interactive: boolean
+}
+
+/** Whether a diff payload item refers to an interactive entry (any encoding). */
+function isInteractiveDiffItem(
+  item:
+    | SnapshotEntry
+    | SnapshotEntryChange
+    | SnapshotEntryChangeCompact
+    | SnapshotEntryRemovedCompact,
+): boolean {
+  if ('interactive' in item) return item.interactive
+  if ('curr' in item && typeof item.curr === 'object' && 'interactive' in item.curr) {
+    return (item.curr as SnapshotEntry).interactive
+  }
+  return (item as { ref: number | null }).ref !== null
+}
+
+/**
+ * Drop the lowest-value diff entries until the payload's estimated tokens fit
+ * `budgetTokens`. Interactive entries are protected: non-interactive removed →
+ * non-interactive changed → non-interactive added go first, then (only if
+ * still over budget) interactive removed → changed → added; within a bucket,
+ * later document-order items drop first. The `entries_*` counts keep
+ * describing the REAL delta; `truncated_entries` reports how many items the
+ * payload omitted. Works on either encoding.
+ */
+export function truncateDiffToBudget<T extends SnapshotDiff | SnapshotDiffCompact>(
+  diff: T,
+  budgetTokens: number,
+): { readonly diff: T; readonly dropped: number } {
+  let total = estimateTokens({ added: diff.added, removed: diff.removed, changed: diff.changed })
+  if (total <= budgetTokens) return { diff, dropped: 0 }
+
+  const items: DroppableItem[] = []
+  const collect = (kind: DroppableItem['kind'], list: readonly unknown[]): void => {
+    for (let index = 0; index < list.length; index++) {
+      const value = list[index] as Parameters<typeof isInteractiveDiffItem>[0]
+      items.push({
+        kind,
+        index,
+        tokens: estimateTokens(value),
+        interactive: isInteractiveDiffItem(value),
+      })
+    }
+  }
+  collect('removed', diff.removed)
+  collect('changed', diff.changed)
+  collect('added', diff.added)
+
+  // Drop order: non-interactive before interactive; removed → changed → added
+  // within each tier; later document-order items first within a bucket.
+  const kindRank = { removed: 0, changed: 1, added: 2 } as const
+  const dropOrder = [...items].sort((a, b) => {
+    if (a.interactive !== b.interactive) return a.interactive ? 1 : -1
+    if (a.kind !== b.kind) return kindRank[a.kind] - kindRank[b.kind]
+    return b.index - a.index
+  })
+
+  const droppedByKind = {
+    added: new Set<number>(),
+    removed: new Set<number>(),
+    changed: new Set<number>(),
+  }
+  let dropped = 0
+  for (const item of dropOrder) {
+    if (total <= budgetTokens) break
+    droppedByKind[item.kind].add(item.index)
+    total -= item.tokens
+    dropped += 1
+  }
+  if (dropped === 0) return { diff, dropped: 0 }
+
+  // The two encodings share the same array positions, so filtering by kept
+  // index is encoding-agnostic; the cast back to T restores the precise shape.
+  const keep = (list: readonly unknown[], kind: DroppableItem['kind']): unknown[] =>
+    list.filter((_, index) => !droppedByKind[kind].has(index))
+
+  const added = keep(diff.added, 'added')
+  const removed = keep(diff.removed, 'removed')
+  const changed = keep(diff.changed, 'changed')
+  return {
+    diff: {
+      ...diff,
+      added,
+      removed,
+      changed,
+      _meta: {
+        ...diff._meta,
+        estimated_tokens: estimateTokens({ added, removed, changed }),
+        truncated_entries: dropped,
+      },
+    } as T,
+    dropped,
   }
 }
 

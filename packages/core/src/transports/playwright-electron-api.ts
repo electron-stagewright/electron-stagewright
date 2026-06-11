@@ -37,6 +37,9 @@ export interface PWClickOptions extends PWActionOptions {
 export interface PWPage {
   url(): string
   title(): Promise<string>
+  // Optional in the shim (test fakes may omit it); real Playwright always
+  // provides it. The transport treats an absent isClosed as "open".
+  isClosed?(): boolean
   evaluate<T = unknown>(fn: (payload: EvalPayload) => unknown, arg?: EvalPayload): Promise<T>
   screenshot(opts?: {
     fullPage?: boolean
@@ -93,6 +96,9 @@ export interface PWDialog {
 export interface PWElectronApp {
   windows(): readonly PWPage[]
   firstWindow(opts?: { timeout?: number }): Promise<PWPage>
+  // Optional in the shim (test fakes may omit it); real Playwright always
+  // provides it. Fired for every window the app opens after launch.
+  on?(event: 'window', handler: (page: PWPage) => void): void
   evaluate<T = unknown>(
     fn: (electronApp: unknown, payload: EvalPayload) => unknown,
     arg?: EvalPayload,

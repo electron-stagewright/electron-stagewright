@@ -2,11 +2,11 @@
 
 > Generated from the dispatcher manifest — do not edit by hand. Run `pnpm docs:tools` to regenerate.
 
-The server exposes 52 tools across 7 operation types. Tools marked "Requires `--allow-eval`" register only when the server is started with that flag.
+The server exposes 53 tools across 7 operation types. Tools marked "Requires `--allow-eval`" register only when the server is started with that flag.
 
 ## Contents
 
-- [Command tools](#command-tools) (22)
+- [Command tools](#command-tools) (23)
 - [Dialog tools](#dialog-tools) (1)
 - [Eval tools](#eval-tools) (2)
 - [Logs tools](#logs-tools) (1)
@@ -20,7 +20,7 @@ The server exposes 52 tools across 7 operation types. Tools marked "Requires `--
 
 **Attach to running Electron app**
 
-Attach to an already-running Electron app exposing a CDP debug endpoint (use electron_discover_running to find one). Provide port (+ optional loopback host), loopback cdpUrl, or pid. Returns: { ok, session_id, transport, windows }. Errors: NOT_IMPLEMENTED (CDP transport not yet built; not retryable), TRANSPORT_UNSUPPORTED (no attach-capable transport), CDP_DISCONNECTED (connection dropped; retryable), BAD_ARGUMENT (missing target selector or non-loopback endpoint).
+Attach to an already-running Electron app exposing a CDP debug endpoint (use electron_discover_running to find one, or start the app with --remote-debugging-port). Provide port (+ optional loopback host) or a loopback cdpUrl; pid alone is not attachable over CDP but, when supplied alongside, lets stop escalate to SIGKILL. The CDP transport supports eval/read/observe and core interaction surfaces against the attached app. Returns: { ok, session_id, transport, windows }. Errors: TRANSPORT_UNSUPPORTED (no attach-capable transport), CDP_DISCONNECTED (endpoint unreachable or dropped; retryable), CDP_TIMEOUT (handshake/method timeout; retryable), BAD_ARGUMENT (missing target selector or non-loopback endpoint).
 
 - Operation: `command`
 
@@ -112,6 +112,23 @@ Drag the source element (ref or selector) onto the target element (targetRef or 
 | `timeoutMs` | integer | no | Actionability budget in ms (default 5000, clamped to 30000). |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
+### `electron_drop_file`
+
+**Drop files onto an element**
+
+Simulate dropping OS files onto the element identified by ref or selector. Web DataTransfer mode: reads each path on the host running the server, rebuilds the files in the renderer, and dispatches dragenter/dragover/drop with a real DataTransfer — engaging standard web drop handlers. Paths must be ABSOLUTE (max 10 files, 5242880 bytes each). default_prevented reports whether a drop handler engaged (called preventDefault); false usually means the target has no web drop handler. Apps that resolve dropped files to native OS paths need an app-specific IPC convention this tool does not simulate. Options: mimeType, timeoutMs. Returns: { ok, session_id, target, files, default_prevented }. Errors: ABSOLUTE_PATH_REQUIRED, FILE_NOT_FOUND, BAD_ARGUMENT (too many/large files, or ref+selector both), SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), NOT_RUNNING.
+
+- Operation: `command`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `ref` | integer | no | Element ref from a snapshot (resolves to [data-sw-ref="N"]). Provide ref OR selector. |
+| `selector` | string | no | CSS selector. Provide ref OR selector, not both. |
+| `paths` | string[] | yes | Absolute file paths to drop. |
+| `mimeType` | string | no | MIME type override applied to every file (defaults to extension-based). |
+| `timeoutMs` | integer | no | Actionability budget in ms (default 5000, clamped to 30000). |
+| `sessionId` | string | no | Target session id. Omit when a single session is running. |
+
 ### `electron_force_kill`
 
 **Force-kill Electron app**
@@ -144,7 +161,7 @@ Hover the element identified by ref or selector (e.g. to reveal a tooltip or men
 
 **Inject into running Electron app**
 
-Attach to a running Electron process that was NOT started with a debug flag, by injecting the Node inspector. Provide pid. Returns: { ok, session_id, transport, windows }. Errors: NOT_IMPLEMENTED (Injector transport not yet built; not retryable), INJECT_FAILED (handshake failed; retryable — try electron_attach), TRANSPORT_UNSUPPORTED.
+Attach to a running Electron process that was NOT started with a debug flag, by injecting the Node inspector. Provide pid. Returns: { ok, session_id, transport, windows }. Errors: INJECT_FAILED (handshake failed or inspector belongs to another process; retryable — try electron_attach when the app already exposes a debug endpoint), TRANSPORT_UNSUPPORTED, BAD_ARGUMENT.
 
 - Operation: `command`
 
@@ -292,13 +309,14 @@ Set the files of the <input type=file> identified by ref or selector. Paths must
 
 **Stop Electron app**
 
-Gracefully stop a session and release it. Pass sessionId to target a specific session. Returns: { ok, session_id, stopped: true }. Errors: NOT_RUNNING (no such session; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Gracefully stop a session and release it. If the app ignores the close within timeoutMs (default 10s) the stop auto-escalates to SIGKILL, so the process is always reaped and never left orphaned; the response reports escalated: true when that happened. Pass sessionId to target a specific session. Returns: { ok, session_id, stopped: true, escalated }. Errors: NOT_RUNNING (no such session; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `command`
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
+| `timeoutMs` | integer | no | Graceful-close budget in ms before escalating to SIGKILL. Defaults to 10000. |
 
 ### `electron_switch_window`
 
@@ -336,7 +354,7 @@ Set the value of the input/textarea identified by ref or selector (fires an inpu
 
 **Type into a code editor**
 
-Type into a code editor (Monaco / EditContext, CodeMirror, contenteditable) the reliable way: click the editor's content area identified by ref or selector (e.g. '.monaco-editor .view-lines'), then type the text into the now-focused editor as real keystrokes. Use this instead of typing into an editor's hidden textarea, which modern EditContext editors ignore (returns TYPE_NO_EFFECT). Returns: { ok, session_id, target, typed }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), TYPE_NO_EFFECT, NOT_RUNNING, BAD_ARGUMENT.
+Type into a code editor (Monaco / EditContext, CodeMirror, contenteditable) the reliable way: click the editor's content area identified by ref or selector (e.g. '.monaco-editor .view-lines'), then type the text into the now-focused editor as real keystrokes. Use this instead of typing into an editor's hidden textarea, which modern EditContext editors ignore (returns TYPE_NO_EFFECT). Pass replace:true to REPLACE the editor contents: after the focusing click it selects all (Meta/Control+A, platform-aware) and types over the selection — no second click that would collapse the selection; with empty text it clears the editor (select-all + Delete). Editor auto-pairing caveat: real keystrokes trigger auto-closing of quotes/brackets, so typed source can gain debris like a trailing }') — type pairing-safe fragments, or use replace:true and include the full intended contents. Returns: { ok, session_id, target, typed, replaced }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), TYPE_NO_EFFECT, NOT_RUNNING, BAD_ARGUMENT.
 
 - Operation: `command`
 
@@ -345,6 +363,7 @@ Type into a code editor (Monaco / EditContext, CodeMirror, contenteditable) the 
 | `ref` | integer | no | Element ref from a snapshot (resolves to [data-sw-ref="N"]). Provide ref OR selector. |
 | `selector` | string | no | CSS selector. Provide ref OR selector, not both. |
 | `text` | string | yes | The text to type into the focused editor. |
+| `replace` | boolean | no | Select all before typing, replacing the editor contents instead of appending. |
 | `timeoutMs` | integer | no | Actionability budget in ms (default 5000, clamped to 30000). |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
@@ -741,7 +760,7 @@ Report the running Electron app environment: runtime versions (electron/node/chr
 
 **Snapshot renderer accessibility tree**
 
-Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name, state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap. Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref. Returns: { ok, kind: "full" | "diff", snapshot? , diff?, renderer_reloaded, truncated }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name, state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap. Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive entries first. Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref. Closed shadow roots are opaque unless the app opts in: push each root onto window.__stagewright_closedShadowRoots at attachShadow time (or implement window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true. Returns: { ok, kind: "full" | "diff", snapshot?, diff?, diff_format?, renderer_reloaded, truncated }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `query`
 
@@ -751,6 +770,8 @@ Capture the renderer accessibility tree: interactive elements (and landmarks) wi
 | `since` | string | no | Return only the delta since the previous snapshot for this session. |
 | `interactiveOnly` | boolean | no | Return only interactive elements (drops landmarks) to save tokens. |
 | `maxEntries` | integer | no | Cap the number of entries returned. Defaults to 2000. |
+| `diffFormat` | string | no | Encoding for since:'last' diffs. 'compact' (default) carries only the changed fields per entry; 'full' carries complete prev/curr entries. |
+| `budgetTokens` | integer | no | Server-side token cap for a since:'last' diff payload. Lowest-value entries (non-interactive removed/changed first) are dropped until the estimate fits; _meta.truncated_entries reports how many were omitted. |
 
 ### `electron_wait`
 

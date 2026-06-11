@@ -22,6 +22,7 @@ function res(name: string, toolCalls: number, estimatedTokens: number, ok = true
     description: '',
     toolCalls,
     estimatedTokens,
+    measuredTokens: estimatedTokens,
     latencyMs: 0,
     memoryRssBytes: null,
     ok,
@@ -36,6 +37,8 @@ function baselineResults(): ScenarioResult[] {
     res('verify-greeting-expect', 5, 3286),
     res('observe-change-rescan', 4, 6412),
     res('observe-change-diff', 4, 3843),
+    res('multi-turn-rescan-30', 62, 180_000),
+    res('multi-turn-diff-30', 62, 70_000),
     res('error-recovery', 6, 3395),
   ]
 }

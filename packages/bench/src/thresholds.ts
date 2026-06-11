@@ -66,6 +66,11 @@ export const DEFAULT_CONTRASTS: ReadonlyArray<Contrast> = [
     baseline: 'observe-change-rescan',
     optimized: 'observe-change-diff',
   },
+  {
+    label: 'react over 30 turns — full re-scan vs snapshot diff (savings at session scale)',
+    baseline: 'multi-turn-rescan-30',
+    optimized: 'multi-turn-diff-30',
+  },
 ]
 
 /** The full regression spec: per-scenario tool-call counts + per-contrast saving floors. */
@@ -89,7 +94,7 @@ export interface ThresholdViolation {
 }
 
 /**
- * Default thresholds, derived from an observed baseline run (5 scenarios). Tool-call counts are the
+ * Default thresholds, derived from an observed baseline run. Tool-call counts are the
  * exact observed values; the token-saving floor for the snapshot-diff contrast sits below the
  * observed ~40% so the gate guards against a collapse, not normal jitter. The verify contrast's
  * lever is round-trips (≈2 calls), not tokens, so its token floor is 0.
@@ -100,6 +105,8 @@ export const DEFAULT_THRESHOLDS: BenchThresholds = {
     'verify-greeting-expect': { toolCalls: 5 },
     'observe-change-rescan': { toolCalls: 4 },
     'observe-change-diff': { toolCalls: 4 },
+    'multi-turn-rescan-30': { toolCalls: 62 },
+    'multi-turn-diff-30': { toolCalls: 62 },
     'error-recovery': { toolCalls: 6 },
   },
   contrasts: {
@@ -108,6 +115,10 @@ export const DEFAULT_THRESHOLDS: BenchThresholds = {
       minTokenSavingRatio: 0,
     },
     'see what changed — full re-scan vs snapshot diff (saves tokens)': {
+      minToolCallsSaved: 0,
+      minTokenSavingRatio: 0.3,
+    },
+    'react over 30 turns — full re-scan vs snapshot diff (savings at session scale)': {
       minToolCallsSaved: 0,
       minTokenSavingRatio: 0.3,
     },

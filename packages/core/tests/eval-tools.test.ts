@@ -165,7 +165,7 @@ describe('eval-tool execution', () => {
     const logger: Logger = {
       debug() {},
       info(message, fields) {
-        logs.push({ message, fields })
+        logs.push({ message, ...(fields !== undefined ? { fields } : {}) })
       },
       warn() {},
       error() {},

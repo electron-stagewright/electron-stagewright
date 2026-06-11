@@ -22,6 +22,7 @@ import type {
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
+  StopResult,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -283,9 +284,10 @@ export class FakeTransport implements ITransport {
     return this.session
   }
 
-  async stop(session: TransportSession, _opts?: StopOptions): Promise<void> {
+  async stop(session: TransportSession, _opts?: StopOptions): Promise<StopResult> {
     this.stopCount += 1
     await session.dispose()
+    return { escalated: false }
   }
 
   async forceKill(session: TransportSession): Promise<void> {

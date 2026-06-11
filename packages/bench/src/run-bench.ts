@@ -30,7 +30,7 @@ import {
 } from './thresholds.js'
 
 /** Schema version of the JSON report; bump when the shape changes (for regression tooling). */
-const REPORT_SCHEMA_VERSION = 2
+const REPORT_SCHEMA_VERSION = 3
 
 /** The machine-readable report written to stdout / the --json file. */
 interface BenchReport {
@@ -68,15 +68,15 @@ function mib(bytes: number | null): string {
 
 /** Render the results as a fixed-width table to stderr. */
 function printTable(results: ReadonlyArray<ScenarioResult>): void {
-  log('\nBenchmark results')
-  log('─'.repeat(86))
+  log('\nBenchmark results (est = char/4 heuristic, real = BPE via gpt-tokenizer)')
+  log('─'.repeat(96))
   log(
-    `  ${'scenario'.padEnd(28)} ${'calls'.padStart(5)} ${'tokens'.padStart(7)} ${'latency'.padStart(9)} ${'memory'.padStart(8)}  result`,
+    `  ${'scenario'.padEnd(28)} ${'calls'.padStart(5)} ${'est tok'.padStart(8)} ${'real tok'.padStart(8)} ${'latency'.padStart(9)} ${'memory'.padStart(8)}  result`,
   )
   for (const r of results) {
     const verdict = r.ok ? 'ok' : `FAIL: ${r.error ?? ''}`
     log(
-      `  ${r.name.padEnd(28)} ${String(r.toolCalls).padStart(5)} ${String(r.estimatedTokens).padStart(7)} ${`${r.latencyMs.toFixed(0)}ms`.padStart(9)} ${mib(r.memoryRssBytes).padStart(8)}  ${verdict}`,
+      `  ${r.name.padEnd(28)} ${String(r.toolCalls).padStart(5)} ${String(r.estimatedTokens).padStart(8)} ${String(r.measuredTokens).padStart(8)} ${`${r.latencyMs.toFixed(0)}ms`.padStart(9)} ${mib(r.memoryRssBytes).padStart(8)}  ${verdict}`,
     )
   }
 }
@@ -84,7 +84,7 @@ function printTable(results: ReadonlyArray<ScenarioResult>): void {
 /** The same-task contrasts the runner reports + thresholds-checks (shared with the pure checker). */
 const CONTRASTS: ReadonlyArray<Contrast> = DEFAULT_CONTRASTS
 
-/** Print each same-task contrast's saving in tool calls and estimated tokens. */
+/** Print each same-task contrast's saving in tool calls and tokens (estimated + real). */
 function printDeltas(results: ReadonlyArray<ScenarioResult>): void {
   log('\nToken-economy deltas (same task, agent-native primitive vs the naive path)')
   for (const c of CONTRASTS) {
@@ -94,8 +94,11 @@ function printDeltas(results: ReadonlyArray<ScenarioResult>): void {
     const calls = base.toolCalls - opt.toolCalls
     const tokens = base.estimatedTokens - opt.estimatedTokens
     const pct = base.estimatedTokens > 0 ? Math.round((tokens / base.estimatedTokens) * 100) : 0
+    const real = base.measuredTokens - opt.measuredTokens
+    const realPct = base.measuredTokens > 0 ? Math.round((real / base.measuredTokens) * 100) : 0
     log(`  ${c.label}`)
     log(`    saved ${calls} tool call(s) and ${tokens} estimated tokens (${pct}% fewer).`)
+    log(`    real tokenizer: saved ${real} BPE tokens (${realPct}% fewer).`)
   }
 }
 

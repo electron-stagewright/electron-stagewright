@@ -63,7 +63,7 @@ describe('ipc plugin smoke (real Electron)', () => {
       const captured = (await server.dispatcher.dispatch('ipc_captured', {
         sessionId,
         channel: 'ping',
-      })) as { ok: boolean; count: number }
+      })) as unknown as { ok: boolean; count: number }
       expect(captured.ok).toBe(true)
       expect(captured.count).toBeGreaterThanOrEqual(1)
 

@@ -9,6 +9,7 @@
 
 import type { AnyToolDefinition } from '../types.js'
 import { clickTool, dragTool, hoverTool } from './pointer.js'
+import { dropFileTool } from './dropfile.js'
 import {
   clearInputTool,
   keyTool,
@@ -21,6 +22,7 @@ import { checkTool, selectOptionTool, setFilesTool, uncheckTool } from './form.j
 import { scrollIntoViewTool, scrollTool } from './scroll.js'
 
 export { clickTool, dragTool, hoverTool } from './pointer.js'
+export { dropFileTool } from './dropfile.js'
 export {
   clearInputTool,
   keyTool,
@@ -37,6 +39,7 @@ export const INTERACTION_TOOLS: readonly AnyToolDefinition[] = [
   clickTool,
   hoverTool,
   dragTool,
+  dropFileTool,
   typeTool,
   keyboardTypeTool,
   typeIntoEditorTool,

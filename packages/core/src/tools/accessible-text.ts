@@ -2,9 +2,13 @@
  * Shared renderer-side text extraction for `electron_get_text` and the `expect_text` /
  * `assert_pattern` text source, so the two ALWAYS agree on what an element's text is.
  *
- * It returns the element's trimmed text content, falling back — when there is no
- * text content — to the accessible label that `electron_find` matches on (aria-labelledby,
- * aria-label, native labels, alt, title, placeholder). Without this fallback a
+ * It returns the element's trimmed text content — skipping text inside
+ * `style`/`script`/`noscript`/`template` nodes, which is markup plumbing rather
+ * than copy (a Monaco editor injects ~3 KB of CSS rules as a `<style>` child,
+ * which would otherwise bloat every text payload and bury the real content) —
+ * falling back, when there is no text content, to the accessible label that
+ * `electron_find` matches on (aria-labelledby, aria-label, native labels, alt,
+ * title, placeholder). Without this fallback a
  * `find`-by-accessible-name → assert chain breaks on icon-only / labelled controls: `find`
  * matches an element whose name comes from an accessible label, but its `textContent` is
  * empty, so `expect_text({ contains })` and `get_text` would report `""`.
@@ -28,13 +32,29 @@
  */
 export const ACCESSIBLE_TEXT_FN = `function __swAccessibleText(el) {
   if (el === null || el === undefined) return '';
-  var text = (el.textContent || '').trim();
+  function isNonContentTag(node) {
+    var tag = (node.tagName || '').toLowerCase();
+    return tag === 'style' || tag === 'script' || tag === 'noscript' || tag === 'template';
+  }
+  function contentText(node) {
+    if (!node) return '';
+    if (node.nodeType === 3) return node.textContent || '';
+    if (node.nodeType !== 1 && node.nodeType !== 11) return '';
+    if (node.nodeType === 1 && isNonContentTag(node)) return '';
+    var out = '';
+    for (var i = 0; i < node.childNodes.length; i += 1) {
+      out += contentText(node.childNodes.item(i));
+    }
+    return out;
+  }
+  var text = contentText(el).trim();
   if (text) return text;
   if (typeof el.getAttribute !== 'function') return '';
   function textOf(node, exclude) {
     if (!node) return '';
     if (node.nodeType === 3) return node.textContent || '';
     if (node.nodeType !== 1) return '';
+    if (isNonContentTag(node)) return '';
     if (exclude && node === exclude) return '';
     var parts = [];
     for (var i = 0; i < node.childNodes.length; i += 1) {

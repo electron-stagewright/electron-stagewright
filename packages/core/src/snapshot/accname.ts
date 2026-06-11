@@ -252,6 +252,8 @@ function computeContentRecursive(node: Node, ctx: NameContext): string {
   if (node.nodeType === 1 /* ELEMENT_NODE */) {
     const el = node as Element
     if (ctx.visited.has(el)) return ''
+    // Markup plumbing (injected CSS/JS) is never part of an accessible name.
+    if (isNonContentElement(el)) return ''
     // Don't traverse into nested form controls' values (avoid leaking input
     // text into a button's accessible name).
     if (isFormControl(el)) return ''
@@ -284,8 +286,19 @@ function isFormControl(element: Element): boolean {
 }
 
 /**
+ * Elements whose text content is markup plumbing (injected CSS/JS), never
+ * user-visible copy — excluded from every name-from-content traversal so an
+ * editor's injected `<style>` rules cannot leak into an accessible name.
+ */
+function isNonContentElement(element: Element): boolean {
+  const tag = element.tagName.toLowerCase()
+  return tag === 'style' || tag === 'script' || tag === 'noscript' || tag === 'template'
+}
+
+/**
  * Collect text content of `element` excluding any single child element
- * (typically the form control inside a wrapping `<label>`).
+ * (typically the form control inside a wrapping `<label>`) and skipping
+ * non-content elements (style/script/noscript/template).
  */
 function textContent(element: Element, exclude?: Element): string {
   const parts: string[] = []
@@ -296,6 +309,7 @@ function textContent(element: Element, exclude?: Element): string {
     if (child.nodeType === 3 /* TEXT_NODE */) {
       parts.push(child.textContent ?? '')
     } else if (child.nodeType === 1 /* ELEMENT_NODE */) {
+      if (isNonContentElement(child as Element)) continue
       parts.push(textContent(child as Element, exclude))
     }
   }

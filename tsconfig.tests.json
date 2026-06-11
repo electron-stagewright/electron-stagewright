@@ -1,0 +1,24 @@
+{
+  // Typechecks every package's tests (plus the sources they import) so test
+  // doubles cannot silently drift from the real interfaces. Kept separate from
+  // the per-package build tsconfigs: tests are never emitted, and they need the
+  // DOM lib (jsdom fixtures) regardless of the package they belong to.
+  // Run via `pnpm typecheck:tests` (chained into `pnpm typecheck`). Workspace
+  // package imports resolve to source files so this stays useful on a clean
+  // checkout before any `dist/` output exists.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM"],
+    "paths": {
+      "@electron-stagewright/core": ["./packages/core/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/tests/**/*.ts", "packages/*/src/**/*.ts"],
+  "exclude": ["**/node_modules", "**/dist"]
+}

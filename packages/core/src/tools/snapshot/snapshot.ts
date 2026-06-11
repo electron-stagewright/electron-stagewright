@@ -15,7 +15,13 @@
 import { z } from 'zod'
 
 import { makeSuccess } from '../../errors/envelope.js'
-import { type Snapshot, diffSnapshots, markRecentlyChanged } from '../../snapshot/index.js'
+import {
+  type Snapshot,
+  compactDiff,
+  diffSnapshots,
+  markRecentlyChanged,
+  truncateDiffToBudget,
+} from '../../snapshot/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { buildWalkBody, loadInjectedWalker } from './inject.js'
 import { reconcileRetagAndStore } from './refs.js'
@@ -45,15 +51,37 @@ const inputSchema = z.object({
     .max(MAX_ENTRIES_LIMIT)
     .optional()
     .describe(`Cap the number of entries returned. Defaults to ${DEFAULT_MAX_ENTRIES}.`),
+  diffFormat: z
+    .enum(['compact', 'full'])
+    .optional()
+    .describe(
+      "Encoding for since:'last' diffs. 'compact' (default) carries only the changed fields per" +
+        " entry; 'full' carries complete prev/curr entries.",
+    ),
+  budgetTokens: z
+    .number()
+    .int()
+    .min(50)
+    .optional()
+    .describe(
+      "Server-side token cap for a since:'last' diff payload. Lowest-value entries" +
+        ' (non-interactive removed/changed first) are dropped until the estimate fits;' +
+        ' _meta.truncated_entries reports how many were omitted.',
+    ),
 })
 
 const DESCRIPTION = [
   'Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name,',
   'state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous',
   'snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap.',
-  'Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on',
-  'the DOM (data-sw-ref) so later interaction tools can act by ref.',
-  'Returns: { ok, kind: "full" | "diff", snapshot? , diff?, renderer_reloaded, truncated }.',
+  'Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete',
+  'prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive',
+  'entries first. Each response carries renderer_reloaded so stale refs are detectable (P10).',
+  'Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref.',
+  'Closed shadow roots are opaque unless the app opts in: push each root onto',
+  'window.__stagewright_closedShadowRoots at attachShadow time (or implement',
+  'window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true.',
+  'Returns: { ok, kind: "full" | "diff", snapshot?, diff?, diff_format?, renderer_reloaded, truncated }.',
   'Errors: NOT_RUNNING (no session — call electron_launch first; not retryable),',
   'BAD_ARGUMENT (multiple sessions live — pass sessionId).',
 ].join(' ')
@@ -123,10 +151,26 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       // since:'last' → the delta against the previous snapshot. Filters apply to
       // full snapshots, not to a diff (a diff is already only what changed). The
       // `prev !== undefined` check is implied by `comparable` and is present so the
-      // type narrows.
+      // type narrows. Compact is the default encoding — the full prev/curr pairs
+      // blow MCP-client token caps on busy dialogs; diffFormat:'full' restores them.
       if (args.since === 'last' && comparable && prev !== undefined) {
-        const diff = diffSnapshots(prev, curr)
-        return makeSuccess({ kind: 'diff', diff, renderer_reloaded: false, truncated: false }, meta)
+        const fullDiff = diffSnapshots(prev, curr)
+        const format = args.diffFormat ?? 'compact'
+        const encoded = format === 'compact' ? compactDiff(fullDiff) : fullDiff
+        const bounded =
+          args.budgetTokens !== undefined
+            ? truncateDiffToBudget(encoded, args.budgetTokens)
+            : { diff: encoded, dropped: 0 }
+        return makeSuccess(
+          {
+            kind: 'diff',
+            diff_format: format,
+            diff: bounded.diff,
+            renderer_reloaded: false,
+            truncated: bounded.dropped > 0,
+          },
+          meta,
+        )
       }
 
       // Full snapshot: mark recently_changed against the previous (when comparable),

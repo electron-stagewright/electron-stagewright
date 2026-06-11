@@ -118,6 +118,11 @@ export const ERROR_CODES = {
     retryable: true,
     hint: 'The CDP connection dropped; the dispatcher will attempt reconnection.',
   },
+  CDP_TIMEOUT: {
+    http: 408,
+    retryable: true,
+    hint: 'The CDP method did not respond within its timeout; the target may be busy or hung.',
+  },
   INJECT_FAILED: {
     http: 500,
     retryable: true,

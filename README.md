@@ -159,8 +159,8 @@ The agent has everything to decide its next move without asking for context.
 Three transport implementations behind a single `ITransport` interface, so the project survives if Playwright's experimental `_electron` API changes or gets deprecated:
 
 - **`PlaywrightElectronTransport`** — `_electron.launch()`, fast path (default).
-- **`CDPTransport`** — Chrome DevTools Protocol direct, no Playwright dependency, currently a capability-honest stub.
-- **`InjectorTransport`** — Node Inspector handshake into running process, currently a capability-honest stub.
+- **`CDPTransport`** — Chrome DevTools Protocol direct, no Playwright dependency; attaches to apps exposing a loopback debug endpoint and supports eval, read, observe, and interaction surfaces.
+- **`InjectorTransport`** — Node Inspector handshake into a running process; supports main-process eval, window discovery, and console capture when an app was not started with a CDP endpoint.
 
 Plugin model: a small core, with domain capabilities shipped as separate `@electron-stagewright/plugin-*` packages loaded explicitly via `--plugin` (the core never auto-scans). Shipped today: **`plugin-trace`** (session trace + deterministic replay + per-tool token budget), **`plugin-ipc`** (capture / invoke / stub Electron IPC, gated behind `--allow-eval`), and **`plugin-production`** (validate a packaged `.app`: bundle structure, Info.plist identity fields, code signing, notarization, Gatekeeper). Planned: `network`, `clock`, `storage`, `macos-native`.
 

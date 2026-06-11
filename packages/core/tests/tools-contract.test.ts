@@ -66,7 +66,7 @@ describe('default tool surface contract', () => {
     const manifest = dispatcher.listManifest()
     expect(manifest).toHaveLength(DEFAULT_TOOLS.length)
     for (const entry of manifest) {
-      expect(entry.inputJsonSchema.type, entry.name).toBe('object')
+      expect(entry.inputJsonSchema['type'], entry.name).toBe('object')
     }
   })
 })

@@ -24,28 +24,48 @@ const sessionOnly = z.object({
     .describe('Target session id. Omit when a single session is running.'),
 })
 
-/** `electron_stop` — graceful shutdown of a session. */
+const stopInput = z.object({
+  sessionId: z
+    .string()
+    .optional()
+    .describe('Target session id. Omit when a single session is running.'),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('Graceful-close budget in ms before escalating to SIGKILL. Defaults to 10000.'),
+})
+
+/** `electron_stop` — graceful shutdown of a session, escalating to SIGKILL on timeout. */
 export const stopTool: AnyToolDefinition = defineTool({
   name: 'electron_stop',
   title: 'Stop Electron app',
   description: [
-    'Gracefully stop a session and release it. Pass sessionId to target a specific session.',
-    'Returns: { ok, session_id, stopped: true }.',
+    'Gracefully stop a session and release it. If the app ignores the close within timeoutMs',
+    '(default 10s) the stop auto-escalates to SIGKILL, so the process is always reaped and never',
+    'left orphaned; the response reports escalated: true when that happened.',
+    'Pass sessionId to target a specific session.',
+    'Returns: { ok, session_id, stopped: true, escalated }.',
     'Errors: NOT_RUNNING (no such session; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).',
   ].join(' '),
-  inputSchema: sessionOnly,
+  inputSchema: stopInput,
   operationType: 'command',
   // Ends the session and closes the app — a destructive, non-undoable action.
   annotations: { destructiveHint: true },
   handler: async (args, ctx) => {
     const managed = ctx.sessions.resolve(args.sessionId)
+    let escalated = false
     try {
-      await ctx.sessions.remove(managed.id)
+      const result = await ctx.sessions.remove(managed.id, {
+        ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+      })
+      escalated = result.escalated
     } finally {
       ctx.snapshots.clear(managed.id)
     }
     return makeSuccess(
-      { session_id: managed.id, stopped: true },
+      { session_id: managed.id, stopped: true, escalated },
       { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
     )
   },

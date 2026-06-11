@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@electron-stagewright/core": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "gpt-tokenizer": "^3.4.0"
   },
   "devDependencies": {
     "tsx": "^4.22.3"

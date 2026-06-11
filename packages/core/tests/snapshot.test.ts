@@ -393,7 +393,7 @@ describe('extractState — full state envelope, role-aware nulls', () => {
     const selected = dom.window.document.querySelector('option[selected]')
     expect(selected).not.toBeNull()
     if (selected !== null) {
-      selected.selected = false
+      ;(selected as HTMLOptionElement).selected = false
       const snap = walkAccessibilityTree(dom.window.document)
       expect(findEntry(snap, byRoleAndName('option', 'Two'))?.state.selected).toBe(false)
     }

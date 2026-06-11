@@ -12,6 +12,13 @@ import { call, findRef, type Envelope, type Scenario } from './harness.js'
 const NAME = 'Ada Lovelace'
 const GREETING = `Hello, ${NAME}`
 
+/**
+ * Turns in the long-running act-then-observe contrast. 30 mirrors a realistic
+ * agent session length, so the diff-vs-rescan saving is measured at the scale
+ * where it compounds rather than on a single observation.
+ */
+const MULTI_TURN_ROUNDS = 30
+
 /** Assert a tool call that is expected to succeed, preserving the envelope for reads. */
 function expectOk(env: Envelope, step: string): Envelope {
   if (!env.ok) {
@@ -95,6 +102,30 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
       expectOk(await call(driver, 'electron_click', { ref: refreshRef }), 'diff refresh click')
       // The agent-native way: ask for only what changed since the last snapshot.
       expectOk(await call(driver, 'electron_snapshot', { since: 'last' }), 'delta snapshot')
+    },
+  },
+  {
+    name: 'multi-turn-rescan-30',
+    description: 'A 30-turn act-then-observe flow reacting via FULL snapshot re-scans.',
+    run: async (driver) => {
+      expectOk(await call(driver, 'electron_snapshot'), 'multi-turn rescan baseline')
+      const refreshRef = await findRef(driver, 'button', 'Refresh list')
+      for (let turn = 1; turn <= MULTI_TURN_ROUNDS; turn += 1) {
+        expectOk(await call(driver, 'electron_click', { ref: refreshRef }), `turn ${turn} click`)
+        expectOk(await call(driver, 'electron_snapshot'), `turn ${turn} full snapshot`)
+      }
+    },
+  },
+  {
+    name: 'multi-turn-diff-30',
+    description: 'The same 30-turn flow reacting via snapshot since:last deltas.',
+    run: async (driver) => {
+      expectOk(await call(driver, 'electron_snapshot'), 'multi-turn diff baseline')
+      const refreshRef = await findRef(driver, 'button', 'Refresh list')
+      for (let turn = 1; turn <= MULTI_TURN_ROUNDS; turn += 1) {
+        expectOk(await call(driver, 'electron_click', { ref: refreshRef }), `turn ${turn} click`)
+        expectOk(await call(driver, 'electron_snapshot', { since: 'last' }), `turn ${turn} delta`)
+      }
     },
   },
   {

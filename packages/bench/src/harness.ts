@@ -23,6 +23,8 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
+import { countRealTokens } from './tokenizer.js'
+
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 // Resolve the built server entry from the core package via ESM resolution (its "."
 // export only declares the `import` condition, so CJS require.resolve fails). cli.js
@@ -45,8 +47,13 @@ export interface Envelope {
 export interface ScenarioMetrics {
   /** Number of MCP tool calls the scenario made (its agent-task steps). */
   toolCalls: number
-  /** Sum of `_meta.estimated_tokens` across those calls. */
+  /** Sum of `_meta.estimated_tokens` across those calls (the server's char/4 heuristic). */
   estimatedTokens: number
+  /**
+   * Sum of REAL BPE tokens across those calls, counted client-side over each raw
+   * response text with `gpt-tokenizer` (see `tokenizer.ts` for the proxy caveat).
+   */
+  measuredTokens: number
   /** Sum of client-side wall-clock latency (ms) across those calls. */
   latencyMs: number
 }
@@ -75,14 +82,19 @@ export interface Scenario {
   readonly run: (driver: Driver) => Promise<void>
 }
 
-/** Parse a tool result's `content` (the SDK's content-block array) first text block. */
-function parseEnvelope(name: string, content: unknown): Envelope {
+/** Extract a tool result's first text block (the raw wire text of the envelope). */
+function firstTextBlock(name: string, content: unknown): string {
   const blocks = content as ReadonlyArray<{ readonly type: string; readonly text?: string }>
   const first = blocks[0]
   if (first === undefined || first.type !== 'text' || typeof first.text !== 'string') {
     throw new Error(`${name}: expected a text content block from the MCP response`)
   }
-  return JSON.parse(first.text) as Envelope
+  return first.text
+}
+
+/** Parse a tool result's `content` (the SDK's content-block array) first text block. */
+function parseEnvelope(name: string, content: unknown): Envelope {
+  return JSON.parse(firstTextBlock(name, content)) as Envelope
 }
 
 /** A tool call that does NOT touch scenario metrics — used for launch/stop/memory instrumentation. */
@@ -112,10 +124,12 @@ export async function call(
     arguments: { sessionId: driver.sessionId, ...args },
   })
   const elapsed = performance.now() - start
-  const env = parseEnvelope(name, result.content)
+  const text = firstTextBlock(name, result.content)
+  const env = JSON.parse(text) as Envelope
   driver.metrics.toolCalls += 1
   driver.metrics.latencyMs += elapsed
   driver.metrics.estimatedTokens += env._meta?.estimated_tokens ?? 0
+  driver.metrics.measuredTokens += countRealTokens(text)
   return env
 }
 
@@ -144,7 +158,12 @@ async function sampleMemory(client: Client, sessionId: string): Promise<number |
  * Never throws — a failure is captured in the returned {@link ScenarioResult}.
  */
 export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
-  const metrics: ScenarioMetrics = { toolCalls: 0, estimatedTokens: 0, latencyMs: 0 }
+  const metrics: ScenarioMetrics = {
+    toolCalls: 0,
+    estimatedTokens: 0,
+    measuredTokens: 0,
+    latencyMs: 0,
+  }
   const transport = new StdioClientTransport({ command: 'node', args: [CLI_PATH, '--allow-eval'] })
   const client = new Client({ name: `bench-${scenario.name}`, version: '0.0.0' })
   await client.connect(transport)

@@ -92,7 +92,7 @@ export interface LaunchOptions {
 
 /** Options accepted by `ITransport.attach`. At least one identifier MUST be provided. */
 export interface AttachOptions {
-  /** Process ID of the running Electron app. */
+  /** Process ID of the running Electron app, used for ownership checks and stop escalation. */
   readonly pid?: number
   /** Full Chrome DevTools Protocol URL (e.g. `ws://localhost:9222/devtools/browser/...`). */
   readonly cdpUrl?: string
@@ -114,10 +114,25 @@ export interface InjectOptions {
 
 /** Options accepted by `ITransport.stop`. */
 export interface StopOptions {
-  /** Maximum time to wait for graceful shutdown before falling back to forceKill. */
+  /**
+   * Maximum time to wait for graceful shutdown before escalating to a SIGKILL.
+   * Transports default this to a bounded budget (10s for the Playwright
+   * transport) so a hung app can never wedge a stop indefinitely.
+   */
   readonly timeoutMs?: number
   /** Skip graceful shutdown entirely and SIGKILL the process. */
   readonly force?: boolean
+}
+
+/**
+ * Result of `ITransport.stop`. `escalated: true` means the graceful close did
+ * not finish within its budget and the transport force-killed the process
+ * instead — the session is still fully released either way, so the caller
+ * never inherits an orphaned process with no handle to it.
+ */
+export interface StopResult {
+  /** True when graceful shutdown timed out and the process was SIGKILLed. */
+  readonly escalated: boolean
 }
 
 /** Options accepted by `TransportSession.screenshot`. */
@@ -163,6 +178,12 @@ export interface ConsoleEntry {
   readonly text: string
   /** Epoch milliseconds when the message was captured by the server. */
   readonly timestamp: number
+  /**
+   * Transport-scoped id of the window that emitted this message (matches
+   * `WindowDescriptor.id`). Present when capture is attached per-window, so an
+   * aggregated multi-window buffer stays attributable.
+   */
+  readonly windowId?: string
   /** Source location, when the renderer reports one. */
   readonly location?: {
     readonly url?: string
@@ -229,6 +250,11 @@ export interface DialogEvent {
   readonly promptText?: string
   /** Epoch milliseconds when the dialog was captured by the server. */
   readonly timestamp: number
+  /**
+   * Transport-scoped id of the window that raised this dialog (matches
+   * `WindowDescriptor.id`). Present when capture is attached per-window.
+   */
+  readonly windowId?: string
 }
 
 /** Options for {@link TransportSession.dialogEvents}. */
@@ -413,8 +439,12 @@ export interface ITransport {
   /** Inject a Node Inspector into a running Electron process that lacks one. */
   inject(opts: InjectOptions): Promise<TransportSession>
 
-  /** Gracefully shut down the session. */
-  stop(session: TransportSession, opts?: StopOptions): Promise<void>
+  /**
+   * Gracefully shut down the session, escalating to SIGKILL when the graceful
+   * close exceeds its budget (see {@link StopOptions.timeoutMs}). The result
+   * reports whether escalation happened.
+   */
+  stop(session: TransportSession, opts?: StopOptions): Promise<StopResult>
 
   /** Forcefully kill the underlying process and release the session. */
   forceKill(session: TransportSession): Promise<void>

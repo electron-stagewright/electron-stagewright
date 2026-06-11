@@ -240,6 +240,22 @@ export interface SnapshotEntryChange {
 }
 
 /**
+ * Token-economy metadata attached to every diff encoding so the agent can
+ * decide whether applying the diff is cheaper than re-reading the full
+ * snapshot (ADR-007 Principle 2). The `entries_*` counts always describe the
+ * REAL delta; `truncated_entries`, when present, says how many of those were
+ * omitted from the payload by a server-side token budget.
+ */
+export interface SnapshotDiffMeta {
+  readonly entries_added: number
+  readonly entries_removed: number
+  readonly entries_changed: number
+  readonly estimated_tokens: number
+  /** Entries dropped from the payload to honour a caller-supplied token budget. */
+  readonly truncated_entries?: number
+}
+
+/**
  * The delta between two snapshots. `added` and `removed` are entries that
  * appeared / disappeared (by fingerprint); `changed` are entries present in
  * both whose state / value / bbox / name differ. `ref_map` maps a current
@@ -252,16 +268,63 @@ export interface SnapshotDiff {
   readonly removed: readonly SnapshotEntry[]
   readonly changed: readonly SnapshotEntryChange[]
   readonly ref_map: Readonly<Record<string, number>>
-  /**
-   * Token-economy metadata so the agent can decide whether applying the diff is
-   * cheaper than re-reading the full snapshot (ADR-007 Principle 2).
-   */
-  readonly _meta: {
-    readonly entries_added: number
-    readonly entries_removed: number
-    readonly entries_changed: number
-    readonly estimated_tokens: number
-  }
+  readonly _meta: SnapshotDiffMeta
+}
+
+/**
+ * The subset of entry fields a diff can report as changed, keyed by
+ * {@link ChangedField}. Used by the compact encoding to carry ONLY the values
+ * that actually differ instead of two full entries.
+ */
+export type SnapshotEntryChangedValues = Partial<
+  Pick<SnapshotEntry, 'state' | 'value' | 'bbox' | 'name'>
+>
+
+/**
+ * Compact projection of one changed entry: identity (fingerprint + current ref
+ * + role/name so the agent can recognise it) plus the changed fields' previous
+ * and current VALUES only — not the two full entries the full encoding
+ * carries. This is what keeps a busy-dialog diff inside an MCP client's token
+ * cap (the dogfooded failure: full prev/curr per change blew a ~65k-char
+ * response out of budget).
+ */
+export interface SnapshotEntryChangeCompact {
+  readonly fingerprint: string
+  /** The CURRENT ref (null for landmarks) so follow-up interaction can target it. */
+  readonly ref: number | null
+  readonly role: SnapshotRole
+  readonly name: string
+  readonly changed_fields: readonly ChangedField[]
+  /** Previous values of exactly the changed fields. */
+  readonly prev: SnapshotEntryChangedValues
+  /** Current values of exactly the changed fields. */
+  readonly curr: SnapshotEntryChangedValues
+}
+
+/**
+ * Compact projection of a removed entry — identity only. The entry is gone, so
+ * its full state/bbox payload has no actionable value to an agent.
+ */
+export interface SnapshotEntryRemovedCompact {
+  readonly fingerprint: string
+  /** The ref the entry held in the previous snapshot (null for landmarks). */
+  readonly ref: number | null
+  readonly role: SnapshotRole
+  readonly name: string
+}
+
+/**
+ * Compact diff encoding — the default for `snapshot({ since: 'last' })`.
+ * `added` entries stay complete (they are new UI the agent has never seen);
+ * `removed` and `changed` carry identity plus changed values only. The full
+ * encoding remains available via the snapshot tool's `diffFormat: 'full'`.
+ */
+export interface SnapshotDiffCompact {
+  readonly added: readonly SnapshotEntry[]
+  readonly removed: readonly SnapshotEntryRemovedCompact[]
+  readonly changed: readonly SnapshotEntryChangeCompact[]
+  readonly ref_map: Readonly<Record<string, number>>
+  readonly _meta: SnapshotDiffMeta
 }
 
 /**

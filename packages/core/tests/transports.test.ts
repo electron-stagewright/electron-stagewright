@@ -1,12 +1,11 @@
 /**
- * Unit tests for the transport abstraction. The slice ships one functional
- * transport (PlaywrightElectronTransport) plus two stubs (CDPTransport,
- * InjectorTransport). These tests cover:
+ * Unit tests for the transport abstraction. These focus on the shared contract
+ * around the Playwright, CDP, and Injector implementations; protocol-specific
+ * happy paths live in their dedicated fake-endpoint suites. These tests cover:
  *
  * - Capability matrix inspection (every transport declares its caps explicitly).
  * - Table-driven capability-vs-method drift detection (every method whose
- *   capability is `false` rejects with `TRANSPORT_UNSUPPORTED`; stubbed methods
- *   surface `NOT_IMPLEMENTED`).
+ *   capability is `false` rejects with `TRANSPORT_UNSUPPORTED`).
  * - `assertCapability` helper.
  * - Refused-when-unsupported behaviour (Playwright transport's `attach` and
  *   `inject` reject because the matrix says false).
@@ -32,6 +31,7 @@ import {
   type TransportCapabilities,
   type TransportSession,
 } from '../src/transports/index.js'
+import type { PWConsoleMessage, PWDialog } from '../src/transports/playwright-electron-api.js'
 import { buildPlaywrightLaunchOptions } from '../src/transports/playwright-electron.js'
 
 const FAKE_SESSION: TransportSession = {
@@ -39,7 +39,7 @@ const FAKE_SESSION: TransportSession = {
   transport: 'playwright-electron',
   ipc: { transport: 'playwright-electron' },
   console: { transport: 'playwright-electron' },
-  evaluate: async () => undefined as unknown,
+  evaluate: async <T = unknown>() => undefined as T,
   screenshot: async () => Buffer.alloc(0),
   windowsList: async () => [],
   consoleLogs: async () => ({ entries: [], overflowed: 0 }),
@@ -49,6 +49,7 @@ const FAKE_SESSION: TransportSession = {
   fill: async () => undefined,
   hover: async () => undefined,
   press: async () => undefined,
+  typeText: async () => undefined,
   selectOption: async (_selector, values) => values,
   setChecked: async () => undefined,
   setInputFiles: async () => undefined,
@@ -97,9 +98,9 @@ function createFakePage(
     url: () => `app:///${title}`,
     title: async () => title,
     evaluate: async <T = unknown>(
-      fn: (payload: { readonly body: string; readonly arg?: unknown }) => T | Promise<T>,
+      fn: (payload: { readonly body: string; readonly arg?: unknown }) => unknown,
       arg?: { readonly body: string; readonly arg?: unknown },
-    ) => {
+    ): Promise<T> => {
       // The type-effect check reads an editable signature: arg carries { selector, settleMs }.
       // Serve it from the editable-content model so fill/type effect verification can be tested
       // without a real DOM.
@@ -114,7 +115,7 @@ function createFakePage(
       // DOM (the real renderer execution is covered by the gated Electron smoke).
       if (opts.evalResult !== undefined) return opts.evalResult as T
       if (arg === undefined) return undefined as T
-      return fn(arg)
+      return fn(arg) as T
     },
     screenshot: async () => {
       screenshotCalls += 1
@@ -178,9 +179,12 @@ function createFakePage(
     // tests can drive PlaywrightSession's buffers without a real renderer.
     consoleHandlers,
     dialogHandlers,
-    on(event: 'console' | 'dialog', handler: (arg: unknown) => void) {
-      if (event === 'console') consoleHandlers.push(handler)
-      else if (event === 'dialog') dialogHandlers.push(handler)
+    on(
+      event: 'console' | 'dialog',
+      handler: ((message: PWConsoleMessage) => void) | ((dialog: PWDialog) => void),
+    ) {
+      if (event === 'console') consoleHandlers.push(handler as (arg: unknown) => void)
+      else if (event === 'dialog') dialogHandlers.push(handler as (arg: unknown) => void)
     },
     emitConsole(message: { type: string; text: string; location?: unknown }) {
       const msg = {
@@ -231,11 +235,13 @@ function createFakePage(
 function createFakeElectronApp(
   initialPages: ReturnType<typeof createFakePage>[],
   electronModule: unknown = { value: 3 },
+  appOpts: { readonly hangClose?: boolean } = {},
 ) {
   let pages = initialPages
   let closeCalls = 0
   let firstWindowCalls = 0
   const killSignals: string[] = []
+  const windowHandlers: ((page: ReturnType<typeof createFakePage>) => void)[] = []
   return {
     get closeCalls() {
       return closeCalls
@@ -246,6 +252,14 @@ function createFakeElectronApp(
     killSignals,
     setPages: (nextPages: ReturnType<typeof createFakePage>[]) => {
       pages = nextPages
+    },
+    /** Register a late-opened window the way Playwright fires its `window` event. */
+    emitWindow(page: ReturnType<typeof createFakePage>) {
+      pages = [...pages, page]
+      for (const handler of windowHandlers) handler(page)
+    },
+    on(event: 'window', handler: (page: ReturnType<typeof createFakePage>) => void) {
+      if (event === 'window') windowHandlers.push(handler)
     },
     windows: () => pages,
     firstWindow: async () => {
@@ -258,14 +272,16 @@ function createFakeElectronApp(
       fn: (
         electronApp: unknown,
         payload: { readonly body: string; readonly arg?: unknown },
-      ) => T | Promise<T>,
+      ) => unknown,
       arg?: { readonly body: string; readonly arg?: unknown },
-    ) => {
+    ): Promise<T> => {
       if (arg === undefined) return undefined as T
-      return fn(electronModule, arg)
+      return fn(electronModule, arg) as T
     },
     close: async () => {
       closeCalls += 1
+      // A hung app never resolves its close — exercises the stop escalation.
+      if (appOpts.hangClose === true) await new Promise(() => {})
     },
     process: () => ({
       pid: 123,
@@ -309,7 +325,7 @@ describe('PlaywrightElectronTransport', () => {
   })
 
   it('stop() and forceKill() delegate to session.dispose() and are safe on a fresh fake', async () => {
-    await expect(t.stop(FAKE_SESSION)).resolves.toBeUndefined()
+    await expect(t.stop(FAKE_SESSION)).resolves.toEqual({ escalated: false })
     await expect(t.forceKill(FAKE_SESSION)).resolves.toBeUndefined()
   })
 
@@ -679,7 +695,7 @@ describe('PlaywrightElectronTransport', () => {
     const session = await transport.launch({ appPath: '/abs/main.js' })
 
     await session.scroll({ dx: 0, dy: 480 })
-    await session.scroll()
+    await session.scroll({})
 
     expect(page.interactions).toEqual([
       { method: 'mouse.wheel', args: [0, 480] },
@@ -773,7 +789,7 @@ describe('CDPTransport', () => {
       canControlClock: true,
       supportsMainEval: true,
       supportsRendererEval: true,
-      supportsInteraction: false,
+      supportsInteraction: true,
     })
   })
 
@@ -789,19 +805,20 @@ describe('CDPTransport', () => {
     })
   })
 
-  it('attach() rejects with NOT_IMPLEMENTED (capability claimed but body deferred)', async () => {
+  it('attach() without port or cdpUrl rejects with BAD_ARGUMENT (pid alone is not attachable)', async () => {
     await expect(t.attach({} as AttachOptions)).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
+      code: 'BAD_ARGUMENT',
+    })
+    await expect(t.attach({ pid: 1234 } as AttachOptions)).rejects.toMatchObject({
+      code: 'BAD_ARGUMENT',
     })
   })
 
-  it('stop() and forceKill() reject with NOT_IMPLEMENTED', async () => {
-    await expect(t.stop(FAKE_SESSION, {} as StopOptions)).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
-    })
-    await expect(t.forceKill(FAKE_SESSION)).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
-    })
+  it('stop() and forceKill() on a non-CDP session fall back to dispose()', async () => {
+    // The protocol-level behaviour (Browser.close, escalation, the pool) is
+    // covered by cdp-transport.test.ts against a fake CDP endpoint.
+    await expect(t.stop(FAKE_SESSION, {} as StopOptions)).resolves.toEqual({ escalated: false })
+    await expect(t.forceKill(FAKE_SESSION)).resolves.toBeUndefined()
   })
 })
 
@@ -828,12 +845,12 @@ describe('InjectorTransport', () => {
     })
   })
 
-  it('attach() and inject() reject with NOT_IMPLEMENTED', async () => {
+  it('attach() without an endpoint and inject() with an invalid pid reject with BAD_ARGUMENT', async () => {
     await expect(t.attach({} as AttachOptions)).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
+      code: 'BAD_ARGUMENT',
     })
     await expect(t.inject({ pid: 0 } as InjectOptions)).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
+      code: 'BAD_ARGUMENT',
     })
   })
 })
@@ -867,9 +884,9 @@ describe('assertCapability helper', () => {
 describe('capability-vs-method drift (table-driven)', () => {
   // For each transport, we walk its declared capabilities and assert that the
   // refused-method behaviour matches: capability false → method rejects with
-  // TRANSPORT_UNSUPPORTED. The Playwright transport's positive paths (canLaunch
-  // returning a real session) require a live Electron app, so we exercise only
-  // the refused path on it; the stubs are exercised fully.
+  // TRANSPORT_UNSUPPORTED. Positive paths are covered by transport-specific
+  // tests with fake Playwright/CDP/Injector endpoints, so this table only pins
+  // the refused-when-unsupported path.
 
   type RefusedMethod = {
     name: string
@@ -906,10 +923,8 @@ describe('capability-vs-method drift (table-driven)', () => {
       if (method.expectedCap === null) continue
       const hasCapability = transport.capabilities[method.expectedCap]
       if (hasCapability) {
-        // Positive-path methods are exercised by transport-specific tests above
-        // (attach/inject for stubs surface NOT_IMPLEMENTED; launch for the real
-        // Playwright transport is too heavyweight for unit tests). We only pin
-        // the refused-when-unsupported path here.
+        // Positive-path methods are exercised by transport-specific tests with
+        // fake endpoints. We only pin the refused-when-unsupported path here.
         continue
       }
       it(`${transport.id}.${method.name}() rejects with TRANSPORT_UNSUPPORTED (capability ${method.expectedCap} is false)`, async () => {
@@ -1075,7 +1090,7 @@ describe('PlaywrightSession dialog handling', () => {
 
     const observed = await session.dialogEvents()
     const observedPolicy = observed.policy as { perType: Record<string, string> }
-    observedPolicy.perType.confirm = 'accept'
+    observedPolicy.perType['confirm'] = 'accept'
 
     const record = page.emitDialog({ type: 'confirm', message: 'should stay dismissed' })
     await flush()
@@ -1130,5 +1145,131 @@ describe('PlaywrightSession dialog handling', () => {
     const { entries } = await session.dialogEvents()
     // The broken dialog was not recorded (it threw before push); the next one was.
     expect(entries.map((e) => e.type)).toEqual(['alert'])
+  })
+})
+
+describe('PlaywrightSession multi-window capture', () => {
+  function launchWith(pages: ReturnType<typeof createFakePage>[]) {
+    const app = createFakeElectronApp(pages)
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    return { app, launch: () => transport.launch({ appPath: '/abs/main.js' }) }
+  }
+
+  it('captures console and dialogs from later windows, attributed by windowId', async () => {
+    const pageA = createFakePage('A')
+    const { app, launch } = launchWith([pageA])
+    const session = await launch()
+
+    const pageB = createFakePage('B')
+    app.emitWindow(pageB)
+
+    pageA.emitConsole({ type: 'log', text: 'from A' })
+    pageB.emitConsole({ type: 'warning', text: 'from B' })
+    const recordB = pageB.emitDialog({ type: 'confirm', message: 'close B?' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const windows = await session.windowsList()
+    const { entries } = await session.consoleLogs()
+    expect(entries.map((e) => ({ text: e.text, windowId: e.windowId }))).toEqual([
+      { text: 'from A', windowId: windows[0]?.id },
+      { text: 'from B', windowId: windows[1]?.id },
+    ])
+    // The dialog from the SECOND window was auto-resolved and recorded too.
+    expect(recordB.dismissed).toBe(true)
+    const dialogs = await session.dialogEvents()
+    expect(dialogs.entries[0]).toMatchObject({ message: 'close B?', windowId: windows[1]?.id })
+  })
+
+  it('attaches capture to a window exactly once even when re-announced', async () => {
+    const pageA = createFakePage('A')
+    const { app, launch } = launchWith([pageA])
+    const session = await launch()
+
+    // Playwright can hand the same page through windows() AND the window event;
+    // the capture set must dedupe or every message doubles.
+    app.emitWindow(pageA)
+    pageA.emitConsole({ type: 'log', text: 'once' })
+
+    const { entries } = await session.consoleLogs()
+    expect(entries).toHaveLength(1)
+  })
+})
+
+describe('PlaywrightSession stop escalation', () => {
+  it('escalates to SIGKILL when the graceful close exceeds its budget', async () => {
+    const app = createFakeElectronApp([createFakePage('A')], { value: 1 }, { hangClose: true })
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    const result = await transport.stop(session, { timeoutMs: 40 })
+
+    expect(result).toEqual({ escalated: true })
+    expect(app.killSignals).toEqual(['SIGKILL'])
+    // The session is released regardless of the hung close.
+    await expect(session.windowsList()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+
+  it('does not escalate when the close resolves within the budget', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(transport.stop(session, { timeoutMs: 1000 })).resolves.toEqual({
+      escalated: false,
+    })
+    expect(app.killSignals).toEqual([])
+    expect(app.closeCalls).toBe(1)
+  })
+
+  it('a second stop after an escalation is a no-op that reports no escalation', async () => {
+    const app = createFakeElectronApp([createFakePage('A')], { value: 1 }, { hangClose: true })
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    await expect(transport.stop(session, { timeoutMs: 40 })).resolves.toEqual({ escalated: true })
+    await expect(transport.stop(session, { timeoutMs: 40 })).resolves.toEqual({ escalated: false })
+    expect(app.killSignals).toEqual(['SIGKILL'])
+  })
+})
+
+describe('PlaywrightSession window recovery (activePage)', () => {
+  it('recovers when the known window list empties and later repopulates', async () => {
+    const pageA = createFakePage('A')
+    const app = createFakeElectronApp([pageA])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+      windowRecoveryBudgetMs: 2000,
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    // Seen after an in-page modal confirm: Playwright momentarily drops the page
+    // from windows() and firstWindow() would block on a window event that never
+    // fires. The page then re-registers WITHOUT an event.
+    app.setPages([])
+    setTimeout(() => app.setPages([pageA]), 150)
+
+    await expect(session.click('#go')).resolves.toBeUndefined()
+    expect(pageA.interactions.at(-1)).toMatchObject({ method: 'click' })
+  })
+
+  it('fails with REF_NOT_FOUND when no window reappears within the budget', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+      windowRecoveryBudgetMs: 150,
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+
+    app.setPages([])
+
+    await expect(session.click('#go')).rejects.toMatchObject({ code: 'REF_NOT_FOUND' })
   })
 })

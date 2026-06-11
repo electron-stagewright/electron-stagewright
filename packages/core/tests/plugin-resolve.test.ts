@@ -251,12 +251,15 @@ describe('electron_plugins introspection tool', () => {
 
 /** A no-op Logger that records `warn` calls so we can assert the orphaned-config warning. */
 function capturingLogger(): Logger & { warn: ReturnType<typeof vi.fn> } {
-  return {
+  const logger = {
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   }
+  // vi.fn()'s Mock type does not structurally satisfy Logger's optional-fields
+  // signatures under exactOptionalPropertyTypes; the runtime shape is correct.
+  return logger as unknown as Logger & { warn: ReturnType<typeof vi.fn> }
 }
 
 describe('createServer orphaned pluginConfigs', () => {

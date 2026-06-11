@@ -16,7 +16,12 @@ export type {
   SnapshotMeta,
   SnapshotJsonSchemaShape,
   SnapshotDiff,
+  SnapshotDiffCompact,
+  SnapshotDiffMeta,
   SnapshotEntryChange,
+  SnapshotEntryChangeCompact,
+  SnapshotEntryChangedValues,
+  SnapshotEntryRemovedCompact,
   ChangedField,
   FindQuery,
   RefReconciliation,
@@ -34,7 +39,14 @@ export { resolveRole, isRoleInteractive } from './roles.js'
 
 export { extractState, isVisible, isDisabled } from './state.js'
 
-export { diffSnapshots, markRecentlyChanged, detectRendererReload, withReloadFlag } from './diff.js'
+export {
+  compactDiff,
+  diffSnapshots,
+  markRecentlyChanged,
+  detectRendererReload,
+  truncateDiffToBudget,
+  withReloadFlag,
+} from './diff.js'
 
 export { reconcileRefs } from './reconcile.js'
 

@@ -36,6 +36,7 @@ import type {
   PWModule,
   PWPage,
 } from './playwright-electron-api.js'
+import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
 import {
   EDITABLE_SIGNATURE_BODY,
   TYPE_EFFECT_SETTLE_MS,
@@ -47,12 +48,10 @@ import type {
   ConsoleEntry,
   ConsoleLogsResult,
   ConsoleStream,
-  DialogAction,
   DialogEvent,
   DialogEventsOptions,
   DialogEventsResult,
   DialogPolicy,
-  DialogType,
   ITransport,
   InjectOptions,
   InteractionOptions,
@@ -62,6 +61,7 @@ import type {
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
+  StopResult,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -70,6 +70,40 @@ import type {
 } from './types.js'
 
 const TRANSPORT_ID: TransportId = 'playwright-electron'
+
+/**
+ * Default budget for a graceful `stop` before escalating to SIGKILL. A hung app
+ * (dead renderer, dev-server-backed session) can ignore `app.close()` far past
+ * the dispatcher's operation timeout; this bound guarantees a stop always
+ * resolves with the process reaped.
+ */
+const STOP_GRACEFUL_BUDGET_MS = 10_000
+/** Bounded wait for Playwright's close() to settle after an escalation SIGKILL. */
+const POST_KILL_SETTLE_MS = 5_000
+
+/**
+ * Resolve `true` when `ms` elapses before `settled` resolves. `settled` must
+ * never reject (callers attach their own catch). The timer never keeps the
+ * process alive.
+ */
+function timedOut(settled: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(true), ms)
+    timer.unref?.()
+    void settled.then(() => {
+      clearTimeout(timer)
+      resolve(false)
+    })
+  })
+}
+
+/** Sleep helper for the window-recovery poll loop. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
 
 /** Map the transport-neutral interaction options onto Playwright's action options. */
 function toActionOptions(opts: InteractionOptions): { force?: boolean; timeout?: number } {
@@ -102,6 +136,12 @@ function toTimeoutOptions(opts: { readonly timeoutMs?: number }): { timeout?: nu
 
 export interface PlaywrightElectronTransportOptions {
   readonly loadElectron?: () => Promise<PWElectron>
+  /**
+   * Override for the window-recovery budget (how long a session waits for a
+   * window to (re)appear when Playwright's known list is empty). Primarily a
+   * test seam; defaults to 10s.
+   */
+  readonly windowRecoveryBudgetMs?: number
 }
 
 export interface PlaywrightLaunchOptions {
@@ -196,60 +236,59 @@ class PlaywrightSession implements TransportSession {
    */
   private dialogPolicy: DialogPolicy = { action: 'dismiss' }
 
-  constructor(app: PWElectronApp, initialPage?: PWPage) {
+  /** Pages that already have console/dialog listeners, so re-attach is a no-op. */
+  private readonly capturedPages = new WeakSet<PWPage>()
+
+  /** Window-recovery budget — how long `activePage` waits for a window to (re)appear. */
+  private readonly windowRecoveryBudgetMs: number
+
+  constructor(app: PWElectronApp, initialPage?: PWPage, windowRecoveryBudgetMs?: number) {
     this.id = `pw-${randomUUID()}`
     this.app = app
-    // Best-effort console + dialog capture from the first window, from launch
-    // onward. A failure to attach (no window, dead app) is non-fatal — the
-    // buffers simply stay empty. When the caller already resolved the first
-    // window (launch does), reuse it so we make no extra firstWindow() call.
-    if (initialPage !== undefined) {
-      this.attachConsole(initialPage)
-      this.attachDialog(initialPage)
-    } else {
-      void this.attachCapture()
-    }
-  }
-
-  /** Resolve the first window (when not supplied) and attach the event listeners. */
-  private async attachCapture(): Promise<void> {
+    this.windowRecoveryBudgetMs =
+      windowRecoveryBudgetMs ?? PlaywrightSession.#WINDOW_RECOVERY_BUDGET_MS
+    // Best-effort console + dialog capture across EVERY window: the launch-time
+    // window(s) and any window the app opens later (the `window` event). A failure
+    // to attach is non-fatal — the buffers simply stay empty. When the caller
+    // already resolved the first window (launch does), reuse it so we make no
+    // extra firstWindow() call.
+    if (initialPage !== undefined) this.attachCaptureTo(initialPage)
     try {
-      const app = this.app
-      if (app === null) return
-      const page = await app.firstWindow()
-      this.attachConsole(page)
-      this.attachDialog(page)
+      for (const page of app.windows()) this.attachCaptureTo(page)
+      app.on?.('window', (page) => this.attachCaptureTo(page))
     } catch {
-      // Event capture is best-effort; a missing/closed window is not an error.
+      // Event capture is best-effort; a dead app handle is not an error here.
     }
   }
 
-  /** Attach the console listener to `page` so its messages buffer for `consoleLogs`. */
-  private attachConsole(page: PWPage): void {
-    page.on('console', (message) => this.pushConsole(message))
-  }
-
-  /** Attach the dialog listener to `page` so it auto-responds and buffers events. */
-  private attachDialog(page: PWPage): void {
-    page.on('dialog', (dialog) => {
-      // `handleDialog` is fire-and-forget; a malformed dialog handle (a throwing
-      // getter) would otherwise surface as an unhandled rejection and, under Node's
-      // default `--unhandled-rejections=throw`, terminate the whole server. Swallow
-      // here so one bad dialog can never take down every live session.
-      void this.handleDialog(dialog).catch(() => {})
-    })
+  /** Attach console + dialog listeners to `page` exactly once (later windows included). */
+  private attachCaptureTo(page: PWPage): void {
+    if (this.capturedPages.has(page)) return
+    this.capturedPages.add(page)
+    const windowId = this.idForWindow(page)
+    try {
+      page.on('console', (message) => this.pushConsole(message, windowId))
+      page.on('dialog', (dialog) => {
+        // `handleDialog` is fire-and-forget; a malformed dialog handle (a throwing
+        // getter) would otherwise surface as an unhandled rejection and, under Node's
+        // default `--unhandled-rejections=throw`, terminate the whole server. Swallow
+        // here so one bad dialog can never take down every live session.
+        void this.handleDialog(dialog, windowId).catch(() => {})
+      })
+    } catch {
+      // A page that refuses listeners (already closed) is skipped, not fatal.
+    }
   }
 
   /** Resolve a native JS dialog per the active policy and record what happened. */
-  private async handleDialog(dialog: PWDialog): Promise<void> {
+  private async handleDialog(dialog: PWDialog, windowId: string): Promise<void> {
     // Read the dialog's fields BEFORE responding — accept()/dismiss() can
     // invalidate the handle.
     const type = dialog.type()
     const message = dialog.message()
     const defaultValue = dialog.defaultValue()
     const policy = this.dialogPolicy
-    const action: DialogAction = policy.perType?.[type as DialogType] ?? policy.action
-    const promptText = action === 'accept' && type === 'prompt' ? policy.promptText : undefined
+    const { action, promptText } = resolveDialogResponse(policy, type)
 
     // A one-shot policy reverts to the safe default after a single dialog, so a
     // lingering `accept` cannot silently confirm a later, unexpected dialog.
@@ -276,6 +315,7 @@ class PlaywrightSession implements TransportSession {
       ...(defaultValue !== '' ? { defaultValue } : {}),
       ...(promptText !== undefined ? { promptText } : {}),
       timestamp: Date.now(),
+      windowId,
     })
   }
 
@@ -289,12 +329,13 @@ class PlaywrightSession implements TransportSession {
   }
 
   /** Append a captured console message, dropping the oldest when the buffer is full. */
-  private pushConsole(message: PWConsoleMessage): void {
+  private pushConsole(message: PWConsoleMessage, windowId: string): void {
     const loc = message.location()
     const entry: ConsoleEntry = {
       type: message.type(),
       text: message.text(),
       timestamp: Date.now(),
+      windowId,
       ...(loc.url !== undefined || loc.lineNumber !== undefined
         ? {
             location: {
@@ -381,7 +422,7 @@ class PlaywrightSession implements TransportSession {
         payload,
       )
     }
-    const page = await app.firstWindow()
+    const page = await this.activePage()
     return page.evaluate<T>(
       (input) =>
         Function('arg', `"use strict"; return (async () => { ${input.body} })()`)(input.arg),
@@ -421,9 +462,58 @@ class PlaywrightSession implements TransportSession {
     return descriptors
   }
 
-  /** The active window that interaction targets. Playwright's first window. */
+  /** Default window-recovery budget (see {@link activePage}). */
+  static readonly #WINDOW_RECOVERY_BUDGET_MS = 10_000
+  /** Per-attempt slice for waiting on a `window` event during recovery. */
+  static readonly #WINDOW_RECOVERY_SLICE_MS = 1_000
+  /** Pause between known-list re-checks when `firstWindow` rejects immediately. */
+  static readonly #WINDOW_RECOVERY_POLL_MS = 100
+
+  /** The pages Playwright currently tracks that are not closed. */
+  private openPages(app: PWElectronApp): readonly PWPage[] {
+    return app.windows().filter((page) => page.isClosed === undefined || !page.isClosed())
+  }
+
+  /**
+   * The active window that interaction targets — the first non-closed known
+   * window. When the known list is momentarily empty (seen after an in-page
+   * modal confirm: Playwright drops the page and `firstWindow()` blocks 30s
+   * waiting for a NEW `window` event that never fires), this alternates short
+   * `firstWindow` waits with re-checks of the known list, so a window that
+   * Playwright re-registers WITHOUT an event is still found. Bounded by the
+   * window-recovery budget; a session that truly has no window fails with a
+   * registered code instead of hanging.
+   */
   private async activePage(): Promise<PWPage> {
-    return this.requireRunning().firstWindow()
+    const app = this.requireRunning()
+    const known = this.openPages(app)[0]
+    if (known !== undefined) return known
+    const deadline = Date.now() + this.windowRecoveryBudgetMs
+    for (;;) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
+      const attemptStarted = Date.now()
+      try {
+        const page = await app.firstWindow({
+          timeout: Math.min(remaining, PlaywrightSession.#WINDOW_RECOVERY_SLICE_MS),
+        })
+        if (page.isClosed === undefined || !page.isClosed()) return page
+      } catch {
+        // Slice elapsed (or firstWindow rejected outright) — re-check the known
+        // list below. Pause briefly when the rejection was immediate so a
+        // hard-failing firstWindow cannot spin this loop hot.
+        if (Date.now() - attemptStarted < PlaywrightSession.#WINDOW_RECOVERY_POLL_MS) {
+          await delay(PlaywrightSession.#WINDOW_RECOVERY_POLL_MS)
+        }
+      }
+      const reappeared = this.openPages(app)[0]
+      if (reappeared !== undefined) return reappeared
+    }
+    throw new StagewrightError(
+      'REF_NOT_FOUND',
+      `No windows are open in the Electron app (waited ${this.windowRecoveryBudgetMs}ms for one to appear).`,
+      { transport: TRANSPORT_ID, sessionId: this.id },
+    )
   }
 
   async click(selector: string, opts: ClickOptions = {}): Promise<void> {
@@ -579,7 +669,17 @@ class PlaywrightSession implements TransportSession {
   }
 
   private async resolveWindow(app: PWElectronApp, ref: WindowRef): Promise<PWPage> {
-    const pages = app.windows()
+    let pages = app.windows()
+    if (pages.length === 0) {
+      // A modal swap / navigation can momentarily empty the known list — give the
+      // window-recovery path a chance before concluding none exist.
+      try {
+        await this.activePage()
+      } catch {
+        // Fall through to the precise REF_NOT_FOUND below.
+      }
+      pages = app.windows()
+    }
     if (pages.length === 0) {
       throw new StagewrightError('REF_NOT_FOUND', 'No windows are open in the Electron app.', {
         transport: TRANSPORT_ID,
@@ -632,39 +732,61 @@ class PlaywrightSession implements TransportSession {
   }
 
   async dispose(): Promise<void> {
-    // Idempotent — second and subsequent calls are no-ops, never throw.
-    if (this.disposed) return
-    this.disposed = true
-    const app = this.app
-    this.app = null
-    if (app === null) return
-    try {
-      await app.close()
-    } catch {
-      // Closing twice or against a dead process is a benign condition during
-      // shutdown. Swallow so callers can `dispose()` defensively.
-    }
+    // Idempotent — second and subsequent calls are no-ops, never throw. Routes
+    // through the bounded graceful close so a hung app cannot wedge shutdown.
+    await this.stopGracefully({})
   }
 
-  async forceKill(): Promise<void> {
-    if (this.disposed) return
+  /**
+   * Bounded graceful shutdown with SIGKILL escalation. Closes the app within
+   * `opts.timeoutMs` (default {@link STOP_GRACEFUL_BUDGET_MS}); when the close
+   * does not settle in time — a hung renderer, a dev-server-backed session —
+   * SIGKILLs the process so the caller never inherits an orphan it has no
+   * handle to. Idempotent: a second call is a no-op reporting no escalation.
+   */
+  async stopGracefully(opts: StopOptions): Promise<StopResult> {
+    if (this.disposed) return { escalated: false }
     this.disposed = true
     const app = this.app
     this.app = null
-    if (app === null) return
+    if (app === null) return { escalated: false }
 
+    if (opts.force === true) {
+      try {
+        app.process().kill('SIGKILL')
+      } catch {
+        // If the process is already gone, close() below still releases any
+        // remaining Playwright-side resources.
+      }
+      try {
+        await app.close()
+      } catch {
+        // A killed process can make Playwright close() reject. Force-kill stays
+        // best-effort and idempotent.
+      }
+      return { escalated: true }
+    }
+
+    const budget = opts.timeoutMs ?? STOP_GRACEFUL_BUDGET_MS
+    // Closing twice or against a dead process is benign during shutdown; the
+    // guarded promise never rejects so the timeout race below stays clean.
+    const closing = app.close().catch(() => {})
+    if (!(await timedOut(closing, budget))) return { escalated: false }
+
+    // Graceful close exceeded its budget — escalate so the process is always
+    // reaped, then give Playwright a bounded window (never longer than the
+    // graceful budget itself) to settle its handle.
     try {
       app.process().kill('SIGKILL')
     } catch {
-      // If the process is already gone, app.close() below still releases any
-      // remaining Playwright-side resources.
+      // Process already gone — the close() above will settle on its own.
     }
-    try {
-      await app.close()
-    } catch {
-      // A killed process can make Playwright close() reject. Force-kill should
-      // remain best-effort and idempotent.
-    }
+    await timedOut(closing, Math.min(POST_KILL_SETTLE_MS, budget))
+    return { escalated: true }
+  }
+
+  async forceKill(): Promise<void> {
+    await this.stopGracefully({ force: true })
   }
 }
 
@@ -672,21 +794,14 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function copyDialogPolicy(policy: DialogPolicy): DialogPolicy {
-  return {
-    action: policy.action,
-    ...(policy.promptText !== undefined ? { promptText: policy.promptText } : {}),
-    ...(policy.perType !== undefined ? { perType: { ...policy.perType } } : {}),
-    ...(policy.oneShot !== undefined ? { oneShot: policy.oneShot } : {}),
-  }
-}
-
 export class PlaywrightElectronTransport implements ITransport {
   public readonly id: TransportId = TRANSPORT_ID
   private readonly loadElectron: () => Promise<PWElectron>
+  private readonly windowRecoveryBudgetMs: number | undefined
 
   constructor(opts: PlaywrightElectronTransportOptions = {}) {
     this.loadElectron = opts.loadElectron ?? loadPlaywrightElectron
+    this.windowRecoveryBudgetMs = opts.windowRecoveryBudgetMs
   }
 
   public readonly capabilities: TransportCapabilities = {
@@ -738,7 +853,7 @@ export class PlaywrightElectronTransport implements ITransport {
     }
     // Reuse the window we already awaited for console capture, so launch makes a
     // single firstWindow() call rather than one here and one in the session.
-    return new PlaywrightSession(app, initialPage)
+    return new PlaywrightSession(app, initialPage, this.windowRecoveryBudgetMs)
   }
 
   attach(_opts: AttachOptions): Promise<TransportSession> {
@@ -761,8 +876,12 @@ export class PlaywrightElectronTransport implements ITransport {
     )
   }
 
-  async stop(session: TransportSession, _opts?: StopOptions): Promise<void> {
+  async stop(session: TransportSession, opts?: StopOptions): Promise<StopResult> {
+    if (session instanceof PlaywrightSession) {
+      return session.stopGracefully(opts ?? {})
+    }
     await session.dispose()
+    return { escalated: false }
   }
 
   async forceKill(session: TransportSession): Promise<void> {

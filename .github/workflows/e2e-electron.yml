@@ -1,0 +1,80 @@
+# Real-Electron smokes on a headless Linux runner (Xvfb).
+#
+# Best-effort by design: the Electron binary download inside CI runners has
+# failed before (the pnpm store cache skipped the postinstall, and pnpm
+# install / rebuild / install.js all no-op'd), so this workflow is separate
+# from ci.yml and marked continue-on-error — a red run here must never block
+# the main gate while the cache + explicit-install path below proves itself.
+#
+# Mitigations for the known failure mode:
+# - ~/.cache/electron is cached keyed by the locked Electron version, so the
+#   zip download survives across runs.
+# - After install, the binary's presence is verified and, when absent, the
+#   packaged install.js is invoked explicitly (it resolves the zip from the
+#   cache first).
+# - ELECTRON_DISABLE_SANDBOX works around the unprivileged-userns AppArmor
+#   restriction on ubuntu-24.04 runners.
+name: E2E (real Electron)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: e2e-electron-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-linux:
+    name: Real-Electron smokes (ubuntu, Xvfb)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    env:
+      ELECTRON_DISABLE_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Resolve locked Electron version
+        id: electron
+        run: |
+          version="$(grep -oE 'electron@[0-9]+\.[0-9]+\.[0-9]+' pnpm-lock.yaml | head -1 | cut -d@ -f2)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Locked Electron version: ${version}"
+
+      - name: Cache the Electron binary download
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: electron-binary-${{ runner.os }}-${{ steps.electron.outputs.version }}
+
+      - run: pnpm install --frozen-lockfile
+
+      # require('electron') throws when the package's path.txt is absent (the
+      # postinstall never ran), so it doubles as the binary-presence probe.
+      - name: Ensure the Electron binary is present
+        run: |
+          if node -e "require('electron')" 2>/dev/null; then
+            echo "Electron binary already present."
+          else
+            echo "Electron binary missing — running the packaged installer."
+            node "$(node -p "require('path').dirname(require.resolve('electron/package.json'))")/install.js"
+          fi
+        working-directory: packages/core
+
+      - run: pnpm build
+
+      - name: Run the gated real-Electron smokes under Xvfb
+        run: xvfb-run --auto-servernum pnpm test
+        env:
+          STAGEWRIGHT_E2E: '1'

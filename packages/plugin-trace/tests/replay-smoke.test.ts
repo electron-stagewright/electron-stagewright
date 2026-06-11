@@ -100,7 +100,7 @@ describe('trace replay smoke (real Electron)', () => {
       try {
         const report = (await replayServer.dispatcher.dispatch('trace_replay', {
           path: file,
-        })) as { ok: boolean; replayed: number; matched: number; diverged: number }
+        })) as unknown as { ok: boolean; replayed: number; matched: number; diverged: number }
         expect(report.ok).toBe(true)
         expect(report.replayed).toBe(4)
         expect(report.diverged).toBe(0)

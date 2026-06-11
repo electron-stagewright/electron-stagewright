@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stagewright Dropzone Fixture</title>
+  </head>
+  <body>
+    <!-- A standard web drop handler: dragover must preventDefault for drop to
+         fire; on drop, the received files are echoed into #result so the smoke
+         can assert the DataTransfer payload actually arrived. -->
+    <div id="dropzone" style="width: 300px; height: 120px; border: 2px dashed #888">
+      Drop files here
+    </div>
+    <p id="result">no drop yet</p>
+
+    <script>
+      const zone = document.getElementById('dropzone')
+      const result = document.getElementById('result')
+      zone.addEventListener('dragover', (ev) => ev.preventDefault())
+      zone.addEventListener('drop', (ev) => {
+        ev.preventDefault()
+        const files = Array.from(ev.dataTransfer?.files ?? [])
+        result.textContent = files.map((f) => `${f.name}:${f.size}:${f.type}`).join(' | ')
+      })
+    </script>
+  </body>
+</html>

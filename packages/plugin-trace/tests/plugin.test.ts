@@ -350,7 +350,9 @@ describe('trace plugin replay (in-process)', () => {
     )
     const server = await createServer({ plugins: [tracePlugin], allowEval: false })
     try {
-      const report = (await server.dispatcher.dispatch('trace_replay', { path: file })) as {
+      const report = (await server.dispatcher.dispatch('trace_replay', {
+        path: file,
+      })) as unknown as {
         ok: boolean
         calls: ReadonlyArray<{
           tool: string

@@ -68,7 +68,7 @@ describe('production plugin (in-process)', () => {
     try {
       const res = (await server.dispatcher.dispatch('production_validate', {
         appPath: app,
-      })) as ValidateResult
+      })) as unknown as ValidateResult
       expect(res.ok).toBe(true)
       expect(res.app_path).toBe(app)
       expect(res.checks).toHaveLength(5)
@@ -88,7 +88,7 @@ describe('production plugin (in-process)', () => {
       const res = (await server.dispatcher.dispatch('production_validate', {
         appPath: app,
         checks: ['bundle-structure'],
-      })) as ValidateResult
+      })) as unknown as ValidateResult
       expect(res.checks).toHaveLength(1)
       expect(res.checks[0]).toMatchObject({ id: 'bundle-structure', status: 'pass' })
       expect(res.passed).toBe(true)
@@ -119,7 +119,7 @@ describe('production plugin (in-process)', () => {
       const res = (await server.dispatcher.dispatch('production_validate', {
         appPath: app,
         checks: ['bundle-structure'],
-      })) as ValidateResult
+      })) as unknown as ValidateResult
       expect(res.ok).toBe(true) // the tool succeeded at validating
       expect(res.passed).toBe(false) // the app failed validation
       expect(res.summary.fail).toBe(1)

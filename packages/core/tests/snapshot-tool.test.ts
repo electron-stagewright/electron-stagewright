@@ -159,3 +159,73 @@ describe('electron_snapshot', () => {
     expect(snapshots.get('sess')).toBeUndefined()
   })
 })
+
+describe('electron_snapshot diff encoding + budget', () => {
+  it('encodes diffs compactly by default (changed fields only) and reports diff_format', async () => {
+    const { dispatcher } = setup([
+      snap('<button>One</button>'),
+      snap('<button>One</button><button>Two</button>'),
+    ])
+    await dispatcher.dispatch('electron_snapshot', {})
+    const res = (await dispatcher.dispatch('electron_snapshot', {
+      since: 'last',
+    })) as SuccessResponse & {
+      diff_format: string
+      diff: { added: unknown[]; removed: readonly Record<string, unknown>[] }
+    }
+    expect(res).toMatchObject({ ok: true, kind: 'diff', diff_format: 'compact' })
+    expect(res.diff.added).toHaveLength(1)
+  })
+
+  it('returns identity-only removed entries in the compact encoding', async () => {
+    const { dispatcher } = setup([
+      snap('<button>One</button><button>Two</button>'),
+      snap('<button>One</button>'),
+    ])
+    await dispatcher.dispatch('electron_snapshot', {})
+    const res = (await dispatcher.dispatch('electron_snapshot', {
+      since: 'last',
+    })) as SuccessResponse & {
+      diff: { removed: readonly Record<string, unknown>[] }
+    }
+    expect(res.diff.removed).toHaveLength(1)
+    const removed = res.diff.removed[0] ?? {}
+    expect(Object.keys(removed).sort()).toEqual(['fingerprint', 'name', 'ref', 'role'])
+  })
+
+  it('restores the full prev/curr encoding with diffFormat:"full"', async () => {
+    const { dispatcher } = setup([
+      snap('<button>One</button><button>Two</button>'),
+      snap('<button>One</button>'),
+    ])
+    await dispatcher.dispatch('electron_snapshot', {})
+    const res = (await dispatcher.dispatch('electron_snapshot', {
+      since: 'last',
+      diffFormat: 'full',
+    })) as SuccessResponse & { diff_format: string; diff: { removed: readonly { tag?: string }[] } }
+    expect(res.diff_format).toBe('full')
+    // Full encoding keeps complete entries (tag present only there).
+    expect(res.diff.removed[0]?.tag).toBe('button')
+  })
+
+  it('truncates the diff payload under budgetTokens and flags it', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => `<button>Item ${i}</button>`).join('')
+    const { dispatcher } = setup([snap(`<main>${many}</main>`), snap('<main></main>')])
+    await dispatcher.dispatch('electron_snapshot', {})
+    const res = (await dispatcher.dispatch('electron_snapshot', {
+      since: 'last',
+      budgetTokens: 120,
+    })) as SuccessResponse & {
+      truncated: boolean
+      diff: {
+        removed: readonly unknown[]
+        _meta: { truncated_entries?: number; entries_removed: number }
+      }
+    }
+    expect(res.ok).toBe(true)
+    expect(res.truncated).toBe(true)
+    expect(res.diff._meta.truncated_entries).toBeGreaterThan(0)
+    // The real delta count is preserved even though the payload shrank.
+    expect(res.diff._meta.entries_removed).toBeGreaterThan(res.diff.removed.length)
+  })
+})

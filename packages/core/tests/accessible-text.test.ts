@@ -10,6 +10,7 @@
 import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 
+import { computeAccessibleName } from '../src/snapshot/index.js'
 import { ACCESSIBLE_TEXT_FN } from '../src/tools/accessible-text.js'
 
 /**
@@ -74,5 +75,50 @@ describe('__swAccessibleText', () => {
 
   it('returns empty string when there is neither text nor a label', () => {
     expect(accessibleText('<button><svg></svg></button>', 'button')).toBe('')
+  })
+})
+
+describe('__swAccessibleText non-content filtering (style/script)', () => {
+  it('skips injected <style> rules so editor text payloads stay clean', () => {
+    const html = '<div id="editor"><style>.view-line { color: red; }</style>const x = 1</div>'
+    expect(accessibleText(html, '#editor')).toBe('const x = 1')
+  })
+
+  it('skips script/noscript/template text the same way', () => {
+    const html =
+      '<div id="d"><script>var hidden = true;</script><template><p>tpl</p></template><noscript>off</noscript>Visible copy</div>'
+    expect(accessibleText(html, '#d')).toBe('Visible copy')
+  })
+
+  it('falls through to the accessible label when the only content is a <style>', () => {
+    const html = '<div id="d" aria-label="Editor pane"><style>.a { color: red; }</style></div>'
+    expect(accessibleText(html, '#d')).toBe('Editor pane')
+  })
+
+  it('keeps aria-labelledby resolution clean of style text inside the label source', () => {
+    const html =
+      '<span id="lbl"><style>.x{}</style>Real label</span><button id="b" aria-labelledby="lbl"></button>'
+    expect(accessibleText(html, '#b')).toBe('Real label')
+  })
+})
+
+describe('computeAccessibleName non-content filtering (snapshot accname)', () => {
+  function nameOf(html: string, selector: string): string {
+    const dom = new JSDOM(`<!doctype html><body>${html}</body>`)
+    const el = dom.window.document.querySelector(selector)
+    if (el === null) throw new Error(`no element matched ${selector}`)
+    return computeAccessibleName(el)
+  }
+
+  it('excludes <style> text from name-from-content', () => {
+    expect(nameOf('<button><style>.icon{fill:red}</style>Guardar</button>', 'button')).toBe(
+      'Guardar',
+    )
+  })
+
+  it('excludes script/template text from label-based names', () => {
+    const html =
+      '<label for="i"><script>var x=1;</script>Nombre del proyecto</label><input id="i" />'
+    expect(nameOf(html, '#i')).toBe('Nombre del proyecto')
   })
 })

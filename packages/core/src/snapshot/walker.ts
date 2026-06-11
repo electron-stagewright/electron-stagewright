@@ -13,11 +13,29 @@
  *
  * Shadow DOM: the walker recurses into OPEN shadow roots automatically (their
  * contents are part of the agent's reachable surface). CLOSED shadow roots are
- * opaque to `element.shadowRoot`; an app author can expose them via the opt-in
- * global hook `window.__stagewright_inspectShadow: () => readonly ShadowRoot[]`,
- * and entries discovered through that hook are marked `state.shadow_closed: true`.
- * Recursion is capped at {@link MAX_SHADOW_DEPTH} levels to defend against
- * pathological nested-shadow DOMs.
+ * opaque to `element.shadowRoot`; an app author can expose them via either
+ * opt-in global hook — entries discovered through them are marked
+ * `state.shadow_closed: true`:
+ *
+ * 1. **Registration array** (preferred — no timing dependency): right after
+ *    `attachShadow({ mode: 'closed' })`, push the root onto a global array:
+ *
+ *    ```js
+ *    const root = host.attachShadow({ mode: 'closed' })
+ *    ;(window.__stagewright_closedShadowRoots ||= []).push(root)
+ *    ```
+ *
+ *    The array is plain app-owned state — it works whether or not the snapshot
+ *    bundle has been injected yet, and the walker simply skips roots whose host
+ *    is no longer connected.
+ *
+ * 2. **Inspection callback** (the original escape hatch): implement
+ *    `window.__stagewright_inspectShadow: () => readonly ShadowRoot[]` and
+ *    return every closed root on demand.
+ *
+ * Both sources are merged and deduplicated. Recursion is capped at
+ * {@link MAX_SHADOW_DEPTH} levels to defend against pathological
+ * nested-shadow DOMs.
  *
  * @module
  */
@@ -33,12 +51,15 @@ import { extractState, isVisible } from './state.js'
 const MAX_SHADOW_DEPTH = 10
 
 /**
- * Shape of the optional global hook an app author implements to expose closed
- * shadow roots to the walker. Typed locally (and accessed via a cast) so the
- * global namespace stays clean and the contract lives next to its only caller.
+ * Shape of the optional global hooks an app author uses to expose closed
+ * shadow roots to the walker: the registration array (pushed at attachShadow
+ * time) and the inspection callback (queried on demand). Typed locally (and
+ * accessed via a cast) so the global namespace stays clean and the contract
+ * lives next to its only caller.
  */
 interface StagewrightShadowWindow {
   readonly __stagewright_inspectShadow?: () => readonly ShadowRoot[]
+  readonly __stagewright_closedShadowRoots?: readonly unknown[]
 }
 
 /**
@@ -140,7 +161,7 @@ interface WalkContext {
  * walks fresh; the walker does not stash state between invocations.
  *
  * Walks the light DOM and open shadow roots in document order, then walks any
- * closed shadow roots exposed via the `__stagewright_inspectShadow` hook.
+ * closed shadow roots exposed via the registration array / inspect callback hooks.
  */
 export function walkAccessibilityTree(document: Document, options: WalkerOptions = {}): Snapshot {
   const entries: SnapshotEntry[] = []
@@ -265,28 +286,46 @@ function collectElements(root: Document | ShadowRoot): readonly Element[] {
 
 /**
  * Resolve closed shadow roots the app author exposed via the optional global
- * hook. Returns an empty array when the hook is absent or throws.
+ * hooks: the `__stagewright_closedShadowRoots` registration array first (the
+ * preferred, timing-independent opt-in), then the `__stagewright_inspectShadow`
+ * callback. Merged and deduplicated; roots whose host is detached are skipped.
+ * Returns an empty array when neither hook is present or one throws.
  */
 function getInspectableClosedShadows(document: Document): readonly ShadowRoot[] {
   const view = document.defaultView as (StagewrightShadowWindow & Window) | null
-  const hook = view?.__stagewright_inspectShadow
-  if (typeof hook !== 'function') return []
-  try {
-    const roots = hook()
-    if (!Array.isArray(roots)) return []
-    const inspected: ShadowRoot[] = []
-    const seen = new Set<ShadowRoot>()
-    for (const root of roots) {
-      if (!isInspectableShadowRoot(root, document)) continue
-      if (seen.has(root)) continue
-      seen.add(root)
-      inspected.push(root)
+  if (view === null) return []
+
+  const candidates: unknown[] = []
+  const registered = view.__stagewright_closedShadowRoots
+  if (Array.isArray(registered)) candidates.push(...registered)
+  const hook = view.__stagewright_inspectShadow
+  if (typeof hook === 'function') {
+    try {
+      const roots = hook()
+      if (Array.isArray(roots)) candidates.push(...roots)
+    } catch {
+      // A misbehaving hook must never break the snapshot.
     }
-    return inspected
-  } catch {
-    // A misbehaving hook must never break the snapshot.
-    return []
   }
+
+  const inspected: ShadowRoot[] = []
+  const seen = new Set<ShadowRoot>()
+  for (const root of candidates) {
+    if (!isInspectableShadowRoot(root, document)) continue
+    if (seen.has(root)) continue
+    // A registered root whose host left the document is stale — walking it
+    // would emit entries for UI that no longer exists.
+    if (!isHostConnected(root)) continue
+    seen.add(root)
+    inspected.push(root)
+  }
+  return inspected
+}
+
+/** Whether a shadow root's host element is still connected to the document. */
+function isHostConnected(root: ShadowRoot): boolean {
+  const host = root.host as Element & { readonly isConnected?: boolean }
+  return host.isConnected !== false
 }
 
 function isInspectableShadowRoot(value: unknown, document: Document): value is ShadowRoot {

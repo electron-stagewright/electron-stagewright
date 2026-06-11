@@ -33,7 +33,7 @@
  */
 
 import { StagewrightError } from '../errors/registry.js'
-import type { ITransport, SessionId, TransportSession } from '../transports/types.js'
+import type { ITransport, SessionId, StopResult, TransportSession } from '../transports/types.js'
 
 /** A live session plus the transport that owns its lifecycle. */
 export interface ManagedSession {
@@ -140,18 +140,28 @@ export class SessionManager {
    * Stop and forget the session `id`. Idempotent: a missing id is a no-op, and
    * the underlying `transport.stop` delegates to the session's idempotent
    * `dispose`. `force` routes to `transport.forceKill` (SIGKILL) instead of a
-   * graceful stop.
+   * graceful stop; `timeoutMs` bounds the graceful close before the transport
+   * escalates to SIGKILL on its own. The result reports whether escalation
+   * happened, so callers can tell a graceful close from a forced reap.
    */
-  async remove(id: SessionId, opts: { readonly force?: boolean } = {}): Promise<void> {
+  async remove(
+    id: SessionId,
+    opts: { readonly force?: boolean; readonly timeoutMs?: number } = {},
+  ): Promise<StopResult> {
     const managed = this.#sessions.get(id)
-    if (managed === undefined) return
-    // Delete first so a concurrent remove/disposeAll cannot double-stop.
+    if (managed === undefined) return { escalated: false }
+    // Delete first so a concurrent remove/disposeAll cannot double-stop. The
+    // transport's stop escalates to SIGKILL on timeout, so releasing the id up
+    // front can no longer orphan a process without a handle.
     this.#sessions.delete(id)
     if (opts.force === true) {
       await managed.transport.forceKill(managed.session)
-    } else {
-      await managed.transport.stop(managed.session)
+      return { escalated: false }
     }
+    return managed.transport.stop(
+      managed.session,
+      opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : undefined,
+    )
   }
 
   /**

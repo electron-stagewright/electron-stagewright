@@ -26,6 +26,7 @@ const MANIFEST: readonly ToolManifestEntry[] = [
     name: 'demo_click',
     title: 'Click it',
     description: 'Click the target.',
+    annotations: {},
     operationType: 'command',
     inputJsonSchema: {
       type: 'object',
@@ -40,12 +41,14 @@ const MANIFEST: readonly ToolManifestEntry[] = [
   {
     name: 'demo_status',
     description: 'Report status.',
+    annotations: {},
     operationType: 'query',
     inputJsonSchema: { type: 'object', properties: {} },
   },
   {
     name: 'demo_eval',
     description: 'Run code.',
+    annotations: {},
     operationType: 'eval',
     requiresEvalFlag: true,
     inputJsonSchema: {
@@ -78,7 +81,13 @@ describe('renderToolReference', () => {
 
   it('preserves underscores in anchors so multi-word operation types link correctly', () => {
     const withUnderscore = renderToolReference([
-      { name: 'demo_info', description: 'x', operationType: 'window_info', inputJsonSchema: {} },
+      {
+        name: 'demo_info',
+        description: 'x',
+        annotations: {},
+        operationType: 'window_info',
+        inputJsonSchema: {},
+      },
     ])
     expect(withUnderscore).toContain('(#window_info-tools)')
     expect(withUnderscore).toContain('## Window_info tools')

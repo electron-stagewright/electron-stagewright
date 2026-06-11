@@ -12,6 +12,8 @@
  * @module
  */
 
+import process from 'node:process'
+
 import { z } from 'zod'
 
 import { StagewrightError } from '../../errors/registry.js'
@@ -107,6 +109,24 @@ async function assertEditorTyped(
   }
 }
 
+async function assertEditorChanged(
+  session: TransportSession,
+  selector: string,
+  before: string | null,
+): Promise<void> {
+  // If it was already empty, clearing is a no-op but still a correct final state.
+  if (before === null || before.length === 0) return
+  const after = await readEditorSignature(session, selector, EDITOR_TYPE_SETTLE_MS)
+  if (after === null) return
+  if (after === before) {
+    throw new StagewrightError(
+      'TYPE_NO_EFFECT',
+      `Clear did not land in "${selector}": the editor content area did not change.`,
+      { selector },
+    )
+  }
+}
+
 /** `electron_type` — set the value of an input/textarea (fires one input event). */
 export const typeTool: AnyToolDefinition = defineTool({
   name: 'electron_type',
@@ -169,6 +189,14 @@ export const keyboardTypeTool: AnyToolDefinition = defineTool({
     }),
 })
 
+/**
+ * The platform's select-all chord. The MCP server always runs on the same host
+ * as the Electron app it drives, so `process.platform` is the app's platform.
+ */
+function selectAllChord(): string {
+  return process.platform === 'darwin' ? 'Meta+A' : 'Control+A'
+}
+
 /** `electron_type_into_editor` — click an editor's content area, then type into the focused editor. */
 export const typeIntoEditorTool: AnyToolDefinition = defineTool({
   name: 'electron_type_into_editor',
@@ -178,8 +206,14 @@ export const typeIntoEditorTool: AnyToolDefinition = defineTool({
     "click the editor's content area identified by ref or selector (e.g. '.monaco-editor .view-lines'),",
     'then type the text into the now-focused editor as real keystrokes. Use this instead of typing into',
     "an editor's hidden textarea, which modern EditContext editors ignore (returns TYPE_NO_EFFECT).",
-    'Returns: { ok, session_id, target, typed }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries',
-    'similar_refs), ELEMENT_NOT_VISIBLE (retryable), TYPE_NO_EFFECT, NOT_RUNNING, BAD_ARGUMENT.',
+    'Pass replace:true to REPLACE the editor contents: after the focusing click it selects all',
+    '(Meta/Control+A, platform-aware) and types over the selection — no second click that would',
+    'collapse the selection; with empty text it clears the editor (select-all + Delete).',
+    'Editor auto-pairing caveat: real keystrokes trigger auto-closing of quotes/brackets, so typed',
+    "source can gain debris like a trailing }') — type pairing-safe fragments, or use replace:true",
+    'and include the full intended contents.',
+    'Returns: { ok, session_id, target, typed, replaced }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH',
+    '(carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), TYPE_NO_EFFECT, NOT_RUNNING, BAD_ARGUMENT.',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,
@@ -188,6 +222,10 @@ export const typeIntoEditorTool: AnyToolDefinition = defineTool({
       .string()
       .max(MAX_KEYSTROKE_TEXT_LENGTH)
       .describe('The text to type into the focused editor.'),
+    replace: z
+      .boolean()
+      .optional()
+      .describe('Select all before typing, replacing the editor contents instead of appending.'),
     timeoutMs: timeoutField,
     sessionId: sessionIdField,
   }),
@@ -198,9 +236,21 @@ export const typeIntoEditorTool: AnyToolDefinition = defineTool({
       // an EditContext editor), then type into the active element with no selector.
       const before = await readEditorSignature(session, selector, 0)
       await session.click(selector, opts)
+      if (args.replace === true) {
+        // Select all against the ACTIVE element — re-targeting the selector here
+        // would click again and collapse the selection (the dogfooded failure
+        // this option exists to prevent).
+        await session.press(selectAllChord())
+        if (args.text.length === 0) {
+          // replace with empty text = clear the editor.
+          await session.press('Delete')
+          await assertEditorChanged(session, selector, before)
+          return { target: selector, typed: 0, replaced: true }
+        }
+      }
       await session.typeText(args.text)
       await assertEditorTyped(session, selector, args.text, before)
-      return { target: selector, typed: args.text.length }
+      return { target: selector, typed: args.text.length, replaced: args.replace === true }
     }),
 })
 
