@@ -50,10 +50,17 @@ describe('production plugin smoke (real CLIs)', () => {
       const results = await runChecks(app, makeRunCommand(10_000))
       expect(results.find((r) => r.id === 'bundle-structure')?.status).toBe('pass')
       for (const r of results) expect(['pass', 'fail', 'unknown']).toContain(r.status)
+      // The pure-fs checks are deterministic on every host: no app-update.yml was packaged
+      // (unknown — runtime feeds are not statically visible) and no Electron Framework exists in
+      // this synthetic bundle (unknown — not an Electron-shaped bundle).
+      expect(results.find((r) => r.id === 'updater-feed')?.status).toBe('unknown')
+      expect(results.find((r) => r.id === 'crash-reporter')?.status).toBe('unknown')
       // On macOS the real CLIs ran against a well-formed but unsigned, un-notarized bundle: the
-      // Info.plist is valid (pass), but signing and notarization must fail.
+      // Info.plist is valid (pass), its lack of URL schemes is a verified pass through the real
+      // plutil, but signing and notarization must fail.
       if (process.platform === 'darwin') {
         expect(results.find((r) => r.id === 'info-plist')?.status).toBe('pass')
+        expect(results.find((r) => r.id === 'protocol-schemes')?.status).toBe('pass')
         expect(results.find((r) => r.id === 'code-signing')?.status).toBe('fail')
         expect(results.find((r) => r.id === 'notarization')?.status).toBe('fail')
       }

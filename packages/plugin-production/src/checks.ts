@@ -12,8 +12,9 @@
  * @module
  */
 
-import { readdir, stat } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
+import process from 'node:process'
 
 import type { CommandResult, RunCommand } from './command.js'
 
@@ -41,12 +42,16 @@ export interface CheckResult {
 
 /**
  * The checks this plugin runs, in a stable display order that mirrors the real build pipeline
- * (structure → Info.plist → sign → notarize → the Gatekeeper launch gate). Doubles as the `checks`
- * argument enum.
+ * (structure → Info.plist metadata → declared URL schemes → updater feed → crash machinery →
+ * sign → notarize → the Gatekeeper launch gate): configuration is validated before the signing
+ * gates that seal it. Doubles as the `checks` argument enum.
  */
 export const CHECK_IDS = [
   'bundle-structure',
   'info-plist',
+  'protocol-schemes',
+  'updater-feed',
+  'crash-reporter',
   'code-signing',
   'notarization',
   'gatekeeper',
@@ -60,6 +65,23 @@ function firstLine(value: string): string {
   const trimmed = value.trim()
   const nl = trimmed.indexOf('\n')
   return nl === -1 ? trimmed : trimmed.slice(0, nl)
+}
+
+/**
+ * Cap on how long any single untrusted value (a feed URL, a provider name, a scheme) may run
+ * inside a `detail` / `evidence` string before {@link clip} truncates it (token economy, ADR-007).
+ */
+const MAX_UNTRUSTED_VALUE_LENGTH = 120
+
+/**
+ * Clip a value read from an untrusted file before embedding it in a `detail` or `evidence`
+ * string, so one corrupted multi-kilobyte field cannot bloat the structured payload past the
+ * agent's token budget. Clipping never changes a verdict — only how it is reported.
+ */
+function clip(value: string): string {
+  return value.length <= MAX_UNTRUSTED_VALUE_LENGTH
+    ? value
+    : `${value.slice(0, MAX_UNTRUSTED_VALUE_LENGTH)}…`
 }
 
 async function isFile(p: string): Promise<boolean> {
@@ -167,6 +189,45 @@ function isPlistDictionary(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Outcome of reading a bundle's `Contents/Info.plist` as JSON via `plutil -convert json`. Shared
+ * by every plist-backed check (info-plist, protocol-schemes) so the spawn / exit / parse / shape
+ * classification can never drift between them. Each kind maps onto the three-valued model the
+ * SAME way in every consumer:
+ *
+ * - `ok` — a parsed dictionary root, ready to inspect.
+ * - `spawn-error` — `plutil` could not run (absent off-macOS, or a timeout) → `unknown`.
+ * - `exit-error` — `plutil` exited non-zero (the plist is missing or malformed) → `fail`.
+ * - `unparseable` — `plutil` exited cleanly but its output was not JSON (defensive) → `unknown`.
+ * - `not-dictionary` — parsed, but the root is not a dictionary → `fail`.
+ */
+type PlistReadOutcome =
+  | { readonly kind: 'ok'; readonly plist: Record<string, unknown> }
+  | { readonly kind: 'spawn-error'; readonly spawnError: string }
+  | { readonly kind: 'exit-error'; readonly output: string }
+  | { readonly kind: 'unparseable' }
+  | { readonly kind: 'not-dictionary' }
+
+/** Read `Contents/Info.plist` as a JSON dictionary through the bounded `plutil` shell-out. */
+async function readInfoPlist(appPath: string, run: RunCommand): Promise<PlistReadOutcome> {
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+  const res = await run('plutil', ['-convert', 'json', '-o', '-', plistPath])
+  if (res.spawnError !== undefined) {
+    return { kind: 'spawn-error', spawnError: res.spawnError }
+  }
+  if (!res.ok) {
+    return { kind: 'exit-error', output: res.stderr.trim() !== '' ? res.stderr : res.stdout }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(res.stdout)
+  } catch {
+    return { kind: 'unparseable' }
+  }
+  if (!isPlistDictionary(parsed)) return { kind: 'not-dictionary' }
+  return { kind: 'ok', plist: parsed }
+}
+
+/**
  * Verify the bundle's `Contents/Info.plist` declares the identity fields a distributable macOS app
  * needs, by converting it to JSON with `plutil -convert json` (which reads both XML and binary
  * plists, so no extra dependency). Confirms `CFBundleIdentifier`, `CFBundleShortVersionString`, and
@@ -182,31 +243,26 @@ function isPlistDictionary(value: unknown): value is Record<string, unknown> {
  */
 export async function checkInfoPlist(appPath: string, run: RunCommand): Promise<CheckResult> {
   const id = 'info-plist' as const
-  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
-  const res = await run('plutil', ['-convert', 'json', '-o', '-', plistPath])
-  if (res.spawnError !== undefined) {
+  const read = await readInfoPlist(appPath, run)
+  if (read.kind === 'spawn-error') {
     return {
       id,
       title: INFO_PLIST_TITLE,
       status: 'unknown',
-      detail: `plutil could not run (${res.spawnError}); Info.plist fields are only verifiable on macOS.`,
+      detail: `plutil could not run (${read.spawnError}); Info.plist fields are only verifiable on macOS.`,
     }
   }
-  if (!res.ok) {
-    const out = res.stderr.trim() !== '' ? res.stderr : res.stdout
+  if (read.kind === 'exit-error') {
     return {
       id,
       title: INFO_PLIST_TITLE,
       status: 'fail',
       detail: 'plutil could not parse Contents/Info.plist: the file is missing or malformed.',
-      ...(out.trim() !== '' ? { evidence: firstLine(out) } : {}),
+      ...(read.output.trim() !== '' ? { evidence: firstLine(read.output) } : {}),
       next_actions: ['Repackage the app with a well-formed Contents/Info.plist.'],
     }
   }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(res.stdout)
-  } catch {
+  if (read.kind === 'unparseable') {
     return {
       id,
       title: INFO_PLIST_TITLE,
@@ -214,7 +270,7 @@ export async function checkInfoPlist(appPath: string, run: RunCommand): Promise<
       detail: 'plutil exited cleanly but did not produce parseable JSON for Contents/Info.plist.',
     }
   }
-  if (!isPlistDictionary(parsed)) {
+  if (read.kind === 'not-dictionary') {
     return {
       id,
       title: INFO_PLIST_TITLE,
@@ -223,7 +279,7 @@ export async function checkInfoPlist(appPath: string, run: RunCommand): Promise<
       next_actions: ['Repackage the app with a Contents/Info.plist whose root is a dictionary.'],
     }
   }
-  const plist = parsed
+  const plist = read.plist
 
   const problems: string[] = []
   const missing = REQUIRED_PLIST_KEYS.filter((key) => readPlistString(plist, key) === undefined)
@@ -273,6 +329,490 @@ export async function checkInfoPlist(appPath: string, run: RunCommand): Promise<
     detail:
       'Contents/Info.plist declares a reverse-DNS bundle id, a version, and an executable that exists.',
     ...(evidence !== '' ? { evidence } : {}),
+  }
+}
+
+const PROTOCOL_TITLE = 'URL scheme declarations'
+
+/**
+ * RFC 3986 scheme shape: a letter followed by letters, digits, `+`, `-`, or `.`. A declared
+ * scheme outside this shape is silently ignored by the OS, so the deep link never opens the app.
+ */
+const URL_SCHEME_SHAPE = /^[A-Za-z][A-Za-z0-9+.-]*$/
+
+/**
+ * Schemes owned by the system or other well-known handlers. An Electron app declaring one of
+ * these as its own custom scheme is (almost always) a copy-paste defect that hijacks — or loses
+ * to — the system handler, so it is classified as a `fail` rather than silently accepted.
+ */
+const WELL_KNOWN_SCHEMES: ReadonlySet<string> = new Set([
+  'http',
+  'https',
+  'file',
+  'ftp',
+  'mailto',
+  'tel',
+  'ws',
+  'wss',
+])
+
+/** Cap on how many schemes the `evidence` lists before eliding (token economy, ADR-007). */
+const MAX_EVIDENCE_SCHEMES = 8
+
+/**
+ * Validate the bundle's deep-link declarations: every `CFBundleURLTypes` entry must be a
+ * dictionary whose `CFBundleURLSchemes` is a non-empty array of RFC-3986-shaped scheme strings,
+ * with no duplicates across entries and no shadowing of well-known schemes (http, mailto, …).
+ *
+ * Declaring NO custom schemes is a `pass` ("declares no custom URL schemes") — the plist was read
+ * and affirmatively contains none, which is a verified-good outcome, not missing evidence. A
+ * malformed declaration is a `fail`: the OS ignores entries it cannot read, so `myapp://` links
+ * silently stop opening the app. Plist read outcomes classify exactly as in the info-plist check
+ * (each check is independent because `runChecks` supports subsets).
+ */
+export async function checkProtocolSchemes(appPath: string, run: RunCommand): Promise<CheckResult> {
+  const id = 'protocol-schemes' as const
+  const read = await readInfoPlist(appPath, run)
+  if (read.kind === 'spawn-error') {
+    return {
+      id,
+      title: PROTOCOL_TITLE,
+      status: 'unknown',
+      detail: `plutil could not run (${read.spawnError}); URL scheme declarations are only verifiable on macOS.`,
+    }
+  }
+  if (read.kind === 'exit-error') {
+    return {
+      id,
+      title: PROTOCOL_TITLE,
+      status: 'fail',
+      detail: 'plutil could not parse Contents/Info.plist: the file is missing or malformed.',
+      ...(read.output.trim() !== '' ? { evidence: firstLine(read.output) } : {}),
+      next_actions: ['Repackage the app with a well-formed Contents/Info.plist.'],
+    }
+  }
+  if (read.kind === 'unparseable') {
+    return {
+      id,
+      title: PROTOCOL_TITLE,
+      status: 'unknown',
+      detail: 'plutil exited cleanly but did not produce parseable JSON for Contents/Info.plist.',
+    }
+  }
+  if (read.kind === 'not-dictionary') {
+    return {
+      id,
+      title: PROTOCOL_TITLE,
+      status: 'fail',
+      detail: 'Contents/Info.plist is not a property-list dictionary.',
+      next_actions: ['Repackage the app with a Contents/Info.plist whose root is a dictionary.'],
+    }
+  }
+
+  const urlTypes = read.plist['CFBundleURLTypes']
+  if (urlTypes === undefined || (Array.isArray(urlTypes) && urlTypes.length === 0)) {
+    return {
+      id,
+      title: PROTOCOL_TITLE,
+      status: 'pass',
+      detail: 'The app declares no custom URL schemes (CFBundleURLTypes is absent or empty).',
+    }
+  }
+  if (!Array.isArray(urlTypes)) {
+    return {
+      id,
+      title: PROTOCOL_TITLE,
+      status: 'fail',
+      detail: 'CFBundleURLTypes is not an array; the OS ignores the declaration entirely.',
+      next_actions: [
+        'Declare CFBundleURLTypes as an array of dictionaries with CFBundleURLSchemes.',
+      ],
+    }
+  }
+
+  const problems: string[] = []
+  const seen = new Set<string>()
+  const schemes: string[] = []
+  for (let index = 0; index < urlTypes.length; index++) {
+    const entry: unknown = urlTypes[index]
+    if (!isPlistDictionary(entry)) {
+      problems.push(`entry ${index} is not a dictionary`)
+      continue
+    }
+    const declared = entry['CFBundleURLSchemes']
+    if (!Array.isArray(declared) || declared.length === 0) {
+      problems.push(`entry ${index} has no CFBundleURLSchemes array (or it is empty)`)
+      continue
+    }
+    for (const scheme of declared) {
+      if (typeof scheme !== 'string' || scheme.trim() === '') {
+        problems.push(`entry ${index} declares a non-string or empty scheme`)
+        continue
+      }
+      const normalised = scheme.trim().toLowerCase()
+      if (!URL_SCHEME_SHAPE.test(normalised)) {
+        problems.push(`scheme "${clip(scheme)}" is not a valid URL scheme (RFC 3986)`)
+        continue
+      }
+      if (WELL_KNOWN_SCHEMES.has(normalised)) {
+        problems.push(`scheme "${normalised}" shadows a well-known system scheme`)
+        continue
+      }
+      if (seen.has(normalised)) {
+        problems.push(`scheme "${clip(normalised)}" is declared more than once`)
+        continue
+      }
+      seen.add(normalised)
+      schemes.push(normalised)
+    }
+  }
+
+  if (problems.length > 0) {
+    return {
+      id,
+      title: PROTOCOL_TITLE,
+      status: 'fail',
+      detail: `CFBundleURLTypes has problems: ${problems.join('; ')}.`,
+      next_actions: [
+        'Declare each deep link as { CFBundleURLName, CFBundleURLSchemes: ["<app-scheme>"] } with a unique RFC-3986 scheme.',
+      ],
+    }
+  }
+  const listed = schemes.slice(0, MAX_EVIDENCE_SCHEMES).map(clip).join(', ')
+  const elided = schemes.length - Math.min(schemes.length, MAX_EVIDENCE_SCHEMES)
+  return {
+    id,
+    title: PROTOCOL_TITLE,
+    status: 'pass',
+    detail: `The app declares ${schemes.length} well-formed custom URL scheme(s).`,
+    evidence: elided > 0 ? `${listed} (+${elided} more)` : listed,
+  }
+}
+
+const UPDATER_TITLE = 'Updater feed configuration'
+
+/** Where electron-updater embeds its packaged feed configuration inside a macOS bundle. */
+const APP_UPDATE_YML = path.join('Contents', 'Resources', 'app-update.yml')
+
+/**
+ * Upper bound for a plausible `app-update.yml` before the check refuses to read it. Real
+ * electron-updater configs are under 1 KB; this keeps the pure-fs check bounded (the shell-out
+ * checks get the same property from the command timeout) so a corrupted multi-hundred-MB file
+ * cannot be slurped into memory.
+ */
+const MAX_FEED_FILE_BYTES = 256 * 1024
+
+/**
+ * Extract top-level scalar fields (`key: value` at column 0) from a YAML document. This is a
+ * TARGETED extraction, not a YAML parser: electron-updater's `app-update.yml` is a flat scalar map
+ * (provider, url, owner, repo, bucket, channel, …), and reading just those lines avoids taking a
+ * YAML dependency — the same no-new-deps trade the info-plist check made with `plutil` (ADR-012
+ * §2). Indented lines, list items, and nested maps are deliberately ignored; surrounding quotes
+ * are stripped. Inline `#` is NOT treated as a comment (URLs legitimately contain fragments).
+ */
+function extractYamlScalars(text: string): Record<string, string> {
+  // Null-prototype: keys come from an untrusted file, and on a plain object a
+  // line like `__proto__: x` would silently hit the prototype setter and drop
+  // the key instead of storing it.
+  const out: Record<string, string> = Object.create(null) as Record<string, string>
+  for (const line of text.split('\n')) {
+    const match = /^([A-Za-z][A-Za-z0-9_-]*):\s*(.+)$/.exec(line)
+    if (match === null) continue
+    const key = match[1] ?? ''
+    let value = (match[2] ?? '').trim()
+    if (
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2) ||
+      (value.startsWith('"') && value.endsWith('"') && value.length >= 2)
+    ) {
+      value = value.slice(1, -1)
+    }
+    if (key !== '' && value !== '') out[key] = value
+  }
+  return out
+}
+
+/**
+ * Per-provider required fields — the matrix that catches "feed declared but unfetchable":
+ * `generic` needs the feed `url`, `github` needs `owner`+`repo`, `s3`/`spaces` need `bucket`.
+ * Providers outside the matrix pass on provider presence alone (forward-compatible with new
+ * electron-updater providers).
+ */
+const PROVIDER_REQUIRED_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  generic: ['url'],
+  github: ['owner', 'repo'],
+  s3: ['bucket'],
+  spaces: ['bucket'],
+}
+
+/**
+ * Validate the packaged auto-update feed configuration. electron-updater embeds
+ * `Contents/Resources/app-update.yml` at build time; this check verifies it declares a `provider`,
+ * the provider's required fields (see {@link PROVIDER_REQUIRED_FIELDS}), and that any feed `url`
+ * is `https://` — macOS App Transport Security blocks plain HTTP at runtime, so an `http://` feed
+ * means the app silently never updates.
+ *
+ * A bundle WITHOUT the file is `unknown`, not `fail`: Electron's built-in autoUpdater
+ * (Squirrel.Mac) configures its feed at runtime via `setFeedURL`, which a static scan cannot see —
+ * that is missing evidence, never a defect. Pure filesystem: runs on any host.
+ */
+export async function checkUpdaterFeed(appPath: string): Promise<CheckResult> {
+  const id = 'updater-feed' as const
+  const ymlPath = path.join(appPath, APP_UPDATE_YML)
+  let text: string
+  try {
+    const info = await stat(ymlPath)
+    if (!info.isFile()) {
+      return {
+        id,
+        title: UPDATER_TITLE,
+        status: 'fail',
+        detail:
+          'Contents/Resources/app-update.yml exists but is not a regular file — the updater cannot read a feed configuration from it.',
+        next_actions: [
+          'Regenerate the package so electron-builder writes Contents/Resources/app-update.yml as a regular file.',
+        ],
+      }
+    }
+    if (info.size > MAX_FEED_FILE_BYTES) {
+      return {
+        id,
+        title: UPDATER_TITLE,
+        status: 'fail',
+        detail: `Contents/Resources/app-update.yml is implausibly large (${info.size} bytes) for an electron-updater feed config — the packaged file is corrupted.`,
+        next_actions: [
+          'Regenerate the package so electron-builder writes a normal (sub-kilobyte) app-update.yml.',
+        ],
+      }
+    }
+    text = await readFile(ymlPath, 'utf8')
+  } catch (err) {
+    const missing =
+      err !== null &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { readonly code?: unknown }).code === 'ENOENT'
+    if (missing) {
+      return {
+        id,
+        title: UPDATER_TITLE,
+        status: 'unknown',
+        detail:
+          'No static updater feed configuration found (Contents/Resources/app-update.yml is absent). electron-updater embeds this file at build time; the built-in autoUpdater sets its feed at runtime, which a static scan cannot verify.',
+      }
+    }
+    return {
+      id,
+      title: UPDATER_TITLE,
+      status: 'unknown',
+      detail: `Could not read Contents/Resources/app-update.yml: ${err instanceof Error ? err.message : String(err)}.`,
+    }
+  }
+
+  if (text.trim() === '') {
+    return {
+      id,
+      title: UPDATER_TITLE,
+      status: 'fail',
+      detail:
+        'Contents/Resources/app-update.yml exists but is empty — the updater has no feed to poll.',
+      next_actions: [
+        'Regenerate the package with a publish configuration (provider + its fields) so electron-builder writes a complete app-update.yml.',
+      ],
+    }
+  }
+
+  const fields = extractYamlScalars(text)
+  const provider = fields['provider']
+  const problems: string[] = []
+  if (provider === undefined) {
+    problems.push('no provider is declared')
+  } else {
+    // hasOwn, not a bare lookup: a provider value colliding with an
+    // Object.prototype member (__proto__, constructor, toString, …) would
+    // otherwise resolve to an inherited non-array and crash the check instead
+    // of classifying the file.
+    const key = provider.toLowerCase()
+    const required = Object.hasOwn(PROVIDER_REQUIRED_FIELDS, key)
+      ? (PROVIDER_REQUIRED_FIELDS[key] ?? [])
+      : []
+    const missing = required.filter((field) => fields[field] === undefined)
+    if (missing.length > 0) {
+      problems.push(`provider "${clip(provider)}" requires ${missing.join(', ')}`)
+    }
+  }
+  const url = fields['url']
+  if (url !== undefined) {
+    let parsed: URL | undefined
+    try {
+      parsed = new URL(url)
+    } catch {
+      problems.push(`url "${clip(url)}" is not a valid URL`)
+    }
+    if (parsed !== undefined && parsed.protocol !== 'https:') {
+      problems.push(
+        `url "${clip(url)}" is not https — App Transport Security blocks it at runtime, so updates silently never arrive`,
+      )
+    }
+  }
+
+  if (problems.length > 0) {
+    return {
+      id,
+      title: UPDATER_TITLE,
+      status: 'fail',
+      detail: `app-update.yml has problems: ${problems.join('; ')}.`,
+      next_actions: [
+        'Fix the publish configuration (provider plus its required fields, https URLs) and repackage.',
+      ],
+    }
+  }
+
+  const evidenceField = (name: string): readonly string[] => {
+    const value = fields[name]
+    return value !== undefined ? [`${name}=${clip(value)}`] : []
+  }
+  const evidence = [
+    `provider=${clip(provider ?? '')}`,
+    ...evidenceField('url'),
+    ...evidenceField('owner'),
+    ...evidenceField('repo'),
+    ...evidenceField('bucket'),
+    ...evidenceField('channel'),
+  ].join(' ')
+  return {
+    id,
+    title: UPDATER_TITLE,
+    status: 'pass',
+    detail: 'app-update.yml declares a provider with its required fields.',
+    evidence,
+  }
+}
+
+const CRASH_TITLE = 'Crash reporter machinery'
+
+/** The framework bundle every packaged Electron app ships on macOS. */
+const ELECTRON_FRAMEWORK = path.join('Contents', 'Frameworks', 'Electron Framework.framework')
+
+/** The crashpad handler executable name inside the framework's per-version Helpers directory. */
+const CRASHPAD_HANDLER = 'chrome_crashpad_handler'
+
+/**
+ * Verify the crash-capture machinery ships intact: the crashpad handler executable must exist
+ * (and be executable, on POSIX hosts) under one of the Electron Framework's
+ * `Versions/<v>/Helpers/` directories. A repackaging step that prunes or zip-roundtrips the
+ * framework can drop the handler or strip its execute bit — either way `crashReporter.start()`
+ * silently captures nothing in production.
+ *
+ * Classification: handler present and executable → `pass` (the detail notes that the runtime
+ * submission endpoint — `crashReporter.start({ submitURL })` — is runtime configuration a static
+ * scan cannot verify); framework present but handler missing or non-executable → `fail`; no
+ * `Electron Framework.framework` at all → `unknown` (not an Electron-shaped bundle — the
+ * machinery's expected location does not apply). Pure filesystem: runs on any host.
+ */
+export async function checkCrashReporter(appPath: string): Promise<CheckResult> {
+  const id = 'crash-reporter' as const
+  const frameworkPath = path.join(appPath, ELECTRON_FRAMEWORK)
+  const versionsPath = path.join(frameworkPath, 'Versions')
+
+  let frameworkInfo: Awaited<ReturnType<typeof stat>>
+  try {
+    frameworkInfo = await stat(frameworkPath)
+  } catch {
+    return {
+      id,
+      title: CRASH_TITLE,
+      status: 'unknown',
+      detail:
+        'No Electron Framework.framework was found in Contents/Frameworks; this does not look like a packaged Electron app, so the crash-capture machinery has no expected location to verify.',
+    }
+  }
+  if (!frameworkInfo.isDirectory()) {
+    return {
+      id,
+      title: CRASH_TITLE,
+      status: 'fail',
+      detail:
+        'Electron Framework.framework exists but is not a directory; the crashpad handler cannot be present at its expected packaged location.',
+      next_actions: ['Repackage the app with the full Electron Framework.framework bundle intact.'],
+    }
+  }
+
+  let versions: readonly string[]
+  try {
+    versions = await readdir(versionsPath)
+  } catch (err) {
+    const missing =
+      err !== null &&
+      typeof err === 'object' &&
+      'code' in err &&
+      ['ENOENT', 'ENOTDIR'].includes(String((err as { readonly code?: unknown }).code))
+    if (missing) {
+      return {
+        id,
+        title: CRASH_TITLE,
+        status: 'fail',
+        detail:
+          'Electron Framework.framework is present but has no Versions directory, so the crashpad handler is missing from its expected packaged location.',
+        next_actions: [
+          'Repackage without pruning Electron Framework.framework/Versions/<v>/Helpers/, then re-sign the app.',
+        ],
+      }
+    }
+    return {
+      id,
+      title: CRASH_TITLE,
+      status: 'unknown',
+      detail: `Could not inspect Electron Framework.framework/Versions: ${err instanceof Error ? err.message : String(err)}.`,
+    }
+  }
+
+  let foundNonExecutable: string | undefined
+  for (const version of versions) {
+    const handlerPath = path.join(versionsPath, version, 'Helpers', CRASHPAD_HANDLER)
+    let info
+    try {
+      info = await stat(handlerPath)
+    } catch {
+      continue
+    }
+    if (!info.isFile()) continue
+    const relative = path.join('Versions', version, 'Helpers', CRASHPAD_HANDLER)
+    // Windows hosts report no meaningful POSIX mode bits; skip the executability probe there.
+    const executable = process.platform === 'win32' || (info.mode & 0o111) !== 0
+    if (!executable) {
+      foundNonExecutable = relative
+      continue
+    }
+    return {
+      id,
+      title: CRASH_TITLE,
+      status: 'pass',
+      detail:
+        'The crashpad handler ships intact; whether the app calls crashReporter.start with a submission endpoint is runtime configuration a static scan cannot verify.',
+      evidence: relative,
+    }
+  }
+
+  if (foundNonExecutable !== undefined) {
+    return {
+      id,
+      title: CRASH_TITLE,
+      status: 'fail',
+      detail: `The crashpad handler exists but is not executable (${foundNonExecutable}) — a zip-based repackaging step likely stripped the execute bit, silently disabling crash capture.`,
+      next_actions: [
+        'Repackage with a tool that preserves POSIX file modes (or restore with chmod +x) and re-sign the app.',
+      ],
+    }
+  }
+  return {
+    id,
+    title: CRASH_TITLE,
+    status: 'fail',
+    detail:
+      'Electron Framework.framework is present but its crashpad handler (Versions/<v>/Helpers/chrome_crashpad_handler) is missing — crash capture is disabled by packaging.',
+    next_actions: [
+      'Repackage without pruning the Electron Framework helpers, then re-sign the app.',
+    ],
   }
 }
 
@@ -475,6 +1015,9 @@ const RUNNERS: Readonly<
 > = {
   'bundle-structure': (appPath) => checkBundleStructure(appPath),
   'info-plist': (appPath, run) => checkInfoPlist(appPath, run),
+  'protocol-schemes': (appPath, run) => checkProtocolSchemes(appPath, run),
+  'updater-feed': (appPath) => checkUpdaterFeed(appPath),
+  'crash-reporter': (appPath) => checkCrashReporter(appPath),
   'code-signing': (appPath, run) => checkCodeSigning(appPath, run),
   notarization: (appPath, run) => checkNotarization(appPath, run),
   gatekeeper: (appPath, run) => checkGatekeeper(appPath, run),

@@ -21,7 +21,10 @@ afterEach(async () => {
   await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
 })
 
-/** A realistic XML Info.plist so the in-process info-plist check exercises a real parse on macOS. */
+/**
+ * A realistic XML Info.plist so the in-process info-plist check exercises a real parse on macOS.
+ * Declares one custom URL scheme so protocol-schemes exercises a real declaration there too.
+ */
 const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
@@ -30,6 +33,14 @@ const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleExecutable</key><string>Demo</string>
   <key>CFBundleName</key><string>Demo</string>
   <key>CFBundleVersion</key><string>42</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>Demo links</string>
+      <key>CFBundleURLSchemes</key>
+      <array><string>swdemo</string></array>
+    </dict>
+  </array>
 </dict>
 </plist>
 `
@@ -41,6 +52,24 @@ async function makeApp(opts: { info?: boolean } = {}): Promise<string> {
   await mkdir(path.join(app, 'Contents', 'MacOS'), { recursive: true })
   if (opts.info ?? true) await writeFile(path.join(app, 'Contents', 'Info.plist'), INFO_PLIST)
   await writeFile(path.join(app, 'Contents', 'MacOS', 'Demo'), '#!/bin/sh\n')
+  // A packaged electron-updater feed and the crash-capture machinery, so the two pure-fs checks
+  // (updater-feed, crash-reporter) have deterministic outcomes on every host.
+  await mkdir(path.join(app, 'Contents', 'Resources'), { recursive: true })
+  await writeFile(
+    path.join(app, 'Contents', 'Resources', 'app-update.yml'),
+    'provider: github\nowner: acme\nrepo: demo\n',
+  )
+  const helpers = path.join(
+    app,
+    'Contents',
+    'Frameworks',
+    'Electron Framework.framework',
+    'Versions',
+    'A',
+    'Helpers',
+  )
+  await mkdir(helpers, { recursive: true })
+  await writeFile(path.join(helpers, 'chrome_crashpad_handler'), '\x7fELF', { mode: 0o755 })
   return app
 }
 
@@ -71,11 +100,14 @@ describe('production plugin (in-process)', () => {
       })) as unknown as ValidateResult
       expect(res.ok).toBe(true)
       expect(res.app_path).toBe(app)
-      expect(res.checks).toHaveLength(5)
-      // Host-agnostic: a well-formed bundle always passes structure; the shell-out checks
-      // (info-plist/code-signing/notarization/gatekeeper) vary with the macOS toolchain's presence.
+      expect(res.checks).toHaveLength(8)
+      // Host-agnostic: the pure-fs checks (bundle-structure, updater-feed, crash-reporter) are
+      // deterministic on every host; the shell-out checks (info-plist/protocol-schemes/
+      // code-signing/notarization/gatekeeper) vary with the macOS toolchain's presence.
       expect(res.checks.find((c) => c.id === 'bundle-structure')?.status).toBe('pass')
-      expect(res.summary.pass + res.summary.fail + res.summary.unknown).toBe(5)
+      expect(res.checks.find((c) => c.id === 'updater-feed')?.status).toBe('pass')
+      expect(res.checks.find((c) => c.id === 'crash-reporter')?.status).toBe('pass')
+      expect(res.summary.pass + res.summary.fail + res.summary.unknown).toBe(8)
     } finally {
       await server.close().catch(() => undefined)
     }

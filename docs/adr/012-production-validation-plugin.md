@@ -1,7 +1,8 @@
 # ADR-012: Production validation plugin
 
-Status: Accepted. Current checks cover bundle structure, Info.plist fields, code signing,
-notarization (`xcrun stapler validate`), and Gatekeeper.
+Status: Accepted. Current checks cover bundle structure, Info.plist fields, URL scheme
+declarations, the packaged updater feed, the crash-reporter machinery, code signing, notarization
+(`xcrun stapler validate`), and Gatekeeper.
 
 ## Context
 
@@ -53,7 +54,16 @@ notarization check uses `xcrun stapler validate` to confirm a ticket is stapled 
 `source=` line as best-effort evidence. The info-plist check shells out to
 `plutil -convert json` (which reads both XML and binary plists) and verifies CFBundleIdentifier
 (reverse-DNS), CFBundleShortVersionString, and a CFBundleExecutable that exists under
-`Contents/MacOS/`. Still deferred: updater feeds, protocol schemes, crash reporter.
+`Contents/MacOS/`. The protocol-schemes check reads the same plist and validates every
+`CFBundleURLTypes` entry (RFC-3986 scheme shape, no duplicates across entries, no shadowing of
+well-known system schemes); declaring no schemes is an affirmative `pass`. The updater-feed check
+is pure filesystem: a packaged `Contents/Resources/app-update.yml` (electron-updater) must declare
+a provider with its per-provider required fields and `https` URLs — an ABSENT file is `unknown`,
+because the built-in autoUpdater sets its feed at runtime, which a static scan cannot see. The
+crash-reporter check is pure filesystem: the crashpad handler must ship intact (and executable)
+under `Electron Framework.framework/Versions/<v>/Helpers/`; a missing framework is `unknown` (not
+an Electron-shaped bundle), while a present framework whose handler is missing or lost its execute
+bit is a `fail` — packaging silently disabled crash capture.
 
 ## Alternatives considered
 

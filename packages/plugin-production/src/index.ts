@@ -2,8 +2,9 @@
  * `@electron-stagewright/plugin-production` — validate a packaged macOS app for production
  * readiness (ADR-012, built on the ADR-004 plugin contract). Where the rest of Stagewright drives
  * a running app, this plugin inspects the BUILD ARTIFACT on disk: is the `.app` a well-formed
- * bundle, does its Info.plist declare valid identity fields, is it code-signed, is it notarized,
- * will Gatekeeper accept it.
+ * bundle, does its Info.plist declare valid identity fields and well-formed URL schemes, is its
+ * auto-update feed configuration coherent, does the crash-capture machinery ship intact, is it
+ * code-signed, is it notarized, will Gatekeeper accept it.
  *
  * The single tool `production_validate` runs a set of checks against an `appPath` and returns
  * STRUCTURED results — each a `pass` / `fail` / `unknown` — where the load-bearing distinction is
@@ -65,13 +66,17 @@ const validateTool: AnyToolDefinition = defineTool({
   title: 'Validate a packaged macOS app',
   description: [
     'Validate a packaged macOS .app for production readiness and return structured results. Runs,',
-    'by default, five checks — bundle-structure (a well-formed Contents/Info.plist + Contents/MacOS',
+    'by default, eight checks — bundle-structure (a well-formed Contents/Info.plist + Contents/MacOS',
     'executable), info-plist (Info.plist declares CFBundleIdentifier / CFBundleShortVersionString /',
-    'CFBundleExecutable, via plutil), code-signing (codesign --verify --deep --strict), notarization',
-    '(a notarization ticket stapled to the bundle, via xcrun stapler validate), and gatekeeper',
-    '(spctl --assess) — or the subset named in checks. Each result is pass (verified good), fail',
-    '(verified bad, with next_actions), or unknown (could not verify — a macOS tool is absent, e.g.',
-    'on a non-macOS host).',
+    'CFBundleExecutable, via plutil), protocol-schemes (CFBundleURLTypes deep-link declarations are',
+    'well-formed, unique, and shadow no system scheme), updater-feed (the packaged electron-updater',
+    'app-update.yml declares a provider with its required fields and https URLs; absent = unknown,',
+    'runtime feeds are not statically visible), crash-reporter (the crashpad handler ships intact and',
+    'executable inside Electron Framework.framework), code-signing (codesign --verify --deep',
+    '--strict), notarization (a notarization ticket stapled to the bundle, via xcrun stapler',
+    'validate), and gatekeeper (spctl --assess) — or the subset named in checks. Each result is pass',
+    '(verified good), fail (verified bad, with next_actions), or unknown (could not verify — a macOS',
+    'tool is absent, e.g. on a non-macOS host).',
     'Returns: { ok, app_path, passed, summary: { pass, fail, unknown }, checks }, where passed is',
     'true when no check failed (unknown checks do not fail it but are reported). Errors:',
     'ABSOLUTE_PATH_REQUIRED (relative appPath), production.APP_NOT_FOUND (no file/dir at appPath),',
@@ -88,7 +93,7 @@ const validateTool: AnyToolDefinition = defineTool({
       .min(1)
       .optional()
       .describe(
-        'Subset of checks to run by id; omit to run all (bundle-structure, info-plist, code-signing, notarization, gatekeeper).',
+        'Subset of checks to run by id; omit to run all (bundle-structure, info-plist, protocol-schemes, updater-feed, crash-reporter, code-signing, notarization, gatekeeper).',
       ),
   }),
   operationType: 'query',
