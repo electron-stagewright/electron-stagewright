@@ -45,12 +45,15 @@ session-traces/
 .turbo/
 
 # Untracked local workspace notes and private docs.
-# Exception: docs/adr/ holds the public Architecture Decision Records — the
-# canonical decisions consumers see — so it IS tracked. `docs/*` (not `docs/`)
-# keeps the directory itself unexcluded so the negation below can re-include it.
+# Exceptions: docs/adr/ (the public Architecture Decision Records) and
+# docs/guides/ (the public user guides) ARE tracked — each re-included
+# directory is wholly public (see docs/adr/013-public-documentation-layout.md).
+# `docs/*` (not `docs/`) keeps the directory itself unexcluded so the
+# negations below can re-include them.
 .claude/
 .agents/
 AGENTS.md
 CLAUDE.md
 docs/*
 !docs/adr/
+!docs/guides/

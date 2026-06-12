@@ -60,7 +60,7 @@ const DESCRIPTION = [
   'Read args (all optional): type (one or more kinds to include), since (epoch ms), limit (max events,',
   'default 50, max 200 — most recent kept), clear (flush the whole buffer after reading).',
   'Until armed, the default policy is dismiss, so dialogs never hang the app.',
-  'Returns: { ok, session_id, policy, entries: [{ type, message, action, defaultValue?, promptText?, timestamp }], count, overflowed }.',
+  'Returns: { ok, session_id, policy, entries: [{ type, message, action, defaultValue?, promptText?, timestamp, windowId? }], count, overflowed }.',
   'overflowed counts dropped events across the whole buffer, not just the returned (type/since/limit-filtered) subset.',
   'Errors: NOT_RUNNING, BAD_ARGUMENT (promptText without an accepting prompt policy, or oneShot without a policy to arm).',
 ].join(' ')

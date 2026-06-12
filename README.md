@@ -4,7 +4,7 @@
 
 A Model Context Protocol (MCP) server that lets AI agents — Claude Code, Codex, Cursor, Cline, Aider, and any MCP-compatible host — operate real Electron desktop applications. The current core can launch Electron apps, inspect the renderer accessibility tree, click/type/select by stable refs or selectors, read state, wait on predicates, run opt-in eval, capture screenshots, read console logs, handle native dialogs, and assert expectations with retrying `expect_*` tools.
 
-> Status: pre-alpha. Core server implementation is active; plugin packages and the first npm release are still ahead. Star the repo to follow releases.
+> Status: pre-alpha. Core server and first-party plugin packages are active; the first npm release is still ahead. Star the repo to follow releases.
 
 ## Why this exists
 
@@ -25,11 +25,11 @@ Electron Stagewright is designed **agent-first from the primitive level up**:
 
 ## What competitors don't cover (yet)
 
-The MCP ecosystem for browser automation is mature. The MCP ecosystem for **desktop Electron apps** is fragmented and still missing three structural capabilities this project is designed to deliver:
+The MCP ecosystem for browser automation is mature. The MCP ecosystem for **desktop Electron apps** is fragmented and still missing three structural capabilities this project treats as first-class:
 
-1. **Attach to a running dev server without restarting it.** Every alternative requires `--remote-debugging-port` from launch. The planned injector transport targets runtime attach via the Node Inspector handshake so a dev server can keep its state.
-2. **Session traces with deterministic replay and per-tool token budgets.** Inspired by Playwright's `trace.zip` but designed for LLM agent sessions: timeline of DOM, console, network, IPC, and screenshots — replayable against a fresh app instance, with token estimates so agents can cap runaway loops.
-3. **End-to-end validation of signed, notarized, packaged `.app` bundles** — `codesign`, Gatekeeper assessment, autoUpdater feed inspection, `protocol.registerFileProtocol` scheme verification, `crashReporter` capture. The full production surface, not just dev.
+1. **Attach to a running dev server without restarting it.** `electron_attach` connects to apps exposing a loopback CDP endpoint, and `electron_inject` can attach to a running main process via the Node Inspector handshake when no debug flag was arranged up front.
+2. **Session traces with deterministic replay and per-tool token budgets.** Inspired by Playwright's `trace.zip` but designed for LLM agent sessions: a timeline of tool calls, arguments, results, timings, and token estimates — replayable against a fresh app instance, with budgets so agents can cap runaway loops.
+3. **End-to-end validation of signed, notarized, packaged `.app` bundles** — `codesign`, Gatekeeper assessment, autoUpdater feed inspection, URL-scheme declaration checks, and crash reporter machinery. The full production surface, not just dev.
 
 Microsoft's official Playwright MCP team [explicitly declined](https://github.com/microsoft/playwright-mcp/pull/1291) to support Electron ("you can release your own server for Electron" — Pavel Feldman, lead). This project takes the invitation seriously.
 
@@ -95,6 +95,21 @@ mcp__electron-stagewright__electron_stop()
 The full tool list — every tool, its parameters, and operation type — is in
 [TOOL-REFERENCE.md](TOOL-REFERENCE.md), generated from the live dispatcher manifest
 (`pnpm docs:tools`).
+
+## Documentation
+
+- [Getting started](docs/guides/getting-started.md) — from a clean checkout to a complete driven
+  session against the bundled example app.
+- [Launch, attach, or inject](docs/guides/launch-or-attach.md) — getting a session against YOUR
+  app, including apps that are already running.
+- [Assert UI state](docs/guides/assert-ui-state.md) — refs vs selectors, the `expect_*` family,
+  waits, and snapshot diffs.
+- [Capture diagnostics](docs/guides/capture-diagnostics.md) — screenshots, console, dialogs, and
+  session traces.
+- [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md) — tool-by-tool
+  mapping and the conceptual shifts.
+- [Guides index](docs/guides/README.md) · [TOOL-REFERENCE.md](TOOL-REFERENCE.md) ·
+  [Architecture Decision Records](docs/adr/README.md).
 
 ## Server flags
 

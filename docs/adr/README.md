@@ -20,3 +20,4 @@ rewritten.
 | [ADR-010](./010-ipc-plugin.md)                           | IPC capture/invoke/stub plugin                            | Accepted                                         |
 | [ADR-011](./011-operation-timeout.md)                    | Operation-timeout backstop at the dispatch boundary       | Accepted                                         |
 | [ADR-012](./012-production-validation-plugin.md)         | Production validation plugin                              | Accepted                                         |
+| [ADR-013](./013-public-documentation-layout.md)          | Public documentation layout                               | Accepted                                         |

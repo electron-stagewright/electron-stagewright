@@ -31,7 +31,7 @@ const DESCRIPTION = [
   'Filters (all optional, ANDed): type (one or more of log/info/warning/error/debug/...),',
   'match (a regular expression the text must match), since (epoch ms — only entries at/after it),',
   'limit (max entries, default 200, max 1000 — the most recent are kept).',
-  'Returns: { ok, session_id, entries: [{ type, text, timestamp, location? }], count, overflowed }.',
+  'Returns: { ok, session_id, entries: [{ type, text, timestamp, windowId?, location? }], count, overflowed }.',
   'overflowed is the number of older entries the buffer dropped. Errors: NOT_RUNNING,',
   'BAD_ARGUMENT (invalid regex, or multiple sessions).',
 ].join(' ')
