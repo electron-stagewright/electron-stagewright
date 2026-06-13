@@ -10,6 +10,7 @@ build/
 # Test output
 coverage/
 .vitest-cache/
+*.profraw
 
 # Review / verification artifacts (screenshots, traces captured during validation)
 output/

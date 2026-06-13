@@ -20,7 +20,6 @@
  */
 
 import {
-  VERSION,
   defineTool,
   makePluginError,
   makeSuccess,
@@ -36,6 +35,8 @@ import { INSTRUMENT_BODY, filterEvents, redactEvents, type IpcEvent } from './in
 
 /** Plugin namespace — must match {@link ipcPlugin.name}; the loader prefixes its tools with it. */
 const IPC_NAMESPACE = 'ipc'
+/** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
+const IPC_PLUGIN_VERSION = '0.1.0'
 
 const configSchema = z.object({
   redact: z
@@ -58,16 +59,25 @@ type IpcConfig = z.infer<typeof configSchema>
 /** Defaults used until `setup` runs (mirror the schema defaults). */
 const DEFAULT_CONFIG: IpcConfig = { redact: [], maxEvents: 1000 }
 
-/** The in-flight capture: which session is instrumented and with what allowlist. */
-interface ActiveCapture {
-  readonly sessionId: string
+/**
+ * One session's in-flight IPC capture — the allowlist {@link captureStartTool} installed for it.
+ * Stored in {@link captures} keyed by the session id, so each running app session captures
+ * independently; the channels are retained to authorise {@link stubTool}.
+ */
+interface SessionCapture {
   readonly channels: readonly string[]
 }
 
-// Module-level state: one capture per process at a time (a second server in the same process would
-// share it — an accepted v1 limitation, as with the trace plugin).
+// Module-level state. `captures` holds one entry per instrumented session, keyed by the transport's
+// globally-unique session id (e.g. `pw-<uuid>`), so concurrent app sessions capture independently —
+// starting or stopping one never disturbs another. The map/config are module-level, so co-resident
+// servers in the SAME process still share plugin lifecycle/config (an accepted limitation, as with
+// the trace plugin). Keying by the unique session id prevents live calls from confusing one session
+// with another; fully independent plugin lifecycles should run in separate Node processes. The
+// realistic one-server deployment drives many sessions through this single map. The main-process
+// `__swIpc` state is per app process; this map only tracks which sessions the plugin instrumented.
 let config: IpcConfig = DEFAULT_CONFIG
-let active: ActiveCapture | undefined
+const captures = new Map<string, SessionCapture>()
 
 /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
 interface PluginMeta {
@@ -110,15 +120,31 @@ function requireMainEval(
 }
 
 /**
- * The NOT_CAPTURING envelope for a request that resolved to a DIFFERENT session than the one the
- * active capture instrumented. Without this guard, reading/stopping/stubbing against the wrong
- * session would silently hit a main process with no `__swIpc` (empty events, or clearing the module
- * flag without restoring the real session's handlers).
+ * The ids of THIS server's sessions that currently have a capture, surfaced in error details so the
+ * agent can retarget. Scoped to the caller's session manager: the `captures` registry is
+ * process-global, so a co-resident second server's captures must not leak into this server's error
+ * payloads (and the agent can only act on its own server's sessions anyway).
  */
-function wrongSession(resolvedId: string, captureId: string, meta: PluginMeta): ToolResult {
+function capturingIds(sessions: ToolContext['sessions']): string[] {
+  return [...captures.keys()].filter((id) => sessions.has(id))
+}
+
+/**
+ * The NOT_CAPTURING envelope for a request whose resolved session has no active capture — either one
+ * was never started for it, or it was already stopped. `details.capturing` lists this server's
+ * sessions that DO have a capture so the agent can retarget instead of guessing; `hint` tails the
+ * message with the tool-specific next step.
+ */
+function notCapturing(
+  sessionId: string,
+  sessions: ToolContext['sessions'],
+  meta: PluginMeta,
+  hint: string,
+): ToolResult {
   return makePluginError('ipc.NOT_CAPTURING', {
     ...meta,
-    message: `The active IPC capture is on session ${captureId}, not ${resolvedId}.`,
+    message: `No active IPC capture on session ${sessionId}; ${hint}`,
+    details: { sessionId, capturing: capturingIds(sessions) },
   })
 }
 
@@ -147,21 +173,24 @@ const captureStartTool: AnyToolDefinition = defineTool({
   operationType: 'command',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    if (active !== undefined) {
-      return makePluginError('ipc.ALREADY_CAPTURING', {
-        ...meta,
-        message: `Already capturing on session ${active.sessionId}; call ipc_capture_stop first.`,
-      })
-    }
+    // Resolve the session first (this also enforces the --allow-eval gate), so ALREADY_CAPTURING is
+    // judged per the resolved session rather than against a single global flag.
     const guard = requireMainEval(ctx, args.sessionId, meta)
     if ('error' in guard) return guard.error
+    if (captures.has(guard.sessionId)) {
+      return makePluginError('ipc.ALREADY_CAPTURING', {
+        ...meta,
+        message: `Already capturing on session ${guard.sessionId}; call ipc_capture_stop first.`,
+        details: { sessionId: guard.sessionId, capturing: capturingIds(ctx.sessions) },
+      })
+    }
     await guard.session.evaluate('main', INSTRUMENT_BODY, {
       op: 'install',
       allow: args.channels,
       captureSend: args.captureSend === true,
       maxEvents: config.maxEvents,
     })
-    active = { sessionId: guard.sessionId, channels: args.channels }
+    captures.set(guard.sessionId, { channels: args.channels })
     return makeSuccess({ capturing: true, channels: args.channels }, meta)
   },
 })
@@ -182,16 +211,11 @@ const capturedTool: AnyToolDefinition = defineTool({
   operationType: 'query',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    if (active === undefined) {
-      return makePluginError('ipc.NOT_CAPTURING', {
-        ...meta,
-        message: 'No active IPC capture; call ipc_capture_start first.',
-      })
-    }
-    const captureId = active.sessionId
     const guard = requireMainEval(ctx, args.sessionId, meta)
     if ('error' in guard) return guard.error
-    if (guard.sessionId !== captureId) return wrongSession(guard.sessionId, captureId, meta)
+    if (!captures.has(guard.sessionId)) {
+      return notCapturing(guard.sessionId, ctx.sessions, meta, 'call ipc_capture_start first.')
+    }
     const read = await guard.session.evaluate<{ events: IpcEvent[] }>('main', INSTRUMENT_BODY, {
       op: 'read',
     })
@@ -214,22 +238,17 @@ const captureStopTool: AnyToolDefinition = defineTool({
   operationType: 'command',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    if (active === undefined) {
-      return makePluginError('ipc.NOT_CAPTURING', {
-        ...meta,
-        message: 'No active IPC capture to stop.',
-      })
-    }
-    const captureId = active.sessionId
     const guard = requireMainEval(ctx, args.sessionId, meta)
     if ('error' in guard) return guard.error
-    if (guard.sessionId !== captureId) return wrongSession(guard.sessionId, captureId, meta)
+    if (!captures.has(guard.sessionId)) {
+      return notCapturing(guard.sessionId, ctx.sessions, meta, 'nothing to stop.')
+    }
     const result = await guard.session.evaluate<{ stopped: boolean; events: number }>(
       'main',
       INSTRUMENT_BODY,
       { op: 'stop' },
     )
-    active = undefined
+    captures.delete(guard.sessionId)
     return makeSuccess({ stopped: result.stopped, events: result.events }, meta)
   },
 })
@@ -301,23 +320,19 @@ const stubTool: AnyToolDefinition = defineTool({
   operationType: 'command',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    if (active === undefined) {
-      return makePluginError('ipc.NOT_CAPTURING', {
-        ...meta,
-        message: 'Stubbing requires an active capture; call ipc_capture_start first.',
-      })
+    const guard = requireMainEval(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const capture = captures.get(guard.sessionId)
+    if (capture === undefined) {
+      return notCapturing(guard.sessionId, ctx.sessions, meta, 'start a capture before stubbing.')
     }
-    if (!active.channels.includes(args.channel)) {
+    if (!capture.channels.includes(args.channel)) {
       return makePluginError('ipc.CHANNEL_NOT_ALLOWED', {
         ...meta,
         message: `Channel "${args.channel}" is not in the capture allowlist.`,
-        details: { channel: args.channel, allowed: active.channels },
+        details: { channel: args.channel, allowed: capture.channels },
       })
     }
-    const captureId = active.sessionId
-    const guard = requireMainEval(ctx, args.sessionId, meta)
-    if ('error' in guard) return guard.error
-    if (guard.sessionId !== captureId) return wrongSession(guard.sessionId, captureId, meta)
     await guard.session.evaluate('main', INSTRUMENT_BODY, {
       op: 'stub',
       channel: args.channel,
@@ -334,7 +349,7 @@ const stubTool: AnyToolDefinition = defineTool({
  */
 export const ipcPlugin: StagewrightPlugin = {
   name: IPC_NAMESPACE,
-  version: VERSION,
+  version: IPC_PLUGIN_VERSION,
   coreVersionRange: '*',
   configSchema,
   errorCodes: {
@@ -374,10 +389,10 @@ export const ipcPlugin: StagewrightPlugin = {
     config = raw as IpcConfig
   },
   teardown: async () => {
-    // Clear the module flag. The main-process __swIpc state lives in the app process, which the
-    // server stops as part of close — so there is no separate handler to restore here (and no
-    // session handle at teardown to evaluate against). ipc_capture_stop is the in-session restore.
-    active = undefined
+    // Forget every session's capture flag. The main-process __swIpc state lives in each app process,
+    // which the server stops as part of close — so there is no separate handler to restore here (and
+    // no session handle at teardown to evaluate against). ipc_capture_stop is the in-session restore.
+    captures.clear()
     config = DEFAULT_CONFIG
   },
 }

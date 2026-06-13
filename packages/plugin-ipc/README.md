@@ -92,5 +92,10 @@ IPC payloads; use `redact` to drop sensitive fields before they reach the agent.
   re-wrapping a handler registered at app startup.
 - **`ipc_invoke` drives a registered handler from main** — it needs a handler to exist on the
   channel (otherwise `ipc.INVOKE_FAILED`); it does not synthesise a renderer.
-- **One capture per process at a time** (v1), like the trace plugin. Requires a transport with
-  main-process eval (Playwright Electron); others return `ipc.MAIN_EVAL_UNSUPPORTED`.
+- **One capture per session.** Each running app session captures, reads, stubs, and stops its IPC
+  independently and concurrently; starting or stopping one never disturbs another. Pass `sessionId`
+  to target a specific app when more than one is running (omitting it with several live sessions
+  returns `BAD_ARGUMENT`). The capture registry and config are process-global, like other first-party
+  plugins, so run independent server lifecycles in separate Node processes; within one server,
+  session-id keying keeps concurrent captures from colliding. Requires a transport with main-process
+  eval (Playwright Electron); others return `ipc.MAIN_EVAL_UNSUPPORTED`.

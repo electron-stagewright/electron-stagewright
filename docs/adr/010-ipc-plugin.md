@@ -1,6 +1,6 @@
 # ADR-010: IPC capture/invoke/stub plugin via main-process instrumentation
 
-Status: Accepted (capture + invoke + stub; send/on capture opt-in)
+Status: Accepted (capture + invoke + stub; multi-session; send/on capture opt-in)
 
 ## Context
 
@@ -77,8 +77,13 @@ payloads reach the agent.
   Captured payloads may contain sensitive data; `redact` mitigates, same as the trace plugin.
 - Re-wrapping existing handlers depends on Electron's internal `_invokeHandlers` map — guarded, with
   a documented limitation if a future Electron changes it.
-- One capture per process at a time (v1). `send/on` capture is opt-in; richer renderer-initiated
-  capture is a forthcoming extension.
+- One capture per session: concurrent app sessions capture independently, keyed by the unique
+  session id. Every op resolves its session first, then looks up that session's capture — so a
+  read/stop/stub cannot bleed across sessions, and the single-active-capture guard the first cut
+  needed is gone. The capture registry and config are module-level, so co-resident servers in the
+  same Node process still share plugin lifecycle/config; run fully independent server lifecycles in
+  separate processes. `send/on` capture is opt-in; richer renderer-initiated capture is a forthcoming
+  extension.
 
 ## Related decisions
 

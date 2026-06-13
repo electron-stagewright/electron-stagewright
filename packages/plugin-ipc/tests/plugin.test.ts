@@ -10,7 +10,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { createServer, TransportRegistry } from '@electron-stagewright/core'
+import { createServer, TransportRegistry, type TransportSession } from '@electron-stagewright/core'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -18,6 +18,7 @@ import {
   FakeTransport,
   type FakeEvaluate,
 } from '../../core/tests/helpers/fake-transport.js'
+import packageJson from '../package.json' with { type: 'json' }
 import ipcPlugin from '../src/index.js'
 
 const created: string[] = []
@@ -91,9 +92,47 @@ function serverWith(opts: { allowEval: boolean }) {
   })
 }
 
-async function launch(server: Awaited<ReturnType<typeof createServer>>): Promise<string> {
+/**
+ * A transport that hands out a fresh session on each launch (the shared FakeTransport returns the
+ * same session every time), so ONE server can drive several concurrent sessions — the multi-session
+ * scenario. Each session carries its own simulated `__swIpc` via its own `fakeMain()`, exactly as
+ * two real Electron apps would.
+ */
+class MultiSessionFakeTransport extends FakeTransport {
+  readonly #queue: FakeSession[]
+  constructor(sessions: readonly FakeSession[]) {
+    super(sessions[0] !== undefined ? { session: sessions[0] } : {})
+    this.#queue = [...sessions]
+  }
+  override async launch(): Promise<TransportSession> {
+    const next = this.#queue.shift()
+    if (next === undefined) throw new Error('MultiSessionFakeTransport: no more sessions queued')
+    return next
+  }
+}
+
+function serverWithSessions(
+  sessions: readonly FakeSession[],
+  opts: { allowEval: boolean } = { allowEval: true },
+) {
+  return createServer({
+    plugins: [ipcPlugin],
+    allowEval: opts.allowEval,
+    transports: new TransportRegistry({ transports: [new MultiSessionFakeTransport(sessions)] }),
+  })
+}
+
+async function launch(
+  server: Awaited<ReturnType<typeof createServer>>,
+  opts: { allowMultiple?: boolean } = {},
+): Promise<string> {
   const main = await fixtureMain()
-  const launched = (await server.dispatcher.dispatch('electron_launch', { main })) as {
+  // electron_launch refuses a second concurrent session unless allowMultiple is set — pass it when a
+  // test drives more than one app on the same server.
+  const launched = (await server.dispatcher.dispatch('electron_launch', {
+    main,
+    ...(opts.allowMultiple === true ? { allowMultiple: true } : {}),
+  })) as {
     ok: boolean
     session_id?: string
     _meta?: { session_id?: string }
@@ -113,8 +152,24 @@ async function open(opts = { allowEval: true }): Promise<Awaited<ReturnType<type
   servers.push(server)
   return server
 }
+async function openMulti(
+  sessions: readonly FakeSession[],
+  opts: { allowEval: boolean } = { allowEval: true },
+): Promise<Awaited<ReturnType<typeof createServer>>> {
+  const server = await serverWithSessions(sessions, opts)
+  servers.push(server)
+  return server
+}
 
 describe('ipc plugin (in-process, simulated main)', () => {
+  it('advertises the package version through plugin introspection', async () => {
+    const server = await open()
+    expect(await server.dispatcher.dispatch('electron_plugins', {})).toMatchObject({
+      ok: true,
+      plugins: [{ name: 'ipc', version: packageJson.version }],
+    })
+  })
+
   it('captures an invoked channel, reads it back, then stops', async () => {
     const server = await open()
     const sessionId = await launch(server)
@@ -220,9 +275,11 @@ describe('ipc plugin (in-process, simulated main)', () => {
     })
   })
 
-  it('refuses reading from a session other than the one captured', async () => {
-    // Capture on server A's session, then ask a different (valid) session to read: the active
-    // capture is elsewhere, so the read must not silently hit the wrong main process.
+  it('a session that never started a capture reports NOT_CAPTURING, even across servers', async () => {
+    // Two servers in one process share the module-level capture registry, but it is keyed by the
+    // unique session id: capturing server A's session must not make server B's untouched session
+    // look like it is capturing. Per-session keying prevents this live cross-server report leak;
+    // lifecycle/config are still process-global, so independent servers belong in separate processes.
     const serverA = await open()
     const idA = await launch(serverA)
     await serverA.dispatcher.dispatch('ipc_capture_start', { sessionId: idA, channels: ['save'] })
@@ -230,13 +287,16 @@ describe('ipc plugin (in-process, simulated main)', () => {
     const serverB = await open()
     const idB = await launch(serverB)
     expect(idB).not.toBe(idA)
+    // Scoped reporting: server A's capture does NOT leak into server B's error details, even though
+    // the registry is process-global — capturing is filtered to the caller server's own sessions.
     expect(await serverB.dispatcher.dispatch('ipc_captured', { sessionId: idB })).toMatchObject({
       ok: false,
       code: 'ipc.NOT_CAPTURING',
+      details: { sessionId: idB, capturing: [] },
     })
   })
 
-  it('refuses stubbing from a session other than the one captured', async () => {
+  it('a session that never started a capture cannot stub, even across servers', async () => {
     const serverA = await open()
     const idA = await launch(serverA)
     await serverA.dispatcher.dispatch('ipc_capture_start', { sessionId: idA, channels: ['save'] })
@@ -253,5 +313,116 @@ describe('ipc plugin (in-process, simulated main)', () => {
       ok: false,
       code: 'ipc.NOT_CAPTURING',
     })
+  })
+})
+
+describe('ipc plugin (multi-session, simulated main)', () => {
+  /** Two independent simulated-main sessions to drive concurrently on ONE server. */
+  function twoSessions(): [FakeSession, FakeSession] {
+    return [
+      new FakeSession({ id: 'sess-a', evaluate: fakeMain() }),
+      new FakeSession({ id: 'sess-b', evaluate: fakeMain() }),
+    ]
+  }
+
+  it('captures two sessions independently and concurrently', async () => {
+    const server = await openMulti(twoSessions())
+    const idA = await launch(server, { allowMultiple: true })
+    const idB = await launch(server, { allowMultiple: true })
+    expect(idA).not.toBe(idB)
+
+    // Both capture at once — starting the second does NOT trip ALREADY_CAPTURING.
+    expect(
+      await server.dispatcher.dispatch('ipc_capture_start', { sessionId: idA, channels: ['save'] }),
+    ).toMatchObject({ ok: true, capturing: true })
+    expect(
+      await server.dispatcher.dispatch('ipc_capture_start', { sessionId: idB, channels: ['save'] }),
+    ).toMatchObject({ ok: true, capturing: true })
+
+    // Invoke on each; the captured events stay isolated per session.
+    await server.dispatcher.dispatch('ipc_invoke', {
+      sessionId: idA,
+      channel: 'save',
+      args: [{ n: 'a' }],
+    })
+    await server.dispatcher.dispatch('ipc_invoke', {
+      sessionId: idB,
+      channel: 'save',
+      args: [{ n: 'b' }],
+    })
+    expect(await server.dispatcher.dispatch('ipc_captured', { sessionId: idA })).toMatchObject({
+      ok: true,
+      count: 1,
+      events: [{ channel: 'save', args: [{ n: 'a' }] }],
+    })
+    expect(await server.dispatcher.dispatch('ipc_captured', { sessionId: idB })).toMatchObject({
+      ok: true,
+      count: 1,
+      events: [{ channel: 'save', args: [{ n: 'b' }] }],
+    })
+
+    // Stopping A leaves B capturing and readable.
+    expect(await server.dispatcher.dispatch('ipc_capture_stop', { sessionId: idA })).toMatchObject({
+      ok: true,
+      stopped: true,
+    })
+    expect(await server.dispatcher.dispatch('ipc_captured', { sessionId: idA })).toMatchObject({
+      ok: false,
+      code: 'ipc.NOT_CAPTURING',
+    })
+    expect(await server.dispatcher.dispatch('ipc_captured', { sessionId: idB })).toMatchObject({
+      ok: true,
+      count: 1,
+    })
+  })
+
+  it('judges ALREADY_CAPTURING per session, not globally', async () => {
+    const server = await openMulti(twoSessions())
+    const idA = await launch(server, { allowMultiple: true })
+    const idB = await launch(server, { allowMultiple: true })
+    await server.dispatcher.dispatch('ipc_capture_start', { sessionId: idA, channels: ['save'] })
+    // Starting a DIFFERENT session while A captures is allowed.
+    expect(
+      await server.dispatcher.dispatch('ipc_capture_start', { sessionId: idB, channels: ['save'] }),
+    ).toMatchObject({ ok: true, capturing: true })
+    // Re-starting the SAME session still trips ALREADY_CAPTURING, naming it.
+    expect(
+      await server.dispatcher.dispatch('ipc_capture_start', { sessionId: idA, channels: ['open'] }),
+    ).toMatchObject({
+      ok: false,
+      code: 'ipc.ALREADY_CAPTURING',
+      details: { sessionId: idA },
+    })
+  })
+
+  it('lists the capturing sessions in NOT_CAPTURING details so the agent can retarget', async () => {
+    const server = await openMulti(twoSessions())
+    const idA = await launch(server, { allowMultiple: true })
+    const idB = await launch(server, { allowMultiple: true })
+    await server.dispatcher.dispatch('ipc_capture_start', { sessionId: idA, channels: ['save'] })
+    // B never started a capture; the error names B and lists A as the one capturing.
+    expect(await server.dispatcher.dispatch('ipc_captured', { sessionId: idB })).toMatchObject({
+      ok: false,
+      code: 'ipc.NOT_CAPTURING',
+      details: { sessionId: idB, capturing: [idA] },
+    })
+  })
+
+  it('returns captured events that survive a JSON round-trip', async () => {
+    // invariant A1: the per-session split must not leak a Map/Set into the wire payload.
+    const server = await openMulti(twoSessions())
+    const idA = await launch(server)
+    await server.dispatcher.dispatch('ipc_capture_start', { sessionId: idA, channels: ['save'] })
+    await server.dispatcher.dispatch('ipc_invoke', {
+      sessionId: idA,
+      channel: 'save',
+      args: [{ n: 'a' }],
+    })
+    const read = (await server.dispatcher.dispatch('ipc_captured', { sessionId: idA })) as {
+      ok: boolean
+      events?: unknown
+    }
+    expect(read.ok).toBe(true)
+    expect(JSON.parse(JSON.stringify(read.events))).toEqual(read.events)
   })
 })
