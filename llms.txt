@@ -13,9 +13,10 @@
 - [Capture diagnostics](docs/guides/capture-diagnostics.md): screenshots, console logs, dialogs, session traces
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md): tool-by-tool mapping
 - [Security model](docs/guides/security-model.md): trust boundaries, the controls behind --allow-eval, residual risks, and a deployment checklist
-- [Architecture decisions](docs/adr/README.md): the design record (ADR-001 through ADR-014)
+- [Architecture decisions](docs/adr/README.md): the design record (ADR-001 through ADR-015)
 
 ## Optional
 
 - [Example app and scripted session](examples/minimal-app/README.md): the runnable hello world
 - [Contributing](.github/CONTRIBUTING.md): conventions and the public-repo content policy
+- [Governance](.github/GOVERNANCE.md): roles, decision-making, and the co-maintainer path

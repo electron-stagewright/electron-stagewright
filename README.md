@@ -196,7 +196,7 @@ The server is a **privileged local tool, not a sandbox**: it drives a real app a
 
 ## Contributing
 
-This project is in its earliest days. Issues and discussions welcome. See [CONTRIBUTING.md](.github/CONTRIBUTING.md).
+This project is in its earliest days. Issues and discussions welcome. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the workflow, and [GOVERNANCE.md](.github/GOVERNANCE.md) for how the project is run and the path to becoming a co-maintainer.
 
 ## License
 

@@ -1,8 +1,13 @@
 # Contributing to Electron Stagewright
 
-This project is pre-alpha. The core server can already launch and drive real Electron apps; plugin packages and the first npm release are still ahead.
+This project is pre-alpha. The core server can already launch and drive real
+Electron apps, and first-party plugin packages now cover traces, IPC, and
+production checks. The first npm release is still ahead.
 
-If you're reading this before the first release ships: thanks for stopping by. The most useful contribution right now is **opening a discussion** with use cases or pain points from your own Electron testing experience — that input shapes which plugins land first.
+If you're reading this before the first release ships: thanks for stopping by. The
+most useful contribution right now is **opening a discussion** with use cases or
+pain points from your own Electron testing experience — that input shapes which
+capabilities and docs are prioritized before the first release.
 
 ## How we work
 
@@ -10,6 +15,17 @@ If you're reading this before the first release ships: thanks for stopping by. T
 - All discussion happens in GitHub Issues and Discussions (no private channels until the project grows).
 - Conventional Commits format for commit messages.
 - Pull requests require: passing CI (`pnpm verify`), conventional commits, a reasonably-scoped diff.
+- How the project is governed — roles, decision-making, and the path to becoming a co-maintainer — is documented in [GOVERNANCE.md](./GOVERNANCE.md).
+
+## Your first contribution
+
+1. Fork the repo and create a branch from `main`.
+2. Make your change; keep the diff reasonably scoped.
+3. Run `pnpm verify` (lint + typecheck + test + build + format check) until it is green.
+4. Write [Conventional Commits](https://www.conventionalcommits.org) messages.
+5. Open a pull request against `main` with a clear description of what changed and why.
+
+If you are new to the codebase, the most useful first step is often opening a discussion with your use case (see above) before writing code.
 
 ## Local development
 

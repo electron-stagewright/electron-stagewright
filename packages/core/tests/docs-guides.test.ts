@@ -3,12 +3,12 @@
  * failure modes that matter are checked mechanically:
  *
  * 1. **Tool-name drift** — every `electron_*` / `trace_*` / `production_*` / `ipc_*` name in the
- *    current-facing docs (guides, root README, SECURITY.md, llms.txt) must exist in the live core
- *    manifest (including eval-gated tools) or in the corresponding plugin's tool list. A current doc
- *    citing a renamed or misspelled tool fails CI the same way TOOL-REFERENCE drift does. Wildcard
- *    family mentions (`electron_expect_*`) are validated as prefixes.
+ *    current-facing docs (guides, root README, GitHub community files, llms.txt) must exist in the
+ *    live core manifest (including eval-gated tools) or in the corresponding plugin's tool list. A
+ *    current doc citing a renamed or misspelled tool fails CI the same way TOOL-REFERENCE drift does.
+ *    Wildcard family mentions (`electron_expect_*`) are validated as prefixes.
  * 2. **Relative-link integrity** — every relative markdown link in the public docs (guides, ADRs,
- *    the root README, SECURITY.md, llms.txt) must resolve to a file that exists AND is
+ *    the root README, GitHub community files, llms.txt) must resolve to a file that exists AND is
  *    tracked-eligible (not gitignored). This mechanises the content-policy rule that tracked files
  *    never link to the local-only planning docs.
  */
@@ -30,6 +30,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..')
 const GUIDES_DIR = path.join(REPO_ROOT, 'docs', 'guides')
 const ADR_DIR = path.join(REPO_ROOT, 'docs', 'adr')
+const GITHUB_DIR = path.join(REPO_ROOT, '.github')
 const FIRST_PARTY_PLUGINS = [tracePlugin, productionPlugin, ipcPlugin] as const
 
 /** One markdown document loaded for scanning. */
@@ -50,19 +51,27 @@ async function loadMarkdown(dir: string): Promise<MarkdownDoc[]> {
   return docs
 }
 
+async function loadMarkdownTree(dir: string): Promise<MarkdownDoc[]> {
+  const entries = await readdir(dir, { withFileTypes: true })
+  const docs: MarkdownDoc[] = []
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const file = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      docs.push(...(await loadMarkdownTree(file)))
+    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+      docs.push({ file, text: (await readFile(file, 'utf8')).replace(/\r\n/g, '\n') })
+    }
+  }
+  return docs
+}
+
 async function loadCurrentPublicDocs(): Promise<MarkdownDoc[]> {
   return [
     ...(await loadMarkdown(GUIDES_DIR)),
+    ...(await loadMarkdownTree(GITHUB_DIR)),
     {
       file: path.join(REPO_ROOT, 'README.md'),
       text: (await readFile(path.join(REPO_ROOT, 'README.md'), 'utf8')).replace(/\r\n/g, '\n'),
-    },
-    {
-      file: path.join(REPO_ROOT, '.github', 'SECURITY.md'),
-      text: (await readFile(path.join(REPO_ROOT, '.github', 'SECURITY.md'), 'utf8')).replace(
-        /\r\n/g,
-        '\n',
-      ),
     },
     {
       file: path.join(REPO_ROOT, 'llms.txt'),
@@ -169,7 +178,7 @@ function isGitIgnored(p: string): boolean {
 }
 
 describe('public docs — relative-link integrity', () => {
-  it('every relative link in guides, ADRs, README, SECURITY.md, and llms.txt resolves to a public file', async () => {
+  it('every relative link in public markdown docs and llms.txt resolves to a public file', async () => {
     const docs = await loadLinkCheckedDocs()
 
     const broken: string[] = []

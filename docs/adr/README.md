@@ -22,3 +22,4 @@ rewritten.
 | [ADR-012](./012-production-validation-plugin.md)         | Production validation plugin                              | Accepted                                         |
 | [ADR-013](./013-public-documentation-layout.md)          | Public documentation layout                               | Accepted                                         |
 | [ADR-014](./014-security-posture-and-threat-model.md)    | Security posture and threat model                         | Accepted                                         |
+| [ADR-015](./015-project-governance.md)                   | Project governance and maintainership                     | Accepted                                         |
