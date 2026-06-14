@@ -91,4 +91,5 @@ A robust act-then-verify beat looks like:
 
 _Design background: stable refs and the snapshot/diff schema are ADR-005; failure envelopes,
 retryability, and `EXPECTATION_FAILED` semantics are ADR-006; the single-round-trip assertion
-principle is ADR-007._
+principle is ADR-007. The model behind refs, snapshots, and retrying assertions:
+[Concepts](./concepts.md)._

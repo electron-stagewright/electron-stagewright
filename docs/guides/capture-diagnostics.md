@@ -93,4 +93,4 @@ artifacts only where you control access — see the [security model](./security-
 
 _Design background: dialog auto-response defaults and console-buffer semantics follow ADR-007;
 the trace artifact format, replay, and the dispatch-observer seam are ADR-009; production
-validation is ADR-012._
+validation is ADR-012. The model behind sessions, eval, and plugins: [Concepts](./concepts.md)._

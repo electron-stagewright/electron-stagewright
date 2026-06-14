@@ -12,6 +12,7 @@
 - [Assert UI state](docs/guides/assert-ui-state.md): refs, the expect family, waits, snapshot diffs
 - [Capture diagnostics](docs/guides/capture-diagnostics.md): screenshots, console logs, dialogs, session traces
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md): tool-by-tool mapping
+- [Concepts](docs/guides/concepts.md): the agent-native model and why -- envelope, refs, snapshots, retrying assertions, sessions/transports, eval and plugins -- each linked to its ADR
 - [Security model](docs/guides/security-model.md): trust boundaries, the controls behind --allow-eval, residual risks, and a deployment checklist
 - [Architecture decisions](docs/adr/README.md): the design record (ADR-001 through ADR-015)
 

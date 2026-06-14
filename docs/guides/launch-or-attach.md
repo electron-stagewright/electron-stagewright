@@ -98,4 +98,4 @@ it. For attached sessions, escalation needs the `pid` you optionally passed at a
 
 _Design background: the three-transport model and its capability matrix are ADR-003; launch
 preflight, ready-wait, and stop escalation semantics follow the agent-native principles in
-ADR-007._
+ADR-007. The model behind sessions, transports, and capabilities: [Concepts](./concepts.md)._

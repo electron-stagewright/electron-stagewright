@@ -108,6 +108,9 @@ The full tool list — every tool, its parameters, and operation type — is in
   session traces.
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md) — tool-by-tool
   mapping and the conceptual shifts.
+- [Concepts](docs/guides/concepts.md) — the agent-native model and why the server is shaped the way
+  it is: the response envelope, refs, snapshots, retrying assertions, sessions, and the eval/plugin
+  trust model, each linked to the decision that set it.
 - [Security model](docs/guides/security-model.md) — the trust model, the controls behind
   `--allow-eval`, and a deployment checklist.
 - [Guides index](docs/guides/README.md) · [TOOL-REFERENCE.md](TOOL-REFERENCE.md) ·

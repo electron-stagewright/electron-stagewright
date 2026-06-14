@@ -1,7 +1,7 @@
 # Electron Stagewright guides
 
-Task-oriented documentation for driving Electron apps over the Model Context Protocol. Start
-where your situation matches:
+Public documentation for driving Electron apps over the Model Context Protocol. Start where your
+situation matches:
 
 | You are…                                                         | Read                                                              |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------- |
@@ -11,14 +11,24 @@ where your situation matches:
 | Debugging a flow — screenshots, console, dialogs, session traces | [Capture diagnostics](./capture-diagnostics.md)                   |
 | Coming from electron-driver                                      | [Migrate from electron-driver](./migrate-from-electron-driver.md) |
 | Deciding whether and how to expose the server                    | [Security model](./security-model.md)                             |
+| Trying to understand how it works, and why                       | [Concepts](./concepts.md)                                         |
 
-Reference material:
+## The four kinds of docs here
 
-- [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) — every tool, generated from the live manifest
-  (parameters, return shapes, error codes). The guides cite tools by name; this is where the full
-  contracts live.
-- [Architecture Decision Records](../adr/README.md) — why the server is designed the way it is.
-  Each guide ends with pointers to the decisions behind the behaviour it documents.
+These docs follow the [Diátaxis](https://diataxis.fr) split, so you can tell at a glance what a page
+is _for_:
+
+- **Tutorial** — learning-oriented. [Getting started](./getting-started.md) walks a first session
+  end to end.
+- **How-to** — task-oriented. [Launch, attach, or inject](./launch-or-attach.md),
+  [Assert UI state](./assert-ui-state.md), [Capture diagnostics](./capture-diagnostics.md), and
+  [Migrate from electron-driver](./migrate-from-electron-driver.md) each solve one job.
+- **Explanation** — understanding-oriented. [Concepts](./concepts.md) explains the agent-native
+  model and why the server is shaped the way it is; the [Security model](./security-model.md)
+  explains the trust boundaries.
+- **Reference** — information-oriented. [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) lists every
+  tool (parameters, return shapes, error codes) generated from the live manifest, and the
+  [Architecture Decision Records](../adr/README.md) record why each decision was made.
 
 ## Conventions the guides assume
 

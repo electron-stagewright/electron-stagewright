@@ -55,3 +55,24 @@ Two rules keep this layout safe and legible:
 
 - ADR-001 (naming and license) — the public-repo posture this layout serves.
 - ADR-007 (agent-native UX principles) — the design language the guides document.
+
+## Status Update — 2026-06-14
+
+The guides directory is now organized internally by the four
+[Diátaxis](https://diataxis.fr) modes, so each page has one job and a reader can tell which from its
+type:
+
+- **Tutorial** — `getting-started.md`.
+- **How-to** — `launch-or-attach.md`, `assert-ui-state.md`, `capture-diagnostics.md`,
+  `migrate-from-electron-driver.md`.
+- **Explanation** — `security-model.md` and the new **`concepts.md`**, which fills the previously
+  missing quadrant: a single page explaining the agent-native model (the response envelope, refs
+  versus selectors, snapshots and diffs, retrying assertions, sessions and transports, and the
+  eval/plugin trust model) and linking each concept to the ADR that decided it rather than
+  restating the decision.
+- **Reference** — the root `TOOL-REFERENCE.md` and `docs/adr/`.
+
+The guides index (`docs/guides/README.md`) labels these four modes explicitly, and each how-to
+closes with a pointer up to `concepts.md`. This refines how the `docs/guides/` directory is
+organized; the layout decision above — public docs re-included directory by directory, the root
+holding only `README.md` and `TOOL-REFERENCE.md` — is unchanged.

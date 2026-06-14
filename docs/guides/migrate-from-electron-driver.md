@@ -98,4 +98,5 @@ addressed and how outcomes are verified.
 
 _Design background: the envelope and error registry are ADR-006; refs and snapshot diffs are
 ADR-005; the agent-native principles that drive the expect-family design are ADR-007; transports
-for attach/inject are ADR-003._
+for attach/inject are ADR-003. The model behind all of this, explained in one place:
+[Concepts](./concepts.md)._
