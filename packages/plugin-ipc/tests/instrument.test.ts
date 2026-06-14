@@ -160,3 +160,118 @@ describe('INSTRUMENT_BODY send/on capture (real shim, mock ipcMain)', () => {
     expect(await shim(ipcMain, { op: 'read' })).toMatchObject({ events: [] })
   })
 })
+
+/** A WebContents stand-in: `send`/`sendToFrame` live on its prototype, like the real Electron class. */
+interface MockWebContents {
+  readonly id: number
+  readonly sent: Array<{ channel: string; args: unknown[] }>
+  send(channel: string, ...args: unknown[]): void
+  sendToFrame(frameId: number, channel: string, ...args: unknown[]): void
+}
+/** Fresh class per call, so each test patches its own prototype in isolation. */
+function makeWebContents(id = 7): MockWebContents {
+  class WebContentsLike {
+    readonly id = id
+    readonly sent: Array<{ channel: string; args: unknown[] }> = []
+    send(channel: string, ...args: unknown[]): void {
+      this.sent.push({ channel, args })
+    }
+    sendToFrame(_frameId: number, channel: string, ...args: unknown[]): void {
+      this.sent.push({ channel, args })
+    }
+  }
+  return new WebContentsLike()
+}
+function appWith(webContentsList: readonly MockWebContents[]): {
+  ipcMain: MockIpcMain
+  webContents: { getAllWebContents: () => readonly MockWebContents[] }
+} {
+  return { ipcMain: makeIpcMain(), webContents: { getAllWebContents: () => webContentsList } }
+}
+
+describe('INSTRUMENT_BODY main->renderer capture (real shim, mock webContents)', () => {
+  afterEach(() => {
+    delete (globalThis as { __swIpc?: unknown }).__swIpc
+  })
+
+  const installToRenderer = {
+    op: 'install',
+    allow: ['push'],
+    captureSendToRenderer: true,
+    maxEvents: 1000,
+  }
+
+  it('records an allowlisted webContents.send (with webContentsId) and forwards it', async () => {
+    const wc = makeWebContents(7)
+    const electronApp = appWith([wc])
+    await runShim(electronApp, installToRenderer)
+    wc.send('push', { n: 1 })
+    wc.send('other', { n: 2 })
+
+    // Both forwarded to the app; only the allowlisted one is recorded.
+    expect(wc.sent).toEqual([
+      { channel: 'push', args: [{ n: 1 }] },
+      { channel: 'other', args: [{ n: 2 }] },
+    ])
+    expect(await runShim(electronApp, { op: 'read' })).toMatchObject({
+      events: [{ channel: 'push', type: 'send-to-renderer', args: [{ n: 1 }], webContentsId: 7 }],
+    })
+  })
+
+  it('captures an allowlisted sendToFrame push', async () => {
+    const wc = makeWebContents(3)
+    const electronApp = appWith([wc])
+    await runShim(electronApp, installToRenderer)
+    wc.sendToFrame(42, 'push', { f: true })
+
+    expect(await runShim(electronApp, { op: 'read' })).toMatchObject({
+      events: [
+        { channel: 'push', type: 'send-to-renderer', args: [{ f: true }], webContentsId: 3 },
+      ],
+    })
+  })
+
+  it('restores WebContents send methods on stop, leaving no residue', async () => {
+    const wc = makeWebContents(1)
+    const electronApp = appWith([wc])
+    const proto = Object.getPrototypeOf(wc)
+    const beforeSend = proto.send
+    const beforeSendToFrame = proto.sendToFrame
+    await runShim(electronApp, installToRenderer)
+    expect(proto.send).not.toBe(beforeSend)
+    expect(proto.sendToFrame).not.toBe(beforeSendToFrame)
+    await runShim(electronApp, { op: 'stop' })
+    expect(proto.send).toBe(beforeSend)
+    expect(proto.sendToFrame).toBe(beforeSendToFrame)
+  })
+
+  it('skips main->renderer capture gracefully when no window is open', async () => {
+    const electronApp = appWith([])
+    expect(await runShim(electronApp, installToRenderer)).toMatchObject({ installed: true })
+    expect(await runShim(electronApp, { op: 'read' })).toMatchObject({ events: [] })
+  })
+
+  it('returns send-to-renderer events that survive a JSON round-trip', async () => {
+    const wc = makeWebContents(2)
+    const electronApp = appWith([wc])
+    await runShim(electronApp, installToRenderer)
+    wc.send('push', { nested: { ok: true } })
+    const read = (await runShim(electronApp, { op: 'read' })) as { events?: unknown }
+    expect(JSON.parse(JSON.stringify(read.events))).toEqual(read.events)
+  })
+
+  it('does not double-wrap webContents.send on re-install', async () => {
+    const wc = makeWebContents(5)
+    const electronApp = appWith([wc])
+    await runShim(electronApp, installToRenderer)
+    const afterFirst = Object.getPrototypeOf(wc).send
+    // A second install hits the already-installed reinstall path, which must not re-wrap the
+    // prototype (a double wrap would record — and forward — every push twice).
+    await runShim(electronApp, installToRenderer)
+    expect(Object.getPrototypeOf(wc).send).toBe(afterFirst)
+    wc.send('push', { x: 1 })
+    expect(wc.sent).toEqual([{ channel: 'push', args: [{ x: 1 }] }])
+    const read = (await runShim(electronApp, { op: 'read' })) as { events?: unknown[] }
+    expect(read.events).toHaveLength(1)
+  })
+})

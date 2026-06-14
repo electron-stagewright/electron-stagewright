@@ -1,6 +1,6 @@
 # ADR-010: IPC capture/invoke/stub plugin via main-process instrumentation
 
-Status: Accepted (capture + invoke + stub; multi-session; send/on capture opt-in)
+Status: Accepted (capture + invoke + stub; multi-session; send/on + main→renderer capture opt-ins)
 
 ## Context
 
@@ -27,7 +27,9 @@ walker's constraint) dispatches on `arg.op` over a persistent `globalThis.__swIp
   internal `_invokeHandlers` map. With `captureSend` it also wraps `ipcMain.on` for fire-and-forget
   capture — both future registrations and listeners already registered for an allowlisted channel
   (plain `on` listeners only; pre-existing `once` listeners are left intact to keep their one-shot
-  semantics).
+  semantics). With `captureSendToRenderer` it wraps `webContents.send`/`sendToFrame` on the shared
+  `WebContents` prototype so main→renderer pushes on allowlisted channels are recorded too (reached
+  from a live webContents; skipped if no window is open at install).
 - **read / stop** — return the buffered events; on stop, restore every wrapped handler, detach every
   wrapped `on` listener and restore the app's original, and restore the patched methods — leaving no
   recording residue.
@@ -94,8 +96,8 @@ payloads reach the agent.
   same Node process still share plugin lifecycle/config; run fully independent server lifecycles in
   separate processes. `send/on` capture is opt-in; on start it wraps
   both new and already-registered `on` listeners for allowlisted channels, and on stop it detaches
-  them cleanly. Capturing the main→renderer direction (`webContents.send`) remains a forthcoming
-  extension.
+  them cleanly. The main→renderer direction (`webContents.send`/`sendToFrame`) is captured under the
+  `captureSendToRenderer` opt-in by wrapping the shared `WebContents` prototype (restored on stop).
 - `ipc_invoke` stays unrestricted by default (eval-equivalent), but is boundable per-deployment via
   the `invokeAllow` config without a code change; capture and stub remain bound by the per-capture
   allowlist.

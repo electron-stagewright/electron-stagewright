@@ -5,10 +5,10 @@
  * a single self-contained string (no imports, no closures over module scope — same constraint as
  * the snapshot walker) that dispatches on `arg.op` over a persistent `globalThis.__swIpc` state.
  *
- * It wraps `ipcMain.handle` (and, when capturing send/on, `ipcMain.on`) so each call to an
- * ALLOWLISTED channel is recorded; it re-wraps already-registered handlers best-effort via the
- * internal handler map; it can invoke a registered channel from main; and it can stub a channel's
- * response. Stopping restores every original handler and method.
+ * It wraps `ipcMain.handle`, opt-in `ipcMain.on`, and opt-in `webContents.send` / `sendToFrame` so
+ * each call to an ALLOWLISTED channel is recorded; it re-wraps already-registered handlers
+ * best-effort via the internal handler map; it can invoke a registered channel from main; and it can
+ * stub a channel's response. Stopping restores every original handler and method.
  *
  * Capture/invoke/stub all run arbitrary main-process JS, so the plugin gates them behind the
  * server's eval opt-in and an explicit channel allowlist (see `index.ts` / ADR-010).
@@ -16,27 +16,36 @@
  * @module
  */
 
-/** One captured IPC call. `args` is the channel payload (the renderer's `invoke`/`send` arguments). */
+/**
+ * One captured IPC call. `args` is the channel payload — the renderer's `invoke`/`send` arguments for
+ * renderer→main events, or the main process's `webContents.send` arguments for `send-to-renderer`.
+ */
 export interface IpcEvent {
   /** The IPC channel name. */
   readonly channel: string
-  /** `invoke` for the handle/invoke request-response pattern, `send` for the fire-and-forget on/send pattern. */
-  readonly type: 'invoke' | 'send'
-  /** The arguments the renderer passed on the channel (after the IpcMainEvent). */
+  /**
+   * The IPC pattern: `invoke` (handle/invoke request-response), `send` (renderer→main fire-and-forget
+   * on/send), or `send-to-renderer` (main→renderer `webContents.send`/`sendToFrame` push).
+   */
+  readonly type: 'invoke' | 'send' | 'send-to-renderer'
+  /** The arguments passed on the channel (after the IpcMainEvent for renderer→main; after the channel for sends). */
   readonly args: readonly unknown[]
-  /** Whether the underlying handler resolved (always true for `send`, which has no result). */
+  /** Whether the underlying handler resolved (always true for `send`/`send-to-renderer`, which have no result). */
   readonly ok: boolean
-  /** Handler duration in ms (0 for `send` and for stubbed responses). */
+  /** Handler duration in ms (0 for `send`, `send-to-renderer`, and stubbed responses). */
   readonly ms: number
   /** Epoch-ms when the call was recorded. */
   readonly ts: number
   /** The handler's error message, when `ok` is false. */
   readonly error?: string
+  /** For `send-to-renderer`, the id of the target WebContents (window) the push was sent to. */
+  readonly webContentsId?: number
 }
 
 /**
  * The op an {@link INSTRUMENT_BODY} eval performs against the main-process state:
- * - `install` — set up `__swIpc` + wrap `ipcMain.handle`/`on` for the allowlist.
+ * - `install` — set up `__swIpc` + wrap `ipcMain.handle`/`on` (and, opt-in, `webContents.send`) for
+ *   the allowlist.
  * - `read` — return the buffered events.
  * - `stop` — restore the original handlers + methods and clear `__swIpc`.
  * - `invoke` — call a registered handle channel from main and return its result.
@@ -61,6 +70,7 @@ if (op === 'install') {
   if (g.__swIpc && g.__swIpc.installed) {
     g.__swIpc.allow = arg.allow.slice();
     g.__swIpc.captureSend = !!arg.captureSend;
+    g.__swIpc.captureSendToRenderer = !!arg.captureSendToRenderer;
     g.__swIpc.events = []; // fresh start: never hand back the previous capture's events
     return { installed: true, channels: g.__swIpc.allow, reinstalled: true };
   }
@@ -68,6 +78,7 @@ if (op === 'install') {
     installed: true,
     allow: arg.allow.slice(),
     captureSend: !!arg.captureSend,
+    captureSendToRenderer: !!arg.captureSendToRenderer,
     maxEvents: arg.maxEvents > 0 ? arg.maxEvents : 1000,
     events: [],
     stubs: {},
@@ -81,7 +92,7 @@ if (op === 'install') {
     origRemoveListener:
       typeof ipcMain.removeListener === 'function' ? ipcMain.removeListener.bind(ipcMain) : null,
   };
-  const record = (channel, type, args, ok, ms, error) => {
+  const record = (channel, type, args, ok, ms, error, webContentsId) => {
     if (state.events.length >= state.maxEvents) return;
     // Snapshot args at record time: a later app mutation must not rewrite history, and a
     // non-clonable payload is captured as a placeholder rather than breaking the eval round-trip.
@@ -97,6 +108,7 @@ if (op === 'install') {
     }
     const ev = { channel: channel, type: type, args: snap, ok: ok, ms: ms, ts: Date.now() };
     if (error !== undefined) ev.error = error;
+    if (webContentsId !== undefined) ev.webContentsId = webContentsId;
     state.events.push(ev);
   };
   const wrapHandle = (channel, origFn) => {
@@ -163,6 +175,35 @@ if (op === 'install') {
       return state.origOn(channel, fn);
     };
   }
+  // main->renderer capture (opt-in): record webContents.send/sendToFrame pushes on allowlisted
+  // channels. The send methods live on the shared WebContents prototype, so wrapping it once covers
+  // every current and future window; we reach the prototype from a live webContents. With no window
+  // open at install there is nothing to reach, so this capture is silently skipped.
+  if (state.captureSendToRenderer) {
+    const wcModule = E.webContents;
+    const all =
+      wcModule && typeof wcModule.getAllWebContents === 'function' ? wcModule.getAllWebContents() : [];
+    if (all.length > 0) {
+      const proto = Object.getPrototypeOf(all[0]);
+      state.sendProto = proto;
+      state.origSend = proto.send;
+      proto.send = function (channel, ...a) {
+        if (state.allow.indexOf(channel) >= 0) {
+          record(channel, 'send-to-renderer', a, true, 0, undefined, this && this.id);
+        }
+        return state.origSend.call(this, channel, ...a);
+      };
+      if (typeof proto.sendToFrame === 'function') {
+        state.origSendToFrame = proto.sendToFrame;
+        proto.sendToFrame = function (frameId, channel, ...a) {
+          if (state.allow.indexOf(channel) >= 0) {
+            record(channel, 'send-to-renderer', a, true, 0, undefined, this && this.id);
+          }
+          return state.origSendToFrame.call(this, frameId, channel, ...a);
+        };
+      }
+    }
+  }
   g.__swIpc = state;
   return { installed: true, channels: state.allow };
 }
@@ -188,6 +229,11 @@ if (op === 'stop') {
       if (s.origRemoveListener) s.origRemoveListener(w.channel, w.wrapper);
       s.origOn(w.channel, w.original);
     }
+  }
+  if (s.sendProto && s.origSend) {
+    // Restore the WebContents prototype methods so main->renderer pushes are no longer recorded.
+    s.sendProto.send = s.origSend;
+    if (s.origSendToFrame) s.sendProto.sendToFrame = s.origSendToFrame;
   }
   const count = s.events.length;
   delete g.__swIpc;

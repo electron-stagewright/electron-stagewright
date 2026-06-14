@@ -4,9 +4,9 @@
  * this one sees the renderer↔main IPC traffic the DOM hides.
  *
  * It instruments the main process through the session transport's `evaluate('main', …)` seam (see
- * `instrument.ts`), wrapping `ipcMain.handle` (and, opt-in, `ipcMain.on`) for the channels in an
- * explicit allowlist. Tools (namespaced by the loader): `ipc_capture_start`, `ipc_captured`,
- * `ipc_capture_stop`, `ipc_invoke`, `ipc_stub`.
+ * `instrument.ts`), wrapping `ipcMain.handle`, opt-in `ipcMain.on`, and opt-in `webContents.send` /
+ * `sendToFrame` for the channels in an explicit allowlist. Tools (namespaced by the loader):
+ * `ipc_capture_start`, `ipc_captured`, `ipc_capture_stop`, `ipc_invoke`, `ipc_stub`.
  *
  * SECURITY: capture / invoke / stub all run JS in the main process, so all three require the
  * server's eval opt-in (`--allow-eval`) — the same gate as the eval tools. Capture and stub are
@@ -36,7 +36,7 @@ import { INSTRUMENT_BODY, filterEvents, redactEvents, type IpcEvent } from './in
 /** Plugin namespace — must match {@link ipcPlugin.name}; the loader prefixes its tools with it. */
 const IPC_NAMESPACE = 'ipc'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const IPC_PLUGIN_VERSION = '0.3.0'
+const IPC_PLUGIN_VERSION = '0.4.0'
 
 const configSchema = z.object({
   redact: z
@@ -162,7 +162,8 @@ const captureStartTool: AnyToolDefinition = defineTool({
   description: [
     'Begin recording calls to the ipcMain channels in `channels` (an explicit allowlist — only',
     'these are captured). Instruments the main process, so the server must run with --allow-eval.',
-    'captureSend also records fire-and-forget on/send messages (default invoke/handle only).',
+    'captureSend also records fire-and-forget on/send messages (default invoke/handle only);',
+    'captureSendToRenderer also records main->renderer webContents.send/sendToFrame pushes.',
     'Returns: { ok, capturing, channels }. Errors: ipc.EVAL_REQUIRED (no --allow-eval),',
     'ipc.MAIN_EVAL_UNSUPPORTED (transport lacks main eval), ipc.ALREADY_CAPTURING (call',
     'ipc_capture_stop first), NOT_RUNNING (no session), BAD_ARGUMENT (empty channels).',
@@ -176,6 +177,12 @@ const captureStartTool: AnyToolDefinition = defineTool({
       .boolean()
       .optional()
       .describe('Also capture fire-and-forget on/send messages, not just invoke/handle.'),
+    captureSendToRenderer: z
+      .boolean()
+      .optional()
+      .describe(
+        'Also capture main->renderer webContents.send/sendToFrame pushes (needs an open window at start).',
+      ),
     sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
   }),
   operationType: 'command',
@@ -196,6 +203,7 @@ const captureStartTool: AnyToolDefinition = defineTool({
       op: 'install',
       allow: args.channels,
       captureSend: args.captureSend === true,
+      captureSendToRenderer: args.captureSendToRenderer === true,
       maxEvents: config.maxEvents,
     })
     captures.set(guard.sessionId, { channels: args.channels })
@@ -208,8 +216,9 @@ const capturedTool: AnyToolDefinition = defineTool({
   title: 'Read captured IPC calls',
   description: [
     'Return the IPC calls captured since ipc_capture_start, optionally filtered to one channel.',
-    'Each event is { channel, type (invoke|send), args, ok, ms, ts, error? }; configured redact',
-    'fields are stripped from args. Returns: { ok, count, events }. Errors: ipc.NOT_CAPTURING',
+    'Each event is { channel, type (invoke|send|send-to-renderer), args, ok, ms, ts, error?,',
+    'webContentsId? }; configured redact fields are stripped from args. Returns: { ok, count,',
+    'events }. Errors: ipc.NOT_CAPTURING',
     '(call ipc_capture_start first), ipc.EVAL_REQUIRED, ipc.MAIN_EVAL_UNSUPPORTED, NOT_RUNNING.',
   ].join(' '),
   inputSchema: z.object({
@@ -236,9 +245,10 @@ const captureStopTool: AnyToolDefinition = defineTool({
   name: 'capture_stop',
   title: 'Stop capturing IPC calls',
   description: [
-    'Stop the active capture and restore the app’s original ipcMain handlers. Returns: { ok,',
-    'stopped, events } (events = how many were captured). Errors: ipc.NOT_CAPTURING (nothing to',
-    'stop), ipc.EVAL_REQUIRED, ipc.MAIN_EVAL_UNSUPPORTED, NOT_RUNNING.',
+    'Stop the active capture and restore the app’s original ipcMain handlers/listeners and',
+    'WebContents send methods. Returns: { ok, stopped, events } (events = how many were captured).',
+    'Errors: ipc.NOT_CAPTURING (nothing to stop), ipc.EVAL_REQUIRED, ipc.MAIN_EVAL_UNSUPPORTED,',
+    'NOT_RUNNING.',
   ].join(' '),
   inputSchema: z.object({
     sessionId: z.string().optional().describe('Target session; defaults to the only session.'),

@@ -1,10 +1,10 @@
 # @electron-stagewright/plugin-ipc
 
 Capture, invoke, and stub Electron IPC for agent-driven testing. The agent's other tools see the
-DOM; this one sees the renderer↔main `ipcMain` traffic the DOM hides. The first transport-eval
-plugin (ADR-010, built on the ADR-004 plugin contract): it instruments the main process through the
-session transport's `evaluate('main', …)` seam, wrapping `ipcMain.handle` for an explicit channel
-allowlist.
+DOM; this one sees the renderer↔main IPC traffic the DOM hides. The first transport-eval plugin
+(ADR-010, built on the ADR-004 plugin contract): it instruments the main process through the session
+transport's `evaluate('main', …)` seam, wrapping `ipcMain.handle`, opt-in `ipcMain.on`, and opt-in
+`webContents.send` / `sendToFrame` for an explicit channel allowlist.
 
 ## Load it
 
@@ -35,15 +35,18 @@ const server = await createServer({
 
 The loader namespaces each tool under the plugin name `ipc`:
 
-- **`ipc_capture_start`** `{ channels, captureSend?, sessionId? }` — start recording calls to the
-  ipcMain channels in `channels` (an explicit allowlist — only these are captured). `captureSend`
-  also records fire-and-forget on/send messages (default: invoke/handle only). Returns
-  `{ capturing, channels }`.
+- **`ipc_capture_start`** `{ channels, captureSend?, captureSendToRenderer?, sessionId? }` — start
+  recording calls to the ipcMain channels in `channels` (an explicit allowlist — only these are
+  captured). `captureSend` also records fire-and-forget on/send messages (default: invoke/handle
+  only); `captureSendToRenderer` also records main→renderer `webContents.send`/`sendToFrame` pushes
+  (needs an open window at start). Returns `{ capturing, channels }`.
 - **`ipc_captured`** `{ channel?, sessionId? }` — return the captured calls, optionally filtered to
-  one channel. Each event is `{ channel, type (invoke|send), args, ok, ms, ts, error? }`; configured
-  `redact` fields are stripped from `args`. Returns `{ count, events }`.
+  one channel. Each event includes `channel`, `type` (`invoke`, `send`, or `send-to-renderer`),
+  `args`, `ok`, `ms`, `ts`, optional `error`, and optional `webContentsId` (`webContentsId` is the
+  target window for `send-to-renderer`); configured `redact` fields are stripped from `args`.
+  Returns `{ count, events }`.
 - **`ipc_capture_stop`** `{ sessionId? }` — stop the capture and restore the app's original ipcMain
-  handlers. Returns `{ stopped, events }`.
+  handlers/listeners and WebContents send methods. Returns `{ stopped, events }`.
 - **`ipc_invoke`** `{ channel, args?, timeoutMs?, sessionId? }` — call a registered `ipcMain.handle`
   channel from the main process (driving the request the renderer would send) and return its result.
   `timeoutMs` bounds a hung handler. Returns `{ channel, result }`.
@@ -96,6 +99,11 @@ the agent.
   originals are fully restored too). Pre-existing `ipcMain.once` listeners are left intact — only
   `on` listeners are re-wrapped — so their one-shot behaviour is never changed, at the cost of not
   capturing them.
+- **`captureSendToRenderer` captures the main→renderer direction.** It wraps `webContents.send` (and
+  `sendToFrame`) on the shared `WebContents` prototype, so one install covers every current and future
+  window; each push on an allowlisted channel is recorded as a `send-to-renderer` event tagged with
+  the target `webContentsId`, and the prototype methods are restored on stop. Reaching the prototype
+  needs at least one window open at capture start; with none open, this direction is silently skipped.
 - **Re-wrapping already-registered handlers is best-effort.** It uses Electron's internal handler
   map; handlers registered AFTER `ipc_capture_start` are always wrapped, and the gated smoke covers
   re-wrapping a handler registered at app startup.
