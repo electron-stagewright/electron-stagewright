@@ -34,12 +34,14 @@ We follow coordinated disclosure:
 4. Publish a security advisory via GitHub Security Advisories (with CVE if applicable).
 5. Credit the reporter in the advisory unless they prefer to remain anonymous.
 
-## Threat model (in progress)
+## Threat model
 
-A formal threat model document is planned. High-level concerns currently identified:
+The full threat model — assets, trust boundaries, threats and their mitigations, and the residual risks — is published at [`docs/guides/security-model.md`](../docs/guides/security-model.md), and the overall posture is recorded in [ADR-014](../docs/adr/014-security-posture-and-threat-model.md).
 
-- The server's `eval_main` and `eval_renderer` tools allow arbitrary JS execution in the Electron app under test. This is intentional and necessary for the tool's purpose, but means the MCP server should never be exposed to untrusted agent input without sandboxing.
-- The `production` plugin reads signed `.app` bundles and inspects updater feeds — must not exfiltrate signing identities.
-- The `trace` plugin writes session data to disk. Defaults must not include sensitive payloads (passwords, tokens) unless the user opts in.
+In one line: the server is **a privileged local tool, not a sandbox**. It runs with your OS privileges and, under `--allow-eval`, executes arbitrary JavaScript in the app under test, so only a trusted agent host should invoke it — over the default local stdio transport. Key concerns:
 
-Until the threat model is published, treat the MCP server as **a privileged local tool** that should only be invoked by trusted agent hosts.
+- `electron_eval_main` / `electron_eval_renderer` allow arbitrary JS in the app. They are default-deny (unregistered without `--allow-eval`) with a keyword blocklist and a result cap; the blocklist is defence-in-depth, not a complete control.
+- The `production` plugin reads signed `.app` bundles and updater feeds. It may return bounded local evidence such as a signing authority in the tool result, but it does not upload that data anywhere.
+- The `trace` plugin writes session artifacts to disk, and the `ipc` plugin returns captured channel payloads to the agent; configure `redact` for structured argument/payload fields, and treat screenshots, console output, and tool results as sensitive.
+
+See the threat model for the full analysis and a deployment checklist.

@@ -84,6 +84,11 @@ notarization, update feed, crash machinery — that is `production_validate` fro
 `@electron-stagewright/plugin-production`; see the [tool reference](../../TOOL-REFERENCE.md) and
 the plugin's README.
 
+**A capture can hold secrets.** Screenshots, console logs, traces, and IPC payloads record whatever
+the app exposed. Configure `redact` for structured trace arguments and IPC payload fields before
+capturing, but do not treat it as a screenshot, console-output, or arbitrary-result scrubber; write
+artifacts only where you control access — see the [security model](./security-model.md).
+
 ---
 
 _Design background: dialog auto-response defaults and console-buffer semantics follow ADR-007;

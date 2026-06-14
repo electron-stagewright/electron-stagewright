@@ -152,6 +152,8 @@ the graceful close, the stop escalates to SIGKILL after a bounded budget and rep
   already running.
 - [Assert UI state](./assert-ui-state.md) — the assertion and wait toolbox.
 - [Capture diagnostics](./capture-diagnostics.md) — screenshots, console, dialogs, traces.
+- [Security model](./security-model.md) — read before you enable `--allow-eval` or expose the
+  server: the trust model and the controls behind it.
 - [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) — the full tool contracts.
 
 ---

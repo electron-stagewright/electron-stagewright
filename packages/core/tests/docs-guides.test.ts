@@ -2,15 +2,15 @@
  * Drift and integrity guards for the public guides (ADR-013) — prose rots silently, so both
  * failure modes that matter are checked mechanically:
  *
- * 1. **Tool-name drift** — every `electron_*` / `trace_*` / `production_*` / `ipc_*` name a guide
- *    mentions must exist in the live core manifest (including eval-gated tools) or in the
- *    corresponding plugin's tool list. A guide citing a renamed or misspelled tool fails CI the
- *    same way TOOL-REFERENCE drift does. Wildcard family mentions (`electron_expect_*`) are
- *    validated as prefixes.
+ * 1. **Tool-name drift** — every `electron_*` / `trace_*` / `production_*` / `ipc_*` name in the
+ *    current-facing docs (guides, root README, SECURITY.md, llms.txt) must exist in the live core
+ *    manifest (including eval-gated tools) or in the corresponding plugin's tool list. A current doc
+ *    citing a renamed or misspelled tool fails CI the same way TOOL-REFERENCE drift does. Wildcard
+ *    family mentions (`electron_expect_*`) are validated as prefixes.
  * 2. **Relative-link integrity** — every relative markdown link in the public docs (guides, ADRs,
- *    the root README, llms.txt) must resolve to a file that exists AND is tracked-eligible (not
- *    gitignored). This mechanises the content-policy rule that tracked files never link to the
- *    local-only planning docs.
+ *    the root README, SECURITY.md, llms.txt) must resolve to a file that exists AND is
+ *    tracked-eligible (not gitignored). This mechanises the content-policy rule that tracked files
+ *    never link to the local-only planning docs.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -30,6 +30,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..')
 const GUIDES_DIR = path.join(REPO_ROOT, 'docs', 'guides')
 const ADR_DIR = path.join(REPO_ROOT, 'docs', 'adr')
+const FIRST_PARTY_PLUGINS = [tracePlugin, productionPlugin, ipcPlugin] as const
 
 /** One markdown document loaded for scanning. */
 interface MarkdownDoc {
@@ -49,6 +50,31 @@ async function loadMarkdown(dir: string): Promise<MarkdownDoc[]> {
   return docs
 }
 
+async function loadCurrentPublicDocs(): Promise<MarkdownDoc[]> {
+  return [
+    ...(await loadMarkdown(GUIDES_DIR)),
+    {
+      file: path.join(REPO_ROOT, 'README.md'),
+      text: (await readFile(path.join(REPO_ROOT, 'README.md'), 'utf8')).replace(/\r\n/g, '\n'),
+    },
+    {
+      file: path.join(REPO_ROOT, '.github', 'SECURITY.md'),
+      text: (await readFile(path.join(REPO_ROOT, '.github', 'SECURITY.md'), 'utf8')).replace(
+        /\r\n/g,
+        '\n',
+      ),
+    },
+    {
+      file: path.join(REPO_ROOT, 'llms.txt'),
+      text: (await readFile(path.join(REPO_ROOT, 'llms.txt'), 'utf8')).replace(/\r\n/g, '\n'),
+    },
+  ]
+}
+
+async function loadLinkCheckedDocs(): Promise<MarkdownDoc[]> {
+  return [...(await loadCurrentPublicDocs()), ...(await loadMarkdown(ADR_DIR))]
+}
+
 /**
  * Namespaced tool-name mentions. A trailing underscore (from a wildcard family mention like
  * `electron_expect_*`) survives the match and is validated as a prefix.
@@ -65,16 +91,28 @@ async function collectKnownToolNames(): Promise<ReadonlySet<string>> {
     await server.close().catch(() => undefined)
   }
   // The loader registers plugin tools as `<plugin>_<tool>` (ADR-004).
-  for (const plugin of [tracePlugin, productionPlugin, ipcPlugin]) {
+  for (const plugin of FIRST_PARTY_PLUGINS) {
     for (const tool of plugin.tools ?? []) known.add(`${plugin.name}_${tool.name}`)
   }
   return known
 }
 
+function collectRuntimeEvalGatedPluginTools(): string[] {
+  const names: string[] = []
+  for (const plugin of FIRST_PARTY_PLUGINS) {
+    for (const tool of plugin.tools ?? []) {
+      if (tool.description.includes('--allow-eval') || tool.description.includes('EVAL_REQUIRED')) {
+        names.push(`${plugin.name}_${tool.name}`)
+      }
+    }
+  }
+  return names.sort((a, b) => a.localeCompare(b))
+}
+
 describe('public guides — tool-name drift', () => {
-  it('every tool a guide mentions exists in the core manifest or a plugin', async () => {
+  it('every tool a public doc mentions exists in the core manifest or a plugin', async () => {
     const known = await collectKnownToolNames()
-    const docs = await loadMarkdown(GUIDES_DIR)
+    const docs = await loadCurrentPublicDocs()
     expect(docs.length).toBeGreaterThan(0)
 
     const unknown: string[] = []
@@ -131,19 +169,8 @@ function isGitIgnored(p: string): boolean {
 }
 
 describe('public docs — relative-link integrity', () => {
-  it('every relative link in guides, ADRs, README, and llms.txt resolves to a public file', async () => {
-    const docs = [
-      ...(await loadMarkdown(GUIDES_DIR)),
-      ...(await loadMarkdown(ADR_DIR)),
-      {
-        file: path.join(REPO_ROOT, 'README.md'),
-        text: await readFile(path.join(REPO_ROOT, 'README.md'), 'utf8'),
-      },
-      {
-        file: path.join(REPO_ROOT, 'llms.txt'),
-        text: await readFile(path.join(REPO_ROOT, 'llms.txt'), 'utf8'),
-      },
-    ]
+  it('every relative link in guides, ADRs, README, SECURITY.md, and llms.txt resolves to a public file', async () => {
+    const docs = await loadLinkCheckedDocs()
 
     const broken: string[] = []
     for (const doc of docs) {
@@ -157,5 +184,36 @@ describe('public docs — relative-link integrity', () => {
       }
     }
     expect(broken, `Public docs contain broken or private links:\n${broken.join('\n')}`).toEqual([])
+  })
+})
+
+describe('security model — eval-gated tool coverage', () => {
+  it('names every --allow-eval-gated core tool and runtime-gated plugin tool', async () => {
+    // A new eval-gated tool must not ship without an entry in the published threat model. Core eval
+    // tools advertise the gate through the manifest; first-party plugin tools can gate at runtime
+    // while staying listed, so collect those from their descriptions too.
+    const server = await createServer({ allowEval: true })
+    let evalGated: string[]
+    try {
+      evalGated = server.dispatcher
+        .listManifest()
+        .filter((entry) => entry.requiresEvalFlag === true)
+        .map((entry) => entry.name)
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+    expect(evalGated.length).toBeGreaterThan(0)
+
+    const securityModel = (
+      await readFile(path.join(GUIDES_DIR, 'security-model.md'), 'utf8')
+    ).replace(/\r\n/g, '\n')
+    const runtimeGatedPluginTools = collectRuntimeEvalGatedPluginTools()
+    const missing = [...evalGated, ...runtimeGatedPluginTools].filter(
+      (name) => !securityModel.includes(name),
+    )
+    expect(
+      missing,
+      `security-model.md must name every --allow-eval-gated tool; missing:\n${missing.join('\n')}`,
+    ).toEqual([])
   })
 })

@@ -108,6 +108,8 @@ The full tool list — every tool, its parameters, and operation type — is in
   session traces.
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md) — tool-by-tool
   mapping and the conceptual shifts.
+- [Security model](docs/guides/security-model.md) — the trust model, the controls behind
+  `--allow-eval`, and a deployment checklist.
 - [Guides index](docs/guides/README.md) · [TOOL-REFERENCE.md](TOOL-REFERENCE.md) ·
   [Architecture Decision Records](docs/adr/README.md).
 
@@ -187,6 +189,10 @@ The MCP is built against two real Electron applications maintained by the author
 - **POS shape** — a multi-tenant Point of Sale desktop app with embedded Fastify server and SQLite. Stresses forms, large tables, embedded backend, auto-updater feeds.
 
 If your Electron app has a shape these don't cover, [open an issue](https://github.com/electron-stagewright/electron-stagewright/issues) — we'd love to add it as an example fixture.
+
+## Security
+
+The server is a **privileged local tool, not a sandbox**: it drives a real app and, under `--allow-eval`, runs arbitrary JavaScript inside it, so only a trusted agent host should invoke it. The [security model](docs/guides/security-model.md) covers the trust boundaries, the controls (eval opt-in + blocklist, channel allowlists, launch confinement, structured redaction), and a deployment checklist; the posture is recorded in [ADR-014](docs/adr/014-security-posture-and-threat-model.md). To report a vulnerability, see [SECURITY.md](.github/SECURITY.md).
 
 ## Contributing
 

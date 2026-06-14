@@ -21,3 +21,4 @@ rewritten.
 | [ADR-011](./011-operation-timeout.md)                    | Operation-timeout backstop at the dispatch boundary       | Accepted                                         |
 | [ADR-012](./012-production-validation-plugin.md)         | Production validation plugin                              | Accepted                                         |
 | [ADR-013](./013-public-documentation-layout.md)          | Public documentation layout                               | Accepted                                         |
+| [ADR-014](./014-security-posture-and-threat-model.md)    | Security posture and threat model                         | Accepted                                         |

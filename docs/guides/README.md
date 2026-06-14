@@ -10,6 +10,7 @@ where your situation matches:
 | Writing assertions an agent can act on                           | [Assert UI state](./assert-ui-state.md)                           |
 | Debugging a flow — screenshots, console, dialogs, session traces | [Capture diagnostics](./capture-diagnostics.md)                   |
 | Coming from electron-driver                                      | [Migrate from electron-driver](./migrate-from-electron-driver.md) |
+| Deciding whether and how to expose the server                    | [Security model](./security-model.md)                             |
 
 Reference material:
 
