@@ -24,9 +24,13 @@ walker's constraint) dispatches on `arg.op` over a persistent `globalThis.__swIp
 
 - **install** — wraps `ipcMain.handle` so a call to an allowlisted channel is recorded
   (`{ channel, type, args, ok, ms, ts }`); re-wraps already-registered handlers best-effort via the
-  internal `_invokeHandlers` map; optionally wraps `ipcMain.on` for fire-and-forget capture.
-- **read / stop** — return the buffered events; restore every wrapped handler and the patched
-  methods on stop.
+  internal `_invokeHandlers` map. With `captureSend` it also wraps `ipcMain.on` for fire-and-forget
+  capture — both future registrations and listeners already registered for an allowlisted channel
+  (plain `on` listeners only; pre-existing `once` listeners are left intact to keep their one-shot
+  semantics).
+- **read / stop** — return the buffered events; on stop, restore every wrapped handler, detach every
+  wrapped `on` listener and restore the app's original, and restore the patched methods — leaving no
+  recording residue.
 - **invoke** — call a registered handle channel from main (driving the renderer's request), bounded
   by an optional timeout.
 - **stub** — make an allowlisted channel's handler return a canned value for the capture's duration.
@@ -34,9 +38,10 @@ walker's constraint) dispatches on `arg.op` over a persistent `globalThis.__swIp
 The plugin keeps the orchestration (allowlist enforcement, per-session capture state, redaction,
 error envelopes) in TypeScript and the main-process mutation in the body string.
 
-### 2. Gated by the eval opt-in AND an explicit channel allowlist
+### 2. Gated by the eval opt-in AND explicit channel allowlists
 
-Main-process eval is powerful, so the instrumentation tools are gated twice:
+Main-process eval is powerful, so the instrumentation tools are gated by the eval opt-in
+and channel allowlists:
 
 - **`--allow-eval`** — without the server's eval opt-in, every IPC tool returns `ipc.EVAL_REQUIRED`.
   The transport's `evaluate` does NOT itself pass through the `--allow-eval` _tool_ gate (that gate
@@ -44,9 +49,14 @@ Main-process eval is powerful, so the instrumentation tools are gated twice:
   at the tool boundary via `ctx.allowEval`.
 - **An explicit channel allowlist** — `ipc_capture_start` requires at least one channel; only
   allowlisted channels are wrapped, captured, stubbed, or recorded. There is no capture-everything.
+- **An optional invoke allowlist** — `ipc_invoke` is unrestricted by default (it names its channel
+  per call and is no more powerful than `electron_eval_main`, which `--allow-eval` already permits),
+  but an operator MAY bound it via the `invokeAllow` config for defense-in-depth: when set,
+  `ipc_invoke` refuses any channel outside it (`ipc.CHANNEL_NOT_ALLOWED`). It is independent of the
+  capture/stub allowlist; `undefined` (omitted) is unrestricted and `[]` blocks all invoke.
 
 This is the trust model of the eval tools (a first-party, in-process plugin the operator chose to
-load) plus a per-channel boundary. The `redact` config drops named arg fields before captured
+load) plus per-channel boundaries. The `redact` config drops named arg fields before captured
 payloads reach the agent.
 
 ## Rationale
@@ -56,7 +66,7 @@ payloads reach the agent.
 - Wrapping `ipcMain.handle` at install + re-wrapping the internal map covers both handlers
   registered after capture starts and those registered at app startup (the gated smoke proves the
   latter).
-- The double gate (eval flag + allowlist) keeps the blast radius explicit and operator-controlled.
+- The eval flag plus explicit allowlists keep the blast radius explicit and operator-controlled.
 
 ## Alternatives considered
 
@@ -82,8 +92,13 @@ payloads reach the agent.
   read/stop/stub cannot bleed across sessions, and the single-active-capture guard the first cut
   needed is gone. The capture registry and config are module-level, so co-resident servers in the
   same Node process still share plugin lifecycle/config; run fully independent server lifecycles in
-  separate processes. `send/on` capture is opt-in; richer renderer-initiated capture is a forthcoming
+  separate processes. `send/on` capture is opt-in; on start it wraps
+  both new and already-registered `on` listeners for allowlisted channels, and on stop it detaches
+  them cleanly. Capturing the main→renderer direction (`webContents.send`) remains a forthcoming
   extension.
+- `ipc_invoke` stays unrestricted by default (eval-equivalent), but is boundable per-deployment via
+  the `invokeAllow` config without a code change; capture and stub remain bound by the per-capture
+  allowlist.
 
 ## Related decisions
 

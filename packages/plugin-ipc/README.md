@@ -60,33 +60,42 @@ Error codes: `ipc.EVAL_REQUIRED`, `ipc.MAIN_EVAL_UNSUPPORTED`, `ipc.ALREADY_CAPT
 
 - **`redact`** — argument property names to replace with `"[redacted]"` in captured events.
 - **`maxEvents`** — cap on buffered captured events (default 1000); later calls are dropped.
+- **`invokeAllow`** — optional allowlist of channels `ipc_invoke` may target. Omit for unrestricted
+  invoke (the default); set to `[]` to block all invoke; set to a list to bound it. Independent of
+  the capture/stub allowlist.
 
 ## Security
 
 Capture, invoke, and stub all execute JavaScript in the app's main process via the transport's eval
-seam. They are gated two ways:
+seam. They are gated by the eval opt-in plus channel allowlists:
 
 - **The server's eval opt-in (`--allow-eval`).** Without it, every instrumentation tool returns
   `ipc.EVAL_REQUIRED` — the same gate the core eval tools sit behind. This applies to capture,
   invoke, and stub alike.
 - **An explicit channel allowlist for capture and stub.** `ipc_capture_start` requires at least one
   channel; only those channels are wrapped, recorded, or stubbable. There is no "capture
-  everything". `ipc_invoke` names its channel per call (the agent's explicit choice) rather than a
-  pre-set allowlist — it is no more powerful than `electron_eval_main`, which `--allow-eval` already
-  permits.
+  everything".
+- **An optional allowlist for invoke.** `ipc_invoke` is unrestricted by default — it names its
+  channel per call (the agent's explicit choice) and is no more powerful than `electron_eval_main`,
+  which `--allow-eval` already permits. For defense-in-depth, set the `invokeAllow` config to bound
+  it: when present, `ipc_invoke` refuses any channel outside the list — `undefined` (omitted) means
+  unrestricted, `[]` means block all invoke, and a list means only those channels.
 
 This is the same trust model as the eval tools: a first-party, in-process plugin (ADR-004) the
-operator chose to load, with a per-channel allowlist on capture/stub. Captured `args` can include
-IPC payloads; use `redact` to drop sensitive fields before they reach the agent.
+operator chose to load, with per-channel capture/stub allowlists and an optional invoke allowlist.
+Captured `args` can include IPC payloads; use `redact` to drop sensitive fields before they reach
+the agent.
 
 ## Scope and limitations
 
 - **invoke/handle is the primary surface.** Capture wraps `ipcMain.handle` (request-response).
-  `captureSend` additionally records `ipcMain.on` (fire-and-forget) messages. On stop, the patched
-  `ipcMain.on` method is restored and the `handle` originals are re-registered, but `on` listeners
-  wrapped during the capture window are not individually detached — they keep forwarding to the app
-  and are released when the app stops. (Invoke/handle has no such residue; its originals are fully
-  restored.) Removing wrapped `on` listeners on stop is a forthcoming refinement of the opt-in path.
+  `captureSend` additionally records `ipcMain.on` (fire-and-forget) messages — both listeners
+  registered after capture starts AND those already registered for an allowlisted channel (re-wrapped
+  on start, parity with the handle re-wrap). On stop, every wrapped `on` listener is detached and the
+  app's original is restored, so capture leaves no recording residue (matching invoke/handle, whose
+  originals are fully restored too). Pre-existing `ipcMain.once` listeners are left intact — only
+  `on` listeners are re-wrapped — so their one-shot behaviour is never changed, at the cost of not
+  capturing them.
 - **Re-wrapping already-registered handlers is best-effort.** It uses Electron's internal handler
   map; handlers registered AFTER `ipc_capture_start` are always wrapped, and the gated smoke covers
   re-wrapping a handler registered at app startup.

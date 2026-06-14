@@ -24,7 +24,6 @@ import { stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
-  VERSION,
   defineTool,
   makeError,
   makePluginError,
@@ -39,6 +38,8 @@ import { makeRunCommand } from './command.js'
 
 /** Plugin namespace — must match {@link productionPlugin.name}; the loader prefixes its tools. */
 const PRODUCTION_NAMESPACE = 'production'
+/** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
+const PRODUCTION_PLUGIN_VERSION = '0.3.0'
 
 const configSchema = z.object({
   commandTimeoutMs: z
@@ -146,7 +147,7 @@ const validateTool: AnyToolDefinition = defineTool({
  */
 export const productionPlugin: StagewrightPlugin = {
   name: PRODUCTION_NAMESPACE,
-  version: VERSION,
+  version: PRODUCTION_PLUGIN_VERSION,
   coreVersionRange: '*',
   configSchema,
   errorCodes: {

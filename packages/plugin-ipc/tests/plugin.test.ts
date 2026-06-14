@@ -160,6 +160,21 @@ async function openMulti(
   servers.push(server)
   return server
 }
+/** A single-session server whose ipc plugin is loaded with `ipcConfig` (e.g. `{ invokeAllow }`). */
+async function openWithConfig(
+  ipcConfig: Record<string, unknown>,
+  opts: { allowEval: boolean } = { allowEval: true },
+): Promise<Awaited<ReturnType<typeof createServer>>> {
+  const transport = new FakeTransport({ session: new FakeSession({ evaluate: fakeMain() }) })
+  const server = await createServer({
+    plugins: [ipcPlugin],
+    allowEval: opts.allowEval,
+    pluginConfigs: { ipc: ipcConfig },
+    transports: new TransportRegistry({ transports: [transport] }),
+  })
+  servers.push(server)
+  return server
+}
 
 describe('ipc plugin (in-process, simulated main)', () => {
   it('advertises the package version through plugin introspection', async () => {
@@ -424,5 +439,68 @@ describe('ipc plugin (multi-session, simulated main)', () => {
     }
     expect(read.ok).toBe(true)
     expect(JSON.parse(JSON.stringify(read.events))).toEqual(read.events)
+  })
+})
+
+describe('ipc plugin (invoke allowlist, simulated main)', () => {
+  it('allows an invoke whose channel is in invokeAllow', async () => {
+    const server = await openWithConfig({ invokeAllow: ['save'] })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('ipc_invoke', {
+        sessionId,
+        channel: 'save',
+        args: [{ n: 1 }],
+      }),
+    ).toMatchObject({ ok: true, result: { saved: { n: 1 } } })
+  })
+
+  it('blocks an invoke whose channel is not in invokeAllow, before the main round-trip', async () => {
+    const server = await openWithConfig({ invokeAllow: ['save'] })
+    const sessionId = await launch(server)
+    // 'other' has no handler in fakeMain; were the allowlist not enforced first this would surface
+    // INVOKE_FAILED. CHANNEL_NOT_ALLOWED proves the guard short-circuits before the eval round-trip.
+    expect(
+      await server.dispatcher.dispatch('ipc_invoke', { sessionId, channel: 'other' }),
+    ).toMatchObject({
+      ok: false,
+      code: 'ipc.CHANNEL_NOT_ALLOWED',
+      details: { channel: 'other', allowed: ['save'] },
+    })
+  })
+
+  it('blocks every invoke when invokeAllow is empty', async () => {
+    const server = await openWithConfig({ invokeAllow: [] })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('ipc_invoke', { sessionId, channel: 'save' }),
+    ).toMatchObject({ ok: false, code: 'ipc.CHANNEL_NOT_ALLOWED', details: { allowed: [] } })
+  })
+
+  it('leaves invoke unrestricted when invokeAllow is unset', async () => {
+    const server = await open()
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('ipc_invoke', { sessionId, channel: 'save' }),
+    ).toMatchObject({ ok: true })
+  })
+
+  it('keeps the invoke allowlist independent of the capture allowlist', async () => {
+    // invokeAllow names only 'other'; capture names only 'save'. Capturing/stubbing 'save' works
+    // (capture allowlist), but invoking 'save' is blocked (not in invokeAllow) — the two allowlists
+    // do not bleed into each other.
+    const server = await openWithConfig({ invokeAllow: ['other'] })
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('ipc_capture_start', { sessionId, channels: ['save'] })
+    expect(
+      await server.dispatcher.dispatch('ipc_stub', { sessionId, channel: 'save', response: 1 }),
+    ).toMatchObject({ ok: true, stubbed: 'save' })
+    expect(
+      await server.dispatcher.dispatch('ipc_invoke', { sessionId, channel: 'save' }),
+    ).toMatchObject({
+      ok: false,
+      code: 'ipc.CHANNEL_NOT_ALLOWED',
+      details: { channel: 'save', allowed: ['other'] },
+    })
   })
 })

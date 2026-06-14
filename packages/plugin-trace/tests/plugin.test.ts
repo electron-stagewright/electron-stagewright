@@ -16,6 +16,7 @@ import { createServer, defineTool, makeSuccess } from '@electron-stagewright/cor
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
+import packageJson from '../package.json' with { type: 'json' }
 import tracePlugin, { readTrace } from '../src/index.js'
 
 const demoTool = defineTool({
@@ -48,6 +49,18 @@ function envelopeOf(result: CallToolResult): Record<string, unknown> {
 }
 
 describe('trace plugin (in-process)', () => {
+  it('advertises its own package version through plugin introspection', async () => {
+    const server = await createServer({ plugins: [tracePlugin] })
+    try {
+      expect(await server.dispatcher.dispatch('electron_plugins', {})).toMatchObject({
+        ok: true,
+        plugins: [{ name: 'trace', version: packageJson.version }],
+      })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
   it('records non-trace tool calls between start and stop, and reports tokens', async () => {
     const file = await tmpFile()
     const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })

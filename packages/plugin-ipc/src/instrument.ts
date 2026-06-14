@@ -73,10 +73,13 @@ if (op === 'install') {
     stubs: {},
     wrappedChannels: [],
     origHandlers: {},
+    wrappedListeners: [],
     origHandle: ipcMain.handle.bind(ipcMain),
     origRemoveHandler:
       typeof ipcMain.removeHandler === 'function' ? ipcMain.removeHandler.bind(ipcMain) : null,
     origOn: ipcMain.on.bind(ipcMain),
+    origRemoveListener:
+      typeof ipcMain.removeListener === 'function' ? ipcMain.removeListener.bind(ipcMain) : null,
   };
   const record = (channel, type, args, ok, ms, error) => {
     if (state.events.length >= state.maxEvents) return;
@@ -129,15 +132,34 @@ if (op === 'install') {
       if (internal.has(channel)) wrapHandle(channel, internal.get(channel));
     }
   }
-  // send/on capture (opt-in): record fire-and-forget messages on allowlisted channels.
+  // send/on capture (opt-in): record fire-and-forget messages on allowlisted channels. Track each
+  // wrapper so stop can detach it and restore the app's original (no recording residue), and re-wrap
+  // listeners already registered for an allowlisted channel (parity with the handle re-wrap above),
+  // so a listener added at startup is captured too — not only those registered after install.
   if (state.captureSend) {
-    ipcMain.on = function (channel, fn) {
-      if (state.allow.indexOf(channel) >= 0) {
-        return state.origOn(channel, (event, ...a) => {
-          record(channel, 'send', a, true, 0);
-          return fn(event, ...a);
-        });
+    const wrapOn = (channel, origFn) => {
+      const wrapper = (event, ...a) => {
+        record(channel, 'send', a, true, 0);
+        return origFn(event, ...a);
+      };
+      state.wrappedListeners.push({ channel: channel, wrapper: wrapper, original: origFn });
+      return wrapper;
+    };
+    if (state.origRemoveListener && typeof ipcMain.rawListeners === 'function') {
+      for (const channel of state.allow) {
+        for (const raw of ipcMain.rawListeners(channel)) {
+          // Skip once-wrappers (Node tags them with a .listener back-ref): re-registering one via .on
+          // would turn a one-shot listener into a persistent one, and instrumentation must stay
+          // transparent. Plain on-listeners (no .listener) are re-wrapped and captured.
+          if (typeof raw === 'function' && !raw.listener) {
+            state.origRemoveListener(channel, raw);
+            state.origOn(channel, wrapOn(channel, raw));
+          }
+        }
       }
+    }
+    ipcMain.on = function (channel, fn) {
+      if (state.allow.indexOf(channel) >= 0) return state.origOn(channel, wrapOn(channel, fn));
       return state.origOn(channel, fn);
     };
   }
@@ -154,10 +176,18 @@ if (op === 'read') {
 if (op === 'stop') {
   if (!s || !s.installed) return { stopped: false, events: 0 };
   ipcMain.handle = s.origHandle;
-  if (s.captureSend) ipcMain.on = s.origOn;
   for (const channel of s.wrappedChannels) {
     if (s.origRemoveHandler) s.origRemoveHandler(channel);
     if (s.origHandlers[channel]) s.origHandle(channel, s.origHandlers[channel]);
+  }
+  if (s.captureSend) {
+    ipcMain.on = s.origOn;
+    // Detach each wrapped on-listener and restore the app's original, so the capture leaves no
+    // recording residue (the wrappers previously kept forwarding to the app until it exited).
+    for (const w of s.wrappedListeners || []) {
+      if (s.origRemoveListener) s.origRemoveListener(w.channel, w.wrapper);
+      s.origOn(w.channel, w.original);
+    }
   }
   const count = s.events.length;
   delete g.__swIpc;

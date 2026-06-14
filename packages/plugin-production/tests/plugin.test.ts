@@ -14,6 +14,7 @@ import path from 'node:path'
 import { createServer } from '@electron-stagewright/core'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import packageJson from '../package.json' with { type: 'json' }
 import productionPlugin from '../src/index.js'
 
 const created: string[] = []
@@ -86,6 +87,18 @@ describe('production plugin (in-process)', () => {
     const server = await createServer({ plugins: [productionPlugin] })
     try {
       expect(server.dispatcher.has('production_validate')).toBe(true)
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('advertises its own package version through plugin introspection', async () => {
+    const server = await createServer({ plugins: [productionPlugin] })
+    try {
+      expect(await server.dispatcher.dispatch('electron_plugins', {})).toMatchObject({
+        ok: true,
+        plugins: [{ name: 'production', version: packageJson.version }],
+      })
     } finally {
       await server.close().catch(() => undefined)
     }

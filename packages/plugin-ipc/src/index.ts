@@ -11,10 +11,10 @@
  * SECURITY: capture / invoke / stub all run JS in the main process, so all three require the
  * server's eval opt-in (`--allow-eval`) — the same gate as the eval tools. Capture and stub are
  * additionally bounded to an explicit channel allowlist (`ipc_capture_start` requires one; only
- * those channels are wrapped/recorded/stubbable). `ipc_invoke` names its channel per call (the
- * agent's explicit choice) rather than a pre-set allowlist, and is no more powerful than
- * `electron_eval_main`, which the same `--allow-eval` already permits. Captured payloads can include
- * IPC arguments; the `redact` config drops named fields before they reach the agent.
+ * those channels are wrapped/recorded/stubbable). `ipc_invoke` is unrestricted by default and names
+ * its channel per call (the agent's explicit choice), but operators can bound it with the
+ * `invokeAllow` config for defense-in-depth. Captured payloads can include IPC arguments; the
+ * `redact` config drops named fields before they reach the agent.
  *
  * @module
  */
@@ -36,7 +36,7 @@ import { INSTRUMENT_BODY, filterEvents, redactEvents, type IpcEvent } from './in
 /** Plugin namespace — must match {@link ipcPlugin.name}; the loader prefixes its tools with it. */
 const IPC_NAMESPACE = 'ipc'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const IPC_PLUGIN_VERSION = '0.1.0'
+const IPC_PLUGIN_VERSION = '0.3.0'
 
 const configSchema = z.object({
   redact: z
@@ -51,6 +51,14 @@ const configSchema = z.object({
     .positive()
     .default(1000)
     .describe('Max captured IPC events buffered per session; later calls are dropped.'),
+  invokeAllow: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      'Optional allowlist of channels ipc_invoke may target. Omit for unrestricted invoke (the ' +
+        'default); set to [] to block all invoke; set to a list to bound it. Independent of the ' +
+        'capture/stub allowlist.',
+    ),
 })
 
 /** Resolved plugin configuration — the validated output of {@link configSchema}. */
@@ -259,8 +267,10 @@ const invokeTool: AnyToolDefinition = defineTool({
   description: [
     'Call a registered ipcMain.handle channel from the main process (driving the request the',
     'renderer would normally send) and return its result. timeoutMs bounds a hung handler.',
+    'If the invokeAllow plugin config is set, the channel must be in it.',
     'Returns: { ok, result }. Errors: ipc.EVAL_REQUIRED, ipc.MAIN_EVAL_UNSUPPORTED, ipc.INVOKE_FAILED',
-    '(no handler / handler threw / timed out), NOT_RUNNING, BAD_ARGUMENT.',
+    '(no handler / handler threw / timed out), ipc.CHANNEL_NOT_ALLOWED (channel not in invokeAllow),',
+    'NOT_RUNNING, BAD_ARGUMENT.',
   ].join(' '),
   inputSchema: z.object({
     channel: z.string().min(1).describe('The ipcMain.handle channel to invoke.'),
@@ -281,6 +291,15 @@ const invokeTool: AnyToolDefinition = defineTool({
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
     const guard = requireMainEval(ctx, args.sessionId, meta)
     if ('error' in guard) return guard.error
+    // Optional invoke allowlist (defense-in-depth): when invokeAllow is configured, refuse a channel
+    // outside it before the main-process round-trip. Undefined = unrestricted; [] = block all.
+    if (config.invokeAllow !== undefined && !config.invokeAllow.includes(args.channel)) {
+      return makePluginError('ipc.CHANNEL_NOT_ALLOWED', {
+        ...meta,
+        message: `Channel "${args.channel}" is not in the ipc_invoke allowlist.`,
+        details: { channel: args.channel, allowed: config.invokeAllow },
+      })
+    }
     const result = await guard.session.evaluate<{
       ok: boolean
       result?: unknown
@@ -345,7 +364,7 @@ const stubTool: AnyToolDefinition = defineTool({
 /**
  * The IPC plugin. Load with `--plugin @electron-stagewright/plugin-ipc --allow-eval` or
  * `createServer({ plugins: [ipcPlugin], allowEval: true })`. Configure via `pluginConfigs.ipc`
- * (`{ redact?, maxEvents? }`).
+ * (`{ redact?, maxEvents?, invokeAllow? }`).
  */
 export const ipcPlugin: StagewrightPlugin = {
   name: IPC_NAMESPACE,
@@ -376,7 +395,7 @@ export const ipcPlugin: StagewrightPlugin = {
     CHANNEL_NOT_ALLOWED: {
       http: 403,
       retryable: false,
-      hint: 'The channel is not in the capture allowlist; add it to ipc_capture_start channels.',
+      hint: 'The channel is not in the relevant allowlist; for capture/stub add it to ipc_capture_start channels, for ipc_invoke add it to the invokeAllow config.',
     },
     INVOKE_FAILED: {
       http: 422,

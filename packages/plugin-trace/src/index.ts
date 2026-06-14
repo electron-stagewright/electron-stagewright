@@ -59,6 +59,8 @@ interface ActiveRecording {
 
 /** Plugin namespace — must match {@link tracePlugin.name}; the loader prefixes its tools with it. */
 const TRACE_NAMESPACE = 'trace'
+/** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
+const TRACE_PLUGIN_VERSION = '0.0.0'
 
 const configSchema = z.object({
   dir: z
@@ -538,7 +540,7 @@ const viewTool: AnyToolDefinition = defineTool({
  */
 export const tracePlugin: StagewrightPlugin = {
   name: TRACE_NAMESPACE,
-  version: VERSION,
+  version: TRACE_PLUGIN_VERSION,
   coreVersionRange: '*',
   configSchema,
   errorCodes: {
