@@ -1,7 +1,7 @@
 /**
  * Integration tests for the IPC plugin (ADR-010) loaded into a real server. The session transport
  * is a FakeTransport whose `evaluate('main', …)` SIMULATES the main-process __swIpc state (install /
- * read / invoke / stop / stub), so the plugin's orchestration — allowlist, the --allow-eval gate,
+ * read / invoke / stop / stub), so the plugin's orchestration — allowlist, the main eval gate,
  * per-session capture state, error envelopes, redaction — is exercised without launching Electron.
  * The real INSTRUMENT_BODY shim is covered by the gated real-Electron smoke.
  */
@@ -10,7 +10,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { createServer, TransportRegistry, type TransportSession } from '@electron-stagewright/core'
+import {
+  createServer,
+  NOOP_LOGGER,
+  TransportRegistry,
+  type EvalPolicy,
+  type TransportSession,
+} from '@electron-stagewright/core'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -22,6 +28,7 @@ import packageJson from '../package.json' with { type: 'json' }
 import ipcPlugin from '../src/index.js'
 
 const created: string[] = []
+type AllowEvalOption = boolean | EvalPolicy
 
 /** electron_launch validates the main path exists on disk, so back it with a real temp file. */
 async function fixtureMain(): Promise<string> {
@@ -83,11 +90,12 @@ function fakeMain(): FakeEvaluate {
   }
 }
 
-function serverWith(opts: { allowEval: boolean }) {
+function serverWith(opts: { allowEval: AllowEvalOption }) {
   const transport = new FakeTransport({ session: new FakeSession({ evaluate: fakeMain() }) })
   return createServer({
     plugins: [ipcPlugin],
     allowEval: opts.allowEval,
+    logger: NOOP_LOGGER,
     transports: new TransportRegistry({ transports: [transport] }),
   })
 }
@@ -113,11 +121,12 @@ class MultiSessionFakeTransport extends FakeTransport {
 
 function serverWithSessions(
   sessions: readonly FakeSession[],
-  opts: { allowEval: boolean } = { allowEval: true },
+  opts: { allowEval: AllowEvalOption } = { allowEval: true },
 ) {
   return createServer({
     plugins: [ipcPlugin],
     allowEval: opts.allowEval,
+    logger: NOOP_LOGGER,
     transports: new TransportRegistry({ transports: [new MultiSessionFakeTransport(sessions)] }),
   })
 }
@@ -147,14 +156,16 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => s.close().catch(() => undefined)))
   await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
 })
-async function open(opts = { allowEval: true }): Promise<Awaited<ReturnType<typeof createServer>>> {
+async function open(
+  opts: { allowEval: AllowEvalOption } = { allowEval: true },
+): Promise<Awaited<ReturnType<typeof createServer>>> {
   const server = await serverWith(opts)
   servers.push(server)
   return server
 }
 async function openMulti(
   sessions: readonly FakeSession[],
-  opts: { allowEval: boolean } = { allowEval: true },
+  opts: { allowEval: AllowEvalOption } = { allowEval: true },
 ): Promise<Awaited<ReturnType<typeof createServer>>> {
   const server = await serverWithSessions(sessions, opts)
   servers.push(server)
@@ -163,12 +174,13 @@ async function openMulti(
 /** A single-session server whose ipc plugin is loaded with `ipcConfig` (e.g. `{ invokeAllow }`). */
 async function openWithConfig(
   ipcConfig: Record<string, unknown>,
-  opts: { allowEval: boolean } = { allowEval: true },
+  opts: { allowEval: AllowEvalOption } = { allowEval: true },
 ): Promise<Awaited<ReturnType<typeof createServer>>> {
   const transport = new FakeTransport({ session: new FakeSession({ evaluate: fakeMain() }) })
   const server = await createServer({
     plugins: [ipcPlugin],
     allowEval: opts.allowEval,
+    logger: NOOP_LOGGER,
     pluginConfigs: { ipc: ipcConfig },
     transports: new TransportRegistry({ transports: [transport] }),
   })
@@ -234,7 +246,7 @@ describe('ipc plugin (in-process, simulated main)', () => {
     })
   })
 
-  it('requires --allow-eval for instrumentation', async () => {
+  it('requires main eval for instrumentation', async () => {
     const server = await open({ allowEval: false })
     const sessionId = await launch(server)
     expect(
@@ -242,6 +254,20 @@ describe('ipc plugin (in-process, simulated main)', () => {
     ).toMatchObject({
       ok: false,
       code: 'ipc.EVAL_REQUIRED',
+      error: expect.stringContaining('--allow-eval=main'),
+    })
+  })
+
+  it('rejects renderer-only eval for main-process instrumentation', async () => {
+    const server = await open({ allowEval: { main: false, renderer: true } })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('ipc_capture_start', { sessionId, channels: ['save'] }),
+    ).toMatchObject({
+      ok: false,
+      code: 'ipc.EVAL_REQUIRED',
+      error: expect.stringContaining('--allow-eval=main'),
+      hint: expect.stringContaining('--allow-eval=main'),
     })
   })
 

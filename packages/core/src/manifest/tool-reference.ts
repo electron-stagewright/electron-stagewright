@@ -75,7 +75,11 @@ function paramTable(schema: Record<string, unknown>): string {
 /** Render one tool as a Markdown section: heading, title, description, metadata, parameter table. */
 function toolSection(entry: ToolManifestEntry): string {
   const meta = [`Operation: \`${entry.operationType}\``]
-  if (entry.requiresEvalFlag === true) meta.push('Requires `--allow-eval`')
+  if (entry.requiresEvalFlag === true) {
+    const flag =
+      entry.evalTarget !== undefined ? `--allow-eval=${entry.evalTarget}` : '--allow-eval'
+    meta.push(`Requires \`${flag}\``)
+  }
   const lines = [`### \`${entry.name}\``, '']
   if (entry.title !== undefined) lines.push(`**${entry.title}**`, '')
   lines.push(
@@ -112,7 +116,7 @@ function anchor(heading: string): string {
  * grouped by operation type, with a table of contents; the output is deterministic so a committed
  * copy can be byte-compared by the sync test. Pass the manifest from
  * `dispatcher.listManifest()` (build it with `allowEval: true` to include the eval-gated tools,
- * which are then marked "Requires `--allow-eval`").
+ * which are then marked with their required `--allow-eval` target).
  */
 export function renderToolReference(manifest: readonly ToolManifestEntry[]): string {
   const sorted = [...manifest].sort((a, b) => a.name.localeCompare(b.name))
@@ -135,7 +139,7 @@ export function renderToolReference(manifest: readonly ToolManifestEntry[]): str
       operationTypes.length === 1 ? 'type' : 'types'
     }.${
       hasEvalGated
-        ? ' Tools marked "Requires `--allow-eval`" register only when the server is started with that flag.'
+        ? ' Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.'
         : ''
     }`,
     '',

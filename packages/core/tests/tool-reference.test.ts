@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { renderToolReference } from '../src/manifest/tool-reference.js'
+import { NOOP_LOGGER } from '../src/server/logger.js'
 import { createServer } from '../src/server/server.js'
 import type { ToolManifestEntry } from '../src/server/dispatcher.js'
 
@@ -51,6 +52,7 @@ const MANIFEST: readonly ToolManifestEntry[] = [
     annotations: {},
     operationType: 'eval',
     requiresEvalFlag: true,
+    evalTarget: 'renderer',
     inputJsonSchema: {
       type: 'object',
       properties: { code: { type: 'string', description: 'JS to run.' } },
@@ -103,8 +105,8 @@ describe('renderToolReference', () => {
   })
 
   it('marks eval-gated tools and notes the flag in the summary', () => {
-    expect(md).toContain('Tools marked "Requires `--allow-eval`"')
-    expect(md).toContain('Operation: `eval` · Requires `--allow-eval`')
+    expect(md).toContain('Tools marked with a "Requires `--allow-eval…`" label')
+    expect(md).toContain('Operation: `eval` · Requires `--allow-eval=renderer`')
   })
 
   it('shows a no-parameters note for a tool with an empty schema', () => {
@@ -120,7 +122,7 @@ describe('renderToolReference', () => {
 
 describe('TOOL-REFERENCE.md is in sync with the live manifest', () => {
   it('matches what the current dispatcher manifest renders (run pnpm docs:tools if this fails)', async () => {
-    const server = await createServer({ allowEval: true })
+    const server = await createServer({ allowEval: true, logger: NOOP_LOGGER })
     try {
       const expected = renderToolReference(server.dispatcher.listManifest())
       // Normalise CRLF -> LF: git may check the committed file out with CRLF on Windows

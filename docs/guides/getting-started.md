@@ -40,8 +40,9 @@ server with the host's MCP configuration; the shape is the same everywhere:
 ```
 
 Useful server flags (append to `args`): `--screenshot-dir <dir>` for a stable screenshot location,
-`--allow-eval` to register the JavaScript-evaluation tools (off by default), `--plugin <name>` to
-load a plugin. The full list is in the [tool reference](../../TOOL-REFERENCE.md).
+`--allow-eval` to register the JavaScript-evaluation tools (off by default; grant the narrowest
+target with `--allow-eval=renderer` or `--allow-eval=main`), `--plugin <name>` to load a plugin. The
+full list is in the [tool reference](../../TOOL-REFERENCE.md).
 
 **Option B — the scripted scenario**, no host required. It connects a real MCP client over stdio
 and prints a transcript of every call:

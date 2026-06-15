@@ -8,14 +8,14 @@
  *
  * 1. **Registration-time validation** — `operationType` is checked against the
  *    closed schema, so a mis-declared tool fails server startup, never an agent
- *    call. Eval-gated tools are skipped entirely unless the server was started
- *    with the eval opt-in flag (they then never appear in `tools/list`).
+ *    call. Eval-gated tools are skipped entirely unless the server's eval policy
+ *    permits their target (they then never appear in `tools/list`).
  * 2. **Input validation** — each call's raw arguments are parsed against the
  *    tool's Zod schema; a failure becomes a `BAD_ARGUMENT` envelope, never a raw
  *    Zod throw escaping to the transport.
  * 3. **Operation-type routing** — eval payloads pass through the keyword
- *    blocklist before the handler runs (the `--allow-eval` flag gates *visibility*
- *    of eval tools, not the per-payload blocklist, which always applies).
+ *    blocklist before the handler runs (the eval policy gates *visibility* of eval
+ *    tools, not the per-payload blocklist, which always applies).
  * 4. **Session correlation** — the call runs inside an `AsyncLocalStorage`
  *    context seeded with the request's `sessionId` (when present) so the
  *    response envelope can stamp `_meta.session_id` without explicit threading.
@@ -53,10 +53,12 @@ import type {
   DispatchGuard,
   DispatchObserver,
   DispatchRecord,
+  EvalTarget,
   ToolAnnotations,
   ToolContext,
   ToolResult,
 } from '../tools/types.js'
+import { anyEvalAllowed, type EvalPolicy, normalizeEvalPolicy } from './eval-policy.js'
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
@@ -102,10 +104,11 @@ export interface DispatcherOptions {
   /** Logger for slow-op warnings and diagnostics. Defaults to a no-op logger. */
   readonly logger?: Logger
   /**
-   * Whether the server was started with the eval opt-in flag. Controls whether
-   * eval-gated tools register at all. Defaults to false (eval tools hidden).
+   * The eval authorization policy. A back-compat `boolean` (`true` → both targets,
+   * `false`/absent → neither) or an explicit per-target {@link EvalPolicy}. Controls
+   * which eval-gated tools register at all. Defaults to deny-both (eval tools hidden).
    */
-  readonly allowEval?: boolean
+  readonly allowEval?: boolean | EvalPolicy
   /** Default directory the screenshot tool writes into; relative paths resolve at startup. */
   readonly screenshotDir?: string
   /** Optional root confining `electron_launch` paths; relative resolves at startup. Unset = no confinement. */
@@ -137,10 +140,16 @@ export interface ToolManifestEntry {
   readonly inputJsonSchema: Record<string, unknown>
   /**
    * True when the tool is eval-gated (`requiresEvalFlag`) and therefore registers only when the
-   * server was started with `--allow-eval`. Absent for ordinary tools. Surfaced so offline
-   * documentation can mark which tools the eval opt-in unlocks.
+   * server's eval policy permits the tool's target. Absent for ordinary tools. Surfaced so offline
+   * documentation can mark which tools an eval opt-in unlocks.
    */
   readonly requiresEvalFlag?: boolean
+  /**
+   * Eval target required for an eval-gated tool, when known. Surfaced so generated
+   * docs can show the least-privilege flag (`--allow-eval=main` vs
+   * `--allow-eval=renderer`) instead of only the legacy binary gate.
+   */
+  readonly evalTarget?: EvalTarget
   /** MCP behaviour hints (readOnlyHint, destructiveHint, …) surfaced in `tools/list`. */
   readonly annotations: ToolAnnotations
 }
@@ -201,7 +210,8 @@ export class Dispatcher {
   readonly #transports: TransportRegistry
   readonly #snapshots: SnapshotStore
   readonly #logger: Logger
-  readonly #allowEval: boolean
+  /** The per-target eval authorization policy (ADR-014); normalised from the option. */
+  readonly #evalPolicy: EvalPolicy
   readonly #screenshotDir?: string
   /** Resolved `--app-root` confinement directory for launch paths; undefined = no confinement. */
   readonly #appRoot?: string
@@ -214,18 +224,27 @@ export class Dispatcher {
   /** Pre-dispatch guards that can veto a call (ADR-009). Empty by default — zero overhead per call. */
   readonly #guards = new Set<DispatchGuard>()
   /**
-   * Names of eval-gated tools skipped at registration because the server lacks `--allow-eval`. Kept
-   * so a call to one returns a precise "needs --allow-eval" error instead of a bare "Unknown tool"
-   * an agent cannot distinguish from a typo.
+   * Eval-gated tools skipped at registration because the policy does not permit their target, mapped
+   * to that target (or `undefined` for an eval-gated tool with no declared target). Kept so a call to
+   * one returns a precise "needs --allow-eval=<target>" error instead of a bare "Unknown tool" an
+   * agent cannot distinguish from a typo.
    */
-  readonly #gatedToolNames = new Set<string>()
+  readonly #gatedToolNames = new Map<string, EvalTarget | undefined>()
 
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
     this.#transports = opts.transports ?? new TransportRegistry()
     this.#snapshots = opts.snapshots ?? new SnapshotStore()
     this.#logger = opts.logger ?? NOOP_LOGGER
-    this.#allowEval = opts.allowEval ?? false
+    this.#evalPolicy = normalizeEvalPolicy(opts.allowEval)
+    if (this.#evalPolicy.main) {
+      // Main-process eval is the high-blast-radius grant (full Node/Electron). One stderr
+      // breadcrumb at startup so an operator who enabled it is reminded; renderer-only eval
+      // (the lower-privilege grant) is not warned.
+      this.#logger.warn(
+        'Main-process eval is enabled: the agent can run arbitrary Node in the app main process. Grant the narrowest target a flow needs (e.g. --allow-eval=renderer).',
+      )
+    }
     if (opts.screenshotDir !== undefined) this.#screenshotDir = path.resolve(opts.screenshotDir)
     if (opts.appRoot !== undefined) this.#appRoot = path.resolve(opts.appRoot)
     this.#now = opts.now ?? Date.now
@@ -249,9 +268,24 @@ export class Dispatcher {
     }
   }
 
-  /** Whether the eval opt-in flag was set for this dispatcher. */
+  /**
+   * Whether MAIN-process eval is permitted by this dispatcher's policy. Surfaced to plugins via
+   * `ctx.allowEval` (see {@link ToolContext.allowEval}); a plugin doing main-process instrumentation
+   * gates on it. Maps to the main target so a renderer-only policy correctly denies main-process work.
+   */
   get allowEval(): boolean {
-    return this.#allowEval
+    return this.#evalPolicy.main
+  }
+
+  /**
+   * Whether the eval policy permits an eval-gated tool to register. A tool with a declared
+   * {@link EvalTarget} is gated on THAT target; an eval-gated tool with no declared target registers
+   * whenever any eval target is permitted, so a future generic eval-gated tool is not silently hidden
+   * under a partial (single-target) policy.
+   */
+  #evalPermitted(def: AnyToolDefinition): boolean {
+    if (def.evalTarget !== undefined) return this.#evalPolicy[def.evalTarget]
+    return anyEvalAllowed(this.#evalPolicy)
   }
 
   /**
@@ -306,7 +340,7 @@ export class Dispatcher {
   /**
    * Register a tool. Validates `operationType` against the closed schema (a bad
    * value throws here, at boot). Eval-gated tools are silently skipped when the
-   * eval flag is off — they must not appear in the manifest or be dispatchable.
+   * eval policy does not permit their target — they must not appear in the manifest or be dispatchable.
    * Eval-classified tools must declare that gate explicitly. A duplicate name is
    * a programming error and throws.
    */
@@ -323,10 +357,11 @@ export class Dispatcher {
         `Tool "${def.name}" declares operationType "eval" but does not set requiresEvalFlag.`,
       )
     }
-    if (def.requiresEvalFlag === true && !this.#allowEval) {
-      this.#gatedToolNames.add(def.name)
-      this.#logger.debug('Eval-gated tool hidden (server started without eval flag)', {
+    if (def.requiresEvalFlag === true && !this.#evalPermitted(def)) {
+      this.#gatedToolNames.set(def.name, def.evalTarget)
+      this.#logger.debug('Eval-gated tool hidden (policy does not permit its target)', {
         tool: def.name,
+        target: def.evalTarget ?? 'any',
       })
       return
     }
@@ -360,6 +395,7 @@ export class Dispatcher {
       operationType: def.operationType,
       inputJsonSchema: z.toJSONSchema(def.inputSchema) as Record<string, unknown>,
       ...(def.requiresEvalFlag === true ? { requiresEvalFlag: true } : {}),
+      ...(def.evalTarget !== undefined ? { evalTarget: def.evalTarget } : {}),
       annotations: annotationsFor(def),
     }))
   }
@@ -381,15 +417,18 @@ export class Dispatcher {
 
   /**
    * The `BAD_ARGUMENT` envelope for an unregistered tool name. When the name is a known eval-gated
-   * tool hidden because the server lacks `--allow-eval`, say so explicitly (with a recovery hint) so
-   * the caller does not mistake an intentionally-gated tool for a typo and retry blindly.
+   * tool hidden because the eval policy does not permit its target, say so explicitly (with a
+   * recovery hint) so the caller does not mistake an intentionally-gated tool for a typo and retry
+   * blindly.
    */
   #unknownToolError(name: string, startedAt: number): ErrorResponse {
     if (this.#gatedToolNames.has(name)) {
+      const target = this.#gatedToolNames.get(name)
+      const flag = target !== undefined ? `--allow-eval=${target}` : '--allow-eval'
       return makeError('BAD_ARGUMENT', {
-        message: `Tool "${name}" is gated: it is only registered when the server is started with --allow-eval.`,
+        message: `Tool "${name}" is gated: it is only registered when the server is started with ${flag}.`,
         next_actions: [
-          'Ask the operator to restart the server with --allow-eval to enable this tool, or use a granular non-eval tool instead.',
+          `Ask the operator to restart the server with ${flag} to enable this tool, or use a granular non-eval tool instead.`,
         ],
         startedAt,
         now: this.#now,
@@ -495,7 +534,7 @@ export class Dispatcher {
       transports: this.#transports,
       snapshots: this.#snapshots,
       logger: this.#logger,
-      allowEval: this.#allowEval,
+      allowEval: this.#evalPolicy.main,
       ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
       ...(this.#appRoot !== undefined ? { appRoot: this.#appRoot } : {}),
       startedAt,

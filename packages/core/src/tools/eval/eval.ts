@@ -4,16 +4,15 @@
  * granular tool covers, and they are dangerous, so they are DEFAULT-DENY:
  *
  * - `operationType: 'eval'` + `requiresEvalFlag: true` — the dispatcher only
- *   registers them when the server was started with `--allow-eval`; otherwise
- *   they never appear in `tools/list` and an attempt to call them is an unknown
- *   tool, never reaching this handler.
+ *   registers them when the eval policy permits their target; otherwise they
+ *   never appear in `tools/list` and an attempt to call them is a gated-tool
+ *   error, never reaching this handler.
  * - The dispatcher runs every eval payload through the keyword blocklist
  *   (`EVAL_BLOCKED_KEYWORD`) before the handler — the `code` field is scanned.
  *
- * Full eval hardening (AST inspection, an authorisation policy, a richer audit
- * log) is deferred to a future threat-model hardening pass; the current
- * implementation ships the safe default plus a stderr audit breadcrumb and a
- * result-size cap.
+ * AST inspection remains deferred to a future threat-model hardening pass; the
+ * current implementation ships the safe default plus per-target authorization, a
+ * stderr audit breadcrumb, and a result-size cap.
  *
  * @module
  */
@@ -21,6 +20,7 @@
 import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
+import { fnv1a32 } from '../../hash.js'
 import { assertCapability, type TransportCapabilities } from '../../transports/index.js'
 import { sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -77,7 +77,8 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
     description: [
       `Evaluate JavaScript in the ${spec.context} and return the returned/awaited value;`,
       'the code receives a JSON `arg`.',
-      'Only available when the server was started with --allow-eval; otherwise this tool is not',
+      `Only available when the eval policy permits the ${spec.target} target (start the server with`,
+      `--allow-eval, or --allow-eval=${spec.target}); otherwise this tool is not`,
       'registered. The code passes a keyword blocklist before running, and large or non-JSON',
       'results are serialised/truncated. Returns: { ok, session_id, result, truncated?,',
       'result_serialized?, result_chars? }.',
@@ -95,17 +96,21 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
     }),
     operationType: 'eval',
     requiresEvalFlag: true,
+    evalTarget: spec.target,
     handler: async (args, ctx) => {
       const managed = ctx.sessions.resolve(args.sessionId)
       const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
       assertCapability(managed.transport, spec.capability)
       // Audit breadcrumb on the security-sensitive surface. Stderr only (the MCP
-      // channel is stdout) and the payload itself is never logged — only its length.
+      // channel is stdout) and the payload itself is never logged — only its length
+      // and a content hash, so an operator can correlate repeated payloads (and a
+      // blocked-eval rejection, which carries the same `code_hash`) without the code.
       ctx.logger.info('eval invoked', {
         tool: spec.name,
         target: spec.target,
         session_id: managed.id,
         code_length: args.code.length,
+        code_hash: fnv1a32(args.code),
       })
       try {
         const result = await managed.session.evaluate(spec.target, args.code, args.arg)

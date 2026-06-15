@@ -50,6 +50,7 @@
  */
 
 import { z } from 'zod'
+import { fnv1a32 } from '../hash.js'
 import { StagewrightError } from './registry.js'
 
 /**
@@ -145,10 +146,12 @@ export function validateEvalContent(input: unknown, opts: ValidateEvalOptions = 
   for (const source of evalSourceCandidates(input)) {
     for (const keyword of DANGEROUS_EVAL_KEYWORDS) {
       if (source.includes(keyword)) {
+        // `code_hash` is the same FNV-1a the eval audit breadcrumb logs, so an operator can
+        // correlate this rejection with the offending payload in the logs without it being recorded.
         throw new StagewrightError(
           'EVAL_BLOCKED_KEYWORD',
           `Eval payload contains blocked keyword: ${keyword}`,
-          { keyword },
+          { keyword, code_hash: fnv1a32(source) },
         )
       }
     }

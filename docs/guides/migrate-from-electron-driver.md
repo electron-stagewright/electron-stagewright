@@ -71,7 +71,7 @@ addressed and how outcomes are verified.
 | -------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `windows_list` / `switch_window` | `electron_windows_list` / `electron_switch_window` | Same.                                                                                                                                               |
 | `dialog_handler`                 | `electron_dialog_handler`                          | Adds per-type overrides, `oneShot`, and an event log of every dialog handled.                                                                       |
-| `eval_renderer` / `eval_main`    | `electron_eval_renderer` / `electron_eval_main`    | Same escape hatch — but registered only when the server runs with `--allow-eval`, so arbitrary-JS execution is an operator decision, not a default. |
+| `eval_renderer` / `eval_main`    | `electron_eval_renderer` / `electron_eval_main`    | Same escape hatch — but registered only when the eval policy permits that target, so arbitrary-JS execution is an operator decision, not a default. |
 | `console_logs`                   | `electron_console_logs`                            | Adds level/regex/time filters at read time and an `overflowed` count, so dropped entries are visible.                                               |
 
 ### No counterpart in electron-driver
@@ -89,9 +89,10 @@ addressed and how outcomes are verified.
 2. Replace every read-compare-retry loop with the matching `electron_expect_*` call.
 3. Delete defensive re-snapshots taken only to refresh refs; rely on `renderer_reloaded` and
    `similar_refs` instead, and use `since: "last"` where you do re-read.
-4. If your flows used `eval_*`, start the server with `--allow-eval` — and check whether a
-   purpose-built tool (e.g. `electron_find`, `electron_expect_state`) now covers the reason the
-   eval existed.
+4. If your flows used `eval_*`, start the server with the narrowest eval target that covers the
+   flow (`--allow-eval=renderer`, `--allow-eval=main`, or bare `--allow-eval` for both) — and check
+   whether a purpose-built tool (e.g. `electron_find`, `electron_expect_state`) now covers the
+   reason the eval existed.
 5. Route error handling through `code` + `retryable` instead of message matching.
 
 ---

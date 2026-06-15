@@ -57,7 +57,8 @@ describe('parseCliArgs (plugin flags)', () => {
   it('collects repeatable and comma-separated --plugin specs', () => {
     const opts = parseCliArgs(['--plugin', 'a,b', '--plugin', './c.js', '--allow-eval'])
     expect(opts.pluginSpecs).toEqual(['a', 'b', './c.js'])
-    expect(opts.allowEval).toBe(true)
+    // Bare `--allow-eval` enables both eval targets (ADR-014).
+    expect(opts.allowEval).toEqual({ main: true, renderer: true })
   })
 
   it('parses --plugin-config <name>=<json> into a config record', () => {

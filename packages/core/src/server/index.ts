@@ -7,6 +7,8 @@
 
 export { Dispatcher, type DispatcherOptions, type ToolManifestEntry } from './dispatcher.js'
 
+export { anyEvalAllowed, normalizeEvalPolicy, type EvalPolicy } from './eval-policy.js'
+
 export { SessionManager, type ManagedSession } from './session-manager.js'
 
 export { TransportRegistry, type TransportRegistryOptions } from './transport-registry.js'

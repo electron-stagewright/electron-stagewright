@@ -110,10 +110,14 @@ export interface ToolContext {
   /** Structured logger. Writes to stderr only (stdout is the MCP protocol channel). */
   readonly logger: Logger
   /**
-   * Whether the server was started with the eval opt-in flag. Tools that declare
-   * {@link ToolDefinition.requiresEvalFlag} are never registered when this is
-   * false, so a handler observing `allowEval === true` can trust the gate already
-   * passed; the field is exposed for handlers that branch on it defensively.
+   * Whether the eval policy permits MAIN-process eval. Tools that declare
+   * {@link ToolDefinition.requiresEvalFlag} are gated per target at registration, so
+   * a handler never needs this for its own visibility. It is exposed for plugins
+   * that reach `transport.evaluate('main', …)` directly (e.g. IPC instrumentation):
+   * that path bypasses the tool-registration gate, so such a plugin must re-assert
+   * `if (!ctx.allowEval) …`. The mapping to the main target means main-process
+   * instrumentation is correctly denied under a renderer-only policy. See ADR-010,
+   * ADR-014.
    */
   readonly allowEval: boolean
   /**
@@ -212,6 +216,14 @@ export interface ToolAnnotations {
 }
 
 /**
+ * The execution target of an eval tool. Main-process eval is full Node/Electron;
+ * renderer eval is the web page context. Used by {@link ToolDefinition.evalTarget}
+ * to drive the dispatcher's per-target eval authorization (ADR-014). The members
+ * mirror the keys of `EvalPolicy`.
+ */
+export type EvalTarget = 'main' | 'renderer'
+
+/**
  * The contract every tool is expressed in.
  *
  * @typeParam Shape - the Zod raw shape of the tool's input object. Defaults to
@@ -247,12 +259,18 @@ export interface ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> {
    */
   readonly operationType: OperationType
   /**
-   * When true, the tool is only registered if the server was started with the
-   * eval opt-in flag; otherwise it is absent from `tools/list` and unreachable.
-   * Eval-classified tools must set this explicitly. Non-eval tools default to
-   * false.
+   * When true, the tool is only registered if the server's eval policy permits it;
+   * otherwise it is absent from `tools/list` and unreachable. Eval-classified tools
+   * must set this explicitly. Non-eval tools default to false.
    */
   readonly requiresEvalFlag?: boolean
+  /**
+   * For an eval tool, which target it evaluates in. The dispatcher uses it to apply
+   * the per-target eval policy at registration (a `renderer` tool is hidden under a
+   * main-only policy, and vice versa). Optional: an eval-gated tool that declares no
+   * target registers whenever ANY eval target is permitted. See ADR-014.
+   */
+  readonly evalTarget?: EvalTarget
   /**
    * Optional MCP behaviour hints surfaced in `tools/list`. Each field overrides the
    * dispatcher's {@link OperationType}-derived default (e.g. a `command` tool that is destructive
@@ -281,6 +299,7 @@ export interface AnyToolDefinition {
   readonly inputSchema: z.ZodObject
   readonly operationType: OperationType
   readonly requiresEvalFlag?: boolean
+  readonly evalTarget?: EvalTarget
   readonly annotations?: ToolAnnotations
   readonly handler: (args: unknown, ctx: ToolContext) => Promise<ToolResult>
 }
@@ -302,6 +321,7 @@ export function defineTool<Shape extends z.ZodRawShape>(
     inputSchema: def.inputSchema,
     operationType: def.operationType,
     ...(def.requiresEvalFlag !== undefined ? { requiresEvalFlag: def.requiresEvalFlag } : {}),
+    ...(def.evalTarget !== undefined ? { evalTarget: def.evalTarget } : {}),
     ...(def.annotations !== undefined ? { annotations: def.annotations } : {}),
     handler: (args, ctx) => def.handler(args as z.infer<z.ZodObject<Shape>>, ctx),
   }

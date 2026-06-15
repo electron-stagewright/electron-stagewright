@@ -14,12 +14,12 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { createServer } from '../server/index.js'
+import { createServer, NOOP_LOGGER } from '../server/index.js'
 import { renderToolReference } from './tool-reference.js'
 
 async function main(): Promise<void> {
   const out = path.resolve(process.argv[2] ?? 'TOOL-REFERENCE.md')
-  const server = await createServer({ allowEval: true })
+  const server = await createServer({ allowEval: true, logger: NOOP_LOGGER })
   try {
     const markdown = renderToolReference(server.dispatcher.listManifest())
     await mkdir(path.dirname(out), { recursive: true })

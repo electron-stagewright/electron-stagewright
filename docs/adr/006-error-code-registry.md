@@ -151,7 +151,7 @@ Char/4 is the standard back-of-envelope estimate that works within ~10-20% on En
 Two reasons:
 
 1. **The routing CONTRACT is the security surface, not the validator body.** Once `routeByOperationType` exists and is the single entry point, the first tool implementation can fill in `validateEvalContent`'s body without re-litigating where the seam lives. The seam's existence is what makes the system fail-closed.
-2. **Even the v1 minimal blocklist has value.** It blocks the obvious foot-guns (`process.exit`, `require(`, `Function(`, `__proto__`, `child_process`) before an eval payload reaches the transport. The eval tools now require `--allow-eval`; the future threat-model slice will harden the blocklist with AST inspection and richer policy.
+2. **Even the v1 minimal blocklist has value.** It blocks the obvious foot-guns (`process.exit`, `require(`, `Function(`, `__proto__`, `child_process`) before an eval payload reaches the transport. The eval tools require an eval-policy opt-in (`--allow-eval` or a target-specific variant); ADR-014 tracks the remaining AST-inspection hardening.
 
 ### Why Zod, not a hand-rolled validator
 
@@ -177,7 +177,7 @@ Zod is already pulled transitively by `@modelcontextprotocol/sdk`. Pinning it as
 - **The envelope shape is stable; additions are non-breaking.** Adding a new field to `_meta` or a new optional field to `ErrorResponse` is permitted. Removing or renaming a field is a breaking change requiring an ADR amendment.
 - **`estimated_tokens` is an estimate, not a measurement.** The v1 char/4 heuristic is documented as such. Agents that budget on exact token counts will need to revisit when the benchmark suite lands a tokenizer-accurate implementation; their existing logic remains correct (the field name and contract do not change).
 - **Plugin error codes are namespaced with a `pluginName.` prefix.** The concrete registration API lands with the plugin loader; core never owns plugin codes.
-- **The eval validator is minimal today.** Eval tools are already hidden unless `--allow-eval` is passed, and visible eval payloads still pass the keyword blocklist. Real validation beyond that (AST inspection, richer audit policy) belongs in the future threat-model slice. The routing seam is in place; the validator body is the part that grows.
+- **The eval validator is minimal today.** Eval tools are already hidden unless the eval policy permits their target, and visible eval payloads still pass the keyword blocklist. Real validation beyond that (AST inspection) belongs in ADR-014. The routing seam is in place; the validator body is the part that grows.
 - **The format gate is now blocking.** `pnpm format:check` joined `pnpm verify` as part of this slice; the umbrella now runs lint + typecheck + test + build + format:check.
 
 ## Related decisions
@@ -187,7 +187,7 @@ Zod is already pulled transitively by `@modelcontextprotocol/sdk`. Pinning it as
 - [ADR-007](./007-agent-native-ux-principles.md) — Agent-native UX principles. Principles 1, 2, 3, and 10 are direct dependencies of this ADR. ADR-006 is the implementation; ADR-007 is the rationale.
 - [ADR-003](./003-transport-abstraction.md) — Transport abstraction. Returns registered codes (`TRANSPORT_UNSUPPORTED`, `CDP_DISCONNECTED`, `INJECT_FAILED`) from transport failures and stubs.
 - [ADR-004](./004-plugin-model.md) — Plugin model. Defines plugin-code registration and namespacing.
-- Threat-model ADR (forthcoming) — Security review. Will harden eval validation beyond the current `--allow-eval` visibility gate and keyword blocklist.
+- [ADR-014](./014-security-posture-and-threat-model.md) — Security posture and threat model. Records the eval trust boundary, per-target eval authorization, content-hash audit, and remaining AST-inspection hardening.
 
 ## References
 

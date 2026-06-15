@@ -91,14 +91,15 @@ Two pieces are deliberately kept behind explicit opt-ins:
 
 - **Eval** (`electron_eval_main` / `electron_eval_renderer`) runs arbitrary
   JavaScript in the app. It is the escape hatch for flows no granular tool covers,
-  and it is **default-deny**: the tools are not even registered without
-  `--allow-eval`. The full trust model is in the
+  and it is **default-deny**: the tools are not even registered unless the eval
+  policy permits their target (`--allow-eval=main`, `--allow-eval=renderer`, or
+  bare `--allow-eval` for both). The full trust model is in the
   [security model](./security-model.md) and
   [ADR-014](../adr/014-security-posture-and-threat-model.md).
 - **Plugins** ship domain capabilities (traces, IPC capture, production validation)
   as separate packages loaded explicitly with `--plugin` — the core never auto-scans.
   The contract is [ADR-004](../adr/004-plugin-model.md); IPC capture, which reaches
-  the main process through the eval seam, re-asserts the same `--allow-eval` gate
+  the main process through the eval seam, re-asserts the main eval opt-in
   ([ADR-010](../adr/010-ipc-plugin.md)).
 
 ## Glossary
@@ -110,5 +111,5 @@ Two pieces are deliberately kept behind explicit opt-ins:
 - **Diff** — the compact "what changed since last snapshot," returned to save tokens.
 - **Session** — one running app the server is driving, identified by a `session_id`.
 - **Transport** — the backend that produces a session (`PlaywrightElectronTransport`, `CDPTransport`, `InjectorTransport`) behind one `ITransport` interface, advertising its capabilities.
-- **Eval gate** — the `--allow-eval` opt-in that must be set before any arbitrary-JS tool is registered.
+- **Eval gate** — the per-target `--allow-eval` opt-in that must permit a target before its arbitrary-JS tool is registered.
 - **Plugin** — a `@electron-stagewright/plugin-*` package loaded with `--plugin`, adding namespaced tools.

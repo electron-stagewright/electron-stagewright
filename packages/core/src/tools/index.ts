@@ -43,7 +43,7 @@ export { EXPECT_TOOLS } from './expect/index.js'
  * (click/type/key/hover/drag/scroll/select/check/set-files), read
  * (get_text/value/attribute/state/bbox/computed_style/exists/focused/elements),
  * wait (wait/wait_for_selector/wait_for_state/wait_for_event), eval
- * (eval_main/eval_renderer — registered only when the server has --allow-eval),
+ * (eval_main/eval_renderer — registered only when the eval policy permits that target),
  * observe (screenshot/console_logs/dialog_handler), and expect
  * (expect_text/value/visible/state/count/url + assert_pattern).
  */

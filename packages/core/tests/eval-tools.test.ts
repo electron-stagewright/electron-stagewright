@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { type ErrorResponse, type SuccessResponse } from '../src/errors/envelope.js'
+import { fnv1a32 } from '../src/hash.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import type { LogFields, Logger } from '../src/server/logger.js'
 import { SessionManager } from '../src/server/session-manager.js'
@@ -179,6 +180,8 @@ describe('eval-tool execution', () => {
       target: 'main',
       session_id: 'sess',
       code_length: 'return secretToken'.length,
+      // A content hash (not the payload) so repeated/blocked payloads correlate in the logs.
+      code_hash: fnv1a32('return secretToken'),
     })
     expect(JSON.stringify(logs)).not.toContain('secretToken')
   })
@@ -187,10 +190,13 @@ describe('eval-tool execution', () => {
 describe('eval-tool safety + error classification', () => {
   it('blocks a payload containing a blocklisted keyword', async () => {
     const { dispatcher } = setup()
-    const res = (await dispatcher.dispatch('electron_eval_main', {
-      code: "return require('fs')",
-    })) as ErrorResponse
+    const code = "return require('fs')"
+    const res = (await dispatcher.dispatch('electron_eval_main', { code })) as ErrorResponse
     expect(res.code).toBe('EVAL_BLOCKED_KEYWORD')
+    // The rejection carries the same content hash the audit breadcrumb logs, so an operator can
+    // correlate the blocked call with the logs. The details survive the dispatcher throw→envelope
+    // mapping. (The matched keyword is surfaced by design; the full payload is not.)
+    expect(res.details?.['code_hash']).toBe(fnv1a32(code))
   })
 
   it('maps a SyntaxError to EVAL_SYNTAX_ERROR', async () => {

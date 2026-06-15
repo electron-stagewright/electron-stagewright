@@ -121,19 +121,20 @@ The full tool list — every tool, its parameters, and operation type — is in
 Pass these after the CLI path in your MCP host config (the `args` array). All default to the safe
 option; diagnostics go to stderr (stdout is reserved for the JSON-RPC protocol channel).
 
-| Flag                            | Effect                                                                                                                                                                                                                                     |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--allow-eval`                  | Register the `electron_eval_main` / `electron_eval_renderer` tools, which run arbitrary JavaScript in the main / renderer process. Default off — the eval tools are hidden and uncallable. Also gates the IPC plugin's main-process tools. |
-| `--app-root <dir>`              | Confine `electron_launch`'s `main`, `executablePath`, and `cwd` to within `<dir>`. Default unset (no confinement). Set it to your app/project root so a tool call cannot launch a binary or main script from elsewhere on the host.        |
-| `--screenshot-dir <dir>`        | Default directory `electron_screenshot` writes into when the call gives no explicit path. Default: the OS temp dir.                                                                                                                        |
-| `--operation-timeout-ms <n>`    | Per-dispatch backstop timeout (ms); a handler that never settles resolves as a retryable `OPERATION_TIMEOUT` instead of hanging the agent on a frozen app. Default 120000; `0` disables it.                                                |
-| `--plugin <name\|path>`         | Load a plugin by package name or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin @electron-stagewright/plugin-trace`.                                                                                         |
-| `--plugin-config <name>=<json>` | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name.                                                                                                                                               |
+| Flag                            | Effect                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--allow-eval[=main\|renderer]` | Register the `electron_eval_main` / `electron_eval_renderer` tools, which run arbitrary JavaScript in the main / renderer process. Default off — the eval tools are hidden and uncallable. Bare `--allow-eval` enables both; `--allow-eval=renderer` (or `=main`) grants only that target for least privilege. Also gates the IPC plugin's main-process tools (on the `main` target). |
+| `--app-root <dir>`              | Confine `electron_launch`'s `main`, `executablePath`, and `cwd` to within `<dir>`. Default unset (no confinement). Set it to your app/project root so a tool call cannot launch a binary or main script from elsewhere on the host.                                                                                                                                                   |
+| `--screenshot-dir <dir>`        | Default directory `electron_screenshot` writes into when the call gives no explicit path. Default: the OS temp dir.                                                                                                                                                                                                                                                                   |
+| `--operation-timeout-ms <n>`    | Per-dispatch backstop timeout (ms); a handler that never settles resolves as a retryable `OPERATION_TIMEOUT` instead of hanging the agent on a frozen app. Default 120000; `0` disables it.                                                                                                                                                                                           |
+| `--plugin <name\|path>`         | Load a plugin by package name or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin @electron-stagewright/plugin-trace`.                                                                                                                                                                                                                                    |
+| `--plugin-config <name>=<json>` | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name.                                                                                                                                                                                                                                                                                          |
 
-Security defaults worth knowing when wiring this into another project: arbitrary JS (`--allow-eval`)
-and host-path launches (`--app-root`) are opt-in; `electron_launch` refuses runtime-altering env
-vars (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `LD_*`, `DYLD_*`); and user-supplied regex / text /
-key arguments are length- and complexity-bounded so a hostile tool call cannot wedge the server.
+Security defaults worth knowing when wiring this into another project: arbitrary JS (the
+`--allow-eval` policy) and host-path launches (`--app-root`) are opt-in; `electron_launch` refuses
+runtime-altering env vars (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `LD_*`, `DYLD_*`); and
+user-supplied regex / text / key arguments are length- and complexity-bounded so a hostile tool call
+cannot wedge the server.
 
 ## What each response looks like (the agent-UX detail)
 
@@ -182,7 +183,7 @@ Three transport implementations behind a single `ITransport` interface, so the p
 - **`CDPTransport`** — Chrome DevTools Protocol direct, no Playwright dependency; attaches to apps exposing a loopback debug endpoint and supports eval, read, observe, and interaction surfaces.
 - **`InjectorTransport`** — Node Inspector handshake into a running process; supports main-process eval, window discovery, and console capture when an app was not started with a CDP endpoint.
 
-Plugin model: a small core, with domain capabilities shipped as separate `@electron-stagewright/plugin-*` packages loaded explicitly via `--plugin` (the core never auto-scans). Shipped today: **`plugin-trace`** (session trace + deterministic replay + per-tool token budget), **`plugin-ipc`** (capture / invoke / stub Electron IPC, gated behind `--allow-eval`), and **`plugin-production`** (validate a packaged `.app`: bundle structure, Info.plist identity fields, URL schemes, updater feed, crash reporter machinery, code signing, notarization, Gatekeeper). Planned: `network`, `clock`, `storage`, `macos-native`.
+Plugin model: a small core, with domain capabilities shipped as separate `@electron-stagewright/plugin-*` packages loaded explicitly via `--plugin` (the core never auto-scans). Shipped today: **`plugin-trace`** (session trace + deterministic replay + per-tool token budget), **`plugin-ipc`** (capture / invoke / stub Electron IPC, gated behind main eval: `--allow-eval=main`, or bare `--allow-eval`), and **`plugin-production`** (validate a packaged `.app`: bundle structure, Info.plist identity fields, URL schemes, updater feed, crash reporter machinery, code signing, notarization, Gatekeeper). Planned: `network`, `clock`, `storage`, `macos-native`.
 
 ## Dogfooding targets
 
@@ -195,7 +196,7 @@ If your Electron app has a shape these don't cover, [open an issue](https://gith
 
 ## Security
 
-The server is a **privileged local tool, not a sandbox**: it drives a real app and, under `--allow-eval`, runs arbitrary JavaScript inside it, so only a trusted agent host should invoke it. The [security model](docs/guides/security-model.md) covers the trust boundaries, the controls (eval opt-in + blocklist, channel allowlists, launch confinement, structured redaction), and a deployment checklist; the posture is recorded in [ADR-014](docs/adr/014-security-posture-and-threat-model.md). To report a vulnerability, see [SECURITY.md](.github/SECURITY.md).
+The server is a **privileged local tool, not a sandbox**: it drives a real app and, under an eval opt-in (`--allow-eval` or a target-specific variant), runs arbitrary JavaScript inside it, so only a trusted agent host should invoke it. The [security model](docs/guides/security-model.md) covers the trust boundaries, the controls (eval opt-in + blocklist, channel allowlists, launch confinement, structured redaction), and a deployment checklist; the posture is recorded in [ADR-014](docs/adr/014-security-posture-and-threat-model.md). To report a vulnerability, see [SECURITY.md](.github/SECURITY.md).
 
 ## Contributing
 

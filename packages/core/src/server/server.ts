@@ -19,6 +19,7 @@ import type { StagewrightPlugin } from '../plugins/index.js'
 import { DEFAULT_TOOLS } from '../tools/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 import { Dispatcher } from './dispatcher.js'
+import type { EvalPolicy } from './eval-policy.js'
 import { type Logger, type LogLevel, StderrLogger } from './logger.js'
 import { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
@@ -36,10 +37,12 @@ const SERVER_VERSION = '0.0.0'
 /** Options for {@link createServer}. */
 export interface CreateServerOptions {
   /**
-   * Enable eval-gated tools. When false (default), tools that declare
-   * `requiresEvalFlag` are not registered and never appear in `tools/list`.
+   * Enable eval-gated tools, optionally per target (ADR-014). A back-compat `boolean`
+   * (`true` → both targets, `false`/absent → neither) or an explicit per-target
+   * {@link EvalPolicy} (e.g. `{ main: false, renderer: true }`). Tools whose target the
+   * policy does not permit are not registered and never appear in `tools/list`.
    */
-  readonly allowEval?: boolean
+  readonly allowEval?: boolean | EvalPolicy
   /** Logger to use. Defaults to a {@link StderrLogger} at {@link CreateServerOptions.logLevel}. */
   readonly logger?: Logger
   /** Level for the default logger when no `logger` is supplied. Defaults to `info`. */
@@ -186,7 +189,8 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
         'suggests the recovery call. Start a session with electron_launch (or electron_attach), then',
         'thread the returned `session_id` through every later call, and end it with electron_stop.',
         'Read state with electron_snapshot / electron_find and assert with the expect_* family. The',
-        'electron_eval_* tools appear only when the server was started with --allow-eval.',
+        'electron_eval_* tools appear only when the eval policy permits their target: --allow-eval',
+        'for both, or --allow-eval=main / --allow-eval=renderer for least privilege.',
       ].join(' '),
     },
   )

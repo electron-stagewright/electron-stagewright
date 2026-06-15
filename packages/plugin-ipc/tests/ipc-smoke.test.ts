@@ -5,8 +5,8 @@
  * registered handler, invoking it from main, and reading the captured event back.
  *
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (with `electron` + `playwright` installed). Skipped by
- * default so `pnpm test` stays fast and headless-CI-safe. The server is started with `allowEval`
- * because IPC instrumentation runs main-process JS.
+ * default so `pnpm test` stays fast and headless-CI-safe. The server permits main eval because IPC
+ * instrumentation runs main-process JS.
  *
  * @module
  */
@@ -36,7 +36,10 @@ describe('ipc plugin smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
     'captures and invokes a real ipcMain.handle channel, then restores on stop',
     async () => {
-      const server = await createServer({ plugins: [ipcPlugin], allowEval: true })
+      const server = await createServer({
+        plugins: [ipcPlugin],
+        allowEval: { main: true, renderer: false },
+      })
       closers.push(() => server.close())
 
       const launched = (await server.dispatcher.dispatch('electron_launch', {

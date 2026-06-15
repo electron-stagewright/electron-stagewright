@@ -7,8 +7,11 @@
  * corrupt the stream and break the client.
  *
  * Flags:
- * - `--allow-eval` — register tools that execute arbitrary JavaScript (default:
- *   off). When disabled, eval-classified tools are omitted from `tools/list`.
+ * - `--allow-eval[=<targets>]` — register tools that execute arbitrary JavaScript
+ *   (default: off). Bare `--allow-eval` enables both eval targets; `--allow-eval=main`,
+ *   `--allow-eval=renderer`, or `--allow-eval=main,renderer` enable only the named
+ *   target(s) for least privilege (ADR-014). A tool whose target is not enabled is
+ *   omitted from `tools/list`.
  * - `--screenshot-dir <path>` — directory the screenshot tool writes captures
  *   into when no explicit path is given (default: the OS temp dir).
  * - `--app-root <path>` — confine `electron_launch`'s `main` / `executablePath` / `cwd` to within
@@ -34,12 +37,14 @@ import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 import { importPlugin } from './plugins/index.js'
+import type { EvalPolicy } from './server/eval-policy.js'
 import { createServer } from './server/index.js'
 import { StderrLogger } from './server/logger.js'
 
 /** Parsed CLI options. */
 interface CliOptions {
-  readonly allowEval: boolean
+  /** The eval authorization policy parsed from `--allow-eval[=<targets>]` (ADR-014). */
+  readonly allowEval: EvalPolicy
   readonly screenshotDir?: string
   /** Optional root directory `electron_launch` paths are confined to (`--app-root`). */
   readonly appRoot?: string
@@ -106,6 +111,50 @@ function parseOperationTimeout(raw: string | undefined): number | undefined {
   return value
 }
 
+/** Parse a comma-separated `--allow-eval=<targets>` value into a policy; throws on an unknown target. */
+function parseEvalTargets(value: string): EvalPolicy {
+  const targets = value
+    .split(',')
+    .map((target) => target.trim())
+    .filter((target) => target.length > 0)
+  if (targets.length === 0) {
+    throw new Error(
+      '--allow-eval= expects main, renderer, or all (comma-separated), or a bare --allow-eval for both',
+    )
+  }
+  const policy = { main: false, renderer: false }
+  for (const target of targets) {
+    if (target === 'main') policy.main = true
+    else if (target === 'renderer') policy.renderer = true
+    else if (target === 'all') {
+      policy.main = true
+      policy.renderer = true
+    } else {
+      throw new Error(`--allow-eval target must be main, renderer, or all, got "${target}"`)
+    }
+  }
+  return policy
+}
+
+/**
+ * Parse `--allow-eval[=<targets>]` into an eval authorization policy (ADR-014). Bare
+ * `--allow-eval` enables both targets; `--allow-eval=main` / `=renderer` /
+ * `=main,renderer` (or `=all`) enable the named target(s); absent → neither. The last
+ * occurrence wins. An unrecognised target value throws so a typo fails startup loudly
+ * rather than silently granting or denying the wrong eval surface.
+ */
+export function parseAllowEval(argv: readonly string[]): EvalPolicy {
+  let policy: EvalPolicy = { main: false, renderer: false }
+  for (const arg of argv) {
+    if (arg === '--allow-eval') {
+      policy = { main: true, renderer: true }
+    } else if (arg.startsWith('--allow-eval=')) {
+      policy = parseEvalTargets(arg.slice('--allow-eval='.length))
+    }
+  }
+  return policy
+}
+
 /** Parse the supported flags from argv (excluding `node` and the script path). */
 export function parseCliArgs(argv: readonly string[]): CliOptions {
   const screenshotDir = readFlagValue(argv, '--screenshot-dir')
@@ -117,7 +166,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     .map((spec) => spec.trim())
     .filter((spec) => spec.length > 0)
   return {
-    allowEval: argv.includes('--allow-eval'),
+    allowEval: parseAllowEval(argv),
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
     ...(appRoot !== undefined ? { appRoot } : {}),
     ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),

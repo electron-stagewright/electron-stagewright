@@ -8,13 +8,15 @@ transport's `evaluate('main', …)` seam, wrapping `ipcMain.handle`, opt-in `ipc
 
 ## Load it
 
-IPC instrumentation runs main-process JavaScript, so the server must run with **`--allow-eval`**:
+IPC instrumentation runs main-process JavaScript, so the server must permit main eval. Prefer the
+least-privilege target flag **`--allow-eval=main`** (bare `--allow-eval` also works, but grants
+renderer eval too):
 
 ```sh
-node packages/core/dist/cli.js --plugin @electron-stagewright/plugin-ipc --allow-eval
+node packages/core/dist/cli.js --plugin @electron-stagewright/plugin-ipc --allow-eval=main
 
 # Configure (optional): redacted arg fields, captured-event cap:
-node packages/core/dist/cli.js --plugin @electron-stagewright/plugin-ipc --allow-eval \
+node packages/core/dist/cli.js --plugin @electron-stagewright/plugin-ipc --allow-eval=main \
   --plugin-config ipc='{"redact":["token"],"maxEvents":5000}'
 ```
 
@@ -26,7 +28,7 @@ import ipcPlugin from '@electron-stagewright/plugin-ipc'
 
 const server = await createServer({
   plugins: [ipcPlugin],
-  allowEval: true,
+  allowEval: { main: true, renderer: false },
   pluginConfigs: { ipc: { redact: ['token'] } },
 })
 ```
@@ -70,18 +72,20 @@ Error codes: `ipc.EVAL_REQUIRED`, `ipc.MAIN_EVAL_UNSUPPORTED`, `ipc.ALREADY_CAPT
 ## Security
 
 Capture, invoke, and stub all execute JavaScript in the app's main process via the transport's eval
-seam. They are gated by the eval opt-in plus channel allowlists:
+seam. They are gated by the main eval opt-in plus channel allowlists:
 
-- **The server's eval opt-in (`--allow-eval`).** Without it, every instrumentation tool returns
-  `ipc.EVAL_REQUIRED` — the same gate the core eval tools sit behind. This applies to capture,
-  invoke, and stub alike.
+- **The server's main eval opt-in (`--allow-eval=main`).** Without a policy that permits main eval,
+  every instrumentation tool returns `ipc.EVAL_REQUIRED` — the same grant that exposes
+  `electron_eval_main`. A bare `--allow-eval` also permits IPC instrumentation, but it grants both
+  main and renderer eval; use `--allow-eval=main` when the plugin is the only eval-backed surface
+  you need. This applies to capture, invoke, and stub alike.
 - **An explicit channel allowlist for capture and stub.** `ipc_capture_start` requires at least one
   channel; only those channels are wrapped, recorded, or stubbable. There is no "capture
   everything".
 - **An optional allowlist for invoke.** `ipc_invoke` is unrestricted by default — it names its
   channel per call (the agent's explicit choice) and is no more powerful than `electron_eval_main`,
-  which `--allow-eval` already permits. For defense-in-depth, set the `invokeAllow` config to bound
-  it: when present, `ipc_invoke` refuses any channel outside the list — `undefined` (omitted) means
+  which main eval already permits. For defense-in-depth, set the `invokeAllow` config to bound it:
+  when present, `ipc_invoke` refuses any channel outside the list — `undefined` (omitted) means
   unrestricted, `[]` means block all invoke, and a list means only those channels.
 
 This is the same trust model as the eval tools: a first-party, in-process plugin (ADR-004) the

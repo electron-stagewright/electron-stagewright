@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 
+import { fnv1a32 } from '../src/hash.js'
 import {
   ERROR_CODES,
   type ErrorCode,
@@ -317,16 +318,17 @@ describe('validateEvalContent', () => {
 
   it('rejects every keyword in the DANGEROUS list with EVAL_BLOCKED_KEYWORD', () => {
     for (const keyword of DANGEROUS_EVAL_KEYWORDS_FOR_TESTS) {
-      expect(() => validateEvalContent(`code containing ${keyword} inline`)).toThrow(
-        StagewrightError,
-      )
+      const source = `code containing ${keyword} inline`
+      expect(() => validateEvalContent(source)).toThrow(StagewrightError)
       try {
-        validateEvalContent(`code containing ${keyword} inline`)
+        validateEvalContent(source)
       } catch (err) {
         expect(err).toBeInstanceOf(StagewrightError)
         if (err instanceof StagewrightError) {
           expect(err.code).toBe('EVAL_BLOCKED_KEYWORD')
-          expect(err.details).toEqual({ keyword })
+          // Details carry the keyword plus a `code_hash` (the same FNV-1a the eval audit logs) so a
+          // rejection can be correlated with the offending payload without the payload being recorded.
+          expect(err.details).toEqual({ keyword, code_hash: fnv1a32(source) })
         }
       }
     }

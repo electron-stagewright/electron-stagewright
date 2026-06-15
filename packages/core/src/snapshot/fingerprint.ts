@@ -1,7 +1,7 @@
 /**
- * Fingerprint hash for snapshot entries. Uses FNV-1a 32-bit over UTF-8 bytes —
- * pure JS, runs in any context (renderer, Node, jsdom, Workers), no
- * `crypto.subtle` dependency.
+ * Fingerprint composition for snapshot entries. The underlying hash is the shared
+ * FNV-1a 32-bit (`fnv1a32` from `../hash.js`), re-exported here so the snapshot
+ * module's public surface is unchanged.
  *
  * Collision probability for our use case (~200 entries per snapshot, distinct
  * strings concatenating role + name + last-3-ancestor-roles) is negligible: at
@@ -11,26 +11,9 @@
  * @module
  */
 
-const FNV_OFFSET_BASIS_32 = 0x811c9dc5
-const FNV_PRIME_32 = 0x01000193
-const UTF8_ENCODER = new TextEncoder()
+import { fnv1a32 } from '../hash.js'
 
-/**
- * FNV-1a 32-bit hash of a UTF-8 string, returned as a zero-padded 8-character
- * hex string. Pure function; same input always yields same output across
- * runtimes.
- */
-export function fnv1a32(input: string): string {
-  let hash = FNV_OFFSET_BASIS_32
-  for (const byte of UTF8_ENCODER.encode(input)) {
-    hash ^= byte
-    // Math.imul preserves the required 32-bit overflow semantics. Plain
-    // number multiplication loses precision once the intermediate value grows
-    // past JS's safe integer range.
-    hash = Math.imul(hash, FNV_PRIME_32) >>> 0
-  }
-  return hash.toString(16).padStart(8, '0')
-}
+export { fnv1a32 }
 
 /**
  * Compose the fingerprint payload from an entry's role, accessible name, and

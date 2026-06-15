@@ -10,11 +10,11 @@ vulnerability see [SECURITY.md](../../.github/SECURITY.md).
 ## The one-line model
 
 The server is a **privileged local tool**, not a sandbox. It runs with your OS
-privileges, drives a real desktop app, and — when you pass `--allow-eval` — runs
-arbitrary JavaScript inside that app. Treat it the way you would treat a shell: only
-let a **trusted agent host** invoke it. The default transport is stdio (a local
-child process), so the trust boundary stays local unless you deliberately put a
-network in front of it.
+privileges, drives a real desktop app, and — when you enable the `--allow-eval`
+policy — runs arbitrary JavaScript inside that app. Treat it the way you would treat
+a shell: only let a **trusted agent host** invoke it. The default transport is stdio
+(a local child process), so the trust boundary stays local unless you deliberately
+put a network in front of it.
 
 ## Assets
 
@@ -22,8 +22,9 @@ What an attacker would want, in rough order of value:
 
 - **The host machine.** The server can launch processes and read files within its
   launch surface, with the operator's privileges.
-- **The target app's runtime.** Under `--allow-eval`, arbitrary main-/renderer-process
-  code; without it, the granular tools still drive the app (click, type, navigate).
+- **The target app's runtime.** Under the `--allow-eval` policy, arbitrary main- and/or
+  renderer-process code; without it, the granular tools still drive the app (click,
+  type, navigate).
 - **Captured data.** Screenshots, console logs, and session traces can contain
   secrets the app displayed; IPC capture can record channel payloads.
 - **Code-signing identity.** The `production_validate` tool reads signed `.app`
@@ -51,17 +52,17 @@ What an attacker would want, in rough order of value:
 
 ## Controls (threats × mitigations)
 
-| Threat                                                                  | Control                                                                                                                                                                                                                                                             | Residual                                                                               |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Arbitrary code execution via eval                                       | `electron_eval_main` / `electron_eval_renderer` are **unregistered without `--allow-eval`**; payloads pass a keyword blocklist; calls are audited to stderr (length only); results are size-capped                                                                  | The blocklist is defence-in-depth, **bypassable** by a determined payload — see below  |
-| A plugin running main-process code behind the operator's back           | Any plugin using the eval seam (`transport.evaluate('main')`) **re-asserts `--allow-eval`** at its own tool boundary; today that covers `ipc_capture_start`, `ipc_captured`, `ipc_capture_stop`, `ipc_invoke`, and `ipc_stub` ([ADR-010](../adr/010-ipc-plugin.md)) | —                                                                                      |
-| Over-broad IPC capture / injection                                      | `ipc_capture_start` requires an **explicit channel allowlist**; `ipc_stub` is allowlist-bound; `ipc_invoke` has an optional allowlist; `redact` drops named fields                                                                                                  | Capture defaults are not redacted unless configured                                    |
-| Path traversal / arbitrary process launch                               | `--app-root` confines `main` / `executablePath` / `cwd` and blocks `..` escape; runtime-altering env vars (`NODE_OPTIONS`, `LD_*`, `DYLD_*`, …) are **refused**                                                                                                     | Without `--app-root`, launch paths are unconstrained (local-tool model)                |
-| Protocol-channel corruption                                             | **stdout is JSON-RPC only**; all diagnostics go to stderr, enforced by a CI gate                                                                                                                                                                                    | —                                                                                      |
-| Denial of service via a hung app                                        | A per-operation **timeout backstop** ([ADR-011](../adr/011-operation-timeout.md)) abandons a non-settling handler and returns a retryable error                                                                                                                     | The abandoned op dies with the session                                                 |
-| Secret exfiltration via captured data and artifacts                     | Trace and IPC captures support `redact` for structured argument/payload fields; screenshots and trace artifacts are written only where the operator points them                                                                                                     | Screenshots, console output, tool results, and unredacted payloads can contain secrets |
-| Prototype-pollution via untrusted string lookups                        | Lookups keyed by tool input guard against inherited `Object.prototype` members                                                                                                                                                                                      | —                                                                                      |
-| Catastrophic-backtracking regex (ReDoS) in `expect`/`assert` predicates | Predicate flags are validated as defence-in-depth                                                                                                                                                                                                                   | Not a complete decision procedure                                                      |
+| Threat                                                                  | Control                                                                                                                                                                                                                                                                                                                               | Residual                                                                               |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Arbitrary code execution via eval                                       | `electron_eval_main` / `electron_eval_renderer` are **unregistered unless `--allow-eval` permits their target** (per-target least privilege — `--allow-eval=renderer` grants only the renderer); payloads pass a keyword blocklist; calls are audited to stderr (length + a content hash, never the payload); results are size-capped | The blocklist is defence-in-depth, **bypassable** by a determined payload — see below  |
+| A plugin running main-process code behind the operator's back           | Any plugin using the eval seam (`transport.evaluate('main')`) **re-asserts the main eval opt-in** (`--allow-eval=main`, or bare `--allow-eval`) at its own tool boundary; today that covers `ipc_capture_start`, `ipc_captured`, `ipc_capture_stop`, `ipc_invoke`, and `ipc_stub` ([ADR-010](../adr/010-ipc-plugin.md))               | —                                                                                      |
+| Over-broad IPC capture / injection                                      | `ipc_capture_start` requires an **explicit channel allowlist**; `ipc_stub` is allowlist-bound; `ipc_invoke` has an optional allowlist; `redact` drops named fields                                                                                                                                                                    | Capture defaults are not redacted unless configured                                    |
+| Path traversal / arbitrary process launch                               | `--app-root` confines `main` / `executablePath` / `cwd` and blocks `..` escape; runtime-altering env vars (`NODE_OPTIONS`, `LD_*`, `DYLD_*`, …) are **refused**                                                                                                                                                                       | Without `--app-root`, launch paths are unconstrained (local-tool model)                |
+| Protocol-channel corruption                                             | **stdout is JSON-RPC only**; all diagnostics go to stderr, enforced by a CI gate                                                                                                                                                                                                                                                      | —                                                                                      |
+| Denial of service via a hung app                                        | A per-operation **timeout backstop** ([ADR-011](../adr/011-operation-timeout.md)) abandons a non-settling handler and returns a retryable error                                                                                                                                                                                       | The abandoned op dies with the session                                                 |
+| Secret exfiltration via captured data and artifacts                     | Trace and IPC captures support `redact` for structured argument/payload fields; screenshots and trace artifacts are written only where the operator points them                                                                                                                                                                       | Screenshots, console output, tool results, and unredacted payloads can contain secrets |
+| Prototype-pollution via untrusted string lookups                        | Lookups keyed by tool input guard against inherited `Object.prototype` members                                                                                                                                                                                                                                                        | —                                                                                      |
+| Catastrophic-backtracking regex (ReDoS) in `expect`/`assert` predicates | Predicate flags are validated as defence-in-depth                                                                                                                                                                                                                                                                                     | Not a complete decision procedure                                                      |
 
 ## The eval blocklist, precisely
 
@@ -72,12 +73,24 @@ visible. It is **not** a sound analyzer: string obfuscation, encoding, or indire
 access defeats it. The real control is the `--allow-eval` opt-in plus the
 "privileged local tool" trust boundary; the blocklist is a seatbelt, not a wall.
 
+**The gate is per-target.** `--allow-eval` accepts targets: bare `--allow-eval`
+enables both, while `--allow-eval=main` or `--allow-eval=renderer` enable only one.
+Each eval tool registers only when its target is permitted, so a renderer-only
+automation never exposes the main-process surface (full Node/Electron). A plugin that
+reaches the main process through the eval seam (IPC capture) is gated on the main
+target too, so it is unavailable under a renderer-only policy.
+
+**Every eval is audited.** A stderr breadcrumb records each call — tool, target,
+session, code length, and a `code_hash` (an FNV-1a of the payload, never the payload
+itself). A blocked `EVAL_BLOCKED_KEYWORD` error carries the same `code_hash`, so a
+rejected payload can be correlated with the logs without ever being recorded.
+
 ## Residual risks and recommendations
 
-- **Eval hardening is the open item.** AST inspection, an authorization policy
-  (per-tool or per-channel), and a richer audit log would raise the floor beyond the
-  keyword blocklist. This needs design input and is tracked as future work, not
-  shipped.
+- **AST inspection is the open hardening item.** The per-target authorization policy
+  and the content-hash audit have shipped; structural (AST) inspection of eval payloads
+  has not. A sound analyzer is a separate design effort, and an honest blocklist beats
+  an over-claimed weak one — so the keyword blocklist stays a seatbelt, not a wall.
 - **Do not expose the server to an untrusted agent host**, and do not put a network
   transport in front of it, until that hardening lands. The supported model is a
   local stdio child process driven by a host you trust.
@@ -93,7 +106,9 @@ access defeats it. The real control is the `--allow-eval` opt-in plus the
 - Run the server as a local stdio child of a trusted host. Do not expose it on a
   network.
 - Leave `--allow-eval` **off** unless a flow genuinely needs it; prefer the granular
-  tools.
+  tools. When you do need it, grant the **narrowest target**: `--allow-eval=renderer`
+  for page-state flows, and `--allow-eval=main` only when a flow truly needs Node-level
+  access in the app's main process.
 - Set `--app-root` to the project you are testing.
 - Configure `redact` for sensitive channels/traces; write artifacts to a directory
   you control.

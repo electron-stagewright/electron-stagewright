@@ -9,12 +9,13 @@
  * `ipc_capture_start`, `ipc_captured`, `ipc_capture_stop`, `ipc_invoke`, `ipc_stub`.
  *
  * SECURITY: capture / invoke / stub all run JS in the main process, so all three require the
- * server's eval opt-in (`--allow-eval`) — the same gate as the eval tools. Capture and stub are
- * additionally bounded to an explicit channel allowlist (`ipc_capture_start` requires one; only
- * those channels are wrapped/recorded/stubbable). `ipc_invoke` is unrestricted by default and names
- * its channel per call (the agent's explicit choice), but operators can bound it with the
- * `invokeAllow` config for defense-in-depth. Captured payloads can include IPC arguments; the
- * `redact` config drops named fields before they reach the agent.
+ * main eval opt-in (`--allow-eval=main`, or bare `--allow-eval`) — the same main-process grant as
+ * `electron_eval_main`. Capture and stub are additionally bounded to an explicit channel allowlist
+ * (`ipc_capture_start` requires one; only those channels are wrapped/recorded/stubbable).
+ * `ipc_invoke` is unrestricted by default and names its channel per call (the agent's explicit
+ * choice), but operators can bound it with the `invokeAllow` config for defense-in-depth. Captured
+ * payloads can include IPC arguments; the `redact` config drops named fields before they reach the
+ * agent.
  *
  * @module
  */
@@ -108,7 +109,7 @@ function requireMainEval(
       error: makePluginError('ipc.EVAL_REQUIRED', {
         ...meta,
         message:
-          'IPC instrumentation runs main-process JS; start the server with --allow-eval to enable it.',
+          'IPC instrumentation runs main-process JS; start the server with --allow-eval=main (or bare --allow-eval) to enable it.',
       }),
     }
   }
@@ -161,10 +162,11 @@ const captureStartTool: AnyToolDefinition = defineTool({
   title: 'Start capturing IPC calls',
   description: [
     'Begin recording calls to the ipcMain channels in `channels` (an explicit allowlist — only',
-    'these are captured). Instruments the main process, so the server must run with --allow-eval.',
+    'these are captured). Instruments the main process, so the server must permit main eval',
+    '(--allow-eval=main, or bare --allow-eval).',
     'captureSend also records fire-and-forget on/send messages (default invoke/handle only);',
     'captureSendToRenderer also records main->renderer webContents.send/sendToFrame pushes.',
-    'Returns: { ok, capturing, channels }. Errors: ipc.EVAL_REQUIRED (no --allow-eval),',
+    'Returns: { ok, capturing, channels }. Errors: ipc.EVAL_REQUIRED (main eval not permitted),',
     'ipc.MAIN_EVAL_UNSUPPORTED (transport lacks main eval), ipc.ALREADY_CAPTURING (call',
     'ipc_capture_stop first), NOT_RUNNING (no session), BAD_ARGUMENT (empty channels).',
   ].join(' '),
@@ -188,7 +190,7 @@ const captureStartTool: AnyToolDefinition = defineTool({
   operationType: 'command',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    // Resolve the session first (this also enforces the --allow-eval gate), so ALREADY_CAPTURING is
+    // Resolve the session first (this also enforces the main eval gate), so ALREADY_CAPTURING is
     // judged per the resolved session rather than against a single global flag.
     const guard = requireMainEval(ctx, args.sessionId, meta)
     if ('error' in guard) return guard.error
@@ -372,9 +374,9 @@ const stubTool: AnyToolDefinition = defineTool({
 })
 
 /**
- * The IPC plugin. Load with `--plugin @electron-stagewright/plugin-ipc --allow-eval` or
- * `createServer({ plugins: [ipcPlugin], allowEval: true })`. Configure via `pluginConfigs.ipc`
- * (`{ redact?, maxEvents?, invokeAllow? }`).
+ * The IPC plugin. Load with `--plugin @electron-stagewright/plugin-ipc --allow-eval=main` or
+ * `createServer({ plugins: [ipcPlugin], allowEval: { main: true, renderer: false } })`.
+ * Configure via `pluginConfigs.ipc` (`{ redact?, maxEvents?, invokeAllow? }`).
  */
 export const ipcPlugin: StagewrightPlugin = {
   name: IPC_NAMESPACE,
@@ -385,7 +387,7 @@ export const ipcPlugin: StagewrightPlugin = {
     EVAL_REQUIRED: {
       http: 403,
       retryable: false,
-      hint: 'Start the server with --allow-eval; IPC instrumentation runs main-process JS.',
+      hint: 'Start the server with --allow-eval=main (or bare --allow-eval); IPC instrumentation runs main-process JS.',
     },
     MAIN_EVAL_UNSUPPORTED: {
       http: 409,

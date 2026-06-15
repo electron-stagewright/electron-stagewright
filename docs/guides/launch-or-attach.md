@@ -73,9 +73,9 @@ electron_inject { "pid": 12345 }
 
 Injection triggers the Node inspector inside the running main process and attaches to it — no
 restart, no pre-arranged flag. The session it produces drives the **main process only**: main
-evaluation (behind `--allow-eval`), window listing, and main-process console capture. Renderer
-reads and interaction need a CDP endpoint — when you control how the app starts, prefer
-`--remote-debugging-port` + `electron_attach`.
+evaluation (behind `--allow-eval=main` or bare `--allow-eval`), window listing, and main-process
+console capture. Renderer reads and interaction need a CDP endpoint — when you control how the app
+starts, prefer `--remote-debugging-port` + `electron_attach`.
 
 The injected target is verified to belong to the pid you named (attaching to a different process
 that happens to own the default inspector port is refused with `INJECT_FAILED`). On Windows the

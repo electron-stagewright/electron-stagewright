@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { createServer } from '../src/server/server.js'
+import { NOOP_LOGGER } from '../src/server/logger.js'
 import ipcPlugin from '../../plugin-ipc/src/index.js'
 import productionPlugin from '../../plugin-production/src/index.js'
 import tracePlugin from '../../plugin-trace/src/index.js'
@@ -93,7 +94,7 @@ const TOOL_MENTION = /\b(?:electron|trace|ipc|production)_[a-z][a-z0-9_]*/g
 /** The full set of real tool names: the live core manifest plus every first-party plugin. */
 async function collectKnownToolNames(): Promise<ReadonlySet<string>> {
   const known = new Set<string>()
-  const server = await createServer({ allowEval: true })
+  const server = await createServer({ allowEval: true, logger: NOOP_LOGGER })
   try {
     for (const entry of server.dispatcher.listManifest()) known.add(entry.name)
   } finally {
@@ -201,7 +202,7 @@ describe('security model — eval-gated tool coverage', () => {
     // A new eval-gated tool must not ship without an entry in the published threat model. Core eval
     // tools advertise the gate through the manifest; first-party plugin tools can gate at runtime
     // while staying listed, so collect those from their descriptions too.
-    const server = await createServer({ allowEval: true })
+    const server = await createServer({ allowEval: true, logger: NOOP_LOGGER })
     let evalGated: string[]
     try {
       evalGated = server.dispatcher

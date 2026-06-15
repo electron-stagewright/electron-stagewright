@@ -40,20 +40,21 @@ walker's constraint) dispatches on `arg.op` over a persistent `globalThis.__swIp
 The plugin keeps the orchestration (allowlist enforcement, per-session capture state, redaction,
 error envelopes) in TypeScript and the main-process mutation in the body string.
 
-### 2. Gated by the eval opt-in AND explicit channel allowlists
+### 2. Gated by the main eval opt-in AND explicit channel allowlists
 
-Main-process eval is powerful, so the instrumentation tools are gated by the eval opt-in
-and channel allowlists:
+Main-process eval is powerful, so the instrumentation tools are gated by the main eval
+opt-in and channel allowlists:
 
-- **`--allow-eval`** — without the server's eval opt-in, every IPC tool returns `ipc.EVAL_REQUIRED`.
-  The transport's `evaluate` does NOT itself pass through the `--allow-eval` _tool_ gate (that gate
-  hides the `electron_eval_*` tools, not the transport method), so the plugin enforces the same gate
-  at the tool boundary via `ctx.allowEval`.
+- **`--allow-eval=main` (or bare `--allow-eval`)** — without a policy that permits main eval,
+  every IPC tool returns `ipc.EVAL_REQUIRED`. The transport's `evaluate` does NOT itself pass
+  through the eval _tool_ registration gate (that gate hides the `electron_eval_*` tools, not the
+  transport method), so the plugin enforces the main eval gate at the tool boundary via
+  `ctx.allowEval`.
 - **An explicit channel allowlist** — `ipc_capture_start` requires at least one channel; only
   allowlisted channels are wrapped, captured, stubbed, or recorded. There is no capture-everything.
 - **An optional invoke allowlist** — `ipc_invoke` is unrestricted by default (it names its channel
-  per call and is no more powerful than `electron_eval_main`, which `--allow-eval` already permits),
-  but an operator MAY bound it via the `invokeAllow` config for defense-in-depth: when set,
+  per call and is no more powerful than `electron_eval_main`, which main eval already permits), but
+  an operator MAY bound it via the `invokeAllow` config for defense-in-depth: when set,
   `ipc_invoke` refuses any channel outside it (`ipc.CHANNEL_NOT_ALLOWED`). It is independent of the
   capture/stub allowlist; `undefined` (omitted) is unrestricted and `[]` blocks all invoke.
 
@@ -68,24 +69,26 @@ payloads reach the agent.
 - Wrapping `ipcMain.handle` at install + re-wrapping the internal map covers both handlers
   registered after capture starts and those registered at app startup (the gated smoke proves the
   latter).
-- The eval flag plus explicit allowlists keep the blast radius explicit and operator-controlled.
+- The main eval opt-in plus explicit allowlists keep the blast radius explicit and
+  operator-controlled.
 
 ## Alternatives considered
 
 - **A dedicated transport IPC API** (e.g. `transport.ipcCapture(...)`) — heavier contract surface
   across every transport for a capability only the Playwright transport can serve today; the eval
   seam already expresses it.
-- **A separate `--allow-ipc` flag** instead of reusing `--allow-eval` — more flags for the same
-  underlying capability (arbitrary main-process JS). Folding it under the existing eval opt-in keeps
-  one switch for "this server may run app-process code."
+- **A separate `--allow-ipc` flag** instead of reusing the main eval opt-in — more flags for the
+  same underlying capability (arbitrary main-process JS). Folding it under the existing eval policy
+  keeps one model for "this server may run app-process code."
 - **Capturing all channels** — rejected; an allowlist is the security boundary the scope demands.
 
 ## Consequences
 
 - New package `@electron-stagewright/plugin-ipc` with `ipc_capture_start`/`ipc_captured`/
   `ipc_capture_stop`/`ipc_invoke`/`ipc_stub` and namespaced `ipc.*` error codes.
-- A plugin reaching `transport.evaluate('main')` bypasses the `--allow-eval` _tool_ gate, so any
-  such plugin MUST re-assert the gate at the tool boundary (this plugin checks `ctx.allowEval`).
+- A plugin reaching `transport.evaluate('main')` bypasses the eval _tool_ registration gate, so any
+  such plugin MUST re-assert the main eval gate at the tool boundary (this plugin checks
+  `ctx.allowEval`).
   Captured payloads may contain sensitive data; `redact` mitigates, same as the trace plugin.
 - Re-wrapping existing handlers depends on Electron's internal `_invokeHandlers` map — guarded, with
   a documented limitation if a future Electron changes it.
