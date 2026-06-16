@@ -172,6 +172,11 @@ export const ERROR_CODES = {
     retryable: false,
     hint: 'Remove the blocked keyword, or use an explicit trusted-eval opt-in for this session.',
   },
+  EVAL_BLOCKED_CONSTRUCT: {
+    http: 400,
+    retryable: false,
+    hint: 'Remove the blocked construct (e.g. process.exit, require, the Function constructor, dynamic import); rewrite the flow using a granular tool where possible.',
+  },
 
   // Dispatch backstop (ADR-011)
   OPERATION_TIMEOUT: {

@@ -411,7 +411,7 @@ Arm the auto-responder for native JS dialogs (alert/confirm/prompt/beforeunload)
 
 **Evaluate JS in the main process**
 
-Evaluate JavaScript in the main process and return the returned/awaited value; the code receives a JSON `arg`. Only available when the eval policy permits the main target (start the server with --allow-eval, or --allow-eval=main); otherwise this tool is not registered. The code passes a keyword blocklist before running, and large or non-JSON results are serialised/truncated. Returns: { ok, session_id, result, truncated?, result_serialized?, result_chars? }. Errors: EVAL_BLOCKED_KEYWORD (blocked keyword in code; not retryable), EVAL_SYNTAX_ERROR, EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable), TRANSPORT_UNSUPPORTED (transport cannot eval here), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
+Evaluate JavaScript in the main process and return the returned/awaited value; the code receives a JSON `arg`. Only available when the eval policy permits the main target (start the server with --allow-eval, or --allow-eval=main); otherwise this tool is not registered. The code passes a keyword blocklist and a structural (AST) check before running, and large or non-JSON results are serialised/truncated. Returns: { ok, session_id, result, truncated?, result_serialized?, result_chars? }. Errors: EVAL_BLOCKED_KEYWORD / EVAL_BLOCKED_CONSTRUCT (blocked keyword or construct; not retryable), EVAL_SYNTAX_ERROR, EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable), TRANSPORT_UNSUPPORTED (transport cannot eval here), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
 
 - Operation: `eval` · Requires `--allow-eval=main`
 
@@ -425,7 +425,7 @@ Evaluate JavaScript in the main process and return the returned/awaited value; t
 
 **Evaluate JS in the focused renderer**
 
-Evaluate JavaScript in the focused renderer and return the returned/awaited value; the code receives a JSON `arg`. Only available when the eval policy permits the renderer target (start the server with --allow-eval, or --allow-eval=renderer); otherwise this tool is not registered. The code passes a keyword blocklist before running, and large or non-JSON results are serialised/truncated. Returns: { ok, session_id, result, truncated?, result_serialized?, result_chars? }. Errors: EVAL_BLOCKED_KEYWORD (blocked keyword in code; not retryable), EVAL_SYNTAX_ERROR, EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable), TRANSPORT_UNSUPPORTED (transport cannot eval here), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
+Evaluate JavaScript in the focused renderer and return the returned/awaited value; the code receives a JSON `arg`. Only available when the eval policy permits the renderer target (start the server with --allow-eval, or --allow-eval=renderer); otherwise this tool is not registered. The code passes a keyword blocklist and a structural (AST) check before running, and large or non-JSON results are serialised/truncated. Returns: { ok, session_id, result, truncated?, result_serialized?, result_chars? }. Errors: EVAL_BLOCKED_KEYWORD / EVAL_BLOCKED_CONSTRUCT (blocked keyword or construct; not retryable), EVAL_SYNTAX_ERROR, EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable), TRANSPORT_UNSUPPORTED (transport cannot eval here), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
 
 - Operation: `eval` · Requires `--allow-eval=renderer`
 

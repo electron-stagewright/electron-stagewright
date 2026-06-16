@@ -61,13 +61,12 @@ summarises it and carries the reporting policy. A CI guard asserts the threat mo
 names every `--allow-eval`-gated tool, so a future eval-gated tool cannot ship
 without a security-model entry.
 
-### 5. Structural eval inspection is deferred, not done
+### 5. Structural eval inspection is defence-in-depth, not a sandbox
 
-AST inspection is recommended in the threat model but **not implemented here** — it
-is a design change that needs deliberate input. Per-target authorization and the
-content-hash audit are recorded in the status update below; the remaining posture is
-the safe default (opt-in + blocklist + audit + cap) plus an honest statement of the
-residual risk.
+AST inspection augments the substring blocklist but remains a deliberately limited
+defence-in-depth pass. It catches obvious structural variants that are cheap to identify,
+while the supported posture stays the safe default (opt-in + blocklist + AST preflight +
+audit + cap) plus an honest statement of the residual risk.
 
 ## Rationale
 
@@ -87,21 +86,20 @@ guarantee than the code makes.
   usefully would be nearly as powerful as no sandbox.
 - **Remove the eval tools entirely** — rejected; they are the documented escape
   hatch, already gated and opt-in.
-- **Ship a complete static analyzer for eval payloads now** — deferred; a sound
-  analyzer is a real design effort, and over-claiming a weak one is worse than an
-  honest blocklist + recommendation.
+- **Ship a complete static analyzer for eval payloads now** — rejected; a sound
+  analyzer is a real design effort, and over-claiming a weak one is worse than a
+  deliberately narrow blocklist + AST preflight with documented limits.
 
 ## Consequences
 
 - A single published threat model + a `SECURITY.md` summary; operators can make an
   informed deploy decision.
-- The eval keyword blocklist is bypassable by construction; this is documented, not
-  hidden, and the hardening path is recorded as future work.
+- The eval keyword blocklist and AST preflight are bypassable by construction; this
+  is documented, not hidden, and the trust boundary remains explicit.
 - New `--allow-eval`-gated tools must be added to the security model (enforced by a
   CI guard), so the model cannot silently rot.
 - The "privileged local tool" framing is now explicit: exposing the server to an
-  untrusted agent host, or over a network transport, is out of the supported model
-  until that hardening lands.
+  untrusted agent host, or over a network transport, is out of the supported model.
 
 ## Related decisions
 
@@ -146,3 +144,23 @@ a **content-hash audit**. AST inspection remains the single deferred item.
   remains a deliberately weak seatbelt (string obfuscation defeats it); a sound analyzer is a
   separate design effort, and §5's rationale — an honest blocklist beats an over-claimed weak
   analyzer — stands. The trust boundary (a trusted local agent host) is unchanged.
+
+## Status Update — 2026-06-15
+
+The last deferred item from §5 — **AST structural inspection** — has shipped, so nothing on
+the eval-hardening list remains deferred.
+
+- **A structural pass augments the substring blocklist.** Each eval payload is parsed (acorn) and
+  walked for the SAME threat set the keyword blocklist names, matched in the parse tree rather than
+  as raw text, plus the constructor-`Function` escape and dynamic `import()`. This catches the
+  formatting and computed-access variants the substring scan misses: `process . exit`,
+  `process['exit']`, `eval ('…')`, `[].constructor.constructor('…')()`. A hit throws the new
+  `EVAL_BLOCKED_CONSTRUCT` (carrying the construct label and the same `code_hash` as the audit
+  breadcrumb). On a parse failure the pass defers — the substring blocklist still runs and the
+  remote eval surfaces a genuine syntax error — so it is never worse than the blocklist alone.
+- **Honest about the limits — still defence-in-depth, not a wall.** The analysis is static and
+  conservative: a dynamic computed key it cannot resolve (`globalThis['pro'+'cess']`), aliasing
+  (`const f = Function; f('…')`), and payloads assembled from strings at runtime all still pass.
+  The `--allow-eval` opt-in and the privileged-local-tool trust boundary remain the primary
+  controls. The security model documents exactly what the pass does and does not catch, so the
+  guarantee is never over-claimed — the concern §5 raised about a weak analyzer.

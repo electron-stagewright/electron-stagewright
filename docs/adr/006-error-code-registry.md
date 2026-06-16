@@ -151,7 +151,7 @@ Char/4 is the standard back-of-envelope estimate that works within ~10-20% on En
 Two reasons:
 
 1. **The routing CONTRACT is the security surface, not the validator body.** Once `routeByOperationType` exists and is the single entry point, the first tool implementation can fill in `validateEvalContent`'s body without re-litigating where the seam lives. The seam's existence is what makes the system fail-closed.
-2. **Even the v1 minimal blocklist has value.** It blocks the obvious foot-guns (`process.exit`, `require(`, `Function(`, `__proto__`, `child_process`) before an eval payload reaches the transport. The eval tools require an eval-policy opt-in (`--allow-eval` or a target-specific variant); ADR-014 tracks the remaining AST-inspection hardening.
+2. **Even the v1 minimal blocklist has value.** It blocks the obvious foot-guns (`process.exit`, `require(`, `Function(`, `__proto__`, `child_process`) before an eval payload reaches the transport. The eval tools require an eval-policy opt-in (`--allow-eval` or a target-specific variant); ADR-014 now layers structural inspection on top of this seam.
 
 ### Why Zod, not a hand-rolled validator
 
@@ -177,7 +177,7 @@ Zod is already pulled transitively by `@modelcontextprotocol/sdk`. Pinning it as
 - **The envelope shape is stable; additions are non-breaking.** Adding a new field to `_meta` or a new optional field to `ErrorResponse` is permitted. Removing or renaming a field is a breaking change requiring an ADR amendment.
 - **`estimated_tokens` is an estimate, not a measurement.** The v1 char/4 heuristic is documented as such. Agents that budget on exact token counts will need to revisit when the benchmark suite lands a tokenizer-accurate implementation; their existing logic remains correct (the field name and contract do not change).
 - **Plugin error codes are namespaced with a `pluginName.` prefix.** The concrete registration API lands with the plugin loader; core never owns plugin codes.
-- **The eval validator is minimal today.** Eval tools are already hidden unless the eval policy permits their target, and visible eval payloads still pass the keyword blocklist. Real validation beyond that (AST inspection) belongs in ADR-014. The routing seam is in place; the validator body is the part that grows.
+- **The eval validator is defence-in-depth.** Eval tools are already hidden unless the eval policy permits their target, and visible eval payloads pass the substring blocklist plus the structural AST guard from ADR-014. The routing seam is in place; the validator body is the part that grows.
 - **The format gate is now blocking.** `pnpm format:check` joined `pnpm verify` as part of this slice; the umbrella now runs lint + typecheck + test + build + format:check.
 
 ## Related decisions
@@ -187,7 +187,7 @@ Zod is already pulled transitively by `@modelcontextprotocol/sdk`. Pinning it as
 - [ADR-007](./007-agent-native-ux-principles.md) — Agent-native UX principles. Principles 1, 2, 3, and 10 are direct dependencies of this ADR. ADR-006 is the implementation; ADR-007 is the rationale.
 - [ADR-003](./003-transport-abstraction.md) — Transport abstraction. Returns registered codes (`TRANSPORT_UNSUPPORTED`, `CDP_DISCONNECTED`, `INJECT_FAILED`) from transport failures and stubs.
 - [ADR-004](./004-plugin-model.md) — Plugin model. Defines plugin-code registration and namespacing.
-- [ADR-014](./014-security-posture-and-threat-model.md) — Security posture and threat model. Records the eval trust boundary, per-target eval authorization, content-hash audit, and remaining AST-inspection hardening.
+- [ADR-014](./014-security-posture-and-threat-model.md) — Security posture and threat model. Records the eval trust boundary, per-target eval authorization, content-hash audit, and structural eval inspection.
 
 ## References
 
@@ -224,3 +224,16 @@ The CDP transport implementation (ADR-003 Status Update of the same date) introd
 - **`CDP_TIMEOUT`** — `http: 408`, `retryable: true`, hint: the CDP method did not respond within its timeout; the target may be busy or hung. Returned by the CDP connection pool when a method call's response frame does not arrive within the per-method budget (distinct from `CDP_DISCONNECTED`, which means the socket itself is gone), and by the connect path when the WebSocket handshake exceeds its budget. Retryable because a busy target can answer a later attempt. The graceful-stop path branches on it: a `Browser.close` that times out (rather than disconnecting) is what triggers SIGKILL escalation.
 
 Separately, the mirror test crossed the upgrade threshold the Alternatives table anticipated: with the lifecycle, interaction, wait, and plugin tool families all referencing codes, the regex v1 was replaced by a TypeScript AST traversal (`ts.createSourceFile` + a syntax walk; no type checker). Comments and prose are now invisible to the scan (no false positives from docstrings), `new StagewrightError('X', …)` / `makeError('X', …)` first arguments are covered alongside `code: 'X'` property assignments, and — superseding the 2026-06-02 note that the mirror stayed core-only — `packages/plugin-*` sources are scanned too: every `makePluginError('<ns>.<KEY>', …)` literal must name a KEY declared in that package's `errorCodes` manifest. `typescript` was already a devDependency, so the upgrade adds no install weight.
+
+## Status Update (2026-06-15) — added `EVAL_BLOCKED_CONSTRUCT`
+
+ADR-014's structural eval inspection adds a second eval preflight failure distinct from the
+substring keyword block. Added one code to the registry:
+
+- **`EVAL_BLOCKED_CONSTRUCT`** — `http: 400`, `retryable: false`, hint: remove the
+  blocked construct (e.g. `process.exit`, `require`, the `Function` constructor, or dynamic
+  `import`) and prefer a granular non-eval tool when possible. Returned by
+  `validateEvalContent` when the AST guard recognises a dangerous construct that may not appear as
+  a raw substring, such as `process['exit']`, `globalThis['Function']`, or the
+  `.constructor.constructor` escape. Its `details` carry `{ construct, code_hash }`, matching the
+  eval audit hash without logging the payload.

@@ -334,9 +334,38 @@ describe('validateEvalContent', () => {
     }
   })
 
+  it('blocks an AST-only construct in a string payload with EVAL_BLOCKED_CONSTRUCT', () => {
+    // The computed-access form is not a substring the blocklist scans for, so only the AST pass
+    // catches it; the detail carries the construct label plus the correlation hash.
+    const source = "return process['exit'](0)"
+    try {
+      validateEvalContent(source)
+      throw new Error('expected validateEvalContent to throw')
+    } catch (err) {
+      expect(err).toBeInstanceOf(StagewrightError)
+      if (err instanceof StagewrightError) {
+        expect(err.code).toBe('EVAL_BLOCKED_CONSTRUCT')
+        expect(err.details).toEqual({ construct: 'process.exit', code_hash: fnv1a32(source) })
+      }
+    }
+  })
+
+  it('runs the AST pass over object-shaped payload fields, not just bare strings', () => {
+    // evalSourceCandidates inspects named fields (body/code/script/…); the AST pass must run on each.
+    expect(() => validateEvalContent({ body: "process['exit'](0)" })).toThrow(StagewrightError)
+    try {
+      validateEvalContent({ code: "[].constructor.constructor('return 1')()" })
+      throw new Error('expected validateEvalContent to throw')
+    } catch (err) {
+      if (err instanceof StagewrightError) expect(err.code).toBe('EVAL_BLOCKED_CONSTRUCT')
+    }
+  })
+
   it('bypasses the blocklist when allowDangerous is true', () => {
     expect(() => validateEvalContent('process.exit(0)', { allowDangerous: true })).not.toThrow()
     expect(() => validateEvalContent('require("fs")', { allowDangerous: true })).not.toThrow()
+    // allowDangerous also skips the AST pass (the trusted-caller bypass covers both checks).
+    expect(() => validateEvalContent("process['exit'](0)", { allowDangerous: true })).not.toThrow()
   })
 })
 

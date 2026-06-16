@@ -199,6 +199,17 @@ describe('eval-tool safety + error classification', () => {
     expect(res.details?.['code_hash']).toBe(fnv1a32(code))
   })
 
+  it('blocks a structural bypass the substring blocklist misses (process[exit])', async () => {
+    const { dispatcher } = setup()
+    // The substring blocklist scans for the literal "process.exit"; the computed-access form is not
+    // present in the source, so only the AST pass catches it (ADR-014).
+    const code = "return process['exit'](0)"
+    const res = (await dispatcher.dispatch('electron_eval_main', { code })) as ErrorResponse
+    expect(res.code).toBe('EVAL_BLOCKED_CONSTRUCT')
+    expect(res.details?.['construct']).toBe('process.exit')
+    expect(res.details?.['code_hash']).toBe(fnv1a32(code))
+  })
+
   it('maps a SyntaxError to EVAL_SYNTAX_ERROR', async () => {
     const { dispatcher } = setup({
       evaluate: async () => {

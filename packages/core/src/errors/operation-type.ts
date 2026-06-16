@@ -32,12 +32,13 @@
  * `electronApp.evaluate(...)` API, never in this server process.
  *
  * The validators in this file are the FIRST line of defence: they inspect the
- * payload string and reject obvious foot-guns (keyword blocklist) BEFORE the
- * dispatcher hands the payload off to the transport. That mitigation is the
- * point of the file; it is not the vulnerability.
+ * payload string and reject obvious foot-guns (keyword blocklist + structural
+ * AST preflight) BEFORE the dispatcher hands the payload off to the transport.
+ * That mitigation is the point of the file; it is not the vulnerability.
  *
- * Additional eval safeguards belong at the dispatcher or transport boundary so
- * this module stays limited to payload classification and keyword checks.
+ * Additional eval safeguards beyond payload preflight belong at the dispatcher
+ * or transport boundary so this module stays limited to payload classification
+ * and cheap static checks.
  *
  * ## Implementation status
  *
@@ -51,6 +52,7 @@
 
 import { z } from 'zod'
 import { fnv1a32 } from '../hash.js'
+import { inspectEvalAst } from './eval-ast-guard.js'
 import { StagewrightError } from './registry.js'
 
 /**
@@ -132,12 +134,13 @@ export interface ValidateEvalOptions {
 }
 
 /**
- * Stub validator for eval operations. v1 enforces a minimal keyword blocklist;
- * callers that execute JavaScript still need dispatcher-level opt-in plus
- * transport-level controls outside this function.
+ * Stub validator for eval operations. v1 enforces a minimal keyword blocklist
+ * plus a structural AST pass; callers that execute JavaScript still need
+ * dispatcher-level opt-in plus transport-level controls outside this function.
  *
  * @throws {@link StagewrightError} with code `EVAL_BLOCKED_KEYWORD` when a dangerous
- * keyword is detected and `allowDangerous` is not set.
+ * keyword is detected, or `EVAL_BLOCKED_CONSTRUCT` when the AST pass recognises
+ * a dangerous construct and `allowDangerous` is not set.
  */
 export function validateEvalContent(input: unknown, opts: ValidateEvalOptions = {}): void {
   if (opts.allowDangerous === true) {
@@ -154,6 +157,17 @@ export function validateEvalContent(input: unknown, opts: ValidateEvalOptions = 
           { keyword, code_hash: fnv1a32(source) },
         )
       }
+    }
+    // Structural (AST) pass — catches the formatting/computed-access variants the substring
+    // blocklist misses (`process . exit`, `process['exit']`, constructor escapes). Same content hash
+    // so an operator can correlate the rejection with the logs without the payload being recorded.
+    const construct = inspectEvalAst(source)
+    if (construct !== null) {
+      throw new StagewrightError(
+        'EVAL_BLOCKED_CONSTRUCT',
+        `Eval payload contains a blocked construct: ${construct.label}`,
+        { construct: construct.label, code_hash: fnv1a32(source) },
+      )
     }
   }
 }

@@ -8,11 +8,12 @@
  *   never appear in `tools/list` and an attempt to call them is a gated-tool
  *   error, never reaching this handler.
  * - The dispatcher runs every eval payload through the keyword blocklist
- *   (`EVAL_BLOCKED_KEYWORD`) before the handler — the `code` field is scanned.
+ *   (`EVAL_BLOCKED_KEYWORD`) and structural AST pass (`EVAL_BLOCKED_CONSTRUCT`)
+ *   before the handler — the `code` field is scanned/parsed.
  *
- * AST inspection remains deferred to a future threat-model hardening pass; the
+ * The structural AST pass is still defence-in-depth, not a sound sandbox; the
  * current implementation ships the safe default plus per-target authorization, a
- * stderr audit breadcrumb, and a result-size cap.
+ * stderr audit breadcrumb, AST preflight, and a result-size cap.
  *
  * @module
  */
@@ -79,10 +80,11 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
       'the code receives a JSON `arg`.',
       `Only available when the eval policy permits the ${spec.target} target (start the server with`,
       `--allow-eval, or --allow-eval=${spec.target}); otherwise this tool is not`,
-      'registered. The code passes a keyword blocklist before running, and large or non-JSON',
-      'results are serialised/truncated. Returns: { ok, session_id, result, truncated?,',
-      'result_serialized?, result_chars? }.',
-      'Errors: EVAL_BLOCKED_KEYWORD (blocked keyword in code; not retryable), EVAL_SYNTAX_ERROR,',
+      'registered. The code passes a keyword blocklist and a structural (AST) check before running,',
+      'and large or non-JSON results are serialised/truncated. Returns: { ok, session_id, result,',
+      'truncated?, result_serialized?, result_chars? }.',
+      'Errors: EVAL_BLOCKED_KEYWORD / EVAL_BLOCKED_CONSTRUCT (blocked keyword or construct; not',
+      'retryable), EVAL_SYNTAX_ERROR,',
       'EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable), TRANSPORT_UNSUPPORTED (transport cannot eval',
       'here), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).',
     ].join(' '),
