@@ -13,7 +13,7 @@
  *    never link to the local-only planning docs.
  */
 
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
@@ -148,6 +148,18 @@ interface RelativeLink {
   readonly resolved: string
 }
 
+/**
+ * The subset of a `spawnSync` result that {@link assertGitCheckIgnoreSucceeded} inspects. Narrowed to
+ * these three fields so the success check can be unit-tested with a plain literal instead of a real
+ * spawn. `status` is the process exit code, or `null` when git was killed by a signal; `error` is set
+ * only when the process could not be spawned at all (e.g. git missing).
+ */
+interface GitCheckIgnoreResult {
+  readonly error?: Error
+  readonly status: number | null
+  readonly stderr: string
+}
+
 /** Markdown inline links — `](target)`; external schemes and pure anchors are skipped. */
 const MARKDOWN_LINK = /\]\(([^()\s]+)\)/g
 
@@ -168,29 +180,72 @@ function extractRelativeLinks(doc: MarkdownDoc): RelativeLink[] {
   return links
 }
 
-/** Whether git ignores `p` — a tracked doc linking an ignored path leaks local-only files. */
-function isGitIgnored(p: string): boolean {
-  try {
-    execFileSync('git', ['check-ignore', '-q', p], { cwd: REPO_ROOT })
-    return true
-  } catch {
-    return false
+/**
+ * The subset of `paths` that git ignores, computed in ONE `git check-ignore` call rather than one
+ * spawn per path. A tracked doc that links an ignored path leaks a local-only file. Per-path spawning
+ * was slow enough on Windows (where process creation is costly) to time the whole test out as the doc
+ * set grew; `--stdin --verbose --non-matching` emits one verdict line per input, in order, so paths
+ * are matched by index — no fragile cross-platform path-string comparison.
+ */
+function gitIgnoredPaths(paths: readonly string[]): ReadonlySet<string> {
+  if (paths.length === 0) return new Set()
+  const result = spawnSync('git', ['check-ignore', '--stdin', '--verbose', '--non-matching'], {
+    cwd: REPO_ROOT,
+    input: paths.join('\n'),
+    encoding: 'utf8',
+  })
+  assertGitCheckIgnoreSucceeded(result)
+  const lines = (result.stdout ?? '').split('\n').filter((line) => line.length > 0)
+  const ignored = new Set<string>()
+  lines.forEach((line, index) => {
+    // A non-matching path reports an empty `<source>:<line>:<pattern>` — i.e. the line starts `::`.
+    const p = paths[index]
+    if (p !== undefined && !line.startsWith('::')) ignored.add(p)
+  })
+  return ignored
+}
+
+function assertGitCheckIgnoreSucceeded(result: GitCheckIgnoreResult): void {
+  if (result.error !== undefined || (result.status !== 0 && result.status !== 1)) {
+    const detail =
+      (result.error?.message ?? result.stderr.trim()) || 'unknown git check-ignore error'
+    throw new Error(`git check-ignore failed while validating public-doc links: ${detail}`)
   }
 }
+
+describe('gitIgnoredPaths', () => {
+  it('fails loudly if the batched git probe fails', () => {
+    expect(() =>
+      assertGitCheckIgnoreSucceeded({
+        status: 128,
+        stderr: 'fatal: not a git repository',
+      }),
+    ).toThrow(
+      'git check-ignore failed while validating public-doc links: fatal: not a git repository',
+    )
+  })
+})
 
 describe('public docs — relative-link integrity', () => {
   it('every relative link in public markdown docs and llms.txt resolves to a public file', async () => {
     const docs = await loadLinkCheckedDocs()
+    const links = docs.flatMap((doc) =>
+      extractRelativeLinks(doc).map((link) => ({
+        label: `${path.relative(REPO_ROOT, link.from)} -> ${link.target}`,
+        resolved: link.resolved,
+        exists: existsSync(link.resolved),
+      })),
+    )
+    const ignored = gitIgnoredPaths(
+      links.filter((link) => link.exists).map((link) => link.resolved),
+    )
 
     const broken: string[] = []
-    for (const doc of docs) {
-      for (const link of extractRelativeLinks(doc)) {
-        const label = `${path.relative(REPO_ROOT, link.from)} -> ${link.target}`
-        if (!existsSync(link.resolved)) {
-          broken.push(`${label} (target does not exist)`)
-        } else if (isGitIgnored(link.resolved)) {
-          broken.push(`${label} (target is gitignored / local-only)`)
-        }
+    for (const link of links) {
+      if (!link.exists) {
+        broken.push(`${link.label} (target does not exist)`)
+      } else if (ignored.has(link.resolved)) {
+        broken.push(`${link.label} (target is gitignored / local-only)`)
       }
     }
     expect(broken, `Public docs contain broken or private links:\n${broken.join('\n')}`).toEqual([])
