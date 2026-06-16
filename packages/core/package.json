@@ -58,7 +58,10 @@
   "devDependencies": {
     "electron": "^42.3.0",
     "esbuild": "^0.28.0",
+    "highlight.js": "^11.11.1",
     "jsdom": "^29.1.1",
+    "marked": "^18.0.5",
+    "marked-highlight": "^2.2.4",
     "playwright": "^1.60.0"
   },
   "peerDependencies": {

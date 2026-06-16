@@ -1,0 +1,52 @@
+name: Docs site
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: docs-site-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build docs site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # build-docs-site exits non-zero on a broken or local-only internal link, so this validates the
+      # docs' cross-link graph on every PR — no package build is needed (docs + git index only).
+      - run: pnpm docs:site
+      - if: vars.DOCS_SITE_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # Deploy to GitHub Pages on main only after Pages is enabled for the repository
+  # (Settings -> Pages -> Source: GitHub Actions) and DOCS_SITE_DEPLOY_ENABLED=true
+  # is set as a repository variable. Until then, the workflow remains a PR/main build guard.
+  deploy:
+    name: Deploy to GitHub Pages
+    if: vars.DOCS_SITE_DEPLOY_ENABLED == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

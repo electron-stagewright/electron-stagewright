@@ -76,3 +76,27 @@ The guides index (`docs/guides/README.md`) labels these four modes explicitly, a
 closes with a pointer up to `concepts.md`. This refines how the `docs/guides/` directory is
 organized; the layout decision above — public docs re-included directory by directory, the root
 holding only `README.md` and `TOOL-REFERENCE.md` — is unchanged.
+
+## Status Update — 2026-06-15
+
+The static-site pipeline the "Alternatives" section anticipated — "a static-site pipeline can
+consume `docs/adr/` + `docs/guides/` later without moving anything" — is now implemented, and
+nothing was moved.
+
+- **`packages/core/scripts/build-docs-site.ts`** (run via `pnpm docs:site`) renders the public docs
+  to a browsable static `site/` (gitignored): the guides, the ADRs, the generated `TOOL-REFERENCE`,
+  the root `README`, and the public community docs (CONTRIBUTING/GOVERNANCE/SECURITY/RELEASING/CoC).
+  It wraps each page in a shared template with a Diátaxis-grouped sidebar and syntax-highlighted
+  code, copies `llms.txt` verbatim, and emits a `sitemap.xml`. Relative `.md` links are rewritten to
+  the mapped `.html`; a link to a tracked-but-unrendered file (an example README, `LICENSE`) becomes
+  its GitHub blob URL; a link whose target does not exist **fails the build** — a guard that
+  complements the source-link check in `docs-guides.test.ts`.
+- It is deliberately **lean** — one markdown library (`marked` + a highlighter), no framework —
+  living under `scripts/` so neither it nor its build-only dependencies ship in any package's
+  `dist/`. A CI job validates the build (and so the cross-link graph) on every PR and deploys to
+  GitHub Pages on `main` only when the repository variable `DOCS_SITE_DEPLOY_ENABLED=true` is set
+  after Pages is enabled for the repository.
+- This revisits the "premature" stance of the original Alternatives note: the pipeline is now worth
+  having, and keeping it small keeps it a replaceable commitment. The layout decision itself — public
+  docs re-included directory by directory; the generated site is a build artifact, not tracked — is
+  unchanged.
