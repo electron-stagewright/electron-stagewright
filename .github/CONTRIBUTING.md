@@ -16,6 +16,7 @@ capabilities and docs are prioritized before the first release.
 - Conventional Commits format for commit messages.
 - Pull requests require: passing CI (`pnpm verify`), conventional commits, a reasonably-scoped diff.
 - How the project is governed — roles, decision-making, and the path to becoming a co-maintainer — is documented in [GOVERNANCE.md](./GOVERNANCE.md).
+- How maintainers publish a release is documented in [RELEASING.md](./RELEASING.md).
 
 ## Your first contribution
 
