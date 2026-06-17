@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest'
 import { createServer } from '../src/server/server.js'
 import { NOOP_LOGGER } from '../src/server/logger.js'
 import ipcPlugin from '../../plugin-ipc/src/index.js'
+import networkPlugin from '../../plugin-network/src/index.js'
 import productionPlugin from '../../plugin-production/src/index.js'
 import tracePlugin from '../../plugin-trace/src/index.js'
 
@@ -32,7 +33,7 @@ const REPO_ROOT = path.resolve(HERE, '..', '..', '..')
 const GUIDES_DIR = path.join(REPO_ROOT, 'docs', 'guides')
 const ADR_DIR = path.join(REPO_ROOT, 'docs', 'adr')
 const GITHUB_DIR = path.join(REPO_ROOT, '.github')
-const FIRST_PARTY_PLUGINS = [tracePlugin, productionPlugin, ipcPlugin] as const
+const FIRST_PARTY_PLUGINS = [tracePlugin, productionPlugin, ipcPlugin, networkPlugin] as const
 
 /** One markdown document loaded for scanning. */
 interface MarkdownDoc {
@@ -89,7 +90,7 @@ async function loadLinkCheckedDocs(): Promise<MarkdownDoc[]> {
  * Namespaced tool-name mentions. A trailing underscore (from a wildcard family mention like
  * `electron_expect_*`) survives the match and is validated as a prefix.
  */
-const TOOL_MENTION = /\b(?:electron|trace|ipc|production)_[a-z][a-z0-9_]*/g
+const TOOL_MENTION = /\b(?:electron|trace|ipc|network|production)_[a-z][a-z0-9_]*/g
 
 /** The full set of real tool names: the live core manifest plus every first-party plugin. */
 async function collectKnownToolNames(): Promise<ReadonlySet<string>> {

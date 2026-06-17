@@ -15,8 +15,9 @@
  *   capability matrix reflects the upstream API rather than the broader
  *   Stagewright transport contract.
  * - `canInject: false` — Injector is its own transport.
- * - `canIntercept: false` — Network/IPC interception is not exposed through this
- *   transport contract.
+ * - `canIntercept: true` — renderer network traffic is observable via Playwright's
+ *   `page.on('requestfinished'|'requestfailed')`; the network-capture seam records it.
+ *   This is the observe half of "intercept"; request stubbing is a deferred follow-up.
  * - `canControlClock: false` — Clock control is not provided by this transport.
  * - `supportsMainEval: true` — `electronApp.evaluate()`.
  * - `supportsRendererEval: true` — `page.evaluate()`.
@@ -35,8 +36,10 @@ import type {
   PWElectronApp,
   PWModule,
   PWPage,
+  PWRequest,
 } from './playwright-electron-api.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
+import { copyNetworkFilter, matchesNetworkFilter } from './network-filter.js'
 import {
   EDITABLE_SIGNATURE_BODY,
   TYPE_EFFECT_SETTLE_MS,
@@ -57,6 +60,10 @@ import type {
   InteractionOptions,
   IpcChannel,
   LaunchOptions,
+  NetworkCaptureFilter,
+  NetworkEvent,
+  NetworkEventsOptions,
+  NetworkEventsResult,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -103,6 +110,19 @@ function delay(ms: number): Promise<void> {
     const timer = setTimeout(resolve, ms)
     timer.unref?.()
   })
+}
+
+/**
+ * Total request duration in ms from Playwright's resource timing, or undefined when unavailable.
+ * `timing().responseEnd` is the offset from request start; `-1` means "not measured".
+ */
+function safeDurationMs(request: PWRequest): number | undefined {
+  try {
+    const responseEnd = request.timing().responseEnd
+    return responseEnd >= 0 ? responseEnd : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** Map the transport-neutral interaction options onto Playwright's action options. */
@@ -236,8 +256,20 @@ class PlaywrightSession implements TransportSession {
    */
   private dialogPolicy: DialogPolicy = { action: 'dismiss' }
 
-  /** Pages that already have console/dialog listeners, so re-attach is a no-op. */
+  /** Pages that already have console/dialog/network listeners, so re-attach is a no-op. */
   private readonly capturedPages = new WeakSet<PWPage>()
+
+  /** Max network events retained; older ones are dropped and counted in `networkOverflow`. */
+  static readonly #NETWORK_CAP = 1000
+  private readonly networkBuffer: NetworkEvent[] = []
+  private networkOverflow = 0
+  /**
+   * The active capture filter, or `null` when not capturing. Network listeners attach alongside the
+   * console/dialog ones (so current and future windows are covered with no extra bookkeeping) but
+   * stay inert until armed — they record only while this is non-null, so `stopNetworkCapture` is just
+   * nulling it, with no fragile per-page listener detach.
+   */
+  private networkFilter: NetworkCaptureFilter | null = null
 
   /** Window-recovery budget — how long `activePage` waits for a window to (re)appear. */
   private readonly windowRecoveryBudgetMs: number
@@ -261,7 +293,7 @@ class PlaywrightSession implements TransportSession {
     }
   }
 
-  /** Attach console + dialog listeners to `page` exactly once (later windows included). */
+  /** Attach console + dialog + network listeners to `page` exactly once (later windows included). */
   private attachCaptureTo(page: PWPage): void {
     if (this.capturedPages.has(page)) return
     this.capturedPages.add(page)
@@ -275,6 +307,12 @@ class PlaywrightSession implements TransportSession {
         // here so one bad dialog can never take down every live session.
         void this.handleDialog(dialog, windowId).catch(() => {})
       })
+      // Network listeners attach unconditionally but are inert until capture is armed (they early-out
+      // on a null filter). `requestfinished` reads the response (async); `requestfailed` is sync.
+      page.on('requestfinished', (request) => {
+        void this.recordRequestFinished(request, windowId).catch(() => {})
+      })
+      page.on('requestfailed', (request) => this.recordRequestFailed(request, windowId))
     } catch {
       // A page that refuses listeners (already closed) is skipped, not fatal.
     }
@@ -377,6 +415,94 @@ class PlaywrightSession implements TransportSession {
       this.dialogOverflow = 0
     }
     return result
+  }
+
+  /** Record a completed request when capturing and its method+URL match the active filter. */
+  private async recordRequestFinished(request: PWRequest, windowId: string): Promise<void> {
+    const filter = this.networkFilter
+    if (filter === null) return
+    const method = request.method()
+    const url = request.url()
+    if (!matchesNetworkFilter({ method, url }, filter)) return
+    // Read the synchronous request fields BEFORE the first await (the response) — the
+    // event-capture lesson from the console/dialog buffers, applied defensively here too.
+    const resourceType = request.resourceType()
+    const requestHeaders = request.headers()
+    const durationMs = safeDurationMs(request)
+    const response = await request.response()
+    // stopNetworkCapture() / startNetworkCapture() can run during the await above. If the armed filter
+    // changed, this in-flight response belongs to a capture that is no longer active — drop it rather
+    // than push a ghost into a buffer that stop cleared (or a re-arm replaced).
+    if (this.networkFilter !== filter) return
+    const status = response?.status()
+    const responseHeaders = response?.headers()
+    this.pushNetwork({
+      method,
+      url,
+      resourceType,
+      ...(status !== undefined ? { status, ok: status >= 200 && status < 300 } : {}),
+      requestHeaders,
+      ...(responseHeaders !== undefined ? { responseHeaders } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      timestamp: Date.now(),
+      windowId,
+    })
+  }
+
+  /** Record a failed request when capturing and its method+URL match the active filter. */
+  private recordRequestFailed(request: PWRequest, windowId: string): void {
+    const filter = this.networkFilter
+    if (filter === null) return
+    const method = request.method()
+    const url = request.url()
+    if (!matchesNetworkFilter({ method, url }, filter)) return
+    const durationMs = safeDurationMs(request)
+    this.pushNetwork({
+      method,
+      url,
+      resourceType: request.resourceType(),
+      requestHeaders: request.headers(),
+      failure: request.failure()?.errorText ?? 'request failed',
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      timestamp: Date.now(),
+      windowId,
+    })
+  }
+
+  /** Append a captured network event, dropping the oldest when the buffer is full. */
+  private pushNetwork(entry: NetworkEvent): void {
+    this.networkBuffer.push(entry)
+    if (this.networkBuffer.length > PlaywrightSession.#NETWORK_CAP) {
+      this.networkBuffer.shift()
+      this.networkOverflow += 1
+    }
+  }
+
+  async startNetworkCapture(filter: NetworkCaptureFilter): Promise<void> {
+    this.requireRunning()
+    this.networkFilter = copyNetworkFilter(filter)
+    this.networkBuffer.length = 0
+    this.networkOverflow = 0
+  }
+
+  async networkEvents(opts: NetworkEventsOptions = {}): Promise<NetworkEventsResult> {
+    this.requireRunning()
+    const result: NetworkEventsResult = {
+      events: [...this.networkBuffer],
+      overflowed: this.networkOverflow,
+    }
+    if (opts.clear === true) {
+      this.networkBuffer.length = 0
+      this.networkOverflow = 0
+    }
+    return result
+  }
+
+  async stopNetworkCapture(): Promise<void> {
+    this.requireRunning()
+    this.networkFilter = null
+    this.networkBuffer.length = 0
+    this.networkOverflow = 0
   }
 
   private requireRunning(): PWElectronApp {
@@ -810,7 +936,9 @@ export class PlaywrightElectronTransport implements ITransport {
     // surface. Attach is provided by CDPTransport.
     canAttach: false,
     canInject: false,
-    canIntercept: false,
+    // Renderer network traffic is observable via page.on(request|response|…); the
+    // network-capture seam consumes it. Stubbing (the modify half) is deferred.
+    canIntercept: true,
     canControlClock: false,
     supportsMainEval: true,
     supportsRendererEval: true,

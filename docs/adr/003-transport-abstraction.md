@@ -348,3 +348,27 @@ implementation status is below.
   EVERY window (the `window` event), attributes buffered entries by
   `windowId`, and recovers the active window from the known list before
   blocking on a new `window` event after modal-induced handle loss.
+
+## Status Update — 2026-06-16: Network capture seam (canIntercept's first consumer)
+
+The `canIntercept` capability, dormant since this ADR reserved it, gains its first consumer (see
+ADR-016). `TransportSession` is extended with an ARMED network-capture seam — `startNetworkCapture`,
+`networkEvents`, `stopNetworkCapture` — alongside the always-on console/dialog buffers.
+
+- The **Playwright transport** implements the seam via `page.on('requestfinished'|'requestfailed')`
+  (renderer traffic) and flips `canIntercept` from `false` to `true` — capture is the observe half of
+  "intercept". The listeners attach next to the console/dialog ones (current + future windows) and
+  stay inert until a filter is armed.
+- The **CDP transport** declares `canIntercept: false` for now: its Network domain could serve
+  capture, but the seam is not wired, and a capability that now has a consumer (the plugin gate) stays
+  honest rather than advertising methods that reject at runtime. The flag flips to `true` when the CDP
+  seam lands. Its three seam methods still throw `NOT_IMPLEMENTED` for a direct caller that bypasses
+  the gate (distinct from its `canControlClock`, which stays aspirational-true while it has no
+  consumer).
+- The **injector transport** keeps `canIntercept: false` (no renderer network).
+
+So the plugin's capability gate refuses both CDP and injector sessions with `network.UNSUPPORTED`
+(naming the Playwright transport), while `NOT_IMPLEMENTED` remains the contract-level signal for a
+direct caller that ignores the capability. Capture rides this seam rather than the eval seam
+(ADR-010's approach) because protocol-level network is invisible to `evaluate`, and so it is NOT
+`--allow-eval` gated.

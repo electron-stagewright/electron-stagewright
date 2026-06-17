@@ -31,7 +31,11 @@ import {
   type TransportCapabilities,
   type TransportSession,
 } from '../src/transports/index.js'
-import type { PWConsoleMessage, PWDialog } from '../src/transports/playwright-electron-api.js'
+import type {
+  PWConsoleMessage,
+  PWDialog,
+  PWRequest,
+} from '../src/transports/playwright-electron-api.js'
 import { buildPlaywrightLaunchOptions } from '../src/transports/playwright-electron.js'
 
 const FAKE_SESSION: TransportSession = {
@@ -45,6 +49,9 @@ const FAKE_SESSION: TransportSession = {
   consoleLogs: async () => ({ entries: [], overflowed: 0 }),
   setDialogPolicy: async () => undefined,
   dialogEvents: async () => ({ entries: [], overflowed: 0, policy: { action: 'dismiss' } }),
+  startNetworkCapture: async () => undefined,
+  networkEvents: async () => ({ events: [], overflowed: 0 }),
+  stopNetworkCapture: async () => undefined,
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -73,6 +80,8 @@ function createFakePage(
   const interactions: { readonly method: string; readonly args: readonly unknown[] }[] = []
   const consoleHandlers: ((message: unknown) => void)[] = []
   const dialogHandlers: ((dialog: unknown) => void)[] = []
+  const requestFinishedHandlers: ((request: unknown) => void)[] = []
+  const requestFailedHandlers: ((request: unknown) => void)[] = []
   // Editable-content model backing the type-effect check: fill/type/keyboard-type update a
   // selector's content; the type-effect signature read (evaluate with arg.settleMs) reads it.
   // Selectors in `inertSelectors` swallow input (content never changes), simulating a modern
@@ -180,11 +189,18 @@ function createFakePage(
     consoleHandlers,
     dialogHandlers,
     on(
-      event: 'console' | 'dialog',
-      handler: ((message: PWConsoleMessage) => void) | ((dialog: PWDialog) => void),
+      event: 'console' | 'dialog' | 'requestfinished' | 'requestfailed',
+      handler:
+        | ((message: PWConsoleMessage) => void)
+        | ((dialog: PWDialog) => void)
+        | ((request: PWRequest) => void),
     ) {
       if (event === 'console') consoleHandlers.push(handler as (arg: unknown) => void)
       else if (event === 'dialog') dialogHandlers.push(handler as (arg: unknown) => void)
+      else if (event === 'requestfinished')
+        requestFinishedHandlers.push(handler as (arg: unknown) => void)
+      else if (event === 'requestfailed')
+        requestFailedHandlers.push(handler as (arg: unknown) => void)
     },
     emitConsole(message: { type: string; text: string; location?: unknown }) {
       const msg = {
@@ -228,6 +244,48 @@ function createFakePage(
       }
       for (const handler of dialogHandlers) handler(dialog)
       return record
+    },
+    /** Drive a completed request through the `requestfinished` listeners (with an optional response). */
+    emitRequestFinished(spec: {
+      url: string
+      method?: string
+      resourceType?: string
+      requestHeaders?: Record<string, string>
+      status?: number
+      responseHeaders?: Record<string, string>
+      durationMs?: number
+    }): void {
+      const request: PWRequest = {
+        url: () => spec.url,
+        method: () => spec.method ?? 'GET',
+        resourceType: () => spec.resourceType ?? 'fetch',
+        headers: () => spec.requestHeaders ?? {},
+        timing: () => ({ startTime: 0, responseEnd: spec.durationMs ?? -1 }),
+        failure: () => null,
+        response: async () =>
+          spec.status === undefined
+            ? null
+            : { status: () => spec.status as number, headers: () => spec.responseHeaders ?? {} },
+      }
+      for (const handler of requestFinishedHandlers) handler(request)
+    },
+    /** Drive a failed request through the `requestfailed` listeners. */
+    emitRequestFailed(spec: {
+      url: string
+      method?: string
+      requestHeaders?: Record<string, string>
+      errorText?: string
+    }): void {
+      const request: PWRequest = {
+        url: () => spec.url,
+        method: () => spec.method ?? 'GET',
+        resourceType: () => 'fetch',
+        headers: () => spec.requestHeaders ?? {},
+        timing: () => ({ startTime: 0, responseEnd: -1 }),
+        failure: () => ({ errorText: spec.errorText ?? 'net::ERR_FAILED' }),
+        response: async () => null,
+      }
+      for (const handler of requestFailedHandlers) handler(request)
     },
   }
 }
@@ -302,7 +360,7 @@ describe('PlaywrightElectronTransport', () => {
       canLaunch: true,
       canAttach: false,
       canInject: false,
-      canIntercept: false,
+      canIntercept: true,
       canControlClock: false,
       supportsMainEval: true,
       supportsRendererEval: true,
@@ -785,7 +843,7 @@ describe('CDPTransport', () => {
       canLaunch: false,
       canAttach: true,
       canInject: false,
-      canIntercept: true,
+      canIntercept: false,
       canControlClock: true,
       supportsMainEval: true,
       supportsRendererEval: true,
@@ -994,6 +1052,127 @@ describe('PlaywrightSession console buffer', () => {
     expect(overflowed).toBe(5)
     expect(entries[0]?.text).toBe('m5')
     expect(entries.at(-1)?.text).toBe('m1004')
+  })
+})
+
+describe('PlaywrightSession network capture', () => {
+  // recordRequestFinished awaits the response (fire-and-forget), so let its microtasks settle.
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  async function launchWithPage() {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    return { page, session }
+  }
+
+  it('records only allowlisted finished requests with response metadata', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'] })
+
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/items',
+      status: 200,
+      requestHeaders: { accept: 'application/json' },
+      responseHeaders: { 'content-type': 'application/json' },
+      durationMs: 17,
+    })
+    page.emitRequestFinished({ method: 'GET', url: 'https://cdn.test/logo.png', status: 200 })
+    await flush()
+
+    const { events, overflowed } = await session.networkEvents()
+    expect(overflowed).toBe(0)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://app.test/api/items',
+      resourceType: 'fetch',
+      status: 200,
+      ok: true,
+      requestHeaders: { accept: 'application/json' },
+      responseHeaders: { 'content-type': 'application/json' },
+      durationMs: 17,
+    })
+    expect(typeof events[0]?.timestamp).toBe('number')
+  })
+
+  it('records a failed request with its failure text and no status', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'] })
+    page.emitRequestFailed({
+      method: 'POST',
+      url: 'https://app.test/api/save',
+      errorText: 'net::ERR_ABORTED',
+    })
+    await flush()
+
+    const { events } = await session.networkEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      method: 'POST',
+      url: 'https://app.test/api/save',
+      failure: 'net::ERR_ABORTED',
+    })
+    expect(events[0]?.status).toBeUndefined()
+    expect(events[0]?.ok).toBeUndefined()
+  })
+
+  it('restricts capture to the named methods', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'], methods: ['POST'] })
+    page.emitRequestFinished({ method: 'GET', url: 'https://app.test/api/x', status: 200 })
+    page.emitRequestFinished({ method: 'POST', url: 'https://app.test/api/x', status: 201 })
+    await flush()
+
+    expect((await session.networkEvents()).events.map((e) => e.method)).toEqual(['POST'])
+  })
+
+  it('records nothing until armed, and stop disarms and clears', async () => {
+    const { page, session } = await launchWithPage()
+    // Before arming: ignored (the listeners are attached but inert).
+    page.emitRequestFinished({ method: 'GET', url: 'https://app.test/api/early', status: 200 })
+    await flush()
+    expect((await session.networkEvents()).events).toHaveLength(0)
+
+    await session.startNetworkCapture({ urls: ['/api/'] })
+    page.emitRequestFinished({ method: 'GET', url: 'https://app.test/api/live', status: 200 })
+    await flush()
+    expect((await session.networkEvents()).events).toHaveLength(1)
+
+    // Stop disarms + clears; a later request is ignored and the buffer stays empty.
+    await session.stopNetworkCapture()
+    expect((await session.networkEvents()).events).toHaveLength(0)
+    page.emitRequestFinished({ method: 'GET', url: 'https://app.test/api/after', status: 200 })
+    await flush()
+    expect((await session.networkEvents()).events).toHaveLength(0)
+  })
+
+  it('flushes the buffer when clear is passed and rejects after dispose', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'] })
+    page.emitRequestFinished({ method: 'GET', url: 'https://app.test/api/a', status: 200 })
+    await flush()
+    expect((await session.networkEvents({ clear: true })).events).toHaveLength(1)
+    expect((await session.networkEvents()).events).toHaveLength(0)
+
+    await session.dispose()
+    await expect(session.networkEvents()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+
+  it('drops an in-flight request whose response resolves after stop (no ghost event)', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'] })
+    // recordRequestFinished suspends at `await request.response()`; stop() runs its synchronous body
+    // (nulling the filter + clearing the buffer) before that await resolves. The fixed code re-checks
+    // the filter after the await and drops the event, so it never lands in the cleared buffer.
+    page.emitRequestFinished({ method: 'GET', url: 'https://app.test/api/inflight', status: 200 })
+    await session.stopNetworkCapture()
+    await flush()
+    expect((await session.networkEvents()).events).toHaveLength(0)
   })
 })
 

@@ -12,7 +12,11 @@
  * - `canLaunch: false` — CDP requires an existing process to connect to.
  * - `canAttach: true` — attach is the primary purpose.
  * - `canInject: false` — InjectorTransport handles the no-pre-flag case.
- * - `canIntercept: true` — CDP exposes `Fetch.enable` for request interception.
+ * - `canIntercept: false` — the CDP Network domain COULD serve network capture, but
+ *   the seam (`startNetworkCapture`/`networkEvents`/`stopNetworkCapture`) is not wired
+ *   here yet, so those methods reject with `NOT_IMPLEMENTED`. The capability stays
+ *   honest-false (it now has a consumer — the network plugin gate) and flips to true
+ *   when the seam lands over the CDP Network domain.
  * - `canControlClock: true` — CDP exposes `Emulation.setVirtualTimePolicy`.
  * - `supportsMainEval: true` — `Runtime.evaluate` against the browser target.
  * - `supportsRendererEval: true` — `Runtime.evaluate` against a page target.
@@ -66,6 +70,9 @@ import type {
   ITransport,
   IpcChannel,
   LaunchOptions,
+  NetworkCaptureFilter,
+  NetworkEventsOptions,
+  NetworkEventsResult,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -122,6 +129,19 @@ function unsupported(method: string, capability: keyof TransportCapabilities): S
     method,
     capability,
   })
+}
+
+/**
+ * For a capability CDP genuinely has but whose seam is not wired yet (network capture). Distinct from
+ * {@link unsupported}: the transport CAN do this, it just is not implemented here, so the agent learns
+ * it is a temporary gap (a follow-up), not a permanent transport limitation.
+ */
+function notImplemented(method: string): StagewrightError {
+  return new StagewrightError(
+    'NOT_IMPLEMENTED',
+    `CDPTransport does not yet implement ${method}; network capture over the CDP Network domain is a planned follow-up.`,
+    { transport: TRANSPORT_ID, method },
+  )
 }
 
 /** One entry from the `/json/list` discovery endpoint. */
@@ -473,6 +493,20 @@ class CdpSession implements TransportSession {
     return result
   }
 
+  // --- Network capture surface: declared via canIntercept but not yet wired (see module doc). ---
+
+  startNetworkCapture(_filter: NetworkCaptureFilter): Promise<void> {
+    return Promise.reject(notImplemented('startNetworkCapture'))
+  }
+
+  networkEvents(_opts?: NetworkEventsOptions): Promise<NetworkEventsResult> {
+    return Promise.reject(notImplemented('networkEvents'))
+  }
+
+  stopNetworkCapture(): Promise<void> {
+    return Promise.reject(notImplemented('stopNetworkCapture'))
+  }
+
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---
 
   /**
@@ -818,7 +852,11 @@ export class CDPTransport implements ITransport {
     canLaunch: false,
     canAttach: true,
     canInject: false,
-    canIntercept: true,
+    // The CDP Network domain COULD serve network capture, but the seam is not wired here yet, and
+    // `canIntercept` now has a consumer (the network plugin gate) — so it stays honest-false until the
+    // seam lands, rather than advertising a capability whose methods reject at runtime. Flip to true
+    // when the CDP network-capture seam is implemented.
+    canIntercept: false,
     canControlClock: true,
     supportsMainEval: true,
     supportsRendererEval: true,

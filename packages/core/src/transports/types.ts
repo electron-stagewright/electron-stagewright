@@ -31,7 +31,11 @@ export interface TransportCapabilities {
   readonly canAttach: boolean
   /** The transport can inject a debugger into a running process that did not start with one. */
   readonly canInject: boolean
-  /** The transport can intercept and modify network or IPC traffic mid-flight. */
+  /**
+   * The transport can observe and/or intercept network traffic through the transport seam. The first
+   * consumer is observe-only network capture; request/response mutation can build on the same flag
+   * when a stubbing seam exists.
+   */
   readonly canIntercept: boolean
   /** The transport can install a synthetic clock for time-based testing. */
   readonly canControlClock: boolean
@@ -275,6 +279,73 @@ export interface DialogEventsResult {
 }
 
 /**
+ * The capture filter armed by {@link TransportSession.startNetworkCapture}. Capture is opt-in and
+ * bounded to an explicit URL allowlist — there is no capture-everything — so a careless arm cannot
+ * silently record the whole app's traffic. All fields are JSON-serialisable.
+ */
+export interface NetworkCaptureFilter {
+  /**
+   * URL substrings to capture (an allowlist — at least one is required). A request is recorded when
+   * its full URL CONTAINS any entry, e.g. `['/api/', 'auth.example.com']`. Substring rather than glob
+   * keeps the semantics predictable and transport-neutral.
+   */
+  readonly urls: readonly string[]
+  /**
+   * Optional HTTP-method allowlist (case-insensitive, e.g. `['GET', 'POST']`). When omitted or empty,
+   * every method whose URL matches is captured.
+   */
+  readonly methods?: readonly string[]
+}
+
+/**
+ * One captured network request/response, recorded at terminal state (the request finished or failed),
+ * in the per-session ring buffer read by {@link TransportSession.networkEvents}. Headers and bodies
+ * can carry secrets; bodies are NOT captured in this increment (headers + metadata only), and the
+ * capturing plugin redacts named headers before the event reaches the agent. All fields are
+ * JSON-serialisable (no `Headers` objects/`Buffer` — plain records/strings/numbers).
+ */
+export interface NetworkEvent {
+  /** HTTP method (`GET`, `POST`, …). */
+  readonly method: string
+  /** Full request URL. */
+  readonly url: string
+  /** Playwright resource type when known (`fetch`, `xhr`, `document`, `stylesheet`, …). */
+  readonly resourceType?: string
+  /** Response status code; absent when the request failed before a response. */
+  readonly status?: number
+  /** True when {@link NetworkEvent.status} is in the 2xx range; absent on failure. */
+  readonly ok?: boolean
+  /** Request headers as a plain record; redactable by the capturing plugin. */
+  readonly requestHeaders?: Record<string, string>
+  /** Response headers as a plain record; redactable by the capturing plugin. Absent on failure. */
+  readonly responseHeaders?: Record<string, string>
+  /** Failure text (e.g. `net::ERR_ABORTED`) when the request failed; absent on success. */
+  readonly failure?: string
+  /** Total request duration in ms, when the transport's timing is available. */
+  readonly durationMs?: number
+  /** Epoch milliseconds when the event was recorded by the server. */
+  readonly timestamp: number
+  /** Transport-scoped id of the window that issued the request (matches {@link WindowDescriptor.id}). */
+  readonly windowId?: string
+}
+
+/** Options for {@link TransportSession.networkEvents}. */
+export interface NetworkEventsOptions {
+  /** When true, flush the entire network buffer (and overflow counter) AFTER reading it. */
+  readonly clear?: boolean
+}
+
+/**
+ * Result of reading a session's network buffer. `events` is the retained tail (oldest first);
+ * `overflowed` is the number of older entries the capped ring dropped, so an agent knows the view is
+ * incomplete.
+ */
+export interface NetworkEventsResult {
+  readonly events: readonly NetworkEvent[]
+  readonly overflowed: number
+}
+
+/**
  * Common options for interaction methods. `selector` is a CSS or text selector
  * the tool layer has already resolved (a snapshot `ref` becomes
  * `[data-sw-ref="<ref>"]` before reaching the transport).
@@ -362,6 +433,26 @@ export interface TransportSession {
    * the active policy. Pass `{ clear: true }` to flush the buffer after reading.
    */
   dialogEvents(opts?: DialogEventsOptions): Promise<DialogEventsResult>
+
+  // --- Network capture surface (requires `capabilities.canIntercept`) ---
+  // Capture is ARMED (unlike the always-on console/dialog buffers): listeners only record once a
+  // filter is set. A transport that cannot capture rejects these with `NOT_IMPLEMENTED`.
+
+  /**
+   * Arm network capture for the requests matching `filter` (an explicit URL allowlist + optional
+   * method filter). Attaches to the current and future windows; re-arming replaces the filter and
+   * resets the buffer. The capturing plugin tracks the per-session capture lifecycle on top of this.
+   */
+  startNetworkCapture(filter: NetworkCaptureFilter): Promise<void>
+
+  /**
+   * Read the captured network events (oldest first) plus the dropped-entry count. Pass
+   * `{ clear: true }` to flush the buffer after reading. Returns an empty buffer when not capturing.
+   */
+  networkEvents(opts?: NetworkEventsOptions): Promise<NetworkEventsResult>
+
+  /** Disarm network capture and clear its buffer. Safe to call when not capturing (a no-op). */
+  stopNetworkCapture(): Promise<void>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

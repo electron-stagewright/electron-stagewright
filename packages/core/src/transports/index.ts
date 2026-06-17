@@ -30,6 +30,10 @@ export type {
   DialogEvent,
   DialogEventsOptions,
   DialogEventsResult,
+  NetworkCaptureFilter,
+  NetworkEvent,
+  NetworkEventsOptions,
+  NetworkEventsResult,
   TransportSession,
   ITransport,
 } from './types.js'

@@ -8,6 +8,7 @@
  * pick it up.
  */
 
+import { matchesNetworkFilter } from '../../src/transports/network-filter.js'
 import type {
   ClickOptions,
   ConsoleEntry,
@@ -18,6 +19,10 @@ import type {
   DialogPolicy,
   ITransport,
   InteractionOptions,
+  NetworkCaptureFilter,
+  NetworkEvent,
+  NetworkEventsOptions,
+  NetworkEventsResult,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -73,6 +78,8 @@ export interface FakeSessionOptions {
   readonly dialogPolicy?: DialogPolicy
   /** Buffer returned by `screenshot` (defaults to an empty buffer). */
   readonly screenshotResult?: Buffer
+  /** Cap for the simulated network ring buffer (default 1000); set small to exercise overflow. */
+  readonly networkCap?: number
 }
 
 /** In-memory {@link TransportSession}. Tracks dispose calls for idempotency tests. */
@@ -92,6 +99,12 @@ export class FakeSession implements TransportSession {
   readonly #dialogEntries: DialogEvent[]
   #dialogOverflowed: number
   #dialogPolicy: DialogPolicy = { action: 'dismiss' }
+
+  #networkCapturing = false
+  #networkFilter: NetworkCaptureFilter | undefined = undefined
+  readonly #networkBuffer: NetworkEvent[] = []
+  #networkOverflow = 0
+  readonly #networkCap: number
 
   #copyDialogPolicy(policy: DialogPolicy): DialogPolicy {
     return {
@@ -118,6 +131,7 @@ export class FakeSession implements TransportSession {
     if (opts.dialogPolicy !== undefined)
       this.#dialogPolicy = this.#copyDialogPolicy(opts.dialogPolicy)
     this.#screenshotResult = opts.screenshotResult ?? Buffer.alloc(0)
+    this.#networkCap = opts.networkCap ?? 1000
   }
 
   async consoleLogs(): Promise<ConsoleLogsResult> {
@@ -143,6 +157,47 @@ export class FakeSession implements TransportSession {
       this.#dialogOverflowed = 0
     }
     return result
+  }
+
+  async startNetworkCapture(filter: NetworkCaptureFilter): Promise<void> {
+    this.#networkCapturing = true
+    this.#networkFilter = filter
+    this.#networkBuffer.length = 0
+    this.#networkOverflow = 0
+  }
+
+  async networkEvents(opts: NetworkEventsOptions = {}): Promise<NetworkEventsResult> {
+    const result: NetworkEventsResult = {
+      events: [...this.#networkBuffer],
+      overflowed: this.#networkOverflow,
+    }
+    if (opts.clear === true) {
+      this.#networkBuffer.length = 0
+      this.#networkOverflow = 0
+    }
+    return result
+  }
+
+  async stopNetworkCapture(): Promise<void> {
+    this.#networkCapturing = false
+    this.#networkFilter = undefined
+    this.#networkBuffer.length = 0
+    this.#networkOverflow = 0
+  }
+
+  /**
+   * Test seam: simulate the app emitting one network event while capturing. Applies the armed filter
+   * exactly as the real transport does at record time — an event before start, after stop, or outside
+   * the allowlist is ignored — so a plugin test drives realistic capture without launching Electron.
+   */
+  emitNetwork(event: NetworkEvent): void {
+    if (!this.#networkCapturing || this.#networkFilter === undefined) return
+    if (!matchesNetworkFilter(event, this.#networkFilter)) return
+    this.#networkBuffer.push(event)
+    if (this.#networkBuffer.length > this.#networkCap) {
+      this.#networkBuffer.shift()
+      this.#networkOverflow += 1
+    }
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

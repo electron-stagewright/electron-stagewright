@@ -70,6 +70,29 @@ export interface PWPage {
   mouse: { wheel(deltaX: number, deltaY: number): Promise<void> }
   on(event: 'console', handler: (message: PWConsoleMessage) => void): void
   on(event: 'dialog', handler: (dialog: PWDialog) => void): void
+  on(event: 'requestfinished', handler: (request: PWRequest) => void): void
+  on(event: 'requestfailed', handler: (request: PWRequest) => void): void
+}
+
+/** The slice of Playwright's `Request` we read into a {@link NetworkEvent}. */
+export interface PWRequest {
+  url(): string
+  method(): string
+  resourceType(): string
+  /** Synchronous header map (provisional headers); enough for capture metadata. */
+  headers(): Record<string, string>
+  /** Resource timing; `responseEnd` is the total duration in ms (or `-1` when unavailable). */
+  timing(): { startTime: number; responseEnd: number }
+  /** `{ errorText }` when the request failed, else `null`. */
+  failure(): { errorText: string } | null
+  /** The matching response once available; `null` for a failed/pending request. */
+  response(): Promise<PWResponse | null>
+}
+
+/** The slice of Playwright's `Response` we read into a {@link NetworkEvent}. */
+export interface PWResponse {
+  status(): number
+  headers(): Record<string, string>
 }
 
 /** The slice of Playwright's `ConsoleMessage` we read into a `ConsoleEntry`. */

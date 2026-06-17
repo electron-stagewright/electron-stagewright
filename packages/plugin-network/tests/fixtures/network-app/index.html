@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stagewright network fixture</title>
+  </head>
+  <body>
+    <h1>Stagewright network fixture</h1>
+    <p>Periodically fetches an allowlisted URL for the gated network smoke.</p>
+    <script>
+      // Fetch an allowlisted (and deliberately unresolvable) URL on an interval, so a capture armed
+      // after launch reliably observes one. The reserved .invalid TLD never resolves, so this fires a
+      // requestfailed event even offline — the capture seam records failures as well as successes.
+      function probe() {
+        fetch('https://stagewright.invalid/api/probe').catch(() => {})
+      }
+      probe()
+      setInterval(probe, 200)
+    </script>
+  </body>
+</html>

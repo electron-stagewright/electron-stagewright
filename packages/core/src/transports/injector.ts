@@ -27,7 +27,7 @@
  * - `canLaunch: false` — Injector hooks an existing process; it does not spawn.
  * - `canAttach: true` — connect to an already-listening Node inspector port.
  * - `canInject: true` — the primary purpose.
- * - `canIntercept: false` — interception lives on the CDP transport.
+ * - `canIntercept: false` — the Node inspector exposes no renderer network stream.
  * - `canControlClock: false` — clock control lives on the CDP transport.
  * - `supportsMainEval: true` — Node inspector `Runtime.evaluate`.
  * - `supportsRendererEval: false` — renderer access requires the CDP browser
@@ -61,6 +61,9 @@ import type {
   ITransport,
   IpcChannel,
   LaunchOptions,
+  NetworkCaptureFilter,
+  NetworkEventsOptions,
+  NetworkEventsResult,
   StopOptions,
   StopResult,
   TransportCapabilities,
@@ -313,6 +316,18 @@ class InjectorSession implements TransportSession {
   async dialogEvents(_opts: DialogEventsOptions = {}): Promise<DialogEventsResult> {
     this.#requireRunning()
     return { entries: [], overflowed: 0, policy: copyDialogPolicy(this.#dialogPolicy) }
+  }
+
+  // --- Network capture surface: the Node inspector sees no renderer network (canIntercept: false). ---
+
+  startNetworkCapture(_filter: NetworkCaptureFilter): Promise<void> {
+    return Promise.reject(notImplemented('startNetworkCapture'))
+  }
+  networkEvents(_opts?: NetworkEventsOptions): Promise<NetworkEventsResult> {
+    return Promise.reject(notImplemented('networkEvents'))
+  }
+  stopNetworkCapture(): Promise<void> {
+    return Promise.reject(notImplemented('stopNetworkCapture'))
   }
 
   // --- Interaction surface: the main process has no renderer to drive. ---
