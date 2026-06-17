@@ -72,6 +72,29 @@ export interface PWPage {
   on(event: 'dialog', handler: (dialog: PWDialog) => void): void
   on(event: 'requestfinished', handler: (request: PWRequest) => void): void
   on(event: 'requestfailed', handler: (request: PWRequest) => void): void
+  // route/unroute return `Promise<unknown>` rather than `Promise<void>`: real Playwright (>= 1.60)
+  // resolves `route` to a Disposable, which would not overlap a `void` shim and would break the
+  // structural cast of the imported module. The transport ignores the resolved value.
+  /** Register a request interceptor. The handler MUST resolve every route (fulfill/abort/continue). */
+  route(url: string, handler: (route: PWRoute) => void | Promise<void>): Promise<unknown>
+  /** Remove a previously-registered interceptor (same url glob + handler ref). */
+  unroute(url: string, handler: (route: PWRoute) => void | Promise<void>): Promise<unknown>
+}
+
+/** The slice of Playwright's `Route` a stub handler drives. Exactly one resolution must be called. */
+export interface PWRoute {
+  request(): PWRequest
+  /** Let the request proceed to the network unchanged. */
+  continue(): Promise<void>
+  /** Fulfill the request with a canned response. */
+  fulfill(options: {
+    status?: number
+    headers?: Record<string, string>
+    contentType?: string
+    body?: string
+  }): Promise<void>
+  /** Abort the request with an error reason (e.g. `'failed'`, `'timedout'`). */
+  abort(errorCode?: string): Promise<void>
 }
 
 /** The slice of Playwright's `Request` we read into a {@link NetworkEvent}. */

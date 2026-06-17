@@ -33,16 +33,23 @@ afterAll(async () => {
   await Promise.all(closers.splice(0).map((c) => c().catch(() => undefined)))
 })
 
+interface NetworkEventLike {
+  readonly url: string
+  readonly method: string
+  readonly status?: number
+  readonly failure?: string
+}
 interface CapturedRead {
   readonly ok: boolean
   readonly count: number
-  readonly events: ReadonlyArray<{ readonly url: string; readonly method: string }>
+  readonly events: ReadonlyArray<NetworkEventLike>
 }
 
-/** Poll network_captured until at least one event lands or the budget runs out. */
+/** Poll network_captured until an event satisfying `done` lands or the budget runs out. */
 async function waitForCapture(
   server: Server,
   sessionId: string,
+  done: (read: CapturedRead) => boolean,
   budgetMs = 10_000,
 ): Promise<CapturedRead> {
   const deadline = Date.now() + budgetMs
@@ -50,7 +57,7 @@ async function waitForCapture(
     const read = (await server.dispatcher.dispatch('network_captured', {
       sessionId,
     })) as unknown as CapturedRead
-    if (read.ok && read.count >= 1) return read
+    if (read.ok && done(read)) return read
     if (Date.now() >= deadline) return read
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
@@ -77,7 +84,7 @@ describe('network plugin smoke (real Electron)', () => {
         }),
       ).toMatchObject({ ok: true, capturing: true })
 
-      const captured = await waitForCapture(server, sessionId)
+      const captured = await waitForCapture(server, sessionId, (r) => r.count >= 1)
       expect(captured.ok).toBe(true)
       expect(captured.count).toBeGreaterThanOrEqual(1)
       expect(captured.events[0]?.url).toContain('/api/')
@@ -88,6 +95,48 @@ describe('network plugin smoke (real Electron)', () => {
           stopped: true,
         },
       )
+      expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
+    },
+    60_000,
+  )
+
+  it.skipIf(!RUN_E2E)(
+    'stubs a real request (the fixture URL never resolves, so a 200 capture proves the stub fired) and still captures it',
+    async () => {
+      const server = await createServer({ plugins: [networkPlugin] })
+      closers.push(() => server.close())
+
+      const launched = (await server.dispatcher.dispatch('electron_launch', {
+        main: FIXTURE_MAIN,
+      })) as { ok: boolean; session_id?: string; _meta?: { session_id?: string } }
+      const sessionId = launched.session_id ?? launched._meta?.session_id
+      if (typeof sessionId !== 'string') throw new Error('launch returned no session id')
+
+      // Capture, then stub the fixture's (unresolvable) /api/probe with a 200. Without the stub the
+      // request fails (DNS); a captured event with status 200 proves the stub fulfilled it AND that a
+      // stubbed request is still captured (fold F).
+      await server.dispatcher.dispatch('network_capture_start', { sessionId, urls: ['/api/'] })
+      expect(
+        await server.dispatcher.dispatch('network_stub', {
+          sessionId,
+          urls: ['/api/probe'],
+          status: 200,
+          contentType: 'text/plain',
+          body: 'STUBBED',
+        }),
+      ).toMatchObject({ ok: true, stubbed: ['/api/probe'] })
+
+      const stubbed = await waitForCapture(server, sessionId, (r) =>
+        r.events.some((e) => e.status === 200),
+      )
+      const ok = stubbed.events.find((e) => e.status === 200)
+      expect(ok, 'a stubbed (200) request should have been captured').toBeDefined()
+      expect(ok?.url).toContain('/api/probe')
+
+      expect(await server.dispatcher.dispatch('network_unstub', { sessionId })).toMatchObject({
+        ok: true,
+        unstubbed: 'all',
+      })
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },
     60_000,

@@ -5,9 +5,10 @@ agent's other tools see the DOM; this one sees the network calls the app makes u
 endpoints, what status, how long — so a flow can be debugged or a call asserted (ADR-016, built on
 the ADR-004 plugin contract).
 
-Unlike the IPC plugin, network capture rides a dedicated **transport seam**, not main-process eval —
-so it does **not** require `--allow-eval`. Capture observes; request stubbing (the modify half) and
-CDP-transport coverage are deferred follow-ups.
+Unlike the IPC plugin, the network tools ride a dedicated **transport seam**, not main-process eval —
+so they do **not** require `--allow-eval`. Capture observes; **stubbing** fulfills or aborts matching
+requests so the app can be driven through states a live backend won't reliably produce.
+CDP-transport coverage and response-body capture are deferred follow-ups.
 
 ## Load it
 
@@ -46,8 +47,19 @@ durationMs?, timestamp, windowId? }`; configured redact headers are stripped. `c
   entries the capped ring dropped).
 - **`network_capture_stop`** `{ sessionId? }` — stop the capture and clear its buffer. Returns
   `{ stopped, events }`.
+- **`network_stub`** `{ urls, methods?, status?, headers?, contentType?, body?, abort?, times?,
+delayMs?, sessionId? }` — intercept the requests matching `urls` and either FULFILL them with a
+  canned response (status 100-599, headers/contentType/body, default 200) or ABORT them (`abort`, a
+  Playwright-compatible simulated network-failure reason such as `failed` — mutually exclusive with
+  the fulfill fields). `times` expires the stub after N uses; `delayMs` simulates a slow endpoint.
+  Multiple stubs may be active (first match wins); a stubbed request is still captured. Returns
+  `{ stubbed, abort? }`.
+- **`network_unstub`** `{ url?, sessionId? }` — remove stubs and restore live traffic: all of them,
+  or only those whose `urls` allowlist includes `url` (exact match). Idempotent. Returns
+  `{ unstubbed }`.
 
-Error codes: `network.UNSUPPORTED`, `network.ALREADY_CAPTURING`, `network.NOT_CAPTURING`.
+Error codes: `network.UNSUPPORTED`, `network.ALREADY_CAPTURING`, `network.NOT_CAPTURING`. An empty
+allowlist or `abort` combined with a fulfill response is core `BAD_ARGUMENT`.
 
 ## Config
 
@@ -69,17 +81,24 @@ Captured headers can carry secrets — auth tokens, cookies, API keys. The plugi
 - **Secret headers are redacted by default.** `authorization`, `cookie`, and `set-cookie` are
   replaced with `[redacted]` unless `redactSecureDefaults` is turned off; `redactHeaders` adds more.
 
-It does **not** run app JavaScript: capture is protocol observation through the transport, so the
-plugin is not `--allow-eval` gated (contrast the IPC plugin). It is a first-party, in-process plugin
-(ADR-004) the operator chose to load.
+**Stubbing modifies what the app receives** — it can fulfill an endpoint with a canned response or
+abort it. It is gated identically to capture (the transport's `canIntercept` capability + an explicit
+URL allowlist; no stub-everything) and, like capture, runs no app JavaScript. The canned body is the
+agent's own data; the capability to alter app input is the reason it is bounded to an allowlist and
+to a first-party, operator-loaded plugin.
+
+It does **not** run app JavaScript: the network tools are protocol-level interception through the
+transport, so the plugin is not `--allow-eval` gated (contrast the IPC plugin). It is a first-party,
+in-process plugin (ADR-004) the operator chose to load.
 
 ## Scope and limitations
 
 - **Renderer traffic only (on the Playwright transport).** Capture sees the renderer's `fetch` / XHR
   / navigation requests, not the main process's `net` module. Protocol-level capture that also covers
   the main process is the deferred CDP-transport path.
-- **Capture, not modification.** This plugin observes; stubbing or modifying responses
-  (`page.route`-style) is a deferred follow-up.
+- **Capture and stubbing, on the Playwright transport.** Capture observes; `network_stub` fulfills or
+  aborts via Playwright's request interception. A stubbed request is still captured (its event shows
+  the stubbed status). Modifying an in-flight response body mid-stream is not offered.
 - **Terminal events only.** An event is recorded when the request finishes or fails; an in-flight
   request appears once it completes.
 - **Capped ring buffer.** The transport retains the most recent events (older ones are dropped and

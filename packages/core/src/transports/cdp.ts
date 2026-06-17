@@ -73,6 +73,7 @@ import type {
   NetworkCaptureFilter,
   NetworkEventsOptions,
   NetworkEventsResult,
+  NetworkStub,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -505,6 +506,14 @@ class CdpSession implements TransportSession {
 
   stopNetworkCapture(): Promise<void> {
     return Promise.reject(notImplemented('stopNetworkCapture'))
+  }
+
+  stubNetwork(_stub: NetworkStub): Promise<void> {
+    return Promise.reject(notImplemented('stubNetwork'))
+  }
+
+  clearNetworkStubs(_url?: string): Promise<void> {
+    return Promise.reject(notImplemented('clearNetworkStubs'))
   }
 
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---

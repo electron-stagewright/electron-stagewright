@@ -35,6 +35,7 @@ import type {
   PWConsoleMessage,
   PWDialog,
   PWRequest,
+  PWRoute,
 } from '../src/transports/playwright-electron-api.js'
 import { buildPlaywrightLaunchOptions } from '../src/transports/playwright-electron.js'
 
@@ -52,6 +53,8 @@ const FAKE_SESSION: TransportSession = {
   startNetworkCapture: async () => undefined,
   networkEvents: async () => ({ events: [], overflowed: 0 }),
   stopNetworkCapture: async () => undefined,
+  stubNetwork: async () => undefined,
+  clearNetworkStubs: async () => undefined,
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -82,6 +85,7 @@ function createFakePage(
   const dialogHandlers: ((dialog: unknown) => void)[] = []
   const requestFinishedHandlers: ((request: unknown) => void)[] = []
   const requestFailedHandlers: ((request: unknown) => void)[] = []
+  const routeHandlers: { url: string; handler: (route: PWRoute) => void | Promise<void> }[] = []
   // Editable-content model backing the type-effect check: fill/type/keyboard-type update a
   // selector's content; the type-effect signature read (evaluate with arg.settleMs) reads it.
   // Selectors in `inertSelectors` swallow input (content never changes), simulating a modern
@@ -286,6 +290,48 @@ function createFakePage(
         response: async () => null,
       }
       for (const handler of requestFailedHandlers) handler(request)
+    },
+    // Request-interception stubbing: store each registered route handler (and drop it on unroute) so
+    // tests can drive PlaywrightSession's stub seam without a real renderer.
+    async route(url: string, handler: (route: PWRoute) => void | Promise<void>) {
+      routeHandlers.push({ url, handler })
+    },
+    async unroute(url: string, handler: (route: PWRoute) => void | Promise<void>) {
+      const index = routeHandlers.findIndex((r) => r.url === url && r.handler === handler)
+      if (index !== -1) routeHandlers.splice(index, 1)
+    },
+    /**
+     * Drive a request through the registered interceptor(s) and report how the route resolved
+     * (`fulfilled` opts / `aborted` code / `continued`). `intercepted` is false when no route is
+     * attached — i.e. the request would have gone live.
+     */
+    async emitRoute(spec: { url: string; method?: string }) {
+      const record: {
+        intercepted: boolean
+        continued: boolean
+        fulfilled: Parameters<PWRoute['fulfill']>[0] | undefined
+        aborted: string | undefined
+      } = {
+        intercepted: routeHandlers.length > 0,
+        continued: false,
+        fulfilled: undefined,
+        aborted: undefined,
+      }
+      const route: PWRoute = {
+        request: () =>
+          ({ url: () => spec.url, method: () => spec.method ?? 'GET' }) as unknown as PWRequest,
+        continue: async () => {
+          record.continued = true
+        },
+        fulfill: async (opts) => {
+          record.fulfilled = opts
+        },
+        abort: async (code) => {
+          record.aborted = code
+        },
+      }
+      for (const { handler } of routeHandlers) await handler(route)
+      return record
     },
   }
 }
@@ -1173,6 +1219,107 @@ describe('PlaywrightSession network capture', () => {
     await session.stopNetworkCapture()
     await flush()
     expect((await session.networkEvents()).events).toHaveLength(0)
+  })
+})
+
+describe('PlaywrightSession network stubbing', () => {
+  async function launchWithPage() {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    return { page, session }
+  }
+
+  it('fulfills a matching request with the canned response and continues a non-match', async () => {
+    const { page, session } = await launchWithPage()
+    await session.stubNetwork({
+      urls: ['/api/'],
+      fulfill: { status: 503, contentType: 'application/json', body: '{"down":true}' },
+    })
+
+    const hit = await page.emitRoute({ url: 'https://app.test/api/items', method: 'GET' })
+    expect(hit.fulfilled).toMatchObject({
+      status: 503,
+      contentType: 'application/json',
+      body: '{"down":true}',
+    })
+    expect(hit.aborted).toBeUndefined()
+
+    const miss = await page.emitRoute({ url: 'https://cdn.test/logo.png' })
+    expect(miss.continued).toBe(true)
+    expect(miss.fulfilled).toBeUndefined()
+  })
+
+  it('aborts a matching request when the stub specifies abort', async () => {
+    const { page, session } = await launchWithPage()
+    await session.stubNetwork({ urls: ['/api/'], abort: 'failed' })
+    const hit = await page.emitRoute({ url: 'https://app.test/api/x' })
+    expect(hit.aborted).toBe('failed')
+    expect(hit.fulfilled).toBeUndefined()
+  })
+
+  it('restricts a stub to the named methods', async () => {
+    const { page, session } = await launchWithPage()
+    await session.stubNetwork({ urls: ['/api/'], methods: ['POST'], fulfill: { status: 201 } })
+    expect((await page.emitRoute({ url: 'https://app.test/api/x', method: 'GET' })).continued).toBe(
+      true,
+    )
+    expect(
+      (await page.emitRoute({ url: 'https://app.test/api/x', method: 'POST' })).fulfilled,
+    ).toBeDefined()
+  })
+
+  it('expires a stub after `times` uses, then detaches the catch-all route', async () => {
+    const { page, session } = await launchWithPage()
+    await session.stubNetwork({ urls: ['/api/'], fulfill: { status: 200 }, times: 1 })
+    expect((await page.emitRoute({ url: 'https://app.test/api/x' })).fulfilled).toBeDefined()
+    // Second hit: the one-shot stub is spent and no other stubs remain, so the route is removed and
+    // the request goes live without even paying Playwright's interception/cache-disabling cost.
+    expect((await page.emitRoute({ url: 'https://app.test/api/x' })).intercepted).toBe(false)
+  })
+
+  it('keeps the route attached while another stub remains active', async () => {
+    const { page, session } = await launchWithPage()
+    await session.stubNetwork({ urls: ['/api/a'], fulfill: { status: 201 }, times: 1 })
+    await session.stubNetwork({ urls: ['/api/b'], fulfill: { status: 202 } })
+
+    expect((await page.emitRoute({ url: 'https://app.test/api/a' })).fulfilled).toMatchObject({
+      status: 201,
+    })
+    expect((await page.emitRoute({ url: 'https://app.test/api/a' })).continued).toBe(true)
+    expect((await page.emitRoute({ url: 'https://app.test/api/b' })).fulfilled).toMatchObject({
+      status: 202,
+    })
+  })
+
+  it('clears all stubs and unroutes, so later requests are not intercepted', async () => {
+    const { page, session } = await launchWithPage()
+    await session.stubNetwork({ urls: ['/api/'], fulfill: { status: 200 } })
+    await session.clearNetworkStubs()
+    // The catch-all route was removed; the request would go live (no interceptor attached).
+    expect((await page.emitRoute({ url: 'https://app.test/api/x' })).intercepted).toBe(false)
+  })
+
+  it('clears only the named stub when a url is passed (granular unstub)', async () => {
+    const { page, session } = await launchWithPage()
+    await session.stubNetwork({ urls: ['/api/a'], fulfill: { status: 201 } })
+    await session.stubNetwork({ urls: ['/api/b'], fulfill: { status: 202 } })
+    await session.clearNetworkStubs('/api/a')
+
+    // /api/a now goes live; /api/b is still stubbed (the interceptor stays attached).
+    expect((await page.emitRoute({ url: 'https://app.test/api/a' })).continued).toBe(true)
+    expect((await page.emitRoute({ url: 'https://app.test/api/b' })).fulfilled).toMatchObject({
+      status: 202,
+    })
+  })
+
+  it('applies delayMs and still fulfills', async () => {
+    const { page, session } = await launchWithPage()
+    await session.stubNetwork({ urls: ['/api/'], fulfill: { status: 200 }, delayMs: 1 })
+    expect((await page.emitRoute({ url: 'https://app.test/api/x' })).fulfilled).toBeDefined()
   })
 })
 

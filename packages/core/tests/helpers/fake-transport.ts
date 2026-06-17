@@ -23,6 +23,7 @@ import type {
   NetworkEvent,
   NetworkEventsOptions,
   NetworkEventsResult,
+  NetworkStub,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -198,6 +199,18 @@ export class FakeSession implements TransportSession {
       this.#networkBuffer.shift()
       this.#networkOverflow += 1
     }
+  }
+
+  /** Recorded stub registrations and `clearNetworkStubs` calls, for asserting plugin orchestration. */
+  readonly networkStubCalls: NetworkStub[] = []
+  readonly clearNetworkStubsCalls: Array<string | undefined> = []
+
+  async stubNetwork(stub: NetworkStub): Promise<void> {
+    this.networkStubCalls.push(stub)
+  }
+
+  async clearNetworkStubs(url?: string): Promise<void> {
+    this.clearNetworkStubsCalls.push(url)
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

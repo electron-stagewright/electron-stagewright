@@ -1,6 +1,6 @@
 # ADR-016: Network capture plugin via a transport capture seam
 
-Status: Accepted (renderer request/response capture; stubbing and CDP-transport capture deferred)
+Status: Accepted (renderer capture + stubbing; CDP-transport capture and response-body capture deferred)
 
 ## Context
 
@@ -113,3 +113,24 @@ limit the secret surface.
 - `packages/core/src/transports/network-filter.ts` — the shared allowlist matcher.
 - `packages/plugin-network/src/index.ts` — the tools, capability gate, per-session state, redaction.
 - `packages/plugin-network/tests/` — simulated-capture e2e + the gated real-Electron smoke.
+
+## Status Update — 2026-06-16: Response stubbing (the modify half)
+
+The deferred "modify half" named above now ships. `TransportSession` gains `stubNetwork(stub)` /
+`clearNetworkStubs(url?)`, and the plugin gains `network_stub` / `network_unstub` — gated on the same
+`canIntercept` capability and bounded to the same explicit URL allowlist as capture, and likewise NOT
+`--allow-eval` gated.
+
+- The Playwright transport implements it with a single catch-all `page.route('**/*', handler)` that
+  consults an ordered list of active stubs (first match wins) and `route.fulfill(...)` / `route.abort(...)`
+  / `route.continue()` accordingly. The interceptor is attached lazily on the first stub and
+  `page.unroute`-d when the last clears, so non-stubbed traffic is never intercepted once stubbing is
+  off; the handler always resolves the route (a thrown handler falls back to `continue()`), so a stub
+  can never hang the renderer. `times` (expire after N uses) and `delayMs` (simulate a slow endpoint)
+  are supported per stub.
+- A stubbed request is still captured (a fulfilled request fires `requestfinished`), so capture and
+  stubbing compose — the gated smoke asserts a stubbed (200) response to the fixture's normally-failing
+  URL appears in `network_captured`.
+- **Stubbing is a MODIFY capability** — it alters what the app receives. It carries the same gating as
+  capture (allowlist + `canIntercept` + operator-loaded plugin); the security model gains a row.
+- CDP-transport coverage and response-body capture remain deferred.

@@ -4,17 +4,18 @@
  * agent's other tools see the DOM; this one sees the network calls the app makes underneath — which
  * endpoints, what status, how long — so a flow can be debugged or a call asserted.
  *
- * Unlike the IPC plugin, capture rides a dedicated TRANSPORT SEAM (`startNetworkCapture` /
- * `networkEvents` / `stopNetworkCapture`), NOT main-process eval: protocol-level network is invisible
- * to eval, and capture is not arbitrary JS, so this plugin is NOT `--allow-eval` gated. It IS gated on
- * the transport's `canIntercept` capability (`network.UNSUPPORTED` otherwise) and bounded to an
- * explicit URL allowlist — there is no capture-everything. Tools (namespaced by the loader):
- * `network_capture_start`, `network_captured`, `network_capture_stop`.
+ * Unlike the IPC plugin, the tools ride dedicated TRANSPORT SEAMS (the capture seam
+ * `startNetworkCapture` / `networkEvents` / `stopNetworkCapture`, and the stub seam `stubNetwork` /
+ * `clearNetworkStubs`), NOT main-process eval: protocol-level network is invisible to eval and is not
+ * arbitrary JS, so this plugin is NOT `--allow-eval` gated. It IS gated on the transport's
+ * `canIntercept` capability (`network.UNSUPPORTED` otherwise) and bounded to explicit URL allowlists —
+ * there is no capture-/stub-everything. Tools (namespaced by the loader): `network_capture_start`,
+ * `network_captured`, `network_capture_stop`, `network_stub`, `network_unstub`.
  *
- * SECURITY: captured headers can carry secrets (auth, cookies, tokens). Capture is opt-in (an
- * explicit allowlist), bodies are NOT captured (headers + metadata only), and the `redactSecureDefaults`
- * config redacts `authorization` / `cookie` / `set-cookie` by default before any event reaches the
- * agent; `redactHeaders` adds more.
+ * SECURITY: captured headers can carry secrets (auth, cookies, tokens) — capture is opt-in, bodies are
+ * NOT captured (headers + metadata only), and `redactSecureDefaults` redacts `authorization` /
+ * `cookie` / `set-cookie` by default; `redactHeaders` adds more. Stubbing MODIFIES what the app
+ * receives (fulfill/abort) and carries the same allowlist + capability gating.
  *
  * @module
  */
@@ -25,6 +26,7 @@ import {
   makeSuccess,
   type AnyToolDefinition,
   type NetworkEvent,
+  type NetworkStub,
   type StagewrightPlugin,
   type ToolContext,
   type ToolResult,
@@ -35,10 +37,26 @@ import { z } from 'zod'
 /** Plugin namespace — must match {@link networkPlugin.name}; the loader prefixes its tools with it. */
 const NETWORK_NAMESPACE = 'network'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const NETWORK_PLUGIN_VERSION = '0.1.0'
+const NETWORK_PLUGIN_VERSION = '0.2.0'
 
 /** Header names redacted by default when `redactSecureDefaults` is on (lower-cased). */
 const SECURE_DEFAULT_REDACT = ['authorization', 'cookie', 'set-cookie'] as const
+const NETWORK_ABORT_REASONS = [
+  'aborted',
+  'accessdenied',
+  'addressunreachable',
+  'blockedbyclient',
+  'blockedbyresponse',
+  'connectionaborted',
+  'connectionclosed',
+  'connectionfailed',
+  'connectionrefused',
+  'connectionreset',
+  'internetdisconnected',
+  'namenotresolved',
+  'timedout',
+  'failed',
+] as const
 
 const configSchema = z.object({
   redactHeaders: z
@@ -64,8 +82,8 @@ const DEFAULT_CONFIG: NetworkConfig = { redactHeaders: [], redactSecureDefaults:
 /**
  * One session's in-flight capture — the allowlist {@link captureStartTool} armed for it. Stored in
  * {@link captures} keyed by the session id, so each running app session captures independently; today
- * only the KEY (presence) gates the tools, but the armed filter is retained because the forthcoming
- * stub/modify fold needs it (mirroring the IPC plugin's per-capture record).
+ * only the KEY (presence) gates the tools, but the armed filter is retained for diagnostics and future
+ * capture-status surfaces (mirroring the IPC plugin's per-capture record).
  */
 interface SessionCapture {
   readonly urls: readonly string[]
@@ -127,11 +145,12 @@ export function redactEvents(
 }
 
 /**
- * Resolve the session + assert its transport can capture network traffic. Returns the session, or the
- * plugin-error envelope to return instead. Unlike the IPC plugin, there is no eval gate — network
- * capture is protocol observation, not arbitrary JS.
+ * Resolve the session + assert its transport can intercept network traffic (the `canIntercept`
+ * capability both capture and stubbing need). Returns the session, or the plugin-error envelope to
+ * return instead. Unlike the IPC plugin, there is no eval gate — this is protocol-level interception,
+ * not arbitrary JS.
  */
-function requireCapture(
+function requireIntercept(
   ctx: ToolContext,
   sessionId: string | undefined,
   meta: PluginMeta,
@@ -144,7 +163,7 @@ function requireCapture(
       error: makePluginError('network.UNSUPPORTED', {
         ...meta,
         message:
-          'This session’s transport cannot capture network traffic; the default Playwright transport can.',
+          'This session’s transport cannot intercept network traffic; the default Playwright transport can.',
       }),
     }
   }
@@ -204,7 +223,7 @@ const captureStartTool: AnyToolDefinition = defineTool({
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
     // Resolve the session first (this also enforces the capability gate), so ALREADY_CAPTURING is
     // judged per the resolved session rather than against a single global flag.
-    const guard = requireCapture(ctx, args.sessionId, meta)
+    const guard = requireIntercept(ctx, args.sessionId, meta)
     if ('error' in guard) return guard.error
     if (captures.has(guard.sessionId)) {
       return makePluginError('network.ALREADY_CAPTURING', {
@@ -240,7 +259,7 @@ const capturedTool: AnyToolDefinition = defineTool({
   operationType: 'query',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    const guard = requireCapture(ctx, args.sessionId, meta)
+    const guard = requireIntercept(ctx, args.sessionId, meta)
     if ('error' in guard) return guard.error
     if (!captures.has(guard.sessionId)) {
       return notCapturing(guard.sessionId, ctx.sessions, meta, 'call network_capture_start first.')
@@ -265,7 +284,7 @@ const captureStopTool: AnyToolDefinition = defineTool({
   operationType: 'command',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    const guard = requireCapture(ctx, args.sessionId, meta)
+    const guard = requireIntercept(ctx, args.sessionId, meta)
     if ('error' in guard) return guard.error
     if (!captures.has(guard.sessionId)) {
       return notCapturing(guard.sessionId, ctx.sessions, meta, 'nothing to stop.')
@@ -275,6 +294,134 @@ const captureStopTool: AnyToolDefinition = defineTool({
     await guard.session.stopNetworkCapture()
     captures.delete(guard.sessionId)
     return makeSuccess({ stopped: true, events: read.events.length }, meta)
+  },
+})
+
+const stubTool: AnyToolDefinition = defineTool({
+  name: 'stub',
+  title: 'Stub or abort matching network requests',
+  description: [
+    'Intercept the renderer requests whose URL contains any entry in `urls` and FULFILL them with a',
+    'canned response (status 100-599, headers/contentType/body, default 200) or ABORT them with a',
+    'Playwright-compatible reason (a simulated network failure) — so the app can be driven through',
+    'states a live backend will not reliably produce.',
+    '`abort` is mutually exclusive with the fulfill fields. `times` expires the stub after N uses;',
+    '`delayMs` simulates a slow endpoint. Multiple stubs may be active (first match wins); a stubbed',
+    'request is still captured. Returns: { ok, stubbed, abort? }. Errors: network.UNSUPPORTED',
+    '(transport cannot intercept), NOT_RUNNING, BAD_ARGUMENT (empty urls, or abort+fulfill together).',
+  ].join(' '),
+  inputSchema: z
+    .object({
+      urls: z
+        .array(z.string().min(1))
+        .min(1)
+        .describe('Allowlist of URL substrings to stub (required, at least one).'),
+      methods: z
+        .array(z.string().min(1))
+        .optional()
+        .describe('Optional HTTP-method allowlist (case-insensitive); omit to stub every method.'),
+      status: z
+        .number()
+        .int()
+        .min(100)
+        .max(599)
+        .optional()
+        .describe('Fulfill: HTTP status code (100-599, default 200).'),
+      headers: z
+        .record(z.string(), z.string())
+        .optional()
+        .describe('Fulfill: response headers as a name->value map.'),
+      contentType: z.string().optional().describe('Fulfill: Content-Type shortcut.'),
+      body: z.string().optional().describe('Fulfill: response body as a string.'),
+      abort: z
+        .enum(NETWORK_ABORT_REASONS)
+        .optional()
+        .describe(
+          'Abort the request with this Playwright-compatible reason (e.g. "failed"). Mutually ' +
+            'exclusive with the fulfill fields (status/headers/contentType/body) — pass one kind ' +
+            'or the other, not both.',
+        ),
+      times: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'Apply at most this many times, then the stub expires and the request goes live.',
+        ),
+      delayMs: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('Delay before fulfilling/aborting, in ms, to simulate a slow endpoint.'),
+      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+    })
+    .refine(
+      (v) =>
+        v.abort === undefined ||
+        (v.status === undefined &&
+          v.headers === undefined &&
+          v.contentType === undefined &&
+          v.body === undefined),
+      {
+        message:
+          'abort cannot be combined with a fulfill response (status/headers/contentType/body).',
+      },
+    ),
+  operationType: 'command',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireIntercept(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const stub: NetworkStub = {
+      urls: args.urls,
+      ...(args.methods !== undefined ? { methods: args.methods } : {}),
+      ...(args.times !== undefined ? { times: args.times } : {}),
+      ...(args.delayMs !== undefined ? { delayMs: args.delayMs } : {}),
+      ...(args.abort !== undefined
+        ? { abort: args.abort }
+        : {
+            fulfill: {
+              ...(args.status !== undefined ? { status: args.status } : {}),
+              ...(args.headers !== undefined ? { headers: args.headers } : {}),
+              ...(args.contentType !== undefined ? { contentType: args.contentType } : {}),
+              ...(args.body !== undefined ? { body: args.body } : {}),
+            },
+          }),
+    }
+    await guard.session.stubNetwork(stub)
+    return makeSuccess(
+      { stubbed: args.urls, ...(args.abort !== undefined ? { abort: args.abort } : {}) },
+      meta,
+    )
+  },
+})
+
+const unstubTool: AnyToolDefinition = defineTool({
+  name: 'unstub',
+  title: 'Remove network stubs',
+  description: [
+    'Remove network stubs and restore live traffic: every stub, or only those whose allowlist includes',
+    '`url` (exact match) when given. Idempotent. Returns: { ok, unstubbed }. Errors:',
+    'network.UNSUPPORTED, NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({
+    url: z
+      .string()
+      .optional()
+      .describe(
+        'Clear only stubs whose urls allowlist includes this exact entry; omit to clear all.',
+      ),
+    sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+  }),
+  operationType: 'command',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireIntercept(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    await guard.session.clearNetworkStubs(args.url)
+    return makeSuccess({ unstubbed: args.url ?? 'all' }, meta)
   },
 })
 
@@ -292,7 +439,7 @@ export const networkPlugin: StagewrightPlugin = {
     UNSUPPORTED: {
       http: 409,
       retryable: false,
-      hint: 'This transport cannot capture network traffic; use the default Playwright transport.',
+      hint: 'This transport cannot intercept network traffic; use the default Playwright transport.',
     },
     ALREADY_CAPTURING: {
       http: 409,
@@ -305,13 +452,13 @@ export const networkPlugin: StagewrightPlugin = {
       hint: 'No active network capture on this session; call network_capture_start first.',
     },
   },
-  tools: [captureStartTool, capturedTool, captureStopTool],
+  tools: [captureStartTool, capturedTool, captureStopTool, stubTool, unstubTool],
   setup: (raw) => {
     config = raw as NetworkConfig
   },
   teardown: async () => {
     // Forget every session's capture flag. The per-session ring buffer lives in the transport session,
-    // which the server stops as part of close — so there is nothing else to restore here.
+    // and network stubs live on the same session; the server stops sessions before plugin teardown.
     captures.clear()
     config = DEFAULT_CONFIG
   },

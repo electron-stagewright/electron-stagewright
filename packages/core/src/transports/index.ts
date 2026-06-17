@@ -31,9 +31,12 @@ export type {
   DialogEventsOptions,
   DialogEventsResult,
   NetworkCaptureFilter,
+  NetworkAbortReason,
   NetworkEvent,
   NetworkEventsOptions,
   NetworkEventsResult,
+  NetworkStub,
+  NetworkStubResponse,
   TransportSession,
   ITransport,
 } from './types.js'

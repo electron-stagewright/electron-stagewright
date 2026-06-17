@@ -16,8 +16,8 @@
  *   Stagewright transport contract.
  * - `canInject: false` — Injector is its own transport.
  * - `canIntercept: true` — renderer network traffic is observable via Playwright's
- *   `page.on('requestfinished'|'requestfailed')`; the network-capture seam records it.
- *   This is the observe half of "intercept"; request stubbing is a deferred follow-up.
+ *   `page.on('requestfinished'|'requestfailed')` (the capture seam) AND modifiable via
+ *   `page.route` (the stub seam: fulfill/abort) — both halves of "intercept".
  * - `canControlClock: false` — Clock control is not provided by this transport.
  * - `supportsMainEval: true` — `electronApp.evaluate()`.
  * - `supportsRendererEval: true` — `page.evaluate()`.
@@ -37,9 +37,10 @@ import type {
   PWModule,
   PWPage,
   PWRequest,
+  PWRoute,
 } from './playwright-electron-api.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
-import { copyNetworkFilter, matchesNetworkFilter } from './network-filter.js'
+import { copyNetworkFilter, copyNetworkStub, matchesNetworkFilter } from './network-filter.js'
 import {
   EDITABLE_SIGNATURE_BODY,
   TYPE_EFFECT_SETTLE_MS,
@@ -64,6 +65,7 @@ import type {
   NetworkEvent,
   NetworkEventsOptions,
   NetworkEventsResult,
+  NetworkStub,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -123,6 +125,12 @@ function safeDurationMs(request: PWRequest): number | undefined {
   } catch {
     return undefined
   }
+}
+
+/** A registered stub plus its remaining-use budget (`Infinity` when {@link NetworkStub.times} is unset). */
+interface ActiveStub {
+  readonly stub: NetworkStub
+  remaining: number
 }
 
 /** Map the transport-neutral interaction options onto Playwright's action options. */
@@ -271,6 +279,16 @@ class PlaywrightSession implements TransportSession {
    */
   private networkFilter: NetworkCaptureFilter | null = null
 
+  /**
+   * Active network stubs (first registered match wins) and the pages a catch-all interceptor is
+   * attached to. The route is attached lazily on the first stub and removed when the last is cleared,
+   * so non-stubbed traffic is never intercepted once stubbing is off. `routeHandler` is a single stable
+   * reference so `page.route` / `page.unroute` pair up.
+   */
+  private networkStubs: ActiveStub[] = []
+  private readonly stubbedPages = new Set<PWPage>()
+  private readonly routeHandler = (route: PWRoute): Promise<void> => this.handleRoute(route)
+
   /** Window-recovery budget — how long `activePage` waits for a window to (re)appear. */
   private readonly windowRecoveryBudgetMs: number
 
@@ -316,6 +334,8 @@ class PlaywrightSession implements TransportSession {
     } catch {
       // A page that refuses listeners (already closed) is skipped, not fatal.
     }
+    // A window opened while stubbing is active needs the interceptor too (best-effort, async).
+    if (this.networkStubs.length > 0) void this.attachStubRouteTo(page).catch(() => {})
   }
 
   /** Resolve a native JS dialog per the active policy and record what happened. */
@@ -503,6 +523,113 @@ class PlaywrightSession implements TransportSession {
     this.networkFilter = null
     this.networkBuffer.length = 0
     this.networkOverflow = 0
+  }
+
+  /**
+   * The catch-all interceptor: fulfill/abort the first matching active stub (honouring `times` and
+   * `delayMs`), else let the request continue. MUST resolve the route on every path — a route left
+   * unresolved hangs the request — so a thrown handler falls back to `continue()`.
+   */
+  private async handleRoute(route: PWRoute): Promise<void> {
+    let consumedFiniteStub = false
+    try {
+      this.pruneExpiredStubs()
+      const request = route.request()
+      const url = request.url()
+      const method = request.method()
+      const active = this.networkStubs.find(
+        (entry) => entry.remaining > 0 && matchesNetworkFilter({ url, method }, entry.stub),
+      )
+      if (active === undefined) {
+        if (this.networkStubs.length === 0) await this.detachStubRoutes()
+        await route.continue()
+        return
+      }
+      if (Number.isFinite(active.remaining)) {
+        active.remaining -= 1
+        consumedFiniteStub = true
+      }
+      if (active.stub.delayMs !== undefined && active.stub.delayMs > 0) {
+        await delay(active.stub.delayMs)
+      }
+      if (active.stub.abort !== undefined) {
+        await route.abort(active.stub.abort)
+        return
+      }
+      const fulfill = active.stub.fulfill ?? {}
+      await route.fulfill({
+        ...(fulfill.status !== undefined ? { status: fulfill.status } : {}),
+        ...(fulfill.headers !== undefined ? { headers: fulfill.headers } : {}),
+        ...(fulfill.contentType !== undefined ? { contentType: fulfill.contentType } : {}),
+        ...(fulfill.body !== undefined ? { body: fulfill.body } : {}),
+      })
+    } catch {
+      // Never leave a route unresolved: fall back to live traffic.
+      try {
+        await route.continue()
+      } catch {
+        // The route was already resolved, or the page went away — nothing left to do.
+      }
+    } finally {
+      if (consumedFiniteStub) await this.detachStubRoutesIfIdle()
+    }
+  }
+
+  /** Drop spent finite-use stubs so `times` expiry really turns interception off when idle. */
+  private pruneExpiredStubs(): void {
+    this.networkStubs = this.networkStubs.filter((entry) => entry.remaining > 0)
+  }
+
+  /** Remove the catch-all route once no active stubs remain (including all-expired `times` stubs). */
+  private async detachStubRoutesIfIdle(): Promise<void> {
+    this.pruneExpiredStubs()
+    if (this.networkStubs.length === 0) await this.detachStubRoutes()
+  }
+
+  /** Attach the catch-all interceptor to `page` exactly once. */
+  private async attachStubRouteTo(page: PWPage): Promise<void> {
+    if (this.stubbedPages.has(page)) return
+    this.stubbedPages.add(page)
+    try {
+      await page.route('**/*', this.routeHandler)
+    } catch {
+      // A page that refuses the route (already closed) is dropped, not fatal.
+      this.stubbedPages.delete(page)
+    }
+  }
+
+  /** Remove the interceptor from every routed page and forget them (called when the last stub clears). */
+  private async detachStubRoutes(): Promise<void> {
+    const pages = [...this.stubbedPages]
+    this.stubbedPages.clear()
+    for (const page of pages) {
+      try {
+        await page.unroute('**/*', this.routeHandler)
+      } catch {
+        // The page is closed or was never routed — nothing to undo.
+      }
+    }
+  }
+
+  async stubNetwork(stub: NetworkStub): Promise<void> {
+    const app = this.requireRunning()
+    this.pruneExpiredStubs()
+    const wasEmpty = this.networkStubs.length === 0
+    this.networkStubs.push({ stub: copyNetworkStub(stub), remaining: stub.times ?? Infinity })
+    if (wasEmpty) {
+      try {
+        for (const page of app.windows()) await this.attachStubRouteTo(page)
+      } catch {
+        // Best-effort across windows; a dead handle is not fatal to registering the stub.
+      }
+    }
+  }
+
+  async clearNetworkStubs(url?: string): Promise<void> {
+    this.requireRunning()
+    this.networkStubs =
+      url === undefined ? [] : this.networkStubs.filter((entry) => !entry.stub.urls.includes(url))
+    if (this.networkStubs.length === 0) await this.detachStubRoutes()
   }
 
   private requireRunning(): PWElectronApp {

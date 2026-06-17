@@ -345,6 +345,60 @@ export interface NetworkEventsResult {
   readonly overflowed: number
 }
 
+/** The canned response a {@link NetworkStub} fulfills a matched request with. JSON-serialisable. */
+export interface NetworkStubResponse {
+  /** HTTP status code (100-599). Defaults to 200. */
+  readonly status?: number
+  /** Response headers as a plain record. */
+  readonly headers?: Record<string, string>
+  /** Content-Type shortcut (maps to Playwright's `contentType`); a `headers` entry takes precedence. */
+  readonly contentType?: string
+  /** Response body as a string. */
+  readonly body?: string
+}
+
+/**
+ * Playwright-compatible abort reasons for {@link NetworkStub.abort}. The names mirror
+ * `Route.abort(errorCode)` so a user-facing `network_stub` call cannot silently degrade to live
+ * traffic because the underlying transport rejected an unknown reason.
+ */
+export type NetworkAbortReason =
+  | 'aborted'
+  | 'accessdenied'
+  | 'addressunreachable'
+  | 'blockedbyclient'
+  | 'blockedbyresponse'
+  | 'connectionaborted'
+  | 'connectionclosed'
+  | 'connectionfailed'
+  | 'connectionrefused'
+  | 'connectionreset'
+  | 'internetdisconnected'
+  | 'namenotresolved'
+  | 'timedout'
+  | 'failed'
+
+/**
+ * A network stub registered by {@link TransportSession.stubNetwork}. It MODIFIES what the app receives:
+ * a request matching the allowlist is fulfilled with a canned response ({@link NetworkStub.fulfill},
+ * or the default 200 response when omitted) or aborted ({@link NetworkStub.abort}). Like capture, it is
+ * bounded to an explicit URL allowlist (no stub-everything). All fields are JSON-serialisable (A1).
+ */
+export interface NetworkStub {
+  /** URL substrings to stub (an allowlist — at least one). A request matches when its URL CONTAINS any. */
+  readonly urls: readonly string[]
+  /** Optional HTTP-method allowlist (case-insensitive); omit to stub every method whose URL matches. */
+  readonly methods?: readonly string[]
+  /** The canned response to fulfill with. Mutually exclusive with {@link NetworkStub.abort}. */
+  readonly fulfill?: NetworkStubResponse
+  /** Abort the request with this Playwright-compatible reason. Mutually exclusive with `fulfill`. */
+  readonly abort?: NetworkAbortReason
+  /** Apply at most this many times, then the stub expires and the request goes live. Omit for unlimited. */
+  readonly times?: number
+  /** Delay before fulfilling/aborting, in ms, to simulate a slow endpoint. */
+  readonly delayMs?: number
+}
+
 /**
  * Common options for interaction methods. `selector` is a CSS or text selector
  * the tool layer has already resolved (a snapshot `ref` becomes
@@ -453,6 +507,24 @@ export interface TransportSession {
 
   /** Disarm network capture and clear its buffer. Safe to call when not capturing (a no-op). */
   stopNetworkCapture(): Promise<void>
+
+  // --- Network stubbing surface (requires `capabilities.canIntercept`) ---
+  // The MODIFY half of "intercept": a registered stub fulfills or aborts the requests matching its
+  // allowlist. Independent of capture (a stubbed request is still captured). A transport that cannot
+  // intercept rejects these with `NOT_IMPLEMENTED`.
+
+  /**
+   * Register a network stub on the current and future windows. A request matching the stub's allowlist
+   * is fulfilled with its canned response (or aborted). Multiple stubs may be active; the first
+   * registered match wins. Registering does not affect non-matching traffic.
+   */
+  stubNetwork(stub: NetworkStub): Promise<void>
+
+  /**
+   * Remove network stubs and restore live traffic — every stub, or only those whose allowlist includes
+   * `url` (exact match) when given. Idempotent: safe to call when nothing is stubbed.
+   */
+  clearNetworkStubs(url?: string): Promise<void>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

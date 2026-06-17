@@ -372,6 +372,123 @@ describe('network plugin (overflow + multi-session, simulated capture)', () => {
   })
 })
 
+describe('network plugin (stubbing, simulated)', () => {
+  it('registers a fulfill stub on the session transport', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('network_stub', {
+        sessionId,
+        urls: ['/api/save'],
+        status: 503,
+        contentType: 'application/json',
+        body: '{"down":true}',
+      }),
+    ).toMatchObject({ ok: true, stubbed: ['/api/save'] })
+    expect(session.networkStubCalls).toHaveLength(1)
+    expect(session.networkStubCalls[0]).toMatchObject({
+      urls: ['/api/save'],
+      fulfill: { status: 503, contentType: 'application/json', body: '{"down":true}' },
+    })
+  })
+
+  it('registers an abort stub', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('network_stub', {
+        sessionId,
+        urls: ['/api/'],
+        abort: 'failed',
+      }),
+    ).toMatchObject({ ok: true, abort: 'failed' })
+    expect(session.networkStubCalls[0]).toMatchObject({ abort: 'failed' })
+    expect(session.networkStubCalls[0]?.fulfill).toBeUndefined()
+  })
+
+  it('passes through times and delayMs', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('network_stub', {
+      sessionId,
+      urls: ['/api/'],
+      status: 200,
+      times: 2,
+      delayMs: 50,
+    })
+    expect(session.networkStubCalls[0]).toMatchObject({ times: 2, delayMs: 50 })
+  })
+
+  it('rejects invalid stub shapes before they reach the transport', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    // abort + body -> refine -> BAD_ARGUMENT.
+    expect(
+      await server.dispatcher.dispatch('network_stub', {
+        sessionId,
+        urls: ['/api/'],
+        abort: 'failed',
+        body: 'x',
+      }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    // empty urls -> zod min(1) -> BAD_ARGUMENT.
+    expect(
+      await server.dispatcher.dispatch('network_stub', { sessionId, urls: [], status: 200 }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    // invalid status range would make Playwright route.fulfill throw at request time.
+    expect(
+      await server.dispatcher.dispatch('network_stub', { sessionId, urls: ['/api/'], status: 99 }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(
+      await server.dispatcher.dispatch('network_stub', { sessionId, urls: ['/api/'], status: 600 }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    // unknown abort reasons would make Playwright route.abort throw at request time.
+    expect(
+      await server.dispatcher.dispatch('network_stub', {
+        sessionId,
+        urls: ['/api/'],
+        abort: 'offline',
+      }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(session.networkStubCalls).toHaveLength(0)
+  })
+
+  it('rejects stubbing on a transport that cannot intercept', async () => {
+    const session = new FakeSession()
+    const server = await open(session, { capabilities: { ...FULL_CAPS, canIntercept: false } })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('network_stub', { sessionId, urls: ['/api/'], status: 200 }),
+    ).toMatchObject({ ok: false, code: 'network.UNSUPPORTED' })
+  })
+
+  it('unstubs all stubs, or only the named url', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(await server.dispatcher.dispatch('network_unstub', { sessionId })).toMatchObject({
+      ok: true,
+      unstubbed: 'all',
+    })
+    expect(
+      await server.dispatcher.dispatch('network_unstub', { sessionId, url: '/api/a' }),
+    ).toMatchObject({ ok: true, unstubbed: '/api/a' })
+    expect(session.clearNetworkStubsCalls).toEqual([undefined, '/api/a'])
+  })
+
+  it('advertises the bumped package version', async () => {
+    const server = await open(new FakeSession())
+    expect(await server.dispatcher.dispatch('electron_plugins', {})).toMatchObject({
+      ok: true,
+      plugins: [{ name: 'network', version: packageJson.version }],
+    })
+  })
+})
+
 /**
  * A transport that hands out a fresh session on each launch (the shared FakeTransport returns the same
  * session every time), so ONE server can drive several concurrent sessions, each with its own

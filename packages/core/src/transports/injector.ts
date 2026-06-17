@@ -64,6 +64,7 @@ import type {
   NetworkCaptureFilter,
   NetworkEventsOptions,
   NetworkEventsResult,
+  NetworkStub,
   StopOptions,
   StopResult,
   TransportCapabilities,
@@ -328,6 +329,12 @@ class InjectorSession implements TransportSession {
   }
   stopNetworkCapture(): Promise<void> {
     return Promise.reject(notImplemented('stopNetworkCapture'))
+  }
+  stubNetwork(_stub: NetworkStub): Promise<void> {
+    return Promise.reject(notImplemented('stubNetwork'))
+  }
+  clearNetworkStubs(_url?: string): Promise<void> {
+    return Promise.reject(notImplemented('clearNetworkStubs'))
   }
 
   // --- Interaction surface: the main process has no renderer to drive. ---

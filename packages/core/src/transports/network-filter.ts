@@ -1,6 +1,7 @@
 /**
- * The network-capture allowlist matcher — shared by the Playwright transport (record-time filtering)
- * and the in-memory test fake, so the "is this request captured?" rule lives in exactly one place.
+ * The network allowlist matcher — shared by capture (record-time filtering), stubbing
+ * (intercept-time filtering), and the in-memory test fake, so the URL/method rule lives in exactly
+ * one place.
  *
  * Matching is intentionally simple and transport-neutral: a URL matches when it CONTAINS any
  * allowlist substring, and (when a method filter is present) its method is in that list
@@ -10,7 +11,7 @@
  * @module
  */
 
-import type { NetworkCaptureFilter } from './types.js'
+import type { NetworkCaptureFilter, NetworkStub } from './types.js'
 
 /** The minimal shape the matcher inspects — a structural subset of {@link NetworkEvent}. */
 export interface NetworkMatchable {
@@ -38,5 +39,28 @@ export function copyNetworkFilter(filter: NetworkCaptureFilter): NetworkCaptureF
   return {
     urls: [...filter.urls],
     ...(filter.methods !== undefined ? { methods: [...filter.methods] } : {}),
+  }
+}
+
+/** Deep-copy a stub (incl. the nested fulfill headers) so a stored stub is immune to later mutation. */
+export function copyNetworkStub(stub: NetworkStub): NetworkStub {
+  return {
+    urls: [...stub.urls],
+    ...(stub.methods !== undefined ? { methods: [...stub.methods] } : {}),
+    ...(stub.fulfill !== undefined
+      ? {
+          fulfill: {
+            ...(stub.fulfill.status !== undefined ? { status: stub.fulfill.status } : {}),
+            ...(stub.fulfill.headers !== undefined ? { headers: { ...stub.fulfill.headers } } : {}),
+            ...(stub.fulfill.contentType !== undefined
+              ? { contentType: stub.fulfill.contentType }
+              : {}),
+            ...(stub.fulfill.body !== undefined ? { body: stub.fulfill.body } : {}),
+          },
+        }
+      : {}),
+    ...(stub.abort !== undefined ? { abort: stub.abort } : {}),
+    ...(stub.times !== undefined ? { times: stub.times } : {}),
+    ...(stub.delayMs !== undefined ? { delayMs: stub.delayMs } : {}),
   }
 }
