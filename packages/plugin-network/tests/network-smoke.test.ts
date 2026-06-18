@@ -38,6 +38,8 @@ interface NetworkEventLike {
   readonly method: string
   readonly status?: number
   readonly failure?: string
+  readonly responseBody?: string
+  readonly responseBodyBytes?: number
 }
 interface CapturedRead {
   readonly ok: boolean
@@ -136,6 +138,48 @@ describe('network plugin smoke (real Electron)', () => {
       expect(await server.dispatcher.dispatch('network_unstub', { sessionId })).toMatchObject({
         ok: true,
         unstubbed: 'all',
+      })
+      expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
+    },
+    60_000,
+  )
+
+  it.skipIf(!RUN_E2E)(
+    'captures a response body when captureBodies is on (stubbed JSON over the unresolvable URL)',
+    async () => {
+      const server = await createServer({ plugins: [networkPlugin] })
+      closers.push(() => server.close())
+
+      const launched = (await server.dispatcher.dispatch('electron_launch', {
+        main: FIXTURE_MAIN,
+      })) as { ok: boolean; session_id?: string; _meta?: { session_id?: string } }
+      const sessionId = launched.session_id ?? launched._meta?.session_id
+      if (typeof sessionId !== 'string') throw new Error('launch returned no session id')
+
+      // Capture WITH bodies, then stub /api/probe with a JSON 200 body. The captured event should
+      // carry the decoded responseBody — proving the body-capture path end-to-end on real Electron.
+      await server.dispatcher.dispatch('network_capture_start', {
+        sessionId,
+        urls: ['/api/'],
+        captureBodies: true,
+      })
+      await server.dispatcher.dispatch('network_stub', {
+        sessionId,
+        urls: ['/api/probe'],
+        status: 200,
+        contentType: 'application/json',
+        body: '{"stub":true}',
+      })
+
+      const captured = await waitForCapture(server, sessionId, (r) =>
+        r.events.some((e) => e.responseBody !== undefined),
+      )
+      const withBody = captured.events.find((e) => e.responseBody !== undefined)
+      expect(withBody, 'a captured event should carry a response body').toBeDefined()
+      expect(withBody?.responseBody).toContain('"stub":true')
+
+      expect(await server.dispatcher.dispatch('network_unstub', { sessionId })).toMatchObject({
+        ok: true,
       })
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },

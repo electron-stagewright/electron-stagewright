@@ -1,6 +1,6 @@
 # ADR-016: Network capture plugin via a transport capture seam
 
-Status: Accepted (renderer capture + stubbing; CDP-transport capture and response-body capture deferred)
+Status: Accepted (renderer capture + stubbing + response-body capture; CDP-transport capture deferred)
 
 ## Context
 
@@ -134,3 +134,30 @@ The deferred "modify half" named above now ships. `TransportSession` gains `stub
 - **Stubbing is a MODIFY capability** — it alters what the app receives. It carries the same gating as
   capture (allowlist + `canIntercept` + operator-loaded plugin); the security model gains a row.
 - CDP-transport coverage and response-body capture remain deferred.
+
+## Status Update — 2026-06-17: Response-body capture (the deferred opt-in)
+
+The body opt-in deferred in _Alternatives_ now ships. Capture still records headers + metadata by
+default; `captureBodies` opts into bodies, bounded by the same allowlist + `canIntercept` gate (and
+likewise NOT `--allow-eval` gated).
+
+- `NetworkCaptureFilter` gains `captureBodies` (`true` records decoded body text; `'size'` records only
+  the byte length), `maxBodyBytes` (per-body exposure cap), and `bodyContentTypes` (override the
+  text-ish content-type allowlist). `NetworkEvent` gains `requestBody` / `responseBody` plus
+  `*BodyBytes` (the true, pre-truncation byte length) and `*BodyTruncated`. The Playwright transport
+  reads the response via `Response.body()` and the request via `Request.postData()`, gated by a
+  content-type allowlist (default json / text / xml / form-urlencoded / javascript) so binary payloads
+  are never decoded as text. The body read is a second `await` in the finished-request path, so the
+  armed-filter re-check that drops a ghost event after `response()` is repeated after `body()`; a
+  body-read failure records the event WITHOUT a body rather than dropping it.
+- **Bounds.** Bodies are captured only when explicitly opted in, only for text-ish content types, and
+  capped to `maxBodyBytes` (transport default 64 KiB; the plugin enforces a 1 MiB hard ceiling). An
+  oversize body is truncated with an inline `…[+N bytes truncated]` marker while `*BodyBytes` still
+  reports the true size. `captureBodies: 'size'` and the plugin's `redactBodies` (replace content with
+  `[redacted: N bytes]`) let an agent assert payload size/presence without the content reaching it.
+- **Privacy residual.** Unlike named headers, body **content** is free-form and is NOT value-redacted —
+  the double opt-in (URL allowlist + explicit `captureBodies`), the byte cap, and the content-type gate
+  are the bound, with `'size'` / `redactBodies` as the drop-the-content levers. The cap limits what
+  reaches the agent, not what the transport buffers (`Response.body()` reads the whole response). A
+  stubbed request's body is captured too, so capture and stubbing still compose.
+- CDP-transport coverage remains the one deferred piece.

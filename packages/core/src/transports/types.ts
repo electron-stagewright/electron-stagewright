@@ -295,13 +295,38 @@ export interface NetworkCaptureFilter {
    * every method whose URL matches is captured.
    */
   readonly methods?: readonly string[]
+  /**
+   * Opt into capturing request/response bodies (default off — headers + metadata only). `true` records
+   * the decoded body text, capped by {@link NetworkCaptureFilter.maxBodyBytes}; `'size'` records ONLY
+   * the byte length without the body content, so an agent can assert payload
+   * size/presence while the body's secrets never reach it. Bodies are captured only for text-ish
+   * content types (see {@link NetworkCaptureFilter.bodyContentTypes}). Body content is NOT
+   * value-redacted by the transport — the explicit opt-in, the URL allowlist, the size cap, and the
+   * content-type gate are the bound.
+   */
+  readonly captureBodies?: boolean | 'size'
+  /**
+   * Maximum body BYTES exposed per request when {@link NetworkCaptureFilter.captureBodies} records
+   * text (a transport default applies when omitted). A larger body is truncated to this many UTF-8
+   * bytes and the event's `*BodyTruncated` flag is set; the true byte length is still reported in
+   * `*BodyBytes`. This caps what reaches the agent, not what the underlying transport buffers.
+   */
+  readonly maxBodyBytes?: number
+  /**
+   * Content-type substrings whose bodies are eligible for capture, overriding the transport's text-ish
+   * default (json / text / xml / form-urlencoded / javascript). A body is captured only when its
+   * `content-type` header CONTAINS one of these (case-insensitive) — the guard that keeps binary
+   * payloads (images, archives) from being decoded as text. An explicit empty list captures no body.
+   */
+  readonly bodyContentTypes?: readonly string[]
 }
 
 /**
  * One captured network request/response, recorded at terminal state (the request finished or failed),
  * in the per-session ring buffer read by {@link TransportSession.networkEvents}. Headers and bodies
- * can carry secrets; bodies are NOT captured in this increment (headers + metadata only), and the
- * capturing plugin redacts named headers before the event reaches the agent. All fields are
+ * can carry secrets; bodies are captured only when {@link NetworkCaptureFilter.captureBodies} opts in
+ * (off by default — headers + metadata only), and the capturing plugin redacts named headers (and,
+ * with `redactBodies`, body content) before the event reaches the agent. All fields are
  * JSON-serialisable (no `Headers` objects/`Buffer` — plain records/strings/numbers).
  */
 export interface NetworkEvent {
@@ -317,8 +342,28 @@ export interface NetworkEvent {
   readonly ok?: boolean
   /** Request headers as a plain record; redactable by the capturing plugin. */
   readonly requestHeaders?: Record<string, string>
+  /**
+   * Decoded request body (e.g. a POST payload), captured only when {@link NetworkCaptureFilter.captureBodies}
+   * is `true` and the request's content-type is text-ish; absent in `'size'` mode and when no body / a
+   * non-text content-type. Capped to {@link NetworkCaptureFilter.maxBodyBytes}.
+   */
+  readonly requestBody?: string
+  /** True (full) byte length of the request body, even when {@link NetworkEvent.requestBody} is truncated or size-only. */
+  readonly requestBodyBytes?: number
+  /** True when {@link NetworkEvent.requestBody} was cut to the byte cap (an inline marker tails the text). */
+  readonly requestBodyTruncated?: boolean
   /** Response headers as a plain record; redactable by the capturing plugin. Absent on failure. */
   readonly responseHeaders?: Record<string, string>
+  /**
+   * Decoded response body, captured only when {@link NetworkCaptureFilter.captureBodies} is `true` and
+   * the response content-type is text-ish; absent in `'size'` mode, on failure, and for a non-text
+   * content-type. Capped to {@link NetworkCaptureFilter.maxBodyBytes}.
+   */
+  readonly responseBody?: string
+  /** True (full) byte length of the response body, even when {@link NetworkEvent.responseBody} is truncated or size-only. */
+  readonly responseBodyBytes?: number
+  /** True when {@link NetworkEvent.responseBody} was cut to the byte cap (an inline marker tails the text). */
+  readonly responseBodyTruncated?: boolean
   /** Failure text (e.g. `net::ERR_ABORTED`) when the request failed; absent on success. */
   readonly failure?: string
   /** Total request duration in ms, when the transport's timing is available. */

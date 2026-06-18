@@ -104,6 +104,8 @@ export interface PWRequest {
   resourceType(): string
   /** Synchronous header map (provisional headers); enough for capture metadata. */
   headers(): Record<string, string>
+  /** The request body as a string (e.g. a POST payload), or `null` when there is none. Synchronous. */
+  postData(): string | null
   /** Resource timing; `responseEnd` is the total duration in ms (or `-1` when unavailable). */
   timing(): { startTime: number; responseEnd: number }
   /** `{ errorText }` when the request failed, else `null`. */
@@ -116,6 +118,8 @@ export interface PWRequest {
 export interface PWResponse {
   status(): number
   headers(): Record<string, string>
+  /** The response body bytes; read (and capped) only when body capture is armed. */
+  body(): Promise<Buffer>
 }
 
 /** The slice of Playwright's `ConsoleMessage` we read into a `ConsoleEntry`. */

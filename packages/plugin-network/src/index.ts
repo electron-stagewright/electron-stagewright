@@ -12,10 +12,11 @@
  * there is no capture-/stub-everything. Tools (namespaced by the loader): `network_capture_start`,
  * `network_captured`, `network_capture_stop`, `network_stub`, `network_unstub`.
  *
- * SECURITY: captured headers can carry secrets (auth, cookies, tokens) — capture is opt-in, bodies are
- * NOT captured (headers + metadata only), and `redactSecureDefaults` redacts `authorization` /
- * `cookie` / `set-cookie` by default; `redactHeaders` adds more. Stubbing MODIFIES what the app
- * receives (fulfill/abort) and carries the same allowlist + capability gating.
+ * SECURITY: captured headers can carry secrets (auth, cookies, tokens) — capture is opt-in,
+ * `redactSecureDefaults` redacts `authorization` / `cookie` / `set-cookie` by default (`redactHeaders`
+ * adds more), and request/response BODIES are NOT captured unless `captureBodies` opts in (then bounded
+ * by a byte cap + a text-ish content-type gate, and droppable to size-only or `redactBodies`). Stubbing
+ * MODIFIES what the app receives (fulfill/abort) and carries the same allowlist + capability gating.
  *
  * @module
  */
@@ -37,10 +38,13 @@ import { z } from 'zod'
 /** Plugin namespace — must match {@link networkPlugin.name}; the loader prefixes its tools with it. */
 const NETWORK_NAMESPACE = 'network'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const NETWORK_PLUGIN_VERSION = '0.2.0'
+const NETWORK_PLUGIN_VERSION = '0.3.0'
 
 /** Header names redacted by default when `redactSecureDefaults` is on (lower-cased). */
 const SECURE_DEFAULT_REDACT = ['authorization', 'cookie', 'set-cookie'] as const
+
+/** Hard ceiling for a per-call `maxBodyBytes` (1 MiB) — an agent cannot request an unbounded body. */
+const MAX_BODY_BYTES_CEILING = 1024 * 1024
 const NETWORK_ABORT_REASONS = [
   'aborted',
   'accessdenied',
@@ -71,13 +75,23 @@ const configSchema = z.object({
     .describe(
       'Redact authorization, cookie, and set-cookie headers by default; set false to capture them verbatim.',
     ),
+  redactBodies: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Replace captured request/response body content with "[redacted: N bytes]" (keeps the byte count, drops the content). Off by default.',
+    ),
 })
 
 /** Resolved plugin configuration — the validated output of {@link configSchema}. */
 type NetworkConfig = z.infer<typeof configSchema>
 
 /** Defaults used until `setup` runs (mirror the schema defaults). */
-const DEFAULT_CONFIG: NetworkConfig = { redactHeaders: [], redactSecureDefaults: true }
+const DEFAULT_CONFIG: NetworkConfig = {
+  redactHeaders: [],
+  redactSecureDefaults: true,
+  redactBodies: false,
+}
 
 /**
  * One session's in-flight capture — the allowlist {@link captureStartTool} armed for it. Stored in
@@ -88,6 +102,9 @@ const DEFAULT_CONFIG: NetworkConfig = { redactHeaders: [], redactSecureDefaults:
 interface SessionCapture {
   readonly urls: readonly string[]
   readonly methods?: readonly string[]
+  readonly captureBodies?: boolean | 'size'
+  readonly maxBodyBytes?: number
+  readonly bodyContentTypes?: readonly string[]
 }
 
 // Module-level state. `captures` holds one entry per capturing session, keyed by the transport's
@@ -124,12 +141,33 @@ function redactHeaderMap(
   return out
 }
 
-/** Redact request/response headers on every event before it reaches the agent. */
+/**
+ * Replace any captured body content with a size-only placeholder, keeping the reported byte count.
+ * Body content can carry secrets and — unlike headers — is free-form, so this is an all-or-nothing
+ * drop rather than a named-field redaction.
+ */
+function redactBodyFields(event: NetworkEvent): Pick<NetworkEvent, 'requestBody' | 'responseBody'> {
+  const out: { requestBody?: string; responseBody?: string } = {}
+  if (event.requestBody !== undefined) {
+    out.requestBody = `[redacted: ${event.requestBodyBytes ?? Buffer.byteLength(event.requestBody)} bytes]`
+  }
+  if (event.responseBody !== undefined) {
+    out.responseBody = `[redacted: ${event.responseBodyBytes ?? Buffer.byteLength(event.responseBody)} bytes]`
+  }
+  return out
+}
+
+/**
+ * Redact request/response headers (and, when `redactBodies`, body content) on every event before it
+ * reaches the agent. Body content is NOT value-redacted unless `redactBodies` is set — the capture
+ * opt-in, the URL allowlist, the byte cap, and the content-type gate are the bound otherwise.
+ */
 export function redactEvents(
   events: readonly NetworkEvent[],
   names: ReadonlySet<string>,
+  redactBodies = false,
 ): NetworkEvent[] {
-  if (names.size === 0) return [...events]
+  if (names.size === 0 && !redactBodies) return [...events]
   return events.map((event) => {
     const { requestHeaders, responseHeaders } = event
     return {
@@ -140,6 +178,7 @@ export function redactEvents(
       ...(responseHeaders !== undefined
         ? { responseHeaders: redactHeaderMap(responseHeaders, names) }
         : {}),
+      ...(redactBodies ? redactBodyFields(event) : {}),
     }
   })
 }
@@ -202,22 +241,65 @@ const captureStartTool: AnyToolDefinition = defineTool({
   description: [
     'Begin recording the renderer requests whose URL contains any entry in `urls` (an explicit',
     'allowlist — only matching requests are captured; there is no capture-everything). Optionally',
-    'restrict to `methods` (e.g. ["GET","POST"], case-insensitive). Captures metadata + headers only',
-    '(no bodies). Returns: { ok, capturing, urls, methods? }. Errors: network.UNSUPPORTED (transport',
-    'cannot capture), network.ALREADY_CAPTURING (call network_capture_stop first), NOT_RUNNING (no',
-    'session), BAD_ARGUMENT (empty urls).',
+    'restrict to `methods` (e.g. ["GET","POST"], case-insensitive). Captures metadata + headers only by',
+    'default; set `captureBodies` (true, or "size" for byte-length only) to also capture request/response',
+    'bodies (text-ish content types only, capped by `maxBodyBytes`). Returns: { ok, capturing, urls,',
+    'methods? }. Errors: network.UNSUPPORTED (transport cannot capture), network.ALREADY_CAPTURING (call',
+    'network_capture_stop first), NOT_RUNNING (no session), BAD_ARGUMENT (empty urls, or a body knob',
+    'without captureBodies).',
   ].join(' '),
-  inputSchema: z.object({
-    urls: z
-      .array(z.string().min(1))
-      .min(1)
-      .describe('Allowlist of URL substrings to capture (required, at least one).'),
-    methods: z
-      .array(z.string().min(1))
-      .optional()
-      .describe('Optional HTTP-method allowlist (case-insensitive); omit to capture every method.'),
-    sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-  }),
+  inputSchema: z
+    .object({
+      urls: z
+        .array(z.string().min(1))
+        .min(1)
+        .describe('Allowlist of URL substrings to capture (required, at least one).'),
+      methods: z
+        .array(z.string().min(1))
+        .optional()
+        .describe(
+          'Optional HTTP-method allowlist (case-insensitive); omit to capture every method.',
+        ),
+      captureBodies: z
+        .union([z.boolean(), z.literal('size')])
+        .optional()
+        .describe(
+          'Capture request/response bodies (default off — headers/metadata only). true records the ' +
+            'decoded body text (capped by maxBodyBytes); "size" records only the byte length, not the ' +
+            'content. Bodies are captured only for text-ish content types (see bodyContentTypes).',
+        ),
+      maxBodyBytes: z
+        .number()
+        .int()
+        .positive()
+        .max(MAX_BODY_BYTES_CEILING)
+        .optional()
+        .describe(
+          'Max body BYTES exposed per request when captureBodies is on (default 65536, hard cap ' +
+            '1048576). A larger body is truncated; its true byte length is still reported.',
+        ),
+      bodyContentTypes: z
+        .array(z.string().min(1))
+        .min(1)
+        .optional()
+        .describe(
+          'Override the content-type substrings eligible for body capture (default ' +
+            'json/text/xml/form/javascript); a body is captured only when its content-type contains one.',
+        ),
+      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+    })
+    // The body knobs are inert without captureBodies, so passing them alone is a silent no-op of a
+    // privacy-relevant control — reject it (fail loud per the agent-native UX principles) rather than
+    // capture nothing. The refine runs at dispatch (-> BAD_ARGUMENT); it is dropped from the generated
+    // JSON-Schema manifest, like the stub tool's abort/fulfill refine.
+    .refine(
+      (v) =>
+        v.captureBodies !== undefined ||
+        (v.maxBodyBytes === undefined && v.bodyContentTypes === undefined),
+      {
+        message: 'maxBodyBytes and bodyContentTypes only apply when captureBodies is set.',
+      },
+    ),
   operationType: 'command',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
@@ -235,10 +317,20 @@ const captureStartTool: AnyToolDefinition = defineTool({
     const filter = {
       urls: args.urls,
       ...(args.methods !== undefined ? { methods: args.methods } : {}),
+      ...(args.captureBodies !== undefined ? { captureBodies: args.captureBodies } : {}),
+      ...(args.maxBodyBytes !== undefined ? { maxBodyBytes: args.maxBodyBytes } : {}),
+      ...(args.bodyContentTypes !== undefined ? { bodyContentTypes: args.bodyContentTypes } : {}),
     }
     await guard.session.startNetworkCapture(filter)
     captures.set(guard.sessionId, filter)
-    return makeSuccess({ capturing: true, ...filter }, meta)
+    return makeSuccess(
+      {
+        capturing: true,
+        urls: filter.urls,
+        ...(filter.methods !== undefined ? { methods: filter.methods } : {}),
+      },
+      meta,
+    )
   },
 })
 
@@ -247,10 +339,11 @@ const capturedTool: AnyToolDefinition = defineTool({
   title: 'Read captured network requests',
   description: [
     'Return the network events captured since network_capture_start. Each event is { method, url,',
-    'resourceType?, status?, ok?, requestHeaders?, responseHeaders?, failure?, durationMs?,',
-    'timestamp, windowId? }; configured redact headers are stripped. Pass clear:true to flush the',
-    'buffer after reading. Returns: { ok, count, events, overflowed }. Errors: network.NOT_CAPTURING (call',
-    'network_capture_start first), network.UNSUPPORTED, NOT_RUNNING.',
+    'resourceType?, status?, ok?, requestHeaders?, responseHeaders?, failure?, durationMs?, timestamp,',
+    'windowId? }, plus requestBody?/responseBody? (+ *BodyBytes?/*BodyTruncated?) when captureBodies was',
+    'set; configured redact headers are stripped (and bodies when redactBodies is on). Pass clear:true to',
+    'flush the buffer after reading. Returns: { ok, count, events, overflowed }. Errors:',
+    'network.NOT_CAPTURING (call network_capture_start first), network.UNSUPPORTED, NOT_RUNNING.',
   ].join(' '),
   inputSchema: z.object({
     clear: z.boolean().optional().describe('Flush the captured buffer after reading it.'),
@@ -265,7 +358,7 @@ const capturedTool: AnyToolDefinition = defineTool({
       return notCapturing(guard.sessionId, ctx.sessions, meta, 'call network_capture_start first.')
     }
     const read = await guard.session.networkEvents(args.clear === true ? { clear: true } : {})
-    const events = redactEvents(read.events, redactNameSet())
+    const events = redactEvents(read.events, redactNameSet(), config.redactBodies)
     return makeSuccess({ count: events.length, events, overflowed: read.overflowed }, meta)
   },
 })
@@ -428,7 +521,7 @@ const unstubTool: AnyToolDefinition = defineTool({
 /**
  * The network plugin. Load with `--plugin @electron-stagewright/plugin-network` (NO eval flag — it
  * does not run app JS) or `createServer({ plugins: [networkPlugin] })`. Configure via
- * `pluginConfigs.network` (`{ redactHeaders?, redactSecureDefaults? }`).
+ * `pluginConfigs.network` (`{ redactHeaders?, redactSecureDefaults?, redactBodies? }`).
  */
 export const networkPlugin: StagewrightPlugin = {
   name: NETWORK_NAMESPACE,

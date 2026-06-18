@@ -489,6 +489,144 @@ describe('network plugin (stubbing, simulated)', () => {
   })
 })
 
+describe('network plugin (body capture, simulated)', () => {
+  const bodyEvent = event({
+    method: 'POST',
+    url: 'https://app.test/api/login',
+    status: 200,
+    requestBody: '{"password":"hunter2"}',
+    requestBodyBytes: 22,
+    responseBody: '{"token":"abc"}',
+    responseBodyBytes: 15,
+  })
+
+  it('relays the body-capture knobs into the transport filter', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('network_capture_start', {
+      sessionId,
+      urls: ['/api/'],
+      captureBodies: 'size',
+      maxBodyBytes: 2048,
+      bodyContentTypes: ['application/json'],
+    })
+    expect(session.networkCaptureFilters[0]).toMatchObject({
+      urls: ['/api/'],
+      captureBodies: 'size',
+      maxBodyBytes: 2048,
+      bodyContentTypes: ['application/json'],
+    })
+  })
+
+  it('rejects a maxBodyBytes above the hard ceiling with BAD_ARGUMENT', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('network_capture_start', {
+        sessionId,
+        urls: ['/api/'],
+        captureBodies: true,
+        maxBodyBytes: 1024 * 1024 + 1,
+      }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(session.networkCaptureFilters).toHaveLength(0)
+  })
+
+  it('rejects an empty bodyContentTypes list (would silently capture nothing)', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('network_capture_start', {
+        sessionId,
+        urls: ['/api/'],
+        captureBodies: true,
+        bodyContentTypes: [],
+      }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(session.networkCaptureFilters).toHaveLength(0)
+  })
+
+  it('rejects body knobs passed without captureBodies (a silent no-op otherwise)', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('network_capture_start', {
+        sessionId,
+        urls: ['/api/'],
+        maxBodyBytes: 1024,
+      }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(
+      await server.dispatcher.dispatch('network_capture_start', {
+        sessionId,
+        urls: ['/api/'],
+        bodyContentTypes: ['application/json'],
+      }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(session.networkCaptureFilters).toHaveLength(0)
+  })
+
+  it('passes a captured body through to the agent', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('network_capture_start', {
+      sessionId,
+      urls: ['/api/'],
+      captureBodies: true,
+    })
+    session.emitNetwork(
+      event({
+        method: 'GET',
+        url: 'https://app.test/api/me',
+        status: 200,
+        responseBody: '{"id":7}',
+        responseBodyBytes: 8,
+      }),
+    )
+    expect(await server.dispatcher.dispatch('network_captured', { sessionId })).toMatchObject({
+      ok: true,
+      events: [{ responseBody: '{"id":7}', responseBodyBytes: 8 }],
+    })
+  })
+
+  it('passes body content through verbatim by default (bodies are not value-redacted)', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('network_capture_start', {
+      sessionId,
+      urls: ['/api/'],
+      captureBodies: true,
+    })
+    session.emitNetwork(bodyEvent)
+    expect(await server.dispatcher.dispatch('network_captured', { sessionId })).toMatchObject({
+      ok: true,
+      events: [{ requestBody: '{"password":"hunter2"}', responseBody: '{"token":"abc"}' }],
+    })
+  })
+
+  it('replaces body content with a size placeholder when redactBodies is on', async () => {
+    const session = new FakeSession()
+    const server = await open(session, { networkConfig: { redactBodies: true } })
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('network_capture_start', {
+      sessionId,
+      urls: ['/api/'],
+      captureBodies: true,
+    })
+    session.emitNetwork(bodyEvent)
+    expect(await server.dispatcher.dispatch('network_captured', { sessionId })).toMatchObject({
+      ok: true,
+      events: [{ requestBody: '[redacted: 22 bytes]', responseBody: '[redacted: 15 bytes]' }],
+    })
+  })
+})
+
 /**
  * A transport that hands out a fresh session on each launch (the shared FakeTransport returns the same
  * session every time), so ONE server can drive several concurrent sessions, each with its own

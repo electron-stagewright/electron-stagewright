@@ -38,6 +38,12 @@ import type {
   PWRoute,
 } from '../src/transports/playwright-electron-api.js'
 import { buildPlaywrightLaunchOptions } from '../src/transports/playwright-electron.js'
+import {
+  bodyContentTypeAllowed,
+  captureBodyField,
+  DEFAULT_BODY_CONTENT_TYPES,
+  headerValue,
+} from '../src/transports/network-filter.js'
 
 const FAKE_SESSION: TransportSession = {
   id: 'fake-session',
@@ -255,8 +261,14 @@ function createFakePage(
       method?: string
       resourceType?: string
       requestHeaders?: Record<string, string>
+      postData?: string
       status?: number
       responseHeaders?: Record<string, string>
+      responseBody?: string
+      /** When set, the fake `response.body()` rejects (simulates an already-consumed / absent body). */
+      responseBodyThrows?: boolean
+      /** Awaited inside `response.body()` — lets a test interleave a stop into the body await. */
+      onBodyRead?: () => void | Promise<void>
       durationMs?: number
     }): void {
       const request: PWRequest = {
@@ -264,12 +276,21 @@ function createFakePage(
         method: () => spec.method ?? 'GET',
         resourceType: () => spec.resourceType ?? 'fetch',
         headers: () => spec.requestHeaders ?? {},
+        postData: () => spec.postData ?? null,
         timing: () => ({ startTime: 0, responseEnd: spec.durationMs ?? -1 }),
         failure: () => null,
         response: async () =>
           spec.status === undefined
             ? null
-            : { status: () => spec.status as number, headers: () => spec.responseHeaders ?? {} },
+            : {
+                status: () => spec.status as number,
+                headers: () => spec.responseHeaders ?? {},
+                body: async () => {
+                  if (spec.onBodyRead !== undefined) await spec.onBodyRead()
+                  if (spec.responseBodyThrows === true) throw new Error('body unavailable')
+                  return Buffer.from(spec.responseBody ?? '', 'utf8')
+                },
+              },
       }
       for (const handler of requestFinishedHandlers) handler(request)
     },
@@ -278,6 +299,7 @@ function createFakePage(
       url: string
       method?: string
       requestHeaders?: Record<string, string>
+      postData?: string
       errorText?: string
     }): void {
       const request: PWRequest = {
@@ -285,6 +307,7 @@ function createFakePage(
         method: () => spec.method ?? 'GET',
         resourceType: () => 'fetch',
         headers: () => spec.requestHeaders ?? {},
+        postData: () => spec.postData ?? null,
         timing: () => ({ startTime: 0, responseEnd: -1 }),
         failure: () => ({ errorText: spec.errorText ?? 'net::ERR_FAILED' }),
         response: async () => null,
@@ -1220,6 +1243,179 @@ describe('PlaywrightSession network capture', () => {
     await flush()
     expect((await session.networkEvents()).events).toHaveLength(0)
   })
+
+  it('captures request and response bodies when captureBodies is on (text content type)', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'], captureBodies: true })
+    page.emitRequestFinished({
+      method: 'POST',
+      url: 'https://app.test/api/save',
+      status: 200,
+      requestHeaders: { 'content-type': 'application/json' },
+      postData: '{"name":"ada"}',
+      responseHeaders: { 'content-type': 'application/json; charset=utf-8' },
+      responseBody: '{"ok":true}',
+    })
+    await flush()
+    const [event] = (await session.networkEvents()).events
+    expect(event).toMatchObject({
+      requestBody: '{"name":"ada"}',
+      requestBodyBytes: 14,
+      responseBody: '{"ok":true}',
+      responseBodyBytes: 11,
+    })
+    expect(event?.requestBodyTruncated).toBeUndefined()
+    expect(event?.responseBodyTruncated).toBeUndefined()
+    // invariant A1: the body fields round-trip through JSON (string/number, no Buffer leak).
+    expect(JSON.parse(JSON.stringify(event))).toEqual(event)
+  })
+
+  it('records only the byte length in size-only mode (no body content)', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'], captureBodies: 'size' })
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/items',
+      status: 200,
+      responseHeaders: { 'content-type': 'application/json' },
+      responseBody: '[1,2,3]',
+    })
+    await flush()
+    const [event] = (await session.networkEvents()).events
+    expect(event?.responseBodyBytes).toBe(7)
+    expect(event?.responseBody).toBeUndefined()
+    expect(event?.responseBodyTruncated).toBeUndefined()
+  })
+
+  it('truncates an oversize body to maxBodyBytes and reports the true size', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'], captureBodies: true, maxBodyBytes: 4 })
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/big',
+      status: 200,
+      responseHeaders: { 'content-type': 'text/plain' },
+      responseBody: 'abcdefgh',
+    })
+    await flush()
+    const [event] = (await session.networkEvents()).events
+    expect(event?.responseBodyBytes).toBe(8)
+    expect(event?.responseBodyTruncated).toBe(true)
+    expect(event?.responseBody).toBe('abcd…[+4 bytes truncated]')
+  })
+
+  it('skips the body for a non-text content type', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'], captureBodies: true })
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/logo',
+      status: 200,
+      responseHeaders: { 'content-type': 'image/png' },
+      responseBody: 'PNGDATA',
+    })
+    await flush()
+    const [event] = (await session.networkEvents()).events
+    expect(event?.responseBody).toBeUndefined()
+    expect(event?.responseBodyBytes).toBeUndefined()
+  })
+
+  it('captures no body when captureBodies is not set', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'] })
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/x',
+      status: 200,
+      responseHeaders: { 'content-type': 'application/json' },
+      responseBody: '{"a":1}',
+    })
+    await flush()
+    const [event] = (await session.networkEvents()).events
+    expect(event?.responseBody).toBeUndefined()
+    expect(event?.responseBodyBytes).toBeUndefined()
+  })
+
+  it('records the event without a body when the body read throws', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'], captureBodies: true })
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/x',
+      status: 200,
+      responseHeaders: { 'content-type': 'application/json' },
+      responseBodyThrows: true,
+    })
+    await flush()
+    const { events } = await session.networkEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ url: 'https://app.test/api/x', status: 200 })
+    expect(events[0]?.responseBody).toBeUndefined()
+  })
+
+  it('drops an event whose body read finishes after stop (no ghost event)', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'], captureBodies: true })
+    // The fake awaits onBodyRead INSIDE response.body(); stopping there exercises the post-body-await
+    // filter re-check, so the resolved event never lands in the cleared buffer.
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/inflight',
+      status: 200,
+      responseHeaders: { 'content-type': 'application/json' },
+      responseBody: '{"a":1}',
+      onBodyRead: () => session.stopNetworkCapture(),
+    })
+    await flush()
+    expect((await session.networkEvents()).events).toHaveLength(0)
+  })
+
+  it('honours a bodyContentTypes override', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({
+      urls: ['/api/'],
+      captureBodies: true,
+      bodyContentTypes: ['application/custom'],
+    })
+    // The default text-ish types are now excluded; only the override matches.
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/json',
+      status: 200,
+      responseHeaders: { 'content-type': 'application/json' },
+      responseBody: '{"a":1}',
+    })
+    page.emitRequestFinished({
+      method: 'GET',
+      url: 'https://app.test/api/custom',
+      status: 200,
+      responseHeaders: { 'content-type': 'application/custom' },
+      responseBody: 'CUSTOM',
+    })
+    await flush()
+    const events = (await session.networkEvents()).events
+    expect(events.find((e) => e.url.endsWith('/json'))?.responseBody).toBeUndefined()
+    expect(events.find((e) => e.url.endsWith('/custom'))?.responseBody).toBe('CUSTOM')
+  })
+
+  it('captures the request body on a failed request', async () => {
+    const { page, session } = await launchWithPage()
+    await session.startNetworkCapture({ urls: ['/api/'], captureBodies: true })
+    page.emitRequestFailed({
+      method: 'POST',
+      url: 'https://app.test/api/save',
+      requestHeaders: { 'content-type': 'application/json' },
+      postData: '{"x":1}',
+      errorText: 'net::ERR_ABORTED',
+    })
+    await flush()
+    const [event] = (await session.networkEvents()).events
+    expect(event).toMatchObject({
+      failure: 'net::ERR_ABORTED',
+      requestBody: '{"x":1}',
+      requestBodyBytes: 7,
+    })
+  })
 })
 
 describe('PlaywrightSession network stubbing', () => {
@@ -1597,5 +1793,55 @@ describe('PlaywrightSession window recovery (activePage)', () => {
     app.setPages([])
 
     await expect(session.click('#go')).rejects.toMatchObject({ code: 'REF_NOT_FOUND' })
+  })
+})
+
+describe('network body helpers', () => {
+  it('captureBodyField: returns the full body under the cap, no truncation', () => {
+    const result = captureBodyField(Buffer.from('hello', 'utf8'), true, 64)
+    expect(result).toEqual({ body: 'hello', bytes: 5, truncated: false })
+  })
+
+  it('captureBodyField: an exact-cap body is not truncated', () => {
+    const result = captureBodyField(Buffer.from('abcd', 'utf8'), true, 4)
+    expect(result).toEqual({ body: 'abcd', bytes: 4, truncated: false })
+  })
+
+  it('captureBodyField: truncates by BYTES and appends the dropped-byte marker', () => {
+    const result = captureBodyField(Buffer.from('abcdefgh', 'utf8'), true, 4)
+    expect(result).toEqual({ body: 'abcd…[+4 bytes truncated]', bytes: 8, truncated: true })
+  })
+
+  it('captureBodyField: size mode reports byte length only (no text)', () => {
+    // "café" is 5 bytes (é is 2) — the byte count is honest even for multibyte content.
+    const result = captureBodyField(Buffer.from('café', 'utf8'), 'size', 4)
+    expect(result).toEqual({ bytes: 5, truncated: false })
+    expect(result.body).toBeUndefined()
+  })
+
+  it('bodyContentTypeAllowed: matches text-ish types and rejects binary / absent', () => {
+    const allow = ['application/json', 'text/', 'xml']
+    expect(bodyContentTypeAllowed('application/json; charset=utf-8', allow)).toBe(true)
+    expect(bodyContentTypeAllowed('TEXT/HTML', allow)).toBe(true)
+    expect(bodyContentTypeAllowed('image/png', allow)).toBe(false)
+    expect(bodyContentTypeAllowed(undefined, allow)).toBe(false)
+    expect(bodyContentTypeAllowed('application/json', [])).toBe(false)
+  })
+
+  it('headerValue: case-insensitive lookup', () => {
+    expect(headerValue({ 'Content-Type': 'text/plain' }, 'content-type')).toBe('text/plain')
+    expect(headerValue({ 'content-type': 'application/json' }, 'Content-Type')).toBe(
+      'application/json',
+    )
+    expect(headerValue({ accept: '*/*' }, 'content-type')).toBeUndefined()
+  })
+
+  it('DEFAULT_BODY_CONTENT_TYPES: captures vendor/problem JSON media types', () => {
+    expect(bodyContentTypeAllowed('application/problem+json', DEFAULT_BODY_CONTENT_TYPES)).toBe(
+      true,
+    )
+    expect(bodyContentTypeAllowed('application/vnd.api+json', DEFAULT_BODY_CONTENT_TYPES)).toBe(
+      true,
+    )
   })
 })

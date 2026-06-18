@@ -160,7 +160,11 @@ export class FakeSession implements TransportSession {
     return result
   }
 
+  /** Every filter passed to `startNetworkCapture`, so a tool test can assert the relayed knobs. */
+  readonly networkCaptureFilters: NetworkCaptureFilter[] = []
+
   async startNetworkCapture(filter: NetworkCaptureFilter): Promise<void> {
+    this.networkCaptureFilters.push(filter)
     this.#networkCapturing = true
     this.#networkFilter = filter
     this.#networkBuffer.length = 0

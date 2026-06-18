@@ -37,10 +37,20 @@ import type {
   PWModule,
   PWPage,
   PWRequest,
+  PWResponse,
   PWRoute,
 } from './playwright-electron-api.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
-import { copyNetworkFilter, copyNetworkStub, matchesNetworkFilter } from './network-filter.js'
+import {
+  bodyContentTypeAllowed,
+  captureBodyField,
+  copyNetworkFilter,
+  copyNetworkStub,
+  DEFAULT_BODY_CONTENT_TYPES,
+  DEFAULT_MAX_BODY_BYTES,
+  headerValue,
+  matchesNetworkFilter,
+} from './network-filter.js'
 import {
   EDITABLE_SIGNATURE_BODY,
   TYPE_EFFECT_SETTLE_MS,
@@ -124,6 +134,79 @@ function safeDurationMs(request: PWRequest): number | undefined {
     return responseEnd >= 0 ? responseEnd : undefined
   } catch {
     return undefined
+  }
+}
+
+/** The resolved body-capture knobs for an armed filter, or `null` when bodies are not being captured. */
+interface BodyCapturePlan {
+  readonly mode: boolean | 'size'
+  readonly maxBytes: number
+  readonly contentTypes: readonly string[]
+}
+
+/** Resolve a filter's body-capture plan (applying the transport defaults), or null when bodies are off. */
+function bodyCapturePlan(filter: NetworkCaptureFilter): BodyCapturePlan | null {
+  const mode = filter.captureBodies
+  if (mode === undefined || mode === false) return null
+  return {
+    mode,
+    maxBytes: filter.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+    contentTypes: filter.bodyContentTypes ?? DEFAULT_BODY_CONTENT_TYPES,
+  }
+}
+
+/**
+ * Capture the request body (synchronously, from `postData()`) into the event's `requestBody*` fields,
+ * gated by the request's content-type. Returns an empty object when there is no body, the content-type
+ * is not text-ish, or `postData()` throws — body capture never blocks recording the event.
+ */
+function requestBodyFields(
+  request: PWRequest,
+  requestHeaders: Record<string, string>,
+  plan: BodyCapturePlan,
+): Pick<NetworkEvent, 'requestBody' | 'requestBodyBytes' | 'requestBodyTruncated'> {
+  let postData: string | null
+  try {
+    postData = request.postData()
+  } catch {
+    return {}
+  }
+  if (postData === null || postData === '') return {}
+  if (!bodyContentTypeAllowed(headerValue(requestHeaders, 'content-type'), plan.contentTypes)) {
+    return {}
+  }
+  const captured = captureBodyField(Buffer.from(postData, 'utf8'), plan.mode, plan.maxBytes)
+  return {
+    ...(captured.body !== undefined ? { requestBody: captured.body } : {}),
+    requestBodyBytes: captured.bytes,
+    ...(captured.truncated ? { requestBodyTruncated: true } : {}),
+  }
+}
+
+/**
+ * Capture the response body (awaiting `response.body()`) into the event's `responseBody*` fields, gated
+ * by the response content-type. Returns an empty object when the content-type is not text-ish or the
+ * body read throws (already-consumed / no body) — a body failure records the event WITHOUT a body.
+ */
+async function responseBodyFields(
+  response: PWResponse,
+  responseHeaders: Record<string, string>,
+  plan: BodyCapturePlan,
+): Promise<Pick<NetworkEvent, 'responseBody' | 'responseBodyBytes' | 'responseBodyTruncated'>> {
+  if (!bodyContentTypeAllowed(headerValue(responseHeaders, 'content-type'), plan.contentTypes)) {
+    return {}
+  }
+  let buf: Buffer
+  try {
+    buf = await response.body()
+  } catch {
+    return {}
+  }
+  const captured = captureBodyField(buf, plan.mode, plan.maxBytes)
+  return {
+    ...(captured.body !== undefined ? { responseBody: captured.body } : {}),
+    responseBodyBytes: captured.bytes,
+    ...(captured.truncated ? { responseBodyTruncated: true } : {}),
   }
 }
 
@@ -449,6 +532,9 @@ class PlaywrightSession implements TransportSession {
     const resourceType = request.resourceType()
     const requestHeaders = request.headers()
     const durationMs = safeDurationMs(request)
+    const bodyPlan = bodyCapturePlan(filter)
+    const requestBody =
+      bodyPlan !== null ? requestBodyFields(request, requestHeaders, bodyPlan) : {}
     const response = await request.response()
     // stopNetworkCapture() / startNetworkCapture() can run during the await above. If the armed filter
     // changed, this in-flight response belongs to a capture that is no longer active — drop it rather
@@ -456,13 +542,25 @@ class PlaywrightSession implements TransportSession {
     if (this.networkFilter !== filter) return
     const status = response?.status()
     const responseHeaders = response?.headers()
+    let responseBody: Pick<
+      NetworkEvent,
+      'responseBody' | 'responseBodyBytes' | 'responseBodyTruncated'
+    > = {}
+    if (bodyPlan !== null && response !== null && responseHeaders !== undefined) {
+      responseBody = await responseBodyFields(response, responseHeaders, bodyPlan)
+      // The body read is a SECOND await — re-check the armed filter once more before the push, so a
+      // capture stopped/re-armed mid-body-read cannot land a ghost in the cleared buffer.
+      if (this.networkFilter !== filter) return
+    }
     this.pushNetwork({
       method,
       url,
       resourceType,
       ...(status !== undefined ? { status, ok: status >= 200 && status < 300 } : {}),
       requestHeaders,
+      ...requestBody,
       ...(responseHeaders !== undefined ? { responseHeaders } : {}),
+      ...responseBody,
       ...(durationMs !== undefined ? { durationMs } : {}),
       timestamp: Date.now(),
       windowId,
@@ -476,12 +574,18 @@ class PlaywrightSession implements TransportSession {
     const method = request.method()
     const url = request.url()
     if (!matchesNetworkFilter({ method, url }, filter)) return
+    const requestHeaders = request.headers()
     const durationMs = safeDurationMs(request)
+    const bodyPlan = bodyCapturePlan(filter)
+    // A failed request still has a request body (the POST payload), so capture it on this path too.
+    const requestBody =
+      bodyPlan !== null ? requestBodyFields(request, requestHeaders, bodyPlan) : {}
     this.pushNetwork({
       method,
       url,
       resourceType: request.resourceType(),
-      requestHeaders: request.headers(),
+      requestHeaders,
+      ...requestBody,
       failure: request.failure()?.errorText ?? 'request failed',
       ...(durationMs !== undefined ? { durationMs } : {}),
       timestamp: Date.now(),
@@ -1063,8 +1167,8 @@ export class PlaywrightElectronTransport implements ITransport {
     // surface. Attach is provided by CDPTransport.
     canAttach: false,
     canInject: false,
-    // Renderer network traffic is observable via page.on(request|response|…); the
-    // network-capture seam consumes it. Stubbing (the modify half) is deferred.
+    // Renderer network traffic is observable via page.on(requestfinished|requestfailed) and modifiable
+    // via page.route; the network capture and stubbing seams consume this capability.
     canIntercept: true,
     canControlClock: false,
     supportsMainEval: true,
