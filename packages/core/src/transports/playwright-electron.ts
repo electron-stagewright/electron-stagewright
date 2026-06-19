@@ -42,14 +42,14 @@ import type {
 } from './playwright-electron-api.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
 import {
+  bodyCapturePlan,
   bodyContentTypeAllowed,
   captureBodyField,
   copyNetworkFilter,
   copyNetworkStub,
-  DEFAULT_BODY_CONTENT_TYPES,
-  DEFAULT_MAX_BODY_BYTES,
   headerValue,
   matchesNetworkFilter,
+  type BodyCapturePlan,
 } from './network-filter.js'
 import {
   EDITABLE_SIGNATURE_BODY,
@@ -134,24 +134,6 @@ function safeDurationMs(request: PWRequest): number | undefined {
     return responseEnd >= 0 ? responseEnd : undefined
   } catch {
     return undefined
-  }
-}
-
-/** The resolved body-capture knobs for an armed filter, or `null` when bodies are not being captured. */
-interface BodyCapturePlan {
-  readonly mode: boolean | 'size'
-  readonly maxBytes: number
-  readonly contentTypes: readonly string[]
-}
-
-/** Resolve a filter's body-capture plan (applying the transport defaults), or null when bodies are off. */
-function bodyCapturePlan(filter: NetworkCaptureFilter): BodyCapturePlan | null {
-  const mode = filter.captureBodies
-  if (mode === undefined || mode === false) return null
-  return {
-    mode,
-    maxBytes: filter.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
-    contentTypes: filter.bodyContentTypes ?? DEFAULT_BODY_CONTENT_TYPES,
   }
 }
 

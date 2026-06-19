@@ -171,7 +171,12 @@ describe('network plugin (in-process, simulated capture)', () => {
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('network_capture_start', { sessionId, urls: ['/api/'] }),
-    ).toMatchObject({ ok: false, code: 'network.UNSUPPORTED' })
+    ).toMatchObject({
+      ok: false,
+      code: 'network.UNSUPPORTED',
+      error: expect.stringContaining('CDP attach session'),
+      hint: expect.stringContaining('CDP attach session'),
+    })
   })
 
   it('rejects an empty allowlist, reading before a capture, and a double start', async () => {
@@ -463,7 +468,12 @@ describe('network plugin (stubbing, simulated)', () => {
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('network_stub', { sessionId, urls: ['/api/'], status: 200 }),
-    ).toMatchObject({ ok: false, code: 'network.UNSUPPORTED' })
+    ).toMatchObject({
+      ok: false,
+      code: 'network.UNSUPPORTED',
+      error: expect.stringContaining('CDP attach session'),
+      hint: expect.stringContaining('CDP attach session'),
+    })
   })
 
   it('unstubs all stubs, or only the named url', async () => {

@@ -120,6 +120,31 @@ export function captureBodyField(
   return { body: text, bytes, truncated }
 }
 
+/** The resolved body-capture knobs for an armed filter, or `null` when bodies are not being captured. */
+export interface BodyCapturePlan {
+  /** `true` decodes the body text; `'size'` records only the byte length. */
+  readonly mode: boolean | 'size'
+  /** Per-body byte cap (the filter's `maxBodyBytes`, or {@link DEFAULT_MAX_BODY_BYTES}). */
+  readonly maxBytes: number
+  /** Content-type substrings whose bodies are eligible (the filter's override or the default set). */
+  readonly contentTypes: readonly string[]
+}
+
+/**
+ * Resolve a filter's body-capture plan (applying the transport defaults), or `null` when bodies are
+ * off. Transport-neutral — shared by the Playwright and CDP transports so the opt-in, the cap, and the
+ * content-type allowlist resolve identically on both.
+ */
+export function bodyCapturePlan(filter: NetworkCaptureFilter): BodyCapturePlan | null {
+  const mode = filter.captureBodies
+  if (mode === undefined || mode === false) return null
+  return {
+    mode,
+    maxBytes: filter.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+    contentTypes: filter.bodyContentTypes ?? DEFAULT_BODY_CONTENT_TYPES,
+  }
+}
+
 /** Deep-copy a stub (incl. the nested fulfill headers) so a stored stub is immune to later mutation. */
 export function copyNetworkStub(stub: NetworkStub): NetworkStub {
   return {

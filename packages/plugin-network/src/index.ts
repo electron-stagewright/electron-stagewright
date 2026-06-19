@@ -202,7 +202,7 @@ function requireIntercept(
       error: makePluginError('network.UNSUPPORTED', {
         ...meta,
         message:
-          'This session’s transport cannot intercept network traffic; the default Playwright transport can.',
+          'This session’s transport cannot intercept network traffic; use a Playwright launch session or a CDP attach session.',
       }),
     }
   }
@@ -532,7 +532,7 @@ export const networkPlugin: StagewrightPlugin = {
     UNSUPPORTED: {
       http: 409,
       retryable: false,
-      hint: 'This transport cannot intercept network traffic; use the default Playwright transport.',
+      hint: 'This transport cannot intercept network traffic; use a Playwright launch session or a CDP attach session.',
     },
     ALREADY_CAPTURING: {
       http: 409,

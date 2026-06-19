@@ -129,4 +129,71 @@ describe('CDP attach smoke (real Electron)', () => {
     },
     120_000,
   )
+
+  it.skipIf(!RUN_E2E)(
+    'captures a stubbed renderer request over the CDP Network + Fetch domains',
+    async () => {
+      const { cdpUrl, proc } = await spawnWithCdp()
+      const sessions = new SessionManager()
+      const dispatcher = new Dispatcher({
+        sessions,
+        snapshots: new SnapshotStore(),
+        transports: new TransportRegistry(),
+      })
+      dispatcher.registerAll([attachTool, stopTool])
+      const attached = (await dispatcher.dispatch('electron_attach', {
+        cdpUrl,
+      })) as SuccessResponse & {
+        session_id: string
+      }
+      const session = sessions.get(attached.session_id)?.session
+      if (session === undefined) throw new Error('attach returned no session')
+
+      // Arm capture (with bodies), stub an unresolvable URL so the renderer fetch only succeeds via the
+      // Fetch domain — a captured 200 proves the stub fired AND that a stubbed request is still captured
+      // over CDP (capture and stubbing compose, as on Playwright).
+      await session.startNetworkCapture({ urls: ['/api/'], captureBodies: true })
+      await session.stubNetwork({
+        urls: ['/api/probe'],
+        fulfill: { status: 200, contentType: 'application/json', body: '{"cdp":true}' },
+      })
+      await session.evaluate(
+        'renderer',
+        'void fetch("https://stagewright.invalid/api/probe").then((r) => r.text()).catch(() => {}); return true;',
+      )
+
+      const deadline = Date.now() + 10_000
+      let probe:
+        | { readonly url: string; readonly status?: number; readonly responseBody?: string }
+        | undefined
+      while (Date.now() < deadline) {
+        const { events } = await session.networkEvents()
+        probe = events.find((e) => e.url.includes('/api/probe'))
+        if (probe?.status === 200) break
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      }
+      expect(probe, 'a stubbed /api/probe request should have been captured').toBeDefined()
+      expect(probe?.status).toBe(200)
+      expect(probe?.responseBody).toContain('"cdp":true')
+
+      await session.clearNetworkStubs()
+      await session.stopNetworkCapture()
+      await dispatcher.dispatch('electron_stop', { sessionId: attached.session_id })
+      await new Promise<void>((resolve) => {
+        if (proc.exitCode !== null) {
+          resolve()
+          return
+        }
+        const timer = setTimeout(() => {
+          proc.kill('SIGKILL')
+          resolve()
+        }, 10_000)
+        proc.on('exit', () => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+    },
+    120_000,
+  )
 })

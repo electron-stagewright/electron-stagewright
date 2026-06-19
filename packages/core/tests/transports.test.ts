@@ -912,7 +912,7 @@ describe('CDPTransport', () => {
       canLaunch: false,
       canAttach: true,
       canInject: false,
-      canIntercept: false,
+      canIntercept: true,
       canControlClock: true,
       supportsMainEval: true,
       supportsRendererEval: true,

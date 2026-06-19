@@ -1,6 +1,6 @@
 # ADR-016: Network capture plugin via a transport capture seam
 
-Status: Accepted (renderer capture + stubbing + response-body capture; CDP-transport capture deferred)
+Status: Accepted (renderer capture + stubbing + response-body capture on both the Playwright and CDP transports)
 
 ## Context
 
@@ -161,3 +161,34 @@ likewise NOT `--allow-eval` gated).
   reaches the agent, not what the transport buffers (`Response.body()` reads the whole response). A
   stubbed request's body is captured too, so capture and stubbing still compose.
 - CDP-transport coverage remains the one deferred piece.
+
+## Status Update — 2026-06-18: CDP-transport network seam (the deferred broader path)
+
+The deferred CDP-transport coverage now ships, so the whole seam — capture, bodies, and stubbing —
+works on the attach-mode transport too, and `canIntercept` flips honestly true on CDP (amends ADR-003).
+The plugin and the `NetworkEvent` / `NetworkStub` types are unchanged; this is a second transport
+implementation of the same seam.
+
+- **Capture** rides the CDP **Network domain**: `Network.enable` on arm, then a state machine correlates
+  `requestWillBeSent` → `responseReceived` (+ `responseReceivedExtraInfo` for the raw wire headers) →
+  the terminal `loadingFinished` / `loadingFailed` into one `NetworkEvent` per request, filtered at the
+  request-start event by the same shared allowlist matcher. A redirect (CDP re-fires `requestWillBeSent`
+  with the same `requestId` carrying `redirectResponse`) is recorded as its own hop. The correlation +
+  the abort-reason mapping live in a pure, unit-tested `cdp-network.ts`.
+- **Bodies** come from `Network.getResponseBody` (base64-decoded as needed) and `Request.postData`
+  (with a `Network.getRequestPostData` fallback for large bodies), behind the same byte cap and
+  content-type gate as Playwright; the body read is a second await, so the armed-filter re-check that
+  drops a ghost event is repeated after it.
+- **Stubbing** rides the **Fetch domain**: `Fetch.enable` (catch-all) on the first stub, and a
+  `Fetch.requestPaused` handler matches the active-stub list and `fulfillRequest` / `failRequest` /
+  `continueRequest` accordingly — always resolving the paused request so the renderer can never hang.
+  The plugin's Playwright-flavoured `abort` reason is mapped to the CDP `errorReason` enum (unknown →
+  `Failed`). `Fetch.disable` once the last stub clears.
+- **Honest scope.** CDP capture is renderer **page-target** traffic, the same scope as the Playwright
+  transport — _not_ the main process's `net` module. (An earlier draft of this ADR speculated CDP would
+  "also see the main process"; in practice the page-target Network domain sees the renderer, so the
+  scope note is corrected here.) `canIntercept: true` on CDP is honest because every seam method is
+  wired — none throws `NOT_IMPLEMENTED`.
+- A `STAGEWRIGHT_E2E`-gated real-Electron smoke attaches over CDP, stubs an unresolvable URL with a 200,
+  fires a renderer `fetch`, and asserts the stubbed request is captured — the end-to-end proof that
+  Fetch fulfillment and Network capture compose.

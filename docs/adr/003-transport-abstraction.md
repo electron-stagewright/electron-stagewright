@@ -372,3 +372,21 @@ So the plugin's capability gate refuses both CDP and injector sessions with `net
 direct caller that ignores the capability. Capture rides this seam rather than the eval seam
 (ADR-010's approach) because protocol-level network is invisible to `evaluate`, and so it is NOT
 `--allow-eval` gated.
+
+## Status Update — 2026-06-18: canIntercept's second consumer (CDP network seam)
+
+The seam reserved above is now wired on the **CDP transport** too, so `canIntercept` flips from
+`false` to `true` on CDP and the capability is honest on both attach-mode and launch-mode (see ADR-016).
+
+- **Capture + bodies** ride the CDP **Network domain** (`Network.enable`, the `requestWillBeSent` →
+  `responseReceived` → `loadingFinished`/`loadingFailed` correlation, `Network.getResponseBody`); the
+  inert-until-armed listener pattern matches the Playwright transport (the listeners attach per pooled
+  page connection in `#attachCapture`; `Network.enable`/`disable` toggles on arm/stop).
+- **Stubbing** rides the **Fetch domain** (`Fetch.enable` + `Fetch.requestPaused` → `fulfill`/`fail`/
+  `continue`). The five seam methods are fully implemented — none throws `NOT_IMPLEMENTED` — so
+  `canIntercept: true` is honest, not aspirational.
+- **Scope** is renderer page-target traffic, the same as Playwright (not the main process's `net`
+  module). The **injector** transport keeps `canIntercept: false` (no renderer network).
+
+The `canIntercept` capability now has TWO honest implementers; it is the per-transport gate the network
+plugin reads, and a transport advertises it only once the whole seam is wired.

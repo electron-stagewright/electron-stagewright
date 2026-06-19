@@ -8,8 +8,8 @@ the ADR-004 plugin contract).
 Unlike the IPC plugin, the network tools ride a dedicated **transport seam**, not main-process eval —
 so they do **not** require `--allow-eval`. Capture observes (headers + metadata by default, and
 request/response **bodies** when `captureBodies` opts in); **stubbing** fulfills or aborts matching
-requests so the app can be driven through states a live backend won't reliably produce. CDP-transport
-coverage is a deferred follow-up.
+requests so the app can be driven through states a live backend won't reliably produce. The seam is
+wired on both the default Playwright (launch-mode) transport and the CDP (attach-mode) transport.
 
 ## Load it
 
@@ -107,13 +107,14 @@ in-process plugin (ADR-004) the operator chose to load.
 
 ## Scope and limitations
 
-- **Renderer traffic only (on the Playwright transport).** Capture sees the renderer's `fetch` / XHR
-  / navigation requests, not the main process's `net` module. Protocol-level capture that also covers
-  the main process is the deferred CDP-transport path.
-- **Capture and stubbing, on the Playwright transport.** Capture observes (metadata + headers, and
-  opt-in bodies); `network_stub` fulfills or aborts via Playwright's request interception. A stubbed
-  request is still captured (its event shows the stubbed status and, with `captureBodies`, the stubbed
-  body). Modifying an in-flight response body mid-stream is not offered.
+- **Renderer page-target traffic only.** Capture sees the renderer's `fetch` / XHR / navigation
+  requests, not the main process's `net` module — on both transports.
+- **Both transports.** The seam is wired on the default **Playwright** (launch-mode) transport via
+  `page.on(...)` + `page.route(...)`, and on the **CDP** (attach-mode) transport via the Network domain
+  (capture + bodies) and the Fetch domain (stub). Either works once its session reports `canIntercept`.
+  `network_stub` fulfills or aborts; a stubbed request is still captured (its event shows the stubbed
+  status and, with `captureBodies`, the stubbed body). Modifying an in-flight response body mid-stream
+  is not offered.
 - **Body capture caps exposure, not buffering.** `maxBodyBytes` bounds the bytes that reach the agent;
   the underlying transport may still buffer the whole response to read it. The text-ish content-type
   gate keeps large binary payloads (images, archives) out of capture.
@@ -126,4 +127,4 @@ in-process plugin (ADR-004) the operator chose to load.
   with several live sessions returns `BAD_ARGUMENT`). The capture registry and config are
   process-global, like other first-party plugins; run independent server lifecycles in separate Node
   processes. Requires a transport whose `canIntercept` capability is set (the default Playwright
-  transport); others return `network.UNSUPPORTED`.
+  transport or the CDP transport); the injector transport returns `network.UNSUPPORTED`.

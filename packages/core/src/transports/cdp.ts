@@ -12,11 +12,10 @@
  * - `canLaunch: false` — CDP requires an existing process to connect to.
  * - `canAttach: true` — attach is the primary purpose.
  * - `canInject: false` — InjectorTransport handles the no-pre-flag case.
- * - `canIntercept: false` — the CDP Network domain COULD serve network capture, but
- *   the seam (`startNetworkCapture`/`networkEvents`/`stopNetworkCapture`) is not wired
- *   here yet, so those methods reject with `NOT_IMPLEMENTED`. The capability stays
- *   honest-false (it now has a consumer — the network plugin gate) and flips to true
- *   when the seam lands over the CDP Network domain.
+ * - `canIntercept: true` — the full network seam is wired over the CDP Network domain
+ *   (capture + bodies) and Fetch domain (stub): `startNetworkCapture` / `networkEvents` /
+ *   `stopNetworkCapture` / `stubNetwork` / `clearNetworkStubs`. Renderer page-target traffic, the
+ *   same scope as the Playwright transport.
  * - `canControlClock: true` — CDP exposes `Emulation.setVirtualTimePolicy`.
  * - `supportsMainEval: true` — `Runtime.evaluate` against the browser target.
  * - `supportsRendererEval: true` — `Runtime.evaluate` against a page target.
@@ -51,7 +50,33 @@ import {
   type ParsedKey,
   type ResolvedPoint,
 } from './cdp-interaction.js'
+import {
+  applyResponse,
+  buildFailedEvent,
+  buildFinishedEvent,
+  buildRedirectEvent,
+  mapAbortReason,
+  mergeExtraInfoHeaders,
+  startInflight,
+  type CdpLoadingFailed,
+  type CdpLoadingFinished,
+  type CdpRequestPaused,
+  type CdpRequestWillBeSent,
+  type CdpResponseExtraInfo,
+  type CdpResponseReceived,
+  type InflightRequest,
+} from './cdp-network.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
+import {
+  bodyCapturePlan,
+  bodyContentTypeAllowed,
+  captureBodyField,
+  copyNetworkFilter,
+  copyNetworkStub,
+  headerValue,
+  matchesNetworkFilter,
+  type BodyCapturePlan,
+} from './network-filter.js'
 // The scroll-into-view body is transport-neutral renderer code; it lives next to
 // the Playwright bodies for historical reasons but has no Playwright coupling.
 import { buildScrollIntoViewBody } from './playwright-electron-bodies.js'
@@ -71,9 +96,11 @@ import type {
   IpcChannel,
   LaunchOptions,
   NetworkCaptureFilter,
+  NetworkEvent,
   NetworkEventsOptions,
   NetworkEventsResult,
   NetworkStub,
+  NetworkStubResponse,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -132,17 +159,45 @@ function unsupported(method: string, capability: keyof TransportCapabilities): S
   })
 }
 
-/**
- * For a capability CDP genuinely has but whose seam is not wired yet (network capture). Distinct from
- * {@link unsupported}: the transport CAN do this, it just is not implemented here, so the agent learns
- * it is a temporary gap (a follow-up), not a permanent transport limitation.
- */
-function notImplemented(method: string): StagewrightError {
-  return new StagewrightError(
-    'NOT_IMPLEMENTED',
-    `CDPTransport does not yet implement ${method}; network capture over the CDP Network domain is a planned follow-up.`,
-    { transport: TRANSPORT_ID, method },
-  )
+/** Max network events retained per session; older ones are dropped and counted in the overflow. */
+const NETWORK_CAP = 1000
+
+/** Resolve after `ms`, for a stub's simulated slow endpoint (`delayMs`). */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
+
+/** The composite key for the in-flight correlation map: a request id is unique per target only. */
+function inflightKey(targetId: string, requestId: string): string {
+  return `${targetId} ${requestId}`
+}
+
+/** A registered stub plus its remaining-use budget (`Infinity` when {@link NetworkStub.times} is unset). */
+interface ActiveStub {
+  readonly stub: NetworkStub
+  remaining: number
+}
+
+/** Translate a fulfill response into CDP `Fetch.fulfillRequest` header entries (name/value pairs). */
+function fetchHeaderEntries(
+  fulfill: NetworkStubResponse,
+): readonly { name: string; value: string }[] | undefined {
+  const entries: { name: string; value: string }[] = []
+  const headerHasContentType =
+    fulfill.headers !== undefined &&
+    Object.keys(fulfill.headers).some((name) => name.toLowerCase() === 'content-type')
+  // The contentType shortcut IS the content-type header; skip it when an explicit `headers` entry is
+  // given so that one wins, rather than emitting two content-type entries (CDP responseHeaders is a list).
+  if (fulfill.contentType !== undefined && !headerHasContentType) {
+    entries.push({ name: 'content-type', value: fulfill.contentType })
+  }
+  if (fulfill.headers !== undefined) {
+    for (const [name, value] of Object.entries(fulfill.headers)) entries.push({ name, value })
+  }
+  return entries.length > 0 ? entries : undefined
 }
 
 /** One entry from the `/json/list` discovery endpoint. */
@@ -217,6 +272,19 @@ class CdpSession implements TransportSession {
   #dialogOverflow = 0
   #dialogPolicy: DialogPolicy = { action: 'dismiss' }
 
+  /**
+   * Network-capture state. The four Network listeners attach per page connection (in `#attachCapture`)
+   * but stay inert until a filter is armed; `Network.enable`/`disable` is toggled per connection on
+   * arm/stop. `#inflight` correlates a request across its CDP events (keyed by target+requestId) until
+   * the terminal `loadingFinished`/`loadingFailed`. `#networkStubs` drives Fetch interception, attached
+   * lazily on the first stub and `Fetch.disable`d when the last clears.
+   */
+  #networkFilter: NetworkCaptureFilter | null = null
+  readonly #networkBuffer: NetworkEvent[] = []
+  #networkOverflow = 0
+  readonly #inflight = new Map<string, InflightRequest>()
+  #networkStubs: ActiveStub[] = []
+
   constructor(browser: CdpConnection, httpBase: string, deps: CdpSessionDeps, pid?: number) {
     this.id = `cdp-${randomUUID()}`
     this.#browser = browser
@@ -268,7 +336,7 @@ class CdpSession implements TransportSession {
     }
   }
 
-  /** Console + dialog capture for one target. Best-effort: enable failures are non-fatal. */
+  /** Console + dialog + network capture for one target. Best-effort: enable failures are non-fatal. */
   async #attachCapture(conn: CdpConnection, targetId: string): Promise<void> {
     conn.on('Runtime.consoleAPICalled', (params) => {
       this.#pushConsole((params ?? {}) as ConsoleApiCalledParams, targetId)
@@ -276,12 +344,283 @@ class CdpSession implements TransportSession {
     conn.on('Page.javascriptDialogOpening', (params) => {
       void this.#handleDialog(conn, (params ?? {}) as DialogOpeningParams, targetId).catch(() => {})
     })
+    // Network listeners attach unconditionally but stay inert until a filter is armed (they early-out
+    // on a null filter), mirroring the Playwright transport's attached-but-inert pattern.
+    conn.on('Network.requestWillBeSent', (p) => this.#onNetworkRequest(targetId, p))
+    conn.on('Network.responseReceived', (p) => this.#onNetworkResponse(targetId, p))
+    conn.on('Network.responseReceivedExtraInfo', (p) => this.#onNetworkExtraInfo(targetId, p))
+    conn.on('Network.loadingFinished', (p) => {
+      void this.#onNetworkFinished(conn, targetId, p).catch(() => {})
+    })
+    conn.on('Network.loadingFailed', (p) => {
+      void this.#onNetworkFailed(conn, targetId, p).catch(() => {})
+    })
+    // Fetch interception listener for stubbing — inert until a stub is registered.
+    conn.on('Fetch.requestPaused', (p) => {
+      void this.#onFetchPaused(conn, p).catch(() => {})
+    })
     try {
       await conn.enable('Runtime')
       await conn.enable('Page')
     } catch {
       // Capture is best-effort — a target that refuses an enable still evals.
     }
+    // A page target opened while capture/stubbing is already armed must catch up, so a window opened
+    // mid-capture is covered (the multi-window contract). Direct send (not the enable cache) so a
+    // later re-arm after stopNetworkCapture re-enables the domain.
+    if (this.#networkFilter !== null) {
+      try {
+        await conn.send('Network.enable')
+      } catch {
+        // Non-fatal: this target simply will not contribute capture events.
+      }
+    }
+    if (this.#networkStubs.length > 0) {
+      try {
+        await this.#enableFetch(conn)
+      } catch {
+        // Non-fatal: this target's requests simply are not intercepted.
+      }
+    }
+  }
+
+  /** Enable the Fetch domain with a catch-all request-stage pattern for stub interception. */
+  #enableFetch(conn: CdpConnection): Promise<unknown> {
+    return conn.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] })
+  }
+
+  /** Append a captured network event, dropping the oldest when the per-session ring is full. */
+  #pushNetwork(event: NetworkEvent): void {
+    this.#networkBuffer.push(event)
+    if (this.#networkBuffer.length > NETWORK_CAP) {
+      this.#networkBuffer.shift()
+      this.#networkOverflow += 1
+    }
+  }
+
+  #onNetworkRequest(targetId: string, raw: unknown): void {
+    const filter = this.#networkFilter
+    if (filter === null) return
+    const params = (raw ?? {}) as CdpRequestWillBeSent
+    if (typeof params.requestId !== 'string') return
+    const key = inflightKey(targetId, params.requestId)
+    // Redirect (fold A): CDP re-fires requestWillBeSent with the same requestId carrying the prior
+    // hop's redirectResponse. Record that completed hop before starting the redirected request.
+    if (params.redirectResponse !== undefined) {
+      const prior = this.#inflight.get(key)
+      if (prior !== undefined) {
+        this.#pushNetwork(buildRedirectEvent(prior, params.redirectResponse, Date.now()))
+      }
+    }
+    const inflight = startInflight(targetId, params, filter)
+    if (inflight === null) {
+      this.#inflight.delete(key)
+      return
+    }
+    this.#inflight.set(key, inflight)
+  }
+
+  #onNetworkResponse(targetId: string, raw: unknown): void {
+    if (this.#networkFilter === null) return
+    const params = (raw ?? {}) as CdpResponseReceived
+    const inflight = this.#inflight.get(inflightKey(targetId, params.requestId))
+    if (inflight === undefined || params.response === undefined) return
+    applyResponse(inflight, params.response)
+  }
+
+  #onNetworkExtraInfo(targetId: string, raw: unknown): void {
+    if (this.#networkFilter === null) return
+    const params = (raw ?? {}) as CdpResponseExtraInfo
+    const inflight = this.#inflight.get(inflightKey(targetId, params.requestId))
+    if (inflight === undefined) return
+    mergeExtraInfoHeaders(inflight, params)
+  }
+
+  async #onNetworkFinished(conn: CdpConnection, targetId: string, raw: unknown): Promise<void> {
+    const filter = this.#networkFilter
+    if (filter === null) return
+    const params = (raw ?? {}) as CdpLoadingFinished
+    const key = inflightKey(targetId, params.requestId)
+    const inflight = this.#inflight.get(key)
+    if (inflight === undefined) return
+    this.#inflight.delete(key)
+    const plan = bodyCapturePlan(filter)
+    const requestBody =
+      plan !== null
+        ? await this.#captureRequestBody(conn, params.requestId, inflight, plan)
+        : undefined
+    const responseBody =
+      plan !== null
+        ? await this.#captureResponseBody(conn, params.requestId, inflight, plan)
+        : undefined
+    // The body reads are awaits — re-check the armed filter before pushing so a capture stopped or
+    // re-armed mid-read cannot land a ghost in the cleared buffer (the Playwright ghost-guard lesson).
+    if (this.#networkFilter !== filter) return
+    this.#pushNetwork(
+      buildFinishedEvent(
+        inflight,
+        params,
+        { request: requestBody, response: responseBody },
+        Date.now(),
+      ),
+    )
+  }
+
+  async #onNetworkFailed(conn: CdpConnection, targetId: string, raw: unknown): Promise<void> {
+    const filter = this.#networkFilter
+    if (filter === null) return
+    const params = (raw ?? {}) as CdpLoadingFailed
+    const key = inflightKey(targetId, params.requestId)
+    const inflight = this.#inflight.get(key)
+    if (inflight === undefined) return
+    this.#inflight.delete(key)
+    const plan = bodyCapturePlan(filter)
+    // A failed request still carries a request body (the POST payload), so capture it on this path too.
+    const requestBody =
+      plan !== null
+        ? await this.#captureRequestBody(conn, params.requestId, inflight, plan)
+        : undefined
+    if (this.#networkFilter !== filter) return
+    this.#pushNetwork(buildFailedEvent(inflight, params, requestBody, Date.now()))
+  }
+
+  /** Read + cap the request body, gated by the request content-type; returns undefined when absent. */
+  async #captureRequestBody(
+    conn: CdpConnection,
+    requestId: string,
+    inflight: InflightRequest,
+    plan: BodyCapturePlan,
+  ): Promise<
+    Pick<NetworkEvent, 'requestBody' | 'requestBodyBytes' | 'requestBodyTruncated'> | undefined
+  > {
+    if (!inflight.requestHasPostData) return undefined
+    if (
+      !bodyContentTypeAllowed(
+        headerValue(inflight.requestHeaders ?? {}, 'content-type'),
+        plan.contentTypes,
+      )
+    ) {
+      return undefined
+    }
+    let postData = inflight.requestPostData
+    if (postData === undefined) {
+      // fold B: a large request body is not inlined in requestWillBeSent — fetch it explicitly.
+      try {
+        const res = await conn.send<{ postData?: string }>('Network.getRequestPostData', {
+          requestId,
+        })
+        postData = res.postData
+      } catch {
+        return undefined
+      }
+    }
+    if (postData === undefined || postData === '') return undefined
+    const captured = captureBodyField(Buffer.from(postData, 'utf8'), plan.mode, plan.maxBytes)
+    return {
+      ...(captured.body !== undefined ? { requestBody: captured.body } : {}),
+      requestBodyBytes: captured.bytes,
+      ...(captured.truncated ? { requestBodyTruncated: true } : {}),
+    }
+  }
+
+  /** Read + cap the response body via Network.getResponseBody, gated by the response content-type. */
+  async #captureResponseBody(
+    conn: CdpConnection,
+    requestId: string,
+    inflight: InflightRequest,
+    plan: BodyCapturePlan,
+  ): Promise<
+    Pick<NetworkEvent, 'responseBody' | 'responseBodyBytes' | 'responseBodyTruncated'> | undefined
+  > {
+    if (!bodyContentTypeAllowed(inflight.responseContentType, plan.contentTypes)) return undefined
+    let buf: Buffer
+    try {
+      const res = await conn.send<{ body?: string; base64Encoded?: boolean }>(
+        'Network.getResponseBody',
+        { requestId },
+      )
+      if (res.body === undefined) return undefined
+      buf = Buffer.from(res.body, res.base64Encoded === true ? 'base64' : 'utf8')
+    } catch {
+      // The body may already be evicted — record the event WITHOUT a body rather than dropping it.
+      return undefined
+    }
+    const captured = captureBodyField(buf, plan.mode, plan.maxBytes)
+    return {
+      ...(captured.body !== undefined ? { responseBody: captured.body } : {}),
+      responseBodyBytes: captured.bytes,
+      ...(captured.truncated ? { responseBodyTruncated: true } : {}),
+    }
+  }
+
+  async #onFetchPaused(conn: CdpConnection, raw: unknown): Promise<void> {
+    const params = (raw ?? {}) as CdpRequestPaused
+    const requestId = params.requestId
+    let consumedFiniteStub = false
+    try {
+      this.#pruneExpiredStubs()
+      const url = params.request.url
+      const method = params.request.method
+      const active = this.#networkStubs.find(
+        (entry) => entry.remaining > 0 && matchesNetworkFilter({ url, method }, entry.stub),
+      )
+      if (active === undefined) {
+        await conn.send('Fetch.continueRequest', { requestId })
+        return
+      }
+      if (Number.isFinite(active.remaining)) {
+        active.remaining -= 1
+        consumedFiniteStub = true
+      }
+      if (active.stub.delayMs !== undefined && active.stub.delayMs > 0)
+        await delay(active.stub.delayMs)
+      if (active.stub.abort !== undefined) {
+        await conn.send('Fetch.failRequest', {
+          requestId,
+          errorReason: mapAbortReason(active.stub.abort),
+        })
+        return
+      }
+      const fulfill = active.stub.fulfill ?? {}
+      const headers = fetchHeaderEntries(fulfill)
+      await conn.send('Fetch.fulfillRequest', {
+        requestId,
+        responseCode: fulfill.status ?? 200,
+        ...(headers !== undefined ? { responseHeaders: headers } : {}),
+        ...(fulfill.body !== undefined
+          ? { body: Buffer.from(fulfill.body, 'utf8').toString('base64') }
+          : {}),
+      })
+    } catch {
+      // A handler that throws must still resolve the paused request, or the renderer hangs.
+      try {
+        await conn.send('Fetch.continueRequest', { requestId })
+      } catch {
+        // The request/connection may already be gone; nothing more to do.
+      }
+    } finally {
+      this.#pruneExpiredStubs()
+      // When a `times`-limited stub's last use empties the list, disarm Fetch so non-stubbed traffic
+      // is no longer intercepted — mirroring the Playwright transport's auto-detach on natural expiry.
+      if (consumedFiniteStub && this.#networkStubs.length === 0) {
+        await this.#disableFetchOnAllPages()
+      }
+    }
+  }
+
+  /** `Fetch.disable` on every pooled page connection (idempotent; a gone target is benign). */
+  async #disableFetchOnAllPages(): Promise<void> {
+    for (const conn of this.#pool.values()) {
+      try {
+        await conn.send('Fetch.disable')
+      } catch {
+        // Disabling Fetch on an already-gone target is benign.
+      }
+    }
+  }
+
+  #pruneExpiredStubs(): void {
+    this.#networkStubs = this.#networkStubs.filter((entry) => entry.remaining > 0)
   }
 
   #pushConsole(params: ConsoleApiCalledParams, windowId: string): void {
@@ -494,26 +833,76 @@ class CdpSession implements TransportSession {
     return result
   }
 
-  // --- Network capture surface: declared via canIntercept but not yet wired (see module doc). ---
+  // --- Network seam: capture over the Network domain, stub over the Fetch domain. ---
 
-  startNetworkCapture(_filter: NetworkCaptureFilter): Promise<void> {
-    return Promise.reject(notImplemented('startNetworkCapture'))
+  async startNetworkCapture(filter: NetworkCaptureFilter): Promise<void> {
+    this.#requireRunning()
+    this.#networkFilter = copyNetworkFilter(filter)
+    this.#networkBuffer.length = 0
+    this.#networkOverflow = 0
+    this.#inflight.clear()
+    // Enable the Network domain on every pooled page connection (direct send, not the enable cache, so
+    // a later re-arm after a disable re-enables). A future window is enabled in #attachCapture.
+    for (const conn of this.#pool.values()) {
+      try {
+        await conn.send('Network.enable')
+      } catch {
+        // Best-effort: a target that refuses simply will not contribute events.
+      }
+    }
   }
 
-  networkEvents(_opts?: NetworkEventsOptions): Promise<NetworkEventsResult> {
-    return Promise.reject(notImplemented('networkEvents'))
+  async networkEvents(opts: NetworkEventsOptions = {}): Promise<NetworkEventsResult> {
+    this.#requireRunning()
+    const result: NetworkEventsResult = {
+      events: [...this.#networkBuffer],
+      overflowed: this.#networkOverflow,
+    }
+    if (opts.clear === true) {
+      this.#networkBuffer.length = 0
+      this.#networkOverflow = 0
+    }
+    return result
   }
 
-  stopNetworkCapture(): Promise<void> {
-    return Promise.reject(notImplemented('stopNetworkCapture'))
+  async stopNetworkCapture(): Promise<void> {
+    this.#requireRunning()
+    this.#networkFilter = null
+    this.#networkBuffer.length = 0
+    this.#networkOverflow = 0
+    this.#inflight.clear()
+    for (const conn of this.#pool.values()) {
+      try {
+        await conn.send('Network.disable')
+      } catch {
+        // Disabling an already-gone target is benign.
+      }
+    }
   }
 
-  stubNetwork(_stub: NetworkStub): Promise<void> {
-    return Promise.reject(notImplemented('stubNetwork'))
+  async stubNetwork(stub: NetworkStub): Promise<void> {
+    this.#requireRunning()
+    this.#pruneExpiredStubs()
+    const wasEmpty = this.#networkStubs.length === 0
+    this.#networkStubs.push({ stub: copyNetworkStub(stub), remaining: stub.times ?? Infinity })
+    if (wasEmpty) {
+      for (const conn of this.#pool.values()) {
+        try {
+          await this.#enableFetch(conn)
+        } catch {
+          // Best-effort: a target that refuses Fetch.enable simply is not intercepted.
+        }
+      }
+    }
   }
 
-  clearNetworkStubs(_url?: string): Promise<void> {
-    return Promise.reject(notImplemented('clearNetworkStubs'))
+  async clearNetworkStubs(url?: string): Promise<void> {
+    this.#requireRunning()
+    this.#networkStubs =
+      url === undefined ? [] : this.#networkStubs.filter((entry) => !entry.stub.urls.includes(url))
+    if (this.#networkStubs.length === 0) {
+      await this.#disableFetchOnAllPages()
+    }
   }
 
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---
@@ -861,11 +1250,9 @@ export class CDPTransport implements ITransport {
     canLaunch: false,
     canAttach: true,
     canInject: false,
-    // The CDP Network domain COULD serve network capture, but the seam is not wired here yet, and
-    // `canIntercept` now has a consumer (the network plugin gate) — so it stays honest-false until the
-    // seam lands, rather than advertising a capability whose methods reject at runtime. Flip to true
-    // when the CDP network-capture seam is implemented.
-    canIntercept: false,
+    // The full network seam is wired over the CDP Network domain (capture + bodies) and Fetch domain
+    // (stub), so the capability is honestly true — every seam method works, none throws NOT_IMPLEMENTED.
+    canIntercept: true,
     canControlClock: true,
     supportsMainEval: true,
     supportsRendererEval: true,
