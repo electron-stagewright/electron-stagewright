@@ -37,6 +37,8 @@ export type {
   NetworkEventsResult,
   NetworkStub,
   NetworkStubResponse,
+  ClockTime,
+  ClockInstallOptions,
   TransportSession,
   ITransport,
 } from './types.js'

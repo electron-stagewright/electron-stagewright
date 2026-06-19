@@ -61,6 +61,13 @@ const FAKE_SESSION: TransportSession = {
   stopNetworkCapture: async () => undefined,
   stubNetwork: async () => undefined,
   clearNetworkStubs: async () => undefined,
+  installClock: async () => undefined,
+  setFixedTime: async () => undefined,
+  setSystemTime: async () => undefined,
+  advanceClock: async () => undefined,
+  runClockFor: async () => undefined,
+  pauseClockAt: async () => undefined,
+  resumeClock: async () => undefined,
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -92,6 +99,9 @@ function createFakePage(
   const requestFinishedHandlers: ((request: unknown) => void)[] = []
   const requestFailedHandlers: ((request: unknown) => void)[] = []
   const routeHandlers: { url: string; handler: (route: PWRoute) => void | Promise<void> }[] = []
+  // Records page.clock calls so the PlaywrightSession clock-seam tests can assert the mapping
+  // (installClock -> install, advanceClock -> fastForward, setFixedTime -> setSystemTime+pauseAt, etc.).
+  const clockCalls: { method: string; arg?: unknown }[] = []
   // Editable-content model backing the type-effect check: fill/type/keyboard-type update a
   // selector's content; the type-effect signature read (evaluate with arg.settleMs) reads it.
   // Selectors in `inertSelectors` swallow input (content never changes), simulating a modern
@@ -112,6 +122,34 @@ function createFakePage(
   return {
     get screenshotCalls() {
       return screenshotCalls
+    },
+    clockCalls,
+    clock: {
+      install: async (options?: { time?: number | string }) => {
+        clockCalls.push(
+          options?.time !== undefined
+            ? { method: 'install', arg: options.time }
+            : { method: 'install' },
+        )
+      },
+      setFixedTime: async (time: number | string) => {
+        clockCalls.push({ method: 'setFixedTime', arg: time })
+      },
+      setSystemTime: async (time: number | string) => {
+        clockCalls.push({ method: 'setSystemTime', arg: time })
+      },
+      fastForward: async (ticks: number) => {
+        clockCalls.push({ method: 'fastForward', arg: ticks })
+      },
+      runFor: async (ticks: number) => {
+        clockCalls.push({ method: 'runFor', arg: ticks })
+      },
+      pauseAt: async (time: number | string) => {
+        clockCalls.push({ method: 'pauseAt', arg: time })
+      },
+      resume: async () => {
+        clockCalls.push({ method: 'resume' })
+      },
     },
     interactions,
     url: () => `app:///${title}`,
@@ -430,7 +468,7 @@ describe('PlaywrightElectronTransport', () => {
       canAttach: false,
       canInject: false,
       canIntercept: true,
-      canControlClock: false,
+      canControlClock: true,
       supportsMainEval: true,
       supportsRendererEval: true,
       supportsInteraction: true,
@@ -913,7 +951,7 @@ describe('CDPTransport', () => {
       canAttach: true,
       canInject: false,
       canIntercept: true,
-      canControlClock: true,
+      canControlClock: false,
       supportsMainEval: true,
       supportsRendererEval: true,
       supportsInteraction: true,
@@ -1516,6 +1554,53 @@ describe('PlaywrightSession network stubbing', () => {
     const { page, session } = await launchWithPage()
     await session.stubNetwork({ urls: ['/api/'], fulfill: { status: 200 }, delayMs: 1 })
     expect((await page.emitRoute({ url: 'https://app.test/api/x' })).fulfilled).toBeDefined()
+  })
+})
+
+describe('PlaywrightSession clock control', () => {
+  async function launchWithPage() {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    return { page, session }
+  }
+
+  it('maps each clock seam method onto the page.clock call', async () => {
+    const { page, session } = await launchWithPage()
+    await session.installClock({ time: '2026-01-01T00:00:00Z' })
+    await session.setFixedTime(1000)
+    await session.setSystemTime(2000)
+    await session.advanceClock(5000)
+    await session.runClockFor(250)
+    await session.pauseClockAt(9000)
+    await session.resumeClock()
+    expect(page.clockCalls).toEqual([
+      { method: 'install', arg: '2026-01-01T00:00:00Z' },
+      { method: 'setSystemTime', arg: 1000 },
+      { method: 'pauseAt', arg: 1000 },
+      { method: 'setSystemTime', arg: 2000 },
+      { method: 'resume' },
+      { method: 'fastForward', arg: 5000 },
+      { method: 'runFor', arg: 250 },
+      { method: 'pauseAt', arg: 9000 },
+      { method: 'resume' },
+    ])
+  })
+
+  it('installs with no initial time when none is given', async () => {
+    const { page, session } = await launchWithPage()
+    await session.installClock()
+    expect(page.clockCalls).toEqual([{ method: 'install' }])
+  })
+
+  it('rejects clock ops after dispose', async () => {
+    const { session } = await launchWithPage()
+    await session.dispose()
+    await expect(session.installClock()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+    await expect(session.advanceClock(1)).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })
 })
 

@@ -584,3 +584,14 @@ describe('CdpSession network stubbing', () => {
     expect(contentTypes[0]?.value).toBe('application/json')
   })
 })
+
+describe('CdpSession clock seam (honest-false)', () => {
+  it('declares canControlClock false and rejects the clock seam with NOT_IMPLEMENTED', async () => {
+    const { transport } = setup()
+    expect(transport.capabilities.canControlClock).toBe(false)
+    const session = await transport.attach({ port: 9222 })
+    await expect(session.installClock()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+    await expect(session.advanceClock(1000)).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+    await expect(session.resumeClock()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+  })
+})

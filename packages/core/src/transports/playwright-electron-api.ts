@@ -79,6 +79,22 @@ export interface PWPage {
   route(url: string, handler: (route: PWRoute) => void | Promise<void>): Promise<unknown>
   /** Remove a previously-registered interceptor (same url glob + handler ref). */
   unroute(url: string, handler: (route: PWRoute) => void | Promise<void>): Promise<unknown>
+  /** Playwright's fake-clock controller (the clock seam rides this). */
+  readonly clock: PWClock
+}
+
+/**
+ * The slice of Playwright's `Clock` the clock seam drives. `time`/`ticks` accept epoch ms, an ISO
+ * string, or a `Date` / ms duration — we pass through the {@link ClockTime} the agent supplied.
+ */
+export interface PWClock {
+  install(options?: { time?: number | string }): Promise<void>
+  setFixedTime(time: number | string): Promise<void>
+  setSystemTime(time: number | string): Promise<void>
+  fastForward(ticks: number): Promise<void>
+  runFor(ticks: number): Promise<void>
+  pauseAt(time: number | string): Promise<void>
+  resume(): Promise<void>
 }
 
 /** The slice of Playwright's `Route` a stub handler drives. Exactly one resolution must be called. */

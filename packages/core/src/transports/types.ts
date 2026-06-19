@@ -501,6 +501,22 @@ export interface ScrollOptions {
 }
 
 /**
+ * An instant for the clock seam — epoch milliseconds (a number) or an ISO-8601 string (e.g.
+ * `'2026-01-01T00:00:00Z'`). Both are JSON-serialisable; the transport parses either.
+ */
+export type ClockTime = number | string
+
+/** Options for {@link TransportSession.installClock}. */
+export interface ClockInstallOptions {
+  /**
+   * The instant the installed fake clock starts at. When omitted, the clock installs at the current
+   * real time under the transport's fake-clock controller. Use `setFixedTime` / `pauseClockAt` to
+   * hold time, or `resumeClock` to let it progress with real wall-clock time.
+   */
+  readonly time?: ClockTime
+}
+
+/**
  * A live session against an Electron app, returned by `launch`, `attach`, or
  * `inject`. Disposal is idempotent: calling `dispose()` twice MUST NOT throw,
  * and MUST NOT double-free underlying resources.
@@ -570,6 +586,50 @@ export interface TransportSession {
    * `url` (exact match) when given. Idempotent: safe to call when nothing is stubbed.
    */
   clearNetworkStubs(url?: string): Promise<void>
+
+  // --- Clock control surface (requires `capabilities.canControlClock`) ---
+  // Deterministic virtual time: install a fake clock, freeze it, and advance it to fire the app's
+  // timers on demand. A transport that cannot control the clock rejects these with `NOT_IMPLEMENTED`.
+
+  /**
+   * Install a fake clock over the renderer's `Date` / `setTimeout` / `setInterval`, optionally at a
+   * given start instant. Required before any other clock op. Re-installing replaces the fake clock.
+   */
+  installClock(options?: ClockInstallOptions): Promise<void>
+
+  /**
+   * Pin the clock to `time` and hold the timer queue there: `Date.now()` returns it and timers do NOT
+   * auto-fire until {@link TransportSession.advanceClock}, {@link TransportSession.runClockFor}, or
+   * {@link TransportSession.resumeClock} moves time again. The "stop the world" mode.
+   */
+  setFixedTime(time: ClockTime): Promise<void>
+
+  /**
+   * Set the clock to `time` and resume real-time progression from there. This shifts what the app sees
+   * as the current time without immediately firing timers due before that instant.
+   */
+  setSystemTime(time: ClockTime): Promise<void>
+
+  /**
+   * Jump the clock forward by `ms`, firing every timer due in that window in order (then stopping at
+   * the destination). The deterministic way to trigger time-based UI without real waiting.
+   */
+  advanceClock(ms: number): Promise<void>
+
+  /**
+   * Tick the clock forward by `ms`, firing timers at each interval as they come due (unlike
+   * {@link TransportSession.advanceClock}, which jumps). Use for tight timer loops that re-schedule.
+   */
+  runClockFor(ms: number): Promise<void>
+
+  /**
+   * Fast-forward to `time` firing the timers due up to it, then HOLD there (a frozen pause at a future
+   * instant). Combines advance + freeze in one step.
+   */
+  pauseClockAt(time: ClockTime): Promise<void>
+
+  /** Resume the real clock (timers advance with real wall-clock time again). */
+  resumeClock(): Promise<void>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

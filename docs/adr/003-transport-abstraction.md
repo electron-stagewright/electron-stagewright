@@ -390,3 +390,22 @@ The seam reserved above is now wired on the **CDP transport** too, so `canInterc
 
 The `canIntercept` capability now has TWO honest implementers; it is the per-transport gate the network
 plugin reads, and a transport advertises it only once the whole seam is wired.
+
+## Status Update — 2026-06-19: canControlClock's first consumer (clock seam)
+
+The `canControlClock` capability, reserved in this ADR's matrix and previously **declared without a
+consumer** (the CDP transport even advertised it aspirationally true), gains its first consumer: a
+clock seam on `TransportSession` — `installClock` / `setFixedTime` / `setSystemTime` / `advanceClock` /
+`runClockFor` / `pauseClockAt` / `resumeClock` — driven by the clock plugin (see ADR-017).
+
+- The **Playwright transport** implements the seam via `page.clock` (its fake-timer controller over the
+  renderer's `Date` / `setTimeout` / `setInterval`) and flips `canControlClock` from `false` to `true`.
+- The **CDP transport** flips its aspirational `true` to **honest `false`**: `Emulation.setVirtualTimePolicy`
+  cannot satisfy the full seam (notably resume-to-real), so advertising the capability would be the
+  trap this ADR warns against. Its seam methods reject `NOT_IMPLEMENTED`; a CDP clock increment is a
+  deferred follow-up.
+- The **injector** transport keeps `canControlClock: false` (no renderer clock).
+
+This is the same lesson `canIntercept` taught, applied proactively: a capability is advertised true only
+where the whole seam is honestly wired, and an aspirational true (CDP's) is corrected to false the
+moment the capability gains a real consumer.

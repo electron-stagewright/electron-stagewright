@@ -18,7 +18,8 @@
  * - `canIntercept: true` — renderer network traffic is observable via Playwright's
  *   `page.on('requestfinished'|'requestfailed')` (the capture seam) AND modifiable via
  *   `page.route` (the stub seam: fulfill/abort) — both halves of "intercept".
- * - `canControlClock: false` — Clock control is not provided by this transport.
+ * - `canControlClock: true` — deterministic virtual time via Playwright's `page.clock` (install /
+ *   freeze / advance / resume); the clock seam's first consumer (the clock plugin, ADR-017).
  * - `supportsMainEval: true` — `electronApp.evaluate()`.
  * - `supportsRendererEval: true` — `page.evaluate()`.
  *
@@ -69,6 +70,8 @@ import type {
   ITransport,
   InjectOptions,
   InteractionOptions,
+  ClockInstallOptions,
+  ClockTime,
   IpcChannel,
   LaunchOptions,
   NetworkCaptureFilter,
@@ -718,6 +721,51 @@ class PlaywrightSession implements TransportSession {
     if (this.networkStubs.length === 0) await this.detachStubRoutes()
   }
 
+  // --- Clock control: Playwright's page.clock over the active window (ADR-017). ---
+
+  async installClock(options: ClockInstallOptions = {}): Promise<void> {
+    this.requireRunning()
+    const clock = (await this.activePage()).clock
+    await clock.install(options.time !== undefined ? { time: options.time } : {})
+  }
+
+  async setFixedTime(time: ClockTime): Promise<void> {
+    this.requireRunning()
+    const clock = (await this.activePage()).clock
+    // Playwright's setFixedTime only pins Date while real-time timers keep firing. The Stagewright
+    // seam promises a true hold: Date is set to the instant AND the fake timer queue stays paused
+    // until advance/runFor/resume moves it again.
+    await clock.setSystemTime(time)
+    await clock.pauseAt(time)
+  }
+
+  async setSystemTime(time: ClockTime): Promise<void> {
+    this.requireRunning()
+    const clock = (await this.activePage()).clock
+    await clock.setSystemTime(time)
+    await clock.resume()
+  }
+
+  async advanceClock(ms: number): Promise<void> {
+    this.requireRunning()
+    await (await this.activePage()).clock.fastForward(ms)
+  }
+
+  async runClockFor(ms: number): Promise<void> {
+    this.requireRunning()
+    await (await this.activePage()).clock.runFor(ms)
+  }
+
+  async pauseClockAt(time: ClockTime): Promise<void> {
+    this.requireRunning()
+    await (await this.activePage()).clock.pauseAt(time)
+  }
+
+  async resumeClock(): Promise<void> {
+    this.requireRunning()
+    await (await this.activePage()).clock.resume()
+  }
+
   private requireRunning(): PWElectronApp {
     if (this.disposed || this.app === null) {
       throw new StagewrightError(
@@ -1152,7 +1200,7 @@ export class PlaywrightElectronTransport implements ITransport {
     // Renderer network traffic is observable via page.on(requestfinished|requestfailed) and modifiable
     // via page.route; the network capture and stubbing seams consume this capability.
     canIntercept: true,
-    canControlClock: false,
+    canControlClock: true,
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,

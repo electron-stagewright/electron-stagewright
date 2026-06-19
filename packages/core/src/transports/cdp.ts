@@ -16,7 +16,10 @@
  *   (capture + bodies) and Fetch domain (stub): `startNetworkCapture` / `networkEvents` /
  *   `stopNetworkCapture` / `stubNetwork` / `clearNetworkStubs`. Renderer page-target traffic, the
  *   same scope as the Playwright transport.
- * - `canControlClock: true` — CDP exposes `Emulation.setVirtualTimePolicy`.
+ * - `canControlClock: false` — the clock seam (the clock plugin's consumer, ADR-017) is not wired
+ *   here: CDP's `Emulation.setVirtualTimePolicy` cannot honestly support the full seam (notably
+ *   resume-to-real), so the capability stays honest-false until a CDP clock increment lands (the seam
+ *   methods reject `NOT_IMPLEMENTED` for a direct caller that bypasses the gate).
  * - `supportsMainEval: true` — `Runtime.evaluate` against the browser target.
  * - `supportsRendererEval: true` — `Runtime.evaluate` against a page target.
  * - `supportsInteraction: true` — pointer/keyboard input synthesised through
@@ -83,6 +86,8 @@ import { buildScrollIntoViewBody } from './playwright-electron-bodies.js'
 import type {
   AttachOptions,
   ClickOptions,
+  ClockInstallOptions,
+  ClockTime,
   ConsoleEntry,
   ConsoleLogsResult,
   ConsoleStream,
@@ -157,6 +162,19 @@ function unsupported(method: string, capability: keyof TransportCapabilities): S
     method,
     capability,
   })
+}
+
+/**
+ * For a seam method whose capability is honest-false here (the clock seam). The capability gate
+ * (`canControlClock: false`) refuses a caller first; this is the contract-level signal for a direct
+ * caller that bypasses the gate, distinct from a permanent transport limitation.
+ */
+function notImplemented(method: string): StagewrightError {
+  return new StagewrightError(
+    'NOT_IMPLEMENTED',
+    `CDPTransport does not yet implement ${method}; clock control over the CDP Emulation domain is a planned follow-up.`,
+    { transport: TRANSPORT_ID, method },
+  )
 }
 
 /** Max network events retained per session; older ones are dropped and counted in the overflow. */
@@ -905,6 +923,38 @@ class CdpSession implements TransportSession {
     }
   }
 
+  // --- Clock seam: declared honest-false (canControlClock). The Emulation.setVirtualTimePolicy model
+  // cannot honestly support the whole seam (notably resume-to-real), so the seam stays unwired and
+  // these reject NOT_IMPLEMENTED until a CDP clock increment lands (see ADR-017). ---
+
+  installClock(_options?: ClockInstallOptions): Promise<void> {
+    return Promise.reject(notImplemented('installClock'))
+  }
+
+  setFixedTime(_time: ClockTime): Promise<void> {
+    return Promise.reject(notImplemented('setFixedTime'))
+  }
+
+  setSystemTime(_time: ClockTime): Promise<void> {
+    return Promise.reject(notImplemented('setSystemTime'))
+  }
+
+  advanceClock(_ms: number): Promise<void> {
+    return Promise.reject(notImplemented('advanceClock'))
+  }
+
+  runClockFor(_ms: number): Promise<void> {
+    return Promise.reject(notImplemented('runClockFor'))
+  }
+
+  pauseClockAt(_time: ClockTime): Promise<void> {
+    return Promise.reject(notImplemented('pauseClockAt'))
+  }
+
+  resumeClock(): Promise<void> {
+    return Promise.reject(notImplemented('resumeClock'))
+  }
+
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---
 
   /**
@@ -1253,7 +1303,7 @@ export class CDPTransport implements ITransport {
     // The full network seam is wired over the CDP Network domain (capture + bodies) and Fetch domain
     // (stub), so the capability is honestly true — every seam method works, none throws NOT_IMPLEMENTED.
     canIntercept: true,
-    canControlClock: true,
+    canControlClock: false,
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,

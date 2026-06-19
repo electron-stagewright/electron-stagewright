@@ -28,7 +28,7 @@
  * - `canAttach: true` — connect to an already-listening Node inspector port.
  * - `canInject: true` — the primary purpose.
  * - `canIntercept: false` — the Node inspector exposes no renderer network stream.
- * - `canControlClock: false` — clock control lives on the CDP transport.
+ * - `canControlClock: false` — renderer clock control lives on the Playwright launch transport.
  * - `supportsMainEval: true` — Node inspector `Runtime.evaluate`.
  * - `supportsRendererEval: false` — renderer access requires the CDP browser
  *   endpoint, which the Node inspector does not surface.
@@ -51,6 +51,8 @@ import { copyDialogPolicy } from './dialog-policy.js'
 import type { FetchJson, KillProcess } from './cdp.js'
 import type {
   AttachOptions,
+  ClockInstallOptions,
+  ClockTime,
   ConsoleEntry,
   ConsoleLogsResult,
   ConsoleStream,
@@ -335,6 +337,30 @@ class InjectorSession implements TransportSession {
   }
   clearNetworkStubs(_url?: string): Promise<void> {
     return Promise.reject(notImplemented('clearNetworkStubs'))
+  }
+
+  // --- Clock seam: no renderer clock to control (canControlClock: false). ---
+
+  installClock(_options?: ClockInstallOptions): Promise<void> {
+    return Promise.reject(notImplemented('installClock'))
+  }
+  setFixedTime(_time: ClockTime): Promise<void> {
+    return Promise.reject(notImplemented('setFixedTime'))
+  }
+  setSystemTime(_time: ClockTime): Promise<void> {
+    return Promise.reject(notImplemented('setSystemTime'))
+  }
+  advanceClock(_ms: number): Promise<void> {
+    return Promise.reject(notImplemented('advanceClock'))
+  }
+  runClockFor(_ms: number): Promise<void> {
+    return Promise.reject(notImplemented('runClockFor'))
+  }
+  pauseClockAt(_time: ClockTime): Promise<void> {
+    return Promise.reject(notImplemented('pauseClockAt'))
+  }
+  resumeClock(): Promise<void> {
+    return Promise.reject(notImplemented('resumeClock'))
   }
 
   // --- Interaction surface: the main process has no renderer to drive. ---

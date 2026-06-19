@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Clock fixture</title>
+  </head>
+  <body>
+    <h1>Clock fixture</h1>
+    <button id="read">Read clock</button>
+    <pre id="now"></pre>
+    <button id="start">Start timer</button>
+    <pre id="fired"></pre>
+    <script>
+      // Read the current epoch ms on demand — so the smoke can freeze the clock, then re-read and
+      // assert the frozen instant (the read happens AFTER the clock is installed).
+      document.getElementById('read').addEventListener('click', () => {
+        document.getElementById('now').textContent = String(Date.now())
+      })
+      // Arm a deferred timer AFTER the clock is installed, so advancing the fake clock fires it.
+      document.getElementById('start').addEventListener('click', () => {
+        setTimeout(() => {
+          document.getElementById('fired').textContent = 'FIRED'
+        }, 60000)
+      })
+    </script>
+  </body>
+</html>

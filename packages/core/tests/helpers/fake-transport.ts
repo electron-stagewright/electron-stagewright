@@ -11,6 +11,8 @@
 import { matchesNetworkFilter } from '../../src/transports/network-filter.js'
 import type {
   ClickOptions,
+  ClockInstallOptions,
+  ClockTime,
   ConsoleEntry,
   ConsoleLogsResult,
   DialogEvent,
@@ -215,6 +217,35 @@ export class FakeSession implements TransportSession {
 
   async clearNetworkStubs(url?: string): Promise<void> {
     this.clearNetworkStubsCalls.push(url)
+  }
+
+  /** Recorded clock-seam calls, for asserting the clock plugin's orchestration over the seam. */
+  readonly clockCalls: Array<{ readonly method: string; readonly arg?: ClockTime | number }> = []
+
+  async installClock(options?: ClockInstallOptions): Promise<void> {
+    this.clockCalls.push(
+      options?.time !== undefined
+        ? { method: 'installClock', arg: options.time }
+        : { method: 'installClock' },
+    )
+  }
+  async setFixedTime(time: ClockTime): Promise<void> {
+    this.clockCalls.push({ method: 'setFixedTime', arg: time })
+  }
+  async setSystemTime(time: ClockTime): Promise<void> {
+    this.clockCalls.push({ method: 'setSystemTime', arg: time })
+  }
+  async advanceClock(ms: number): Promise<void> {
+    this.clockCalls.push({ method: 'advanceClock', arg: ms })
+  }
+  async runClockFor(ms: number): Promise<void> {
+    this.clockCalls.push({ method: 'runClockFor', arg: ms })
+  }
+  async pauseClockAt(time: ClockTime): Promise<void> {
+    this.clockCalls.push({ method: 'pauseClockAt', arg: time })
+  }
+  async resumeClock(): Promise<void> {
+    this.clockCalls.push({ method: 'resumeClock' })
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */
