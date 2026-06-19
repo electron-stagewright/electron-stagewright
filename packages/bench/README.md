@@ -99,12 +99,55 @@ alongside the table — this mode writes no JSON report to stdout) for you to pa
 `DEFAULT_THRESHOLDS`. In a normal run the machine JSON report carries the threshold outcome under
 `thresholds` (`{ passed, violations }`), versioned by `schema_version`.
 
+## Comparing against other MCP servers
+
+`pnpm bench --compare` runs a set of **fair shared tasks** (in `src/adapters.ts`) against every
+registered server target and prints a per-target contrast — tool calls and real (BPE) tokens, with
+each target's delta versus our server. The shared tasks are expressed only through generic
+interactions (type, click, find, assert text), so a competing Electron MCP server can do the same
+task through its own tools. Only the BPE token count is contrasted across servers; the server-side
+`estimated_tokens` heuristic is not comparable between different servers.
+
+Out of the box only our own server (`stagewright`) is registered, so `--compare` reports a single
+target. To compare against another server you write one **adapter** — the seam that maps the shared
+task to that server's tools:
+
+```ts
+import { type TaskAdapter } from './harness.js'
+import { GREETING_TASK } from './adapters.js'
+
+const rivalAdapter: TaskAdapter = {
+  target: { name: 'rival', command: 'npx', args: ['some-electron-mcp-server'] },
+  task: GREETING_TASK,
+  launch: async (client) => {
+    /* call the rival's launch tool; return its session id */
+  },
+  run: async (driver) => {
+    /* drive the same task via the rival's type/click/assert tools, using `call(driver, ...)` */
+  },
+  stop: async (client, sessionId) => {
+    /* call the rival's stop/close tool */
+  },
+  // sampleMemory is optional — omit it when the server can't report memory.
+}
+```
+
+Add the adapter to the list `--compare` runs (alongside `stagewrightAdapters()`), then
+`pnpm bench --compare`. The real competitor run is on-demand (you supply the competitor binary),
+just like the other real-Electron smokes — the comparison framework, our adapters, and the contrast
+math are exercised by `pnpm test`; the cross-server numbers are produced when you wire a competitor.
+`--compare-target name=command,arg,arg` overrides the spawn of a registered adapter by name (e.g. to
+point an adapter at a specific install path) without editing code. The `--compare` machine report
+(stdout / `--json`) carries a `comparison` block under its own `schema_version`.
+
 ## Scope and limitations
 
 - **Local only.** Like the other real-Electron smokes in this repo, the benchmark runs on
   demand on a machine with a display; it is not wired into CI.
-- **No competitor comparison yet.** Comparing against other Electron MCP servers is
-  intentionally deferred — it needs those servers installed and a fair shared task.
+- **Competitor comparison is a framework, not bundled data.** `pnpm bench --compare` ships with our
+  server as the only registered target; producing cross-server numbers needs a competitor server
+  installed and an adapter for it (see above). The contrast math + our adapters are gate-tested; the
+  real competitor run is on-demand.
 - **Regression thresholds enforce the deterministic metrics only** (tool-call counts +
   contrast savings) — see above. Latency and memory are never asserted. Enforcement against a
   real run is local/on-demand (`pnpm bench:check`); the pure checker runs in CI via `pnpm test`.

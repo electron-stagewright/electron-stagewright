@@ -82,6 +82,74 @@ export interface Scenario {
   readonly run: (driver: Driver) => Promise<void>
 }
 
+/**
+ * The spawn configuration for one MCP server under benchmark — ours or a competitor's. The harness
+ * spawns it over stdio exactly like a real agent host would, so any server speaking MCP can be
+ * compared by supplying its launch command. `supportsMemory` flags whether the server can report
+ * main-process memory (ours does via `electron_eval_main`; a competitor that cannot simply omits it).
+ */
+export interface ServerTarget {
+  /** Short label shown in the comparison table and the JSON report. */
+  readonly name: string
+  /** Executable to spawn (e.g. `node`, `npx`). */
+  readonly command: string
+  /** Arguments to the executable (the server entry + its flags). */
+  readonly args: readonly string[]
+  /** Extra environment variables for the spawned server, merged over the inherited env. */
+  readonly env?: Readonly<Record<string, string>>
+  /** Whether this server can sample memory (gates the per-target memory column). */
+  readonly supportsMemory?: boolean
+}
+
+/** Our own server as a benchmark target: the built cli.js, started with `--allow-eval` for memory. */
+export const STAGEWRIGHT_TARGET: ServerTarget = {
+  name: 'stagewright',
+  command: 'node',
+  args: [CLI_PATH, '--allow-eval'],
+  supportsMemory: true,
+}
+
+/**
+ * One fair agent task, described abstractly so the SAME task can be expressed against different
+ * servers' tool vocabularies (each via a {@link TaskAdapter}). The task itself carries no tool names —
+ * only an identity and a human description — so the comparison contrasts *how each server does it*.
+ */
+export interface ComparableTask {
+  readonly name: string
+  readonly description: string
+}
+
+/**
+ * Binds one {@link ComparableTask} to one {@link ServerTarget}: it knows how to launch the app, run
+ * the task's steps through THAT server's tools (threading the metric accumulator via {@link call}), and
+ * stop the session. Adding a competitor to the comparison means writing one adapter — see the bench
+ * README. `sampleMemory` is optional: provide it only for a server that can report memory.
+ */
+export interface TaskAdapter {
+  readonly target: ServerTarget
+  readonly task: ComparableTask
+  /** Launch the app under this server and return the session id used by later calls. */
+  launch(client: Client): Promise<string>
+  /** Run the task's steps via this server's tools, counting them into the driver's metrics. */
+  run(driver: Driver): Promise<void>
+  /** End the session (best-effort; the runner also closes the client). */
+  stop(client: Client, sessionId: string): Promise<void>
+  /** Optionally sample main-process memory after the task (omit when unsupported). */
+  sampleMemory?(client: Client, sessionId: string): Promise<number | null>
+}
+
+/** The outcome of running one task against one target — the comparison's per-row record. */
+export interface ComparisonResult extends ScenarioMetrics {
+  /** The server target this row measured (the {@link ServerTarget.name}). */
+  readonly target: string
+  /** The shared task this row measured (the {@link ComparableTask.name}). */
+  readonly task: string
+  /** Main-process RSS (bytes) when the target supports it, else null. */
+  readonly memoryRssBytes: number | null
+  readonly ok: boolean
+  readonly error?: string
+}
+
 /** Extract a tool result's first text block (the raw wire text of the envelope). */
 function firstTextBlock(name: string, content: unknown): string {
   const blocks = content as ReadonlyArray<{ readonly type: string; readonly text?: string }>
@@ -157,14 +225,21 @@ async function sampleMemory(client: Client, sessionId: string): Promise<number |
  * `--allow-eval`), launch the bench app, run the scenario, sample memory, and tear down.
  * Never throws — a failure is captured in the returned {@link ScenarioResult}.
  */
-export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
+export async function runScenario(
+  scenario: Scenario,
+  target: ServerTarget = STAGEWRIGHT_TARGET,
+): Promise<ScenarioResult> {
   const metrics: ScenarioMetrics = {
     toolCalls: 0,
     estimatedTokens: 0,
     measuredTokens: 0,
     latencyMs: 0,
   }
-  const transport = new StdioClientTransport({ command: 'node', args: [CLI_PATH, '--allow-eval'] })
+  const transport = new StdioClientTransport({
+    command: target.command,
+    args: [...target.args],
+    ...(target.env !== undefined ? { env: target.env } : {}),
+  })
   const client = new Client({ name: `bench-${scenario.name}`, version: '0.0.0' })
   await client.connect(transport)
 
@@ -198,5 +273,97 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
     }
     // Guarded so a teardown error can't mask the real failure that reached finally.
     await client.close().catch(() => undefined)
+  }
+}
+
+/** How {@link runAdapter} obtains a connected MCP client for a target — injectable for tests. */
+export type ConnectFn = (target: ServerTarget) => Promise<Client>
+
+/** Default connect: spawn the target server over stdio and connect a client (the production path). */
+const defaultConnect: ConnectFn = async (target) => {
+  const transport = new StdioClientTransport({
+    command: target.command,
+    args: [...target.args],
+    ...(target.env !== undefined ? { env: target.env } : {}),
+  })
+  const client = new Client({ name: `bench-${target.name}`, version: '0.0.0' })
+  await client.connect(transport)
+  return client
+}
+
+/**
+ * Run one {@link TaskAdapter} end to end against its target: connect, launch, run the task, sample
+ * memory (when the adapter supports it), and tear down. Never throws — a failure is captured in the
+ * returned {@link ComparisonResult}. Pass `connect` to inject a fake client (tests); production spawns
+ * the target server over stdio.
+ */
+export async function runAdapter(
+  adapter: TaskAdapter,
+  connect: ConnectFn = defaultConnect,
+): Promise<ComparisonResult> {
+  const metrics: ScenarioMetrics = {
+    toolCalls: 0,
+    estimatedTokens: 0,
+    measuredTokens: 0,
+    latencyMs: 0,
+  }
+  // `connect` (the stdio spawn) is INSIDE the try so a spawn failure becomes an ok:false row, not a
+  // thrown exception — runAdapter never throws, so one unlaunchable target can't sink the comparison.
+  let client: Client | undefined
+  let sessionId: string | undefined
+  let memoryRssBytes: number | null = null
+  try {
+    client = await connect(adapter.target)
+    sessionId = await adapter.launch(client)
+    await adapter.run({ client, sessionId, metrics })
+    if (adapter.sampleMemory !== undefined) {
+      memoryRssBytes = await adapter.sampleMemory(client, sessionId)
+    }
+    return {
+      target: adapter.target.name,
+      task: adapter.task.name,
+      ...metrics,
+      memoryRssBytes,
+      ok: true,
+    }
+  } catch (err) {
+    return {
+      target: adapter.target.name,
+      task: adapter.task.name,
+      ...metrics,
+      memoryRssBytes,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  } finally {
+    if (client !== undefined && sessionId !== undefined) {
+      await adapter.stop(client, sessionId).catch(() => undefined)
+    }
+    await client?.close().catch(() => undefined)
+  }
+}
+
+/**
+ * Build a {@link TaskAdapter} for OUR server: launch the bench app via `electron_launch`, run the
+ * supplied task steps via our tools, stop via `electron_stop`, and sample memory via eval. The step
+ * sequence is supplied by the caller (see `adapters.ts`) so this one factory serves every shared task.
+ */
+export function stagewrightAdapter(
+  task: ComparableTask,
+  run: (driver: Driver) => Promise<void>,
+): TaskAdapter {
+  return {
+    target: STAGEWRIGHT_TARGET,
+    task,
+    launch: async (client) => {
+      const env = await rawCall(client, 'electron_launch', { main: APP_MAIN })
+      if (!env.ok) throw new Error(`launch failed: ${env.code ?? 'UNKNOWN'}`)
+      return env['session_id'] as string
+    },
+    run,
+    stop: async (client, sessionId) => {
+      await rawCall(client, 'electron_stop', { sessionId }).catch(() => undefined)
+    },
+    sampleMemory: (client, sessionId) => sampleMemory(client, sessionId),
   }
 }

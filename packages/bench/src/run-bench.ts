@@ -18,7 +18,16 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { runScenario, type ScenarioResult } from './harness.js'
+import { stagewrightAdapters } from './adapters.js'
+import { computeContrast, runComparison, type TaskContrast } from './comparison.js'
+import {
+  runScenario,
+  STAGEWRIGHT_TARGET,
+  type ComparisonResult,
+  type ScenarioResult,
+  type ServerTarget,
+  type TaskAdapter,
+} from './harness.js'
 import { SCENARIOS } from './scenarios.js'
 import {
   checkThresholds,
@@ -29,8 +38,11 @@ import {
   type ThresholdViolation,
 } from './thresholds.js'
 
-/** Schema version of the JSON report; bump when the shape changes (for regression tooling). */
+/** Schema version of the scenario JSON report; bump when the shape changes (for regression tooling). */
 const REPORT_SCHEMA_VERSION = 3
+
+/** Schema version of the `--compare` JSON report (its own shape, versioned independently). */
+const COMPARISON_SCHEMA_VERSION = 1
 
 /** The machine-readable report written to stdout / the --json file. */
 interface BenchReport {
@@ -112,8 +124,147 @@ function printViolations(violations: ReadonlyArray<ThresholdViolation>): void {
   for (const v of violations) log(`  REGRESSION [${v.kind}] ${v.message}`)
 }
 
+/**
+ * Parse `--compare-target name=command,arg,arg` overrides. Each overrides the SPAWN of a registered
+ * adapter whose target name matches (e.g. point the `stagewright` adapter at a different build). It
+ * cannot add a brand-new competitor — that needs an adapter (code); see the bench README.
+ */
+function parseCompareTargets(argv: readonly string[]): Map<string, ServerTarget> {
+  const overrides = new Map<string, ServerTarget>()
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] !== '--compare-target') continue
+    const spec = argv[i + 1]
+    const eq = spec === undefined ? -1 : spec.indexOf('=')
+    if (spec === undefined || eq <= 0) {
+      log(`warning: --compare-target needs name=command,arg,arg; ignoring "${spec ?? ''}".`)
+      continue
+    }
+    const name = spec.slice(0, eq)
+    const parts = spec
+      .slice(eq + 1)
+      .split(',')
+      .filter((s) => s.length > 0)
+    const command = parts[0]
+    if (command === undefined) {
+      log(`warning: --compare-target "${spec}" has no command; ignoring.`)
+      continue
+    }
+    overrides.set(name, { name, command, args: parts.slice(1) })
+  }
+  return overrides
+}
+
+/** Apply spawn overrides to the registered adapters, preserving each adapter's memory capability. */
+function applyTargetOverrides(
+  adapters: readonly TaskAdapter[],
+  overrides: ReadonlyMap<string, ServerTarget>,
+): TaskAdapter[] {
+  return adapters.map((adapter) => {
+    const override = overrides.get(adapter.target.name)
+    if (override === undefined) return adapter
+    return {
+      ...adapter,
+      target: {
+        ...override,
+        ...(adapter.target.supportsMemory !== undefined
+          ? { supportsMemory: adapter.target.supportsMemory }
+          : {}),
+      },
+    }
+  })
+}
+
+/** Render the cross-server comparison: a per-row table, then each target's deltas vs the baseline. */
+function printComparison(
+  results: ReadonlyArray<ComparisonResult>,
+  contrasts: ReadonlyArray<TaskContrast>,
+): void {
+  log(
+    '\nCross-server comparison (real tok = BPE via gpt-tokenizer — the cross-server-comparable metric)',
+  )
+  log('─'.repeat(96))
+  log(
+    `  ${'task'.padEnd(18)} ${'target'.padEnd(16)} ${'calls'.padStart(5)} ${'real tok'.padStart(8)} ${'latency'.padStart(9)} ${'memory'.padStart(8)}  result`,
+  )
+  for (const r of results) {
+    const verdict = r.ok ? 'ok' : `FAIL: ${r.error ?? ''}`
+    log(
+      `  ${r.task.padEnd(18)} ${r.target.padEnd(16)} ${String(r.toolCalls).padStart(5)} ${String(r.measuredTokens).padStart(8)} ${`${r.latencyMs.toFixed(0)}ms`.padStart(9)} ${mib(r.memoryRssBytes).padStart(8)}  ${verdict}`,
+    )
+  }
+  const withDeltas = contrasts.filter((c) => c.deltas.length > 0)
+  if (withDeltas.length === 0) return
+  log(
+    '\nDeltas vs the baseline (target − baseline; positive = the target spent MORE than the baseline)',
+  )
+  for (const c of withDeltas) {
+    log(`  ${c.task} (vs ${c.baseline})`)
+    for (const d of c.deltas) {
+      const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`)
+      log(
+        `    ${d.target}: ${sign(d.toolCallsVsBaseline)} calls, ${sign(d.measuredTokensVsBaseline)} BPE tokens`,
+      )
+    }
+  }
+}
+
+/** The `--compare` machine report (its own shape; `comparison` block, independently versioned). */
+interface ComparisonReport {
+  readonly schema_version: number
+  readonly generated_at: string
+  readonly env: { readonly node: string; readonly platform: string; readonly arch: string }
+  readonly comparison: {
+    readonly baseline: string
+    readonly results: ReadonlyArray<ComparisonResult>
+    readonly contrasts: ReadonlyArray<TaskContrast>
+  }
+}
+
+/**
+ * `--compare` mode: drive every registered adapter (our baseline + any registered competitor, with
+ * `--compare-target` spawn overrides applied), contrast the metrics vs our server, print the table, and
+ * emit the comparison JSON. Distinct from the default scenario run.
+ */
+async function runCompareMode(argv: readonly string[]): Promise<void> {
+  const overrides = parseCompareTargets(argv)
+  const adapters = applyTargetOverrides(stagewrightAdapters(), overrides)
+  const targets = new Set(adapters.map((a) => a.target.name))
+  log(
+    `Running the cross-server comparison (${adapters.length} task-runs across ${targets.size} target(s))...`,
+  )
+  const results = await runComparison(adapters)
+  const contrasts = computeContrast(results, STAGEWRIGHT_TARGET.name)
+  printComparison(results, contrasts)
+
+  const report: ComparisonReport = {
+    schema_version: COMPARISON_SCHEMA_VERSION,
+    generated_at: new Date().toISOString(),
+    env: { node: process.versions.node, platform: process.platform, arch: process.arch },
+    comparison: { baseline: STAGEWRIGHT_TARGET.name, results, contrasts },
+  }
+  const json = JSON.stringify(report, null, 2)
+  process.stdout.write(`${json}\n`)
+  const outPath = jsonOutPath(argv)
+  if (outPath !== undefined) {
+    await mkdir(path.dirname(path.resolve(outPath)), { recursive: true })
+    await writeFile(outPath, `${json}\n`, 'utf8')
+    log(`\nWrote machine-readable comparison report to ${outPath}`)
+  }
+  const failed = results.filter((r) => !r.ok)
+  if (failed.length > 0) {
+    log(`\n${failed.length} of ${results.length} comparison run(s) FAILED.`)
+    process.exitCode = 1
+  } else {
+    log(`\nComparison complete across ${targets.size} target(s).`)
+  }
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2)
+  if (argv.includes('--compare')) {
+    await runCompareMode(argv)
+    return
+  }
   const check = argv.includes('--check')
   const updateThresholds = argv.includes('--update-thresholds')
 
