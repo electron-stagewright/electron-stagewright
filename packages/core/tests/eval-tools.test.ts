@@ -24,6 +24,7 @@ function caps(partial: Partial<TransportCapabilities>): TransportCapabilities {
     canIntercept: true,
     canControlClock: true,
     canAccessStorage: true,
+    canAccessNativeUI: true,
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,

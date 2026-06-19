@@ -33,6 +33,7 @@ const NO_INTERACTION_CAPS: TransportCapabilities = {
   canIntercept: true,
   canControlClock: true,
   canAccessStorage: true,
+  canAccessNativeUI: true,
   supportsMainEval: true,
   supportsRendererEval: true,
   supportsInteraction: false,

@@ -43,6 +43,8 @@ export type {
   CookieFilter,
   StorageOrigin,
   StorageSnapshot,
+  NativeMenu,
+  NativeMenuItem,
   TransportSession,
   ITransport,
 } from './types.js'

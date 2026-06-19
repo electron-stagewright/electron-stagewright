@@ -40,6 +40,7 @@ const NO_RENDERER_EVAL_CAPS: TransportCapabilities = {
   canIntercept: true,
   canControlClock: true,
   canAccessStorage: true,
+  canAccessNativeUI: true,
   supportsMainEval: true,
   supportsRendererEval: false,
   supportsInteraction: true,

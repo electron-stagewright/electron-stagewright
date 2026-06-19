@@ -22,6 +22,7 @@ import type {
   DialogPolicy,
   ITransport,
   InteractionOptions,
+  NativeMenu,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
@@ -48,6 +49,7 @@ const FULL_CAPS: TransportCapabilities = {
   canIntercept: true,
   canControlClock: true,
   canAccessStorage: true,
+  canAccessNativeUI: true,
   supportsMainEval: true,
   supportsRendererEval: true,
   supportsInteraction: true,
@@ -279,6 +281,12 @@ export class FakeSession implements TransportSession {
   }
   async storageSnapshot(): Promise<StorageSnapshot> {
     return { cookies: this.storageCookies, origins: this.storageOrigins }
+  }
+
+  /** The application menu the fake returns from `getApplicationMenu` (null by default). */
+  applicationMenu: NativeMenu | null = null
+  async getApplicationMenu(): Promise<NativeMenu | null> {
+    return this.applicationMenu
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

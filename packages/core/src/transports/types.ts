@@ -41,6 +41,8 @@ export interface TransportCapabilities {
   readonly canControlClock: boolean
   /** The transport can read and seed the app's storage (cookies + the storage snapshot) via the seam. */
   readonly canAccessStorage: boolean
+  /** The transport can read the app's native UI (the application menu) from the main process via the seam. */
+  readonly canAccessNativeUI: boolean
   /** The transport can evaluate JavaScript in the main process context. */
   readonly supportsMainEval: boolean
   /** The transport can evaluate JavaScript in a renderer (BrowserWindow) context. */
@@ -563,6 +565,46 @@ export interface StorageSnapshot {
 }
 
 /**
+ * One entry in the app's native application menu, as read from the main process. JSON-serialisable: only
+ * the data fields survive (the `click` handler and Electron-internal refs are dropped). `checked` is
+ * present only for `checkbox` / `radio` items; `accelerator` / `role` / `sublabel` / `toolTip` are
+ * present only when set. `role` is surfaced so role-based items (e.g. `quit`, `paste`) that carry no
+ * explicit `label` until rendered are still findable by the agent.
+ */
+export interface NativeMenuItem {
+  /** Developer-assigned id, when the app set one. */
+  readonly id?: string
+  /** The item's visible label (empty string for a separator or a role-only item with no label). */
+  readonly label: string
+  /** The built-in role (`quit`, `paste`, `toggledevtools`, …), when the item is role-based. */
+  readonly role?: string
+  /** Item kind. `separator` / `header` / `palette` items carry no actionable state. */
+  readonly type: 'normal' | 'separator' | 'submenu' | 'checkbox' | 'radio' | 'header' | 'palette'
+  /** The keyboard accelerator (e.g. `CmdOrCtrl+S`), when set. */
+  readonly accelerator?: string
+  /** Whether the item is enabled (the live property, not a stale attribute). */
+  readonly enabled: boolean
+  /** Whether the item is visible. */
+  readonly visible: boolean
+  /** Checked state — present only for `checkbox` / `radio` items. */
+  readonly checked?: boolean
+  readonly sublabel?: string
+  readonly toolTip?: string
+  /** Nested submenu items, present only for `submenu` items. */
+  readonly submenu?: readonly NativeMenuItem[]
+}
+
+/**
+ * A point-in-time read of the app's native application menu (the macOS menu bar / app menu), read from
+ * the Electron main process. Read-only and JSON-serialisable — the no-eval way to ASSERT native-UI
+ * state (is the Save item enabled? is Dark Mode checked?). `null` (not this type) is returned when the
+ * app has no application menu set.
+ */
+export interface NativeMenu {
+  readonly items: readonly NativeMenuItem[]
+}
+
+/**
  * A live session against an Electron app, returned by `launch`, `attach`, or
  * `inject`. Disposal is idempotent: calling `dispose()` twice MUST NOT throw,
  * and MUST NOT double-free underlying resources.
@@ -692,6 +734,13 @@ export interface TransportSession {
 
   /** Read a point-in-time {@link StorageSnapshot} — every cookie plus each visited origin's localStorage. */
   storageSnapshot(): Promise<StorageSnapshot>
+
+  // --- Native UI surface (requires `capabilities.canAccessNativeUI`) ---
+  // Read the app's native chrome (the application menu) from the main process, the no-eval way to assert
+  // native-UI state. A transport that cannot reach the main process rejects this with `NOT_IMPLEMENTED`.
+
+  /** Read the app's application menu ({@link NativeMenu}), or `null` when the app has none set. */
+  getApplicationMenu(): Promise<NativeMenu | null>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

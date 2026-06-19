@@ -101,6 +101,7 @@ import type {
   ITransport,
   IpcChannel,
   LaunchOptions,
+  NativeMenu,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
@@ -1090,6 +1091,14 @@ class CdpSession implements TransportSession {
     }
   }
 
+  // --- Native UI seam: not reachable over CDP (canAccessNativeUI: false). ---
+  // The application menu lives in the Electron main-process Node context; CDP's evaluate runs against the
+  // browser target, which has no Electron `Menu` module, so the seam stays honestly unimplemented.
+
+  getApplicationMenu(): Promise<NativeMenu | null> {
+    return Promise.reject(notImplemented('getApplicationMenu'))
+  }
+
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---
 
   /**
@@ -1440,6 +1449,9 @@ export class CDPTransport implements ITransport {
     canIntercept: true,
     canControlClock: false,
     canAccessStorage: true,
+    // The application menu lives in the Electron main-process Node context, unreachable over the CDP
+    // browser-target evaluate; the native-UI seam stays honestly unimplemented.
+    canAccessNativeUI: false,
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,

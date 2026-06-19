@@ -430,3 +430,21 @@ This is the inverse of the clock lesson and the reason the matrix carries `canIn
 where the clock seam could only be honestly wired on Playwright, the storage seam is honestly wired on
 both observe-capable transports, so both advertise true — and the one partial (CDP `localStorage`) is
 documented rather than hidden behind a rejecting method.
+
+## Status Update — 2026-06-19: canAccessNativeUI's first consumer (native-UI seam)
+
+A `canAccessNativeUI` capability is added to `TransportCapabilities` and consumed by a native-UI read
+seam on `TransportSession` — `getApplicationMenu()` (plus the types `NativeMenu` / `NativeMenuItem`) —
+driven by the native-UI plugin (see ADR-019). Like the clock seam, it is Playwright-only:
+
+- The **Playwright transport** implements it via `electronApp.evaluate` running a fixed serializer over
+  `Menu.getApplicationMenu()` in the Electron main-process Node context, and declares
+  `canAccessNativeUI: true`.
+- The **CDP transport** declares `canAccessNativeUI: false`: its `supportsMainEval` is `Runtime.evaluate`
+  against the **browser target**, which has no Electron `Menu` module, so it cannot reach the main-process
+  menu. The seam method rejects `NOT_IMPLEMENTED`.
+- The **injector** transport keeps `canAccessNativeUI: false` (capability-honest stub).
+
+The lesson is the same the matrix keeps teaching: a capability is advertised true only where the whole
+seam is honestly wired. The application menu lives in the main-process Node context, which only the
+Playwright `electronApp.evaluate` path reaches, so only it advertises true.

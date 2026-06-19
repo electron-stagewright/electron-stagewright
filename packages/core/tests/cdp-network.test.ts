@@ -596,6 +596,17 @@ describe('CdpSession clock seam (honest-false)', () => {
   })
 })
 
+describe('CdpSession native-UI seam (honest-false)', () => {
+  it('declares canAccessNativeUI false and rejects getApplicationMenu with NOT_IMPLEMENTED', async () => {
+    const { transport } = setup()
+    // The application menu lives in the Electron main-process Node context, unreachable over the CDP
+    // browser-target evaluate, so the capability stays honestly false (not an aspirational true).
+    expect(transport.capabilities.canAccessNativeUI).toBe(false)
+    const session = await transport.attach({ port: 9222 })
+    await expect(session.getApplicationMenu()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+  })
+})
+
 describe('CdpSession storage seam (honest-true)', () => {
   it('declares canAccessStorage true and implements every seam method (no NOT_IMPLEMENTED trap)', async () => {
     const { server, transport } = setup()

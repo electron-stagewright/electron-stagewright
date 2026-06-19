@@ -235,6 +235,19 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
 
+  packages/plugin-native-ui:
+    dependencies:
+      '@electron-stagewright/core':
+        specifier: workspace:*
+        version: link:../core
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.3)
+
   packages/plugin-network:
     dependencies:
       '@electron-stagewright/core':

@@ -64,6 +64,7 @@ import type {
   ITransport,
   IpcChannel,
   LaunchOptions,
+  NativeMenu,
   NetworkCaptureFilter,
   NetworkEventsOptions,
   NetworkEventsResult,
@@ -381,6 +382,12 @@ class InjectorSession implements TransportSession {
     return Promise.reject(notImplemented('storageSnapshot'))
   }
 
+  // --- Native UI seam: not implemented on the injector stub (canAccessNativeUI: false). ---
+
+  getApplicationMenu(): Promise<NativeMenu | null> {
+    return Promise.reject(notImplemented('getApplicationMenu'))
+  }
+
   // --- Interaction surface: the main process has no renderer to drive. ---
 
   click(): Promise<void> {
@@ -507,6 +514,7 @@ export class InjectorTransport implements ITransport {
     canIntercept: false,
     canControlClock: false,
     canAccessStorage: false,
+    canAccessNativeUI: false,
     supportsMainEval: true,
     supportsRendererEval: false,
     supportsInteraction: false,

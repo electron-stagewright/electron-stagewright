@@ -76,6 +76,8 @@ import type {
   CookieFilter,
   IpcChannel,
   LaunchOptions,
+  NativeMenu,
+  NativeMenuItem,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
@@ -850,6 +852,81 @@ class PlaywrightSession implements TransportSession {
     }
   }
 
+  // --- Native UI: read the application menu from the main process (ADR-019, no agent eval). ---
+
+  async getApplicationMenu(): Promise<NativeMenu | null> {
+    const app = this.requireRunning()
+    // The serializer runs in the Electron MAIN process via Playwright's electronApp.evaluate. It MUST be
+    // fully self-contained (no closure refs) — Playwright source-extracts the function — so the recursive
+    // walker is declared inline. It reads only the data fields (the click handler and Electron-internal
+    // refs are never touched), so the result is JSON-serialisable, and surfaces `role` so role-based
+    // items with no explicit label stay findable.
+    return app.evaluate<NativeMenu | null>((electron) => {
+      const menuModule = (electron as { Menu?: { getApplicationMenu?: () => unknown } }).Menu
+      const root =
+        menuModule !== undefined && typeof menuModule.getApplicationMenu === 'function'
+          ? menuModule.getApplicationMenu()
+          : null
+      if (root === null || root === undefined) return null
+      interface RawItem {
+        id?: unknown
+        label?: unknown
+        role?: unknown
+        type?: unknown
+        accelerator?: unknown
+        enabled?: unknown
+        visible?: unknown
+        checked?: unknown
+        sublabel?: unknown
+        toolTip?: unknown
+        submenu?: { items?: unknown } | undefined
+      }
+      const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+      function serializeItem(raw: RawItem): NativeMenuItem {
+        const rawType = str(raw.type)
+        const type: NativeMenuItem['type'] =
+          rawType === 'separator' ||
+          rawType === 'submenu' ||
+          rawType === 'checkbox' ||
+          rawType === 'radio' ||
+          rawType === 'header' ||
+          rawType === 'palette'
+            ? rawType
+            : 'normal'
+        const item: {
+          id?: string
+          label: string
+          role?: string
+          type: NativeMenuItem['type']
+          accelerator?: string
+          enabled: boolean
+          visible: boolean
+          checked?: boolean
+          sublabel?: string
+          toolTip?: string
+          submenu?: NativeMenuItem[]
+        } = {
+          label: str(raw.label),
+          type,
+          enabled: raw.enabled !== false,
+          visible: raw.visible !== false,
+        }
+        if (typeof raw.id === 'string' && raw.id !== '') item.id = raw.id
+        if (typeof raw.role === 'string' && raw.role !== '') item.role = raw.role
+        if (typeof raw.accelerator === 'string' && raw.accelerator !== '')
+          item.accelerator = raw.accelerator
+        if (item.type === 'checkbox' || item.type === 'radio') item.checked = raw.checked === true
+        if (typeof raw.sublabel === 'string' && raw.sublabel !== '') item.sublabel = raw.sublabel
+        if (typeof raw.toolTip === 'string' && raw.toolTip !== '') item.toolTip = raw.toolTip
+        const subItems = raw.submenu?.items
+        if (Array.isArray(subItems)) item.submenu = subItems.map((s) => serializeItem(s as RawItem))
+        return item
+      }
+      const items = (root as { items?: unknown }).items
+      return { items: Array.isArray(items) ? items.map((i) => serializeItem(i as RawItem)) : [] }
+    })
+  }
+
   private requireRunning(): PWElectronApp {
     if (this.disposed || this.app === null) {
       throw new StagewrightError(
@@ -1286,6 +1363,9 @@ export class PlaywrightElectronTransport implements ITransport {
     canIntercept: true,
     canControlClock: true,
     canAccessStorage: true,
+    // The application menu is readable from the main process via electronApp.evaluate (a fixed serializer,
+    // not agent JS), so the native-UI read seam is honestly implemented here.
+    canAccessNativeUI: true,
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,

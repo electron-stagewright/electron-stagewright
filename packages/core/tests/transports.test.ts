@@ -72,6 +72,7 @@ const FAKE_SESSION: TransportSession = {
   setCookie: async () => undefined,
   clearCookies: async () => undefined,
   storageSnapshot: async () => ({ cookies: [], origins: [] }),
+  getApplicationMenu: async () => null,
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -480,8 +481,9 @@ function createFakeElectronApp(
       ) => unknown,
       arg?: { readonly body: string; readonly arg?: unknown },
     ): Promise<T> => {
-      if (arg === undefined) return undefined as T
-      return fn(electronModule, arg) as T
+      // Mirror real Playwright: electronApp.evaluate(fn) runs the fn with the electron module as the
+      // first arg whether or not a payload is given (the native-UI serializer takes no payload arg).
+      return fn(electronModule, arg as { readonly body: string; readonly arg?: unknown }) as T
     },
     close: async () => {
       closeCalls += 1
@@ -510,6 +512,7 @@ describe('PlaywrightElectronTransport', () => {
       canIntercept: true,
       canControlClock: true,
       canAccessStorage: true,
+      canAccessNativeUI: true,
       supportsMainEval: true,
       supportsRendererEval: true,
       supportsInteraction: true,
@@ -994,6 +997,7 @@ describe('CDPTransport', () => {
       canIntercept: true,
       canControlClock: false,
       canAccessStorage: true,
+      canAccessNativeUI: false,
       supportsMainEval: true,
       supportsRendererEval: true,
       supportsInteraction: true,
@@ -1041,6 +1045,7 @@ describe('InjectorTransport', () => {
       canIntercept: false,
       canControlClock: false,
       canAccessStorage: false,
+      canAccessNativeUI: false,
       supportsMainEval: true,
       supportsRendererEval: false,
       supportsInteraction: false,
@@ -1730,6 +1735,107 @@ describe('PlaywrightSession storage access', () => {
     ).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.clearCookies()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.storageSnapshot()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+})
+
+describe('PlaywrightSession native UI', () => {
+  // A fake Electron application menu shaped like Menu.getApplicationMenu()'s return: items carry data
+  // fields plus a `click` handler and a `commandId` internal ref that the serializer MUST drop.
+  function fakeAppMenu() {
+    return {
+      items: [
+        {
+          label: 'Edit',
+          type: 'submenu',
+          enabled: true,
+          visible: true,
+          commandId: 42,
+          submenu: {
+            items: [
+              {
+                label: 'Undo',
+                role: 'undo',
+                type: 'normal',
+                enabled: true,
+                visible: true,
+                accelerator: 'CmdOrCtrl+Z',
+                click: () => undefined,
+              },
+              { label: '', type: 'separator', enabled: true, visible: true },
+              {
+                label: 'Spellcheck',
+                type: 'checkbox',
+                enabled: true,
+                visible: true,
+                checked: true,
+              },
+              { label: 'Writing Tools', type: 'header', enabled: true, visible: true },
+              { label: 'Palette', type: 'palette', enabled: true, visible: true },
+              { label: 'Paste', role: 'paste', type: 'normal', enabled: false, visible: true },
+            ],
+          },
+        },
+      ],
+    }
+  }
+
+  async function launchWithMenu(electronModule: unknown) {
+    const app = createFakeElectronApp([createFakePage('A')], electronModule)
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    return { session }
+  }
+
+  it('serializes the application menu, dropping handlers and internal refs', async () => {
+    const { session } = await launchWithMenu({ Menu: { getApplicationMenu: () => fakeAppMenu() } })
+    const menu = await session.getApplicationMenu()
+    expect(menu).toEqual({
+      items: [
+        {
+          label: 'Edit',
+          type: 'submenu',
+          enabled: true,
+          visible: true,
+          submenu: [
+            {
+              label: 'Undo',
+              role: 'undo',
+              type: 'normal',
+              enabled: true,
+              visible: true,
+              accelerator: 'CmdOrCtrl+Z',
+            },
+            { label: '', type: 'separator', enabled: true, visible: true },
+            { label: 'Spellcheck', type: 'checkbox', enabled: true, visible: true, checked: true },
+            { label: 'Writing Tools', type: 'header', enabled: true, visible: true },
+            { label: 'Palette', type: 'palette', enabled: true, visible: true },
+            { label: 'Paste', role: 'paste', type: 'normal', enabled: false, visible: true },
+          ],
+        },
+      ],
+    })
+    // The click handler and the commandId internal ref are gone — the payload is pure JSON.
+    expect(JSON.parse(JSON.stringify(menu))).toEqual(menu)
+    expect(menu?.items[0]).not.toHaveProperty('commandId')
+    expect(menu?.items[0]?.submenu?.[0]).not.toHaveProperty('click')
+  })
+
+  it('returns null when the app has no application menu', async () => {
+    const { session } = await launchWithMenu({ Menu: { getApplicationMenu: () => null } })
+    expect(await session.getApplicationMenu()).toBeNull()
+  })
+
+  it('returns null when the electron module exposes no Menu', async () => {
+    const { session } = await launchWithMenu({})
+    expect(await session.getApplicationMenu()).toBeNull()
+  })
+
+  it('rejects getApplicationMenu after dispose', async () => {
+    const { session } = await launchWithMenu({ Menu: { getApplicationMenu: () => fakeAppMenu() } })
+    await session.dispose()
+    await expect(session.getApplicationMenu()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })
 })
 
