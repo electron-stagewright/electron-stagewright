@@ -409,3 +409,24 @@ clock seam on `TransportSession` — `installClock` / `setFixedTime` / `setSyste
 This is the same lesson `canIntercept` taught, applied proactively: a capability is advertised true only
 where the whole seam is honestly wired, and an aspirational true (CDP's) is corrected to false the
 moment the capability gains a real consumer.
+
+## Status Update — 2026-06-19: canAccessStorage's first consumers (storage seam)
+
+A `canAccessStorage` capability is added to `TransportCapabilities` and immediately consumed by a
+storage seam on `TransportSession` — `getCookies` / `setCookie` / `clearCookies` / `storageSnapshot`
+(plus the types `StorageCookie` / `CookieFilter` / `StorageOrigin` / `StorageSnapshot`) — driven by the
+storage plugin (see ADR-018). Unlike `canControlClock`, this capability has TWO honest implementers from
+the start:
+
+- The **Playwright transport** implements the seam via the page's `BrowserContext` (`cookies` /
+  `addCookies` / `clearCookies` / `storageState`) and declares `canAccessStorage: true`.
+- The **CDP transport** implements it via the `Storage` / `Network` domains (cookies) plus a best-effort
+  `DOMStorage` read for the snapshot's `localStorage` half, and **also** declares `canAccessStorage: true`.
+  That is honest because every seam method is wired and resolves (the best-effort `localStorage` is a
+  documented partial within the snapshot, not a rejecting method).
+- The **injector** transport keeps `canAccessStorage: false` (no renderer storage).
+
+This is the inverse of the clock lesson and the reason the matrix carries `canIntercept`-style nuance:
+where the clock seam could only be honestly wired on Playwright, the storage seam is honestly wired on
+both observe-capable transports, so both advertise true — and the one partial (CDP `localStorage`) is
+documented rather than hidden behind a rejecting method.

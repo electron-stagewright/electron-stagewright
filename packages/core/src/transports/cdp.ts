@@ -91,6 +91,7 @@ import type {
   ConsoleEntry,
   ConsoleLogsResult,
   ConsoleStream,
+  CookieFilter,
   DialogEvent,
   DialogEventsOptions,
   DialogEventsResult,
@@ -111,6 +112,8 @@ import type {
   ScrollOptions,
   StopOptions,
   StopResult,
+  StorageCookie,
+  StorageSnapshot,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -175,6 +178,32 @@ function notImplemented(method: string): StagewrightError {
     `CDPTransport does not yet implement ${method}; clock control over the CDP Emulation domain is a planned follow-up.`,
     { transport: TRANSPORT_ID, method },
   )
+}
+
+/** The `Network.Cookie` slice we read. `expires` is epoch SECONDS; `-1` means a session cookie. */
+interface CdpCookie {
+  readonly name: string
+  readonly value: string
+  readonly domain?: string
+  readonly path?: string
+  readonly expires?: number
+  readonly httpOnly?: boolean
+  readonly secure?: boolean
+  readonly sameSite?: 'Strict' | 'Lax' | 'None'
+}
+
+/** Map a CDP cookie to the JSON-serialisable {@link StorageCookie} (drops the `-1` session sentinel). */
+function cdpCookieToStorage(c: CdpCookie): StorageCookie {
+  return {
+    name: c.name,
+    value: c.value,
+    ...(c.domain !== undefined ? { domain: c.domain } : {}),
+    ...(c.path !== undefined ? { path: c.path } : {}),
+    ...(c.expires !== undefined && c.expires >= 0 ? { expires: c.expires } : {}),
+    ...(c.httpOnly !== undefined ? { httpOnly: c.httpOnly } : {}),
+    ...(c.secure !== undefined ? { secure: c.secure } : {}),
+    ...(c.sameSite !== undefined ? { sameSite: c.sameSite } : {}),
+  }
 }
 
 /** Max network events retained per session; older ones are dropped and counted in the overflow. */
@@ -955,6 +984,112 @@ class CdpSession implements TransportSession {
     return Promise.reject(notImplemented('resumeClock'))
   }
 
+  // --- Storage seam: cookies over the CDP Storage/Network domains + localStorage via DOMStorage. ---
+
+  async getCookies(filter?: CookieFilter): Promise<readonly StorageCookie[]> {
+    this.#requireRunning()
+    const cookies =
+      filter?.urls !== undefined
+        ? await this.#cookiesForUrls(filter.urls)
+        : await this.#allBrowserCookies()
+    return filter?.name !== undefined ? cookies.filter((c) => c.name === filter.name) : cookies
+  }
+
+  async setCookie(cookie: StorageCookie): Promise<void> {
+    this.#requireRunning()
+    const conn = await this.#pageConnection()
+    await conn.send('Network.setCookie', {
+      name: cookie.name,
+      value: cookie.value,
+      ...(cookie.url !== undefined ? { url: cookie.url } : {}),
+      ...(cookie.domain !== undefined ? { domain: cookie.domain } : {}),
+      ...(cookie.path !== undefined ? { path: cookie.path } : {}),
+      ...(cookie.expires !== undefined ? { expires: cookie.expires } : {}),
+      ...(cookie.httpOnly !== undefined ? { httpOnly: cookie.httpOnly } : {}),
+      ...(cookie.secure !== undefined ? { secure: cookie.secure } : {}),
+      ...(cookie.sameSite !== undefined ? { sameSite: cookie.sameSite } : {}),
+    })
+  }
+
+  async clearCookies(filter?: CookieFilter): Promise<void> {
+    this.#requireRunning()
+    const conn = await this.#pageConnection()
+    if (filter === undefined || (filter.urls === undefined && filter.name === undefined)) {
+      await conn.send('Network.clearBrowserCookies')
+      return
+    }
+    // Delete each matching cookie precisely by name (+ its domain/path); CDP has no URL-filtered clear.
+    for (const c of await this.getCookies(filter)) {
+      await conn.send('Network.deleteCookies', {
+        name: c.name,
+        ...(c.domain !== undefined ? { domain: c.domain } : {}),
+        ...(c.path !== undefined ? { path: c.path } : {}),
+      })
+    }
+  }
+
+  async storageSnapshot(): Promise<StorageSnapshot> {
+    this.#requireRunning()
+    const conn = await this.#pageConnection()
+    const cookies = await this.#allBrowserCookies()
+    // localStorage is best-effort on CDP: read the active page's origin via DOMStorage. A failure
+    // (no origin, file:// scheme, domain disabled) leaves localStorage empty — the cookies still return.
+    const origins: { origin: string; localStorage: { name: string; value: string }[] }[] = []
+    try {
+      const origin = await this.#activeOrigin()
+      if (origin !== undefined) {
+        await conn.send('DOMStorage.enable').catch(() => undefined)
+        const items = await conn.send<{ entries?: readonly [string, string][] }>(
+          'DOMStorage.getDOMStorageItems',
+          { storageId: { securityOrigin: origin, isLocalStorage: true } },
+        )
+        origins.push({
+          origin,
+          localStorage: (items.entries ?? []).map(([name, value]) => ({ name, value })),
+        })
+      }
+    } catch {
+      // best-effort; cookies are the reliable part of the CDP snapshot
+    }
+    return { cookies, origins }
+  }
+
+  /** All cookies in the attached browser context. Prefer the modern Storage domain; fall back to page cookies. */
+  async #allBrowserCookies(): Promise<readonly StorageCookie[]> {
+    try {
+      const res = await this.#browser.send<{ cookies?: readonly CdpCookie[] }>(
+        'Storage.getCookies',
+        {},
+      )
+      return (res.cookies ?? []).map(cdpCookieToStorage)
+    } catch {
+      // Older runtimes may not expose Storage.getCookies on the browser endpoint. Keep the seam resolving
+      // honestly by falling back to Network.getCookies for the active page/subframes.
+      const conn = await this.#pageConnection()
+      const res = await conn.send<{ cookies?: readonly CdpCookie[] }>('Network.getCookies', {})
+      return (res.cookies ?? []).map(cdpCookieToStorage)
+    }
+  }
+
+  /** URL-applicable cookies via the Network domain, preserving the explicit URL filter semantics. */
+  async #cookiesForUrls(urls: readonly string[]): Promise<readonly StorageCookie[]> {
+    const conn = await this.#pageConnection()
+    const res = await conn.send<{ cookies?: readonly CdpCookie[] }>('Network.getCookies', {
+      urls: [...urls],
+    })
+    return (res.cookies ?? []).map(cdpCookieToStorage)
+  }
+
+  /** The active page target's URL origin, for the localStorage snapshot; undefined when not derivable. */
+  async #activeOrigin(): Promise<string | undefined> {
+    try {
+      const target = await this.#firstTarget()
+      return new URL(target.url).origin
+    } catch {
+      return undefined
+    }
+  }
+
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---
 
   /**
@@ -1304,6 +1439,7 @@ export class CDPTransport implements ITransport {
     // (stub), so the capability is honestly true — every seam method works, none throws NOT_IMPLEMENTED.
     canIntercept: true,
     canControlClock: false,
+    canAccessStorage: true,
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,

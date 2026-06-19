@@ -39,6 +39,10 @@ export type {
   NetworkStubResponse,
   ClockTime,
   ClockInstallOptions,
+  StorageCookie,
+  CookieFilter,
+  StorageOrigin,
+  StorageSnapshot,
   TransportSession,
   ITransport,
 } from './types.js'

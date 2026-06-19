@@ -56,6 +56,7 @@ import type {
   ConsoleEntry,
   ConsoleLogsResult,
   ConsoleStream,
+  CookieFilter,
   DialogEventsOptions,
   DialogEventsResult,
   DialogPolicy,
@@ -69,6 +70,8 @@ import type {
   NetworkStub,
   StopOptions,
   StopResult,
+  StorageCookie,
+  StorageSnapshot,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -363,6 +366,21 @@ class InjectorSession implements TransportSession {
     return Promise.reject(notImplemented('resumeClock'))
   }
 
+  // --- Storage seam: no renderer storage to access (canAccessStorage: false). ---
+
+  getCookies(_filter?: CookieFilter): Promise<readonly StorageCookie[]> {
+    return Promise.reject(notImplemented('getCookies'))
+  }
+  setCookie(_cookie: StorageCookie): Promise<void> {
+    return Promise.reject(notImplemented('setCookie'))
+  }
+  clearCookies(_filter?: CookieFilter): Promise<void> {
+    return Promise.reject(notImplemented('clearCookies'))
+  }
+  storageSnapshot(): Promise<StorageSnapshot> {
+    return Promise.reject(notImplemented('storageSnapshot'))
+  }
+
   // --- Interaction surface: the main process has no renderer to drive. ---
 
   click(): Promise<void> {
@@ -488,6 +506,7 @@ export class InjectorTransport implements ITransport {
     canInject: true,
     canIntercept: false,
     canControlClock: false,
+    canAccessStorage: false,
     supportsMainEval: true,
     supportsRendererEval: false,
     supportsInteraction: false,

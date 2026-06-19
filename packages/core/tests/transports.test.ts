@@ -68,6 +68,10 @@ const FAKE_SESSION: TransportSession = {
   runClockFor: async () => undefined,
   pauseClockAt: async () => undefined,
   resumeClock: async () => undefined,
+  getCookies: async () => [],
+  setCookie: async () => undefined,
+  clearCookies: async () => undefined,
+  storageSnapshot: async () => ({ cookies: [], origins: [] }),
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -102,6 +106,14 @@ function createFakePage(
   // Records page.clock calls so the PlaywrightSession clock-seam tests can assert the mapping
   // (installClock -> install, advanceClock -> fastForward, setFixedTime -> setSystemTime+pauseAt, etc.).
   const clockCalls: { method: string; arg?: unknown }[] = []
+  // Backing store for the fake BrowserContext (the storage seam): cookies + a storageState snapshot.
+  type FakeCookie = { name: string; value: string; domain?: string; path?: string; url?: string }
+  let cookieStore: FakeCookie[] = []
+  const storageStateData = {
+    cookies: cookieStore,
+    origins: [] as { origin: string; localStorage: { name: string; value: string }[] }[],
+  }
+  const clearCookiesCalls: { name?: string; domain?: string; path?: string }[] = []
   // Editable-content model backing the type-effect check: fill/type/keyboard-type update a
   // selector's content; the type-effect signature read (evaluate with arg.settleMs) reads it.
   // Selectors in `inertSelectors` swallow input (content never changes), simulating a modern
@@ -150,6 +162,34 @@ function createFakePage(
       resume: async () => {
         clockCalls.push({ method: 'resume' })
       },
+    },
+    // Inspectors for the storage seam tests.
+    get cookieStore() {
+      return cookieStore
+    },
+    clearCookiesCalls,
+    setStorageOrigins(
+      origins: { origin: string; localStorage: { name: string; value: string }[] }[],
+    ) {
+      storageStateData.origins = origins
+    },
+    context() {
+      return {
+        cookies: async (_urls?: string | readonly string[]) => [...cookieStore],
+        addCookies: async (cookies: readonly FakeCookie[]) => {
+          cookieStore.push(...cookies)
+        },
+        clearCookies: async (options?: { name?: string; domain?: string; path?: string }) => {
+          clearCookiesCalls.push(options ?? {})
+          cookieStore =
+            options?.name !== undefined ? cookieStore.filter((c) => c.name !== options.name) : []
+          storageStateData.cookies = cookieStore
+        },
+        storageState: async () => ({
+          cookies: [...cookieStore],
+          origins: storageStateData.origins,
+        }),
+      }
     },
     interactions,
     url: () => `app:///${title}`,
@@ -469,6 +509,7 @@ describe('PlaywrightElectronTransport', () => {
       canInject: false,
       canIntercept: true,
       canControlClock: true,
+      canAccessStorage: true,
       supportsMainEval: true,
       supportsRendererEval: true,
       supportsInteraction: true,
@@ -952,6 +993,7 @@ describe('CDPTransport', () => {
       canInject: false,
       canIntercept: true,
       canControlClock: false,
+      canAccessStorage: true,
       supportsMainEval: true,
       supportsRendererEval: true,
       supportsInteraction: true,
@@ -998,6 +1040,7 @@ describe('InjectorTransport', () => {
       canInject: true,
       canIntercept: false,
       canControlClock: false,
+      canAccessStorage: false,
       supportsMainEval: true,
       supportsRendererEval: false,
       supportsInteraction: false,
@@ -1601,6 +1644,92 @@ describe('PlaywrightSession clock control', () => {
     await session.dispose()
     await expect(session.installClock()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.advanceClock(1)).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+})
+
+describe('PlaywrightSession storage access', () => {
+  async function launchWithPage() {
+    const page = createFakePage('A')
+    const app = createFakeElectronApp([page])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    return { page, session }
+  }
+
+  it('sets a cookie through the context (addCookies) verbatim', async () => {
+    const { page, session } = await launchWithPage()
+    await session.setCookie({ name: 'auth', value: 'tok', url: 'https://app.example.com' })
+    expect(page.cookieStore).toEqual([
+      { name: 'auth', value: 'tok', url: 'https://app.example.com' },
+    ])
+  })
+
+  it('reads cookies and applies the name filter', async () => {
+    const { page, session } = await launchWithPage()
+    await page.context().addCookies([
+      { name: 'auth', value: 'a', domain: 'app.example.com', path: '/' },
+      { name: 'theme', value: 'dark', domain: 'app.example.com', path: '/' },
+    ])
+    expect(await session.getCookies()).toHaveLength(2)
+    expect(await session.getCookies({ name: 'auth' })).toEqual([
+      { name: 'auth', value: 'a', domain: 'app.example.com', path: '/' },
+    ])
+  })
+
+  it('clears all cookies when no filter is given', async () => {
+    const { page, session } = await launchWithPage()
+    await page.context().addCookies([{ name: 'auth', value: 'a' }])
+    await session.clearCookies()
+    expect(page.cookieStore).toEqual([])
+    expect(page.clearCookiesCalls).toEqual([{}])
+  })
+
+  it('clears one cookie by name', async () => {
+    const { page, session } = await launchWithPage()
+    await page.context().addCookies([
+      { name: 'auth', value: 'a' },
+      { name: 'theme', value: 'dark' },
+    ])
+    await session.clearCookies({ name: 'auth' })
+    expect(page.cookieStore.map((c) => c.name)).toEqual(['theme'])
+    expect(page.clearCookiesCalls).toEqual([{ name: 'auth' }])
+  })
+
+  it('clears a url-scoped cookie precisely by name/domain/path (no URL option on clearCookies)', async () => {
+    const { page, session } = await launchWithPage()
+    await page
+      .context()
+      .addCookies([{ name: 'auth', value: 'a', domain: 'app.example.com', path: '/' }])
+    await session.clearCookies({ urls: ['https://app.example.com'] })
+    // The url-scoped branch reads the matching cookies and clears each by its precise key.
+    expect(page.clearCookiesCalls).toEqual([{ name: 'auth', domain: 'app.example.com', path: '/' }])
+  })
+
+  it('maps the storage state into the snapshot (cookies + origins)', async () => {
+    const { page, session } = await launchWithPage()
+    await page.context().addCookies([{ name: 'auth', value: 'a', domain: 'app.example.com' }])
+    page.setStorageOrigins([
+      { origin: 'https://app.example.com', localStorage: [{ name: 'cart', value: '3-items' }] },
+    ])
+    expect(await session.storageSnapshot()).toEqual({
+      cookies: [{ name: 'auth', value: 'a', domain: 'app.example.com' }],
+      origins: [
+        { origin: 'https://app.example.com', localStorage: [{ name: 'cart', value: '3-items' }] },
+      ],
+    })
+  })
+
+  it('rejects storage ops after dispose', async () => {
+    const { session } = await launchWithPage()
+    await session.dispose()
+    await expect(session.getCookies()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+    await expect(
+      session.setCookie({ name: 'a', value: 'b', url: 'https://x.example' }),
+    ).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+    await expect(session.clearCookies()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+    await expect(session.storageSnapshot()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })
 })
 

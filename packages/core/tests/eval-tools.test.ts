@@ -23,6 +23,7 @@ function caps(partial: Partial<TransportCapabilities>): TransportCapabilities {
     canInject: true,
     canIntercept: true,
     canControlClock: true,
+    canAccessStorage: true,
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,

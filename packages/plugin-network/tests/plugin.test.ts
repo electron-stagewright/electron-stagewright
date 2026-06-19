@@ -47,6 +47,7 @@ const FULL_CAPS: TransportCapabilities = {
   canInject: true,
   canIntercept: true,
   canControlClock: true,
+  canAccessStorage: true,
   supportsMainEval: true,
   supportsRendererEval: true,
   supportsInteraction: true,

@@ -39,6 +39,8 @@ export interface TransportCapabilities {
   readonly canIntercept: boolean
   /** The transport can install a synthetic clock for time-based testing. */
   readonly canControlClock: boolean
+  /** The transport can read and seed the app's storage (cookies + the storage snapshot) via the seam. */
+  readonly canAccessStorage: boolean
   /** The transport can evaluate JavaScript in the main process context. */
   readonly supportsMainEval: boolean
   /** The transport can evaluate JavaScript in a renderer (BrowserWindow) context. */
@@ -517,6 +519,50 @@ export interface ClockInstallOptions {
 }
 
 /**
+ * One HTTP cookie, as read from / written to the app's storage. JSON-serialisable: `expires` is epoch
+ * SECONDS (a number; `-1`/absent means a session cookie), never a `Date`. The cookie VALUE can carry a
+ * secret (an auth token), so the storage plugin redacts it by default before it reaches the agent.
+ */
+export interface StorageCookie {
+  readonly name: string
+  readonly value: string
+  /** Cookie domain (e.g. `app.example.com`); set this OR `url` when writing. */
+  readonly domain?: string
+  readonly path?: string
+  /** Expiry in epoch SECONDS; absent or `-1` is a session cookie. */
+  readonly expires?: number
+  readonly httpOnly?: boolean
+  readonly secure?: boolean
+  readonly sameSite?: 'Strict' | 'Lax' | 'None'
+  /** A URL the cookie applies to; set this OR `domain`+`path` when writing. */
+  readonly url?: string
+}
+
+/** Narrows a cookie read/clear: by the URL the cookie applies to and/or its name. Absent = all cookies. */
+export interface CookieFilter {
+  /** Only cookies that apply to these URLs. */
+  readonly urls?: readonly string[]
+  /** Only the cookie with this exact name. */
+  readonly name?: string
+}
+
+/** Per-origin localStorage entries in a {@link StorageSnapshot}. */
+export interface StorageOrigin {
+  readonly origin: string
+  readonly localStorage: readonly { readonly name: string; readonly value: string }[]
+}
+
+/**
+ * A point-in-time snapshot of the app's storage: every cookie plus each visited origin's localStorage.
+ * Read-only and JSON-serialisable — the no-eval way to ASSERT storage state (localStorage runtime
+ * writes need eval; see the storage plugin). Cookie values are redacted by the plugin before the agent.
+ */
+export interface StorageSnapshot {
+  readonly cookies: readonly StorageCookie[]
+  readonly origins: readonly StorageOrigin[]
+}
+
+/**
  * A live session against an Electron app, returned by `launch`, `attach`, or
  * `inject`. Disposal is idempotent: calling `dispose()` twice MUST NOT throw,
  * and MUST NOT double-free underlying resources.
@@ -630,6 +676,22 @@ export interface TransportSession {
 
   /** Resume the real clock (timers advance with real wall-clock time again). */
   resumeClock(): Promise<void>
+
+  // --- Storage surface (requires `capabilities.canAccessStorage`) ---
+  // Read and seed the app's cookies + read the storage snapshot, the no-eval way to set up and assert
+  // persisted state. A transport that cannot access storage rejects these with `NOT_IMPLEMENTED`.
+
+  /** Read the app's cookies, optionally narrowed by `filter` (URL and/or name). */
+  getCookies(filter?: CookieFilter): Promise<readonly StorageCookie[]>
+
+  /** Add or overwrite one cookie. The cookie MUST carry a `url` or a `domain` (Playwright requires one). */
+  setCookie(cookie: StorageCookie): Promise<void>
+
+  /** Clear cookies — all of them, or only those matching `filter` (URL and/or name). Idempotent. */
+  clearCookies(filter?: CookieFilter): Promise<void>
+
+  /** Read a point-in-time {@link StorageSnapshot} — every cookie plus each visited origin's localStorage. */
+  storageSnapshot(): Promise<StorageSnapshot>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

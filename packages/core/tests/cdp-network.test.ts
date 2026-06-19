@@ -595,3 +595,121 @@ describe('CdpSession clock seam (honest-false)', () => {
     await expect(session.resumeClock()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
   })
 })
+
+describe('CdpSession storage seam (honest-true)', () => {
+  it('declares canAccessStorage true and implements every seam method (no NOT_IMPLEMENTED trap)', async () => {
+    const { server, transport } = setup()
+    expect(transport.capabilities.canAccessStorage).toBe(true)
+    server.respond('Storage.getCookies', () => ({ cookies: [] }))
+    const session = await transport.attach({ port: 9222 })
+    await expect(session.getCookies()).resolves.toEqual([])
+    await expect(
+      session.setCookie({ name: 'a', value: 'b', url: 'https://x.test' }),
+    ).resolves.toBeUndefined()
+    await expect(session.clearCookies()).resolves.toBeUndefined()
+    await expect(session.storageSnapshot()).resolves.toMatchObject({ cookies: [] })
+  })
+
+  it('reads unfiltered cookies over Storage.getCookies, drops the -1 session sentinel, applies the name filter', async () => {
+    const { server, transport } = setup()
+    server.respond('Storage.getCookies', () => ({
+      cookies: [
+        { name: 'auth', value: 'a', domain: 'app.test', path: '/', expires: -1 },
+        { name: 'theme', value: 'dark', domain: 'app.test', path: '/', expires: 1893456000 },
+      ],
+    }))
+    const session = await transport.attach({ port: 9222 })
+    const all = await session.getCookies()
+    expect(all).toHaveLength(2)
+    // expires: -1 (session sentinel) is dropped; a real expiry survives.
+    expect(all[0]).toEqual({ name: 'auth', value: 'a', domain: 'app.test', path: '/' })
+    expect(all[1]).toMatchObject({ expires: 1893456000 })
+    expect(await session.getCookies({ name: 'theme' })).toHaveLength(1)
+    expect(server.sentTo('browser', 'Storage.getCookies')).toHaveLength(2)
+  })
+
+  it('passes urls through to Network.getCookies', async () => {
+    const { server, transport } = setup()
+    server.respond('Network.getCookies', () => ({ cookies: [] }))
+    const session = await transport.attach({ port: 9222 })
+    await session.getCookies({ urls: ['https://app.test'] })
+    expect(server.sentTo('page/T1', 'Network.getCookies').at(-1)?.params).toEqual({
+      urls: ['https://app.test'],
+    })
+  })
+
+  it('sets a cookie over Network.setCookie', async () => {
+    const { server, transport } = setup()
+    server.respond('Network.setCookie', () => ({ success: true }))
+    const session = await transport.attach({ port: 9222 })
+    await session.setCookie({ name: 'auth', value: 'tok', url: 'https://app.test' })
+    expect(server.sentTo('page/T1', 'Network.setCookie').at(-1)?.params).toMatchObject({
+      name: 'auth',
+      value: 'tok',
+      url: 'https://app.test',
+    })
+  })
+
+  it('clears all cookies over Network.clearBrowserCookies', async () => {
+    const { server, transport } = setup()
+    const session = await transport.attach({ port: 9222 })
+    await session.clearCookies()
+    expect(server.sentTo('page/T1', 'Network.clearBrowserCookies')).toHaveLength(1)
+  })
+
+  it('deletes each matching cookie precisely over Network.deleteCookies for a filtered clear', async () => {
+    const { server, transport } = setup()
+    server.respond('Storage.getCookies', () => ({
+      cookies: [{ name: 'auth', value: 'a', domain: 'app.test', path: '/' }],
+    }))
+    const session = await transport.attach({ port: 9222 })
+    await session.clearCookies({ name: 'auth' })
+    expect(server.sentTo('page/T1', 'Network.deleteCookies').at(-1)?.params).toEqual({
+      name: 'auth',
+      domain: 'app.test',
+      path: '/',
+    })
+  })
+
+  it('snapshots cookies plus best-effort localStorage via the DOMStorage domain', async () => {
+    const { server, transport } = setup([{ ...T1, url: 'https://app.test/index.html' }])
+    server.respond('Storage.getCookies', () => ({
+      cookies: [{ name: 'auth', value: 'a', domain: 'app.test' }],
+    }))
+    server.respond('DOMStorage.getDOMStorageItems', () => ({ entries: [['cart', '3-items']] }))
+    const session = await transport.attach({ port: 9222 })
+    const snap = await session.storageSnapshot()
+    expect(snap.cookies).toEqual([{ name: 'auth', value: 'a', domain: 'app.test' }])
+    expect(snap.origins).toEqual([
+      { origin: 'https://app.test', localStorage: [{ name: 'cart', value: '3-items' }] },
+    ])
+  })
+
+  it('still returns the cookies when the localStorage read fails (best-effort)', async () => {
+    const { server, transport } = setup([{ ...T1, url: 'https://app.test/index.html' }])
+    server.respond('Storage.getCookies', () => ({ cookies: [{ name: 'auth', value: 'a' }] }))
+    server.respond('DOMStorage.getDOMStorageItems', () => {
+      throw new Error('DOMStorage disabled')
+    })
+    const session = await transport.attach({ port: 9222 })
+    const snap = await session.storageSnapshot()
+    expect(snap.cookies).toEqual([{ name: 'auth', value: 'a' }])
+    expect(snap.origins).toEqual([])
+  })
+
+  it('falls back to Network.getCookies when Storage.getCookies is unavailable', async () => {
+    const { server, transport } = setup()
+    server.respond('Storage.getCookies', () => {
+      throw new Error('Storage domain unavailable')
+    })
+    server.respond('Network.getCookies', () => ({
+      cookies: [{ name: 'auth', value: 'a', domain: 'app.test' }],
+    }))
+    const session = await transport.attach({ port: 9222 })
+    await expect(session.getCookies()).resolves.toEqual([
+      { name: 'auth', value: 'a', domain: 'app.test' },
+    ])
+    expect(server.sentTo('browser', 'Storage.getCookies')).toHaveLength(1)
+    expect(server.sentTo('page/T1', 'Network.getCookies')).toHaveLength(1)
+  })
+})

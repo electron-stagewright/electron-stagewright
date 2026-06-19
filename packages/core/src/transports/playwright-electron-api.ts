@@ -81,6 +81,38 @@ export interface PWPage {
   unroute(url: string, handler: (route: PWRoute) => void | Promise<void>): Promise<unknown>
   /** Playwright's fake-clock controller (the clock seam rides this). */
   readonly clock: PWClock
+  /** The page's browser context (the storage seam rides this). */
+  context(): PWContext
+}
+
+/** One cookie as Playwright's BrowserContext represents it. `expires` is epoch seconds. */
+export interface PWCookie {
+  name: string
+  value: string
+  domain?: string
+  path?: string
+  expires?: number
+  httpOnly?: boolean
+  secure?: boolean
+  sameSite?: 'Strict' | 'Lax' | 'None'
+  url?: string
+}
+
+/** The result of `BrowserContext.storageState()` — cookies + per-origin localStorage. */
+export interface PWStorageState {
+  readonly cookies: readonly PWCookie[]
+  readonly origins: readonly {
+    readonly origin: string
+    readonly localStorage: readonly { readonly name: string; readonly value: string }[]
+  }[]
+}
+
+/** The slice of Playwright's `BrowserContext` the storage seam drives. */
+export interface PWContext {
+  cookies(urls?: string | readonly string[]): Promise<readonly PWCookie[]>
+  addCookies(cookies: readonly PWCookie[]): Promise<void>
+  clearCookies(options?: { name?: string; domain?: string; path?: string }): Promise<void>
+  storageState(): Promise<PWStorageState>
 }
 
 /**

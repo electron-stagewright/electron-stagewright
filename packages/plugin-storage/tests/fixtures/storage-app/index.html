@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Storage fixture</title>
+  </head>
+  <body>
+    <h1>Storage fixture</h1>
+    <!-- The page reports its own origin so the smoke can target it when seeding a cookie. -->
+    <pre id="origin"></pre>
+    <button id="read">Read cookie</button>
+    <pre id="cookie"></pre>
+    <script>
+      // Seed a localStorage entry on load, so the storage snapshot can assert the origin's localStorage.
+      localStorage.setItem('cart', '3-items')
+      document.getElementById('origin').textContent = location.origin
+      // Re-read document.cookie on demand, so the smoke can assert a seeded (non-httpOnly) cookie is
+      // visible to the page — proving the seeded cookie reached the real Chromium cookie store.
+      document.getElementById('read').addEventListener('click', () => {
+        document.getElementById('cookie').textContent = document.cookie
+      })
+    </script>
+  </body>
+</html>

@@ -32,6 +32,7 @@ import { StagewrightError } from '../errors/registry.js'
 import type {
   EvalPayload,
   PWConsoleMessage,
+  PWCookie,
   PWDialog,
   PWElectron,
   PWElectronApp,
@@ -72,6 +73,7 @@ import type {
   InteractionOptions,
   ClockInstallOptions,
   ClockTime,
+  CookieFilter,
   IpcChannel,
   LaunchOptions,
   NetworkCaptureFilter,
@@ -84,6 +86,8 @@ import type {
   ScrollOptions,
   StopOptions,
   StopResult,
+  StorageCookie,
+  StorageSnapshot,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -199,6 +203,35 @@ async function responseBodyFields(
 interface ActiveStub {
   readonly stub: NetworkStub
   remaining: number
+}
+
+/** Map a Playwright cookie to the JSON-serialisable {@link StorageCookie} (conditional for exactOptional). */
+function pwCookieToStorage(c: PWCookie): StorageCookie {
+  return {
+    name: c.name,
+    value: c.value,
+    ...(c.domain !== undefined ? { domain: c.domain } : {}),
+    ...(c.path !== undefined ? { path: c.path } : {}),
+    ...(c.expires !== undefined ? { expires: c.expires } : {}),
+    ...(c.httpOnly !== undefined ? { httpOnly: c.httpOnly } : {}),
+    ...(c.secure !== undefined ? { secure: c.secure } : {}),
+    ...(c.sameSite !== undefined ? { sameSite: c.sameSite } : {}),
+  }
+}
+
+/** Map a {@link StorageCookie} (agent input) onto a Playwright cookie for `addCookies`. */
+function storageCookieToPw(c: StorageCookie): PWCookie {
+  return {
+    name: c.name,
+    value: c.value,
+    ...(c.url !== undefined ? { url: c.url } : {}),
+    ...(c.domain !== undefined ? { domain: c.domain } : {}),
+    ...(c.path !== undefined ? { path: c.path } : {}),
+    ...(c.expires !== undefined ? { expires: c.expires } : {}),
+    ...(c.httpOnly !== undefined ? { httpOnly: c.httpOnly } : {}),
+    ...(c.secure !== undefined ? { secure: c.secure } : {}),
+    ...(c.sameSite !== undefined ? { sameSite: c.sameSite } : {}),
+  }
 }
 
 /** Map the transport-neutral interaction options onto Playwright's action options. */
@@ -766,6 +799,57 @@ class PlaywrightSession implements TransportSession {
     await (await this.activePage()).clock.resume()
   }
 
+  // --- Storage: Playwright's BrowserContext cookies + storageState (ADR-018, no eval). ---
+
+  async getCookies(filter?: CookieFilter): Promise<readonly StorageCookie[]> {
+    this.requireRunning()
+    const ctx = (await this.activePage()).context()
+    const raw = await ctx.cookies(filter?.urls !== undefined ? [...filter.urls] : undefined)
+    const cookies = raw.map(pwCookieToStorage)
+    return filter?.name !== undefined ? cookies.filter((c) => c.name === filter.name) : cookies
+  }
+
+  async setCookie(cookie: StorageCookie): Promise<void> {
+    this.requireRunning()
+    const ctx = (await this.activePage()).context()
+    await ctx.addCookies([storageCookieToPw(cookie)])
+  }
+
+  async clearCookies(filter?: CookieFilter): Promise<void> {
+    this.requireRunning()
+    const ctx = (await this.activePage()).context()
+    if (filter === undefined || (filter.urls === undefined && filter.name === undefined)) {
+      await ctx.clearCookies()
+      return
+    }
+    if (filter.urls === undefined && filter.name !== undefined) {
+      await ctx.clearCookies({ name: filter.name })
+      return
+    }
+    // URL-scoped (optionally + name): read the matching cookies and clear each precisely by
+    // name/domain/path, since Playwright's clearCookies has no URL option.
+    for (const c of await this.getCookies(filter)) {
+      await ctx.clearCookies({
+        name: c.name,
+        ...(c.domain !== undefined ? { domain: c.domain } : {}),
+        ...(c.path !== undefined ? { path: c.path } : {}),
+      })
+    }
+  }
+
+  async storageSnapshot(): Promise<StorageSnapshot> {
+    this.requireRunning()
+    const ctx = (await this.activePage()).context()
+    const state = await ctx.storageState()
+    return {
+      cookies: state.cookies.map(pwCookieToStorage),
+      origins: state.origins.map((o) => ({
+        origin: o.origin,
+        localStorage: o.localStorage.map((e) => ({ name: e.name, value: e.value })),
+      })),
+    }
+  }
+
   private requireRunning(): PWElectronApp {
     if (this.disposed || this.app === null) {
       throw new StagewrightError(
@@ -1201,6 +1285,7 @@ export class PlaywrightElectronTransport implements ITransport {
     // via page.route; the network capture and stubbing seams consume this capability.
     canIntercept: true,
     canControlClock: true,
+    canAccessStorage: true,
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,

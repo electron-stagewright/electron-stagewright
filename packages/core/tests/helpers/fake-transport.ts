@@ -15,6 +15,7 @@ import type {
   ClockTime,
   ConsoleEntry,
   ConsoleLogsResult,
+  CookieFilter,
   DialogEvent,
   DialogEventsOptions,
   DialogEventsResult,
@@ -31,6 +32,8 @@ import type {
   ScrollOptions,
   StopOptions,
   StopResult,
+  StorageCookie,
+  StorageSnapshot,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -44,6 +47,7 @@ const FULL_CAPS: TransportCapabilities = {
   canInject: true,
   canIntercept: true,
   canControlClock: true,
+  canAccessStorage: true,
   supportsMainEval: true,
   supportsRendererEval: true,
   supportsInteraction: true,
@@ -246,6 +250,35 @@ export class FakeSession implements TransportSession {
   }
   async resumeClock(): Promise<void> {
     this.clockCalls.push({ method: 'resumeClock' })
+  }
+
+  /** Cookies the fake returns from `getCookies`/`storageSnapshot`, and the localStorage snapshot. */
+  storageCookies: StorageCookie[] = []
+  storageOrigins: StorageSnapshot['origins'] = []
+  /** Recorded storage-seam calls, for asserting the plugin's relay + cookie redaction. */
+  readonly setCookieCalls: StorageCookie[] = []
+  readonly clearCookieCalls: Array<CookieFilter | undefined> = []
+  readonly getCookieCalls: Array<CookieFilter | undefined> = []
+
+  async getCookies(filter?: CookieFilter): Promise<readonly StorageCookie[]> {
+    this.getCookieCalls.push(filter)
+    const all = this.storageCookies
+    return filter?.name !== undefined ? all.filter((c) => c.name === filter.name) : all
+  }
+  async setCookie(cookie: StorageCookie): Promise<void> {
+    this.setCookieCalls.push(cookie)
+    this.storageCookies.push(cookie)
+  }
+  async clearCookies(filter?: CookieFilter): Promise<void> {
+    this.clearCookieCalls.push(filter)
+    if (filter?.name !== undefined) {
+      this.storageCookies = this.storageCookies.filter((c) => c.name !== filter.name)
+    } else if (filter === undefined) {
+      this.storageCookies = []
+    }
+  }
+  async storageSnapshot(): Promise<StorageSnapshot> {
+    return { cookies: this.storageCookies, origins: this.storageOrigins }
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */
