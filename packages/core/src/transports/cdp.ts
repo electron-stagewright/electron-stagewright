@@ -101,6 +101,7 @@ import type {
   ITransport,
   IpcChannel,
   LaunchOptions,
+  MenuInvokeResult,
   NativeMenu,
   NetworkCaptureFilter,
   NetworkEvent,
@@ -1097,6 +1098,9 @@ class CdpSession implements TransportSession {
 
   getApplicationMenu(): Promise<NativeMenu | null> {
     return Promise.reject(notImplemented('getApplicationMenu'))
+  }
+  invokeApplicationMenuItem(_path: readonly string[]): Promise<MenuInvokeResult> {
+    return Promise.reject(notImplemented('invokeApplicationMenuItem'))
   }
 
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---

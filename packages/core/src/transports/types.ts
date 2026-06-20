@@ -41,7 +41,7 @@ export interface TransportCapabilities {
   readonly canControlClock: boolean
   /** The transport can read and seed the app's storage (cookies + the storage snapshot) via the seam. */
   readonly canAccessStorage: boolean
-  /** The transport can read the app's native UI (the application menu) from the main process via the seam. */
+  /** The transport can read and invoke the app's native UI (the application menu) from the main process via the seam. */
   readonly canAccessNativeUI: boolean
   /** The transport can evaluate JavaScript in the main process context. */
   readonly supportsMainEval: boolean
@@ -605,6 +605,26 @@ export interface NativeMenu {
 }
 
 /**
+ * The outcome of invoking an application-menu item by path. JSON-serialisable.
+ *
+ * On success (`invoked: true`) the resolved item's `label` (and `role`, when set) are echoed so the
+ * agent can confirm WHICH item fired. On failure (`invoked: false`) `reason` says why no handler ran:
+ * - `not_found` — the path did not resolve to an item (or the app has no application menu).
+ * - `disabled` — the item resolved but is disabled; a user could not click it, so it is refused.
+ * - `role` — a built-in role item (e.g. `quit`, `reload`); Electron wires the role internally and
+ *   exposes no callable handler, so it cannot be invoked programmatically — press its accelerator instead.
+ * - `submenu` — the item is a submenu parent (descend into it, do not invoke it).
+ * - `separator` — the item is a separator (not actionable).
+ * - `no_handler` — the item is enabled and none of the above, but carries no app-defined `click` handler.
+ */
+export type MenuInvokeResult =
+  | { readonly invoked: true; readonly label: string; readonly role?: string }
+  | {
+      readonly invoked: false
+      readonly reason: 'not_found' | 'disabled' | 'role' | 'submenu' | 'separator' | 'no_handler'
+    }
+
+/**
  * A live session against an Electron app, returned by `launch`, `attach`, or
  * `inject`. Disposal is idempotent: calling `dispose()` twice MUST NOT throw,
  * and MUST NOT double-free underlying resources.
@@ -736,11 +756,18 @@ export interface TransportSession {
   storageSnapshot(): Promise<StorageSnapshot>
 
   // --- Native UI surface (requires `capabilities.canAccessNativeUI`) ---
-  // Read the app's native chrome (the application menu) from the main process, the no-eval way to assert
-  // native-UI state. A transport that cannot reach the main process rejects this with `NOT_IMPLEMENTED`.
+  // Read and invoke the app's native chrome (the application menu) from the main process, the no-eval way
+  // to assert native-UI state and trigger menu actions. A transport that cannot reach the main process
+  // rejects these with `NOT_IMPLEMENTED`.
 
   /** Read the app's application menu ({@link NativeMenu}), or `null` when the app has none set. */
   getApplicationMenu(): Promise<NativeMenu | null>
+
+  /**
+   * Invoke an application-menu item by its label/role `path` (each segment matched by label OR role).
+   * Fires the app's own `click` handler; see {@link MenuInvokeResult} for the success/refusal outcomes.
+   */
+  invokeApplicationMenuItem(path: readonly string[]): Promise<MenuInvokeResult>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

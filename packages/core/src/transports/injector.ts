@@ -64,6 +64,7 @@ import type {
   ITransport,
   IpcChannel,
   LaunchOptions,
+  MenuInvokeResult,
   NativeMenu,
   NetworkCaptureFilter,
   NetworkEventsOptions,
@@ -386,6 +387,9 @@ class InjectorSession implements TransportSession {
 
   getApplicationMenu(): Promise<NativeMenu | null> {
     return Promise.reject(notImplemented('getApplicationMenu'))
+  }
+  invokeApplicationMenuItem(_path: readonly string[]): Promise<MenuInvokeResult> {
+    return Promise.reject(notImplemented('invokeApplicationMenuItem'))
   }
 
   // --- Interaction surface: the main process has no renderer to drive. ---

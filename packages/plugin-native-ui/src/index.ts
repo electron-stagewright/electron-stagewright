@@ -1,18 +1,21 @@
 /**
- * `@electron-stagewright/plugin-native-ui` — read and assert an Electron app's **native chrome**: the
- * application menu (the macOS menu bar / app menu), for agent-driven testing (ADR-019, built on the
+ * `@electron-stagewright/plugin-native-ui` — read, assert, and invoke an Electron app's **native chrome**:
+ * the application menu (the macOS menu bar / app menu), for agent-driven testing (ADR-019, built on the
  * ADR-004 plugin contract). Ask "is the *Save* item enabled?", "did *Dark Mode* get checked under
- * *View*?", "does the *Edit* menu have a *Paste* item?" — state that lives in the Electron main process,
- * outside the DOM the agent already reads — all WITHOUT running app JavaScript.
+ * *View*?", "does the *Edit* menu have a *Paste* item?", then trigger the action — state and actions that
+ * live in the Electron main process, outside the DOM the agent already reads, without agent-supplied
+ * JavaScript.
  *
  * Like the network, clock, and storage plugins, the tools ride a dedicated TRANSPORT SEAM (a fixed
- * main-process serializer over `Menu.getApplicationMenu()`), not eval, so this plugin is NOT
+ * main-process serializer/walker over `Menu.getApplicationMenu()`), not eval, so this plugin is NOT
  * `--allow-eval` gated. It IS gated on the transport's `canAccessNativeUI` capability
- * (`native.UNSUPPORTED` otherwise). Tools (namespaced by the loader): `native_menu`, `native_menu_item`.
+ * (`native.UNSUPPORTED` otherwise). Tools (namespaced by the loader): `native_menu`, `native_menu_item`,
+ * `native_menu_invoke`.
  *
- * Reading the menu is observation of app chrome — not a modify, and not a secret surface (menu labels
- * are no more sensitive than the DOM text the agent already sees). The application menu is cross-platform
- * (Electron's `Menu` API); the macOS menu bar is its most prominent surface.
+ * Reading the menu is observation of app chrome — not a secret surface (menu labels are no more sensitive
+ * than the DOM text the agent already sees). Invoking a menu item modifies app behaviour by firing the
+ * app's own handler, bounded by the same capability and plugin opt-in. The application menu is
+ * cross-platform (Electron's `Menu` API); the macOS menu bar is its most prominent surface.
  *
  * @module
  */
@@ -34,7 +37,7 @@ import { z } from 'zod'
 /** Plugin namespace — must match {@link nativeUiPlugin.name}; the loader prefixes its tools with it. */
 const NATIVE_NAMESPACE = 'native'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const NATIVE_PLUGIN_VERSION = '0.1.0'
+const NATIVE_PLUGIN_VERSION = '0.2.0'
 
 /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
 interface PluginMeta {
@@ -43,7 +46,7 @@ interface PluginMeta {
 }
 
 /**
- * Resolve the session + assert its transport can read the native UI (`canAccessNativeUI`). Returns the
+ * Resolve the session + assert its transport can access the native UI (`canAccessNativeUI`). Returns the
  * session, or the plugin-error envelope to return instead. Not eval-gated — this is a transport seam.
  */
 function requireNativeUI(
@@ -57,7 +60,7 @@ function requireNativeUI(
       error: makePluginError('native.UNSUPPORTED', {
         ...meta,
         message:
-          'This session’s transport cannot read the native UI; use the default Playwright launch transport.',
+          'This session’s transport cannot access the native UI; use the default Playwright launch transport.',
       }),
     }
   }
@@ -85,6 +88,12 @@ function findByPath(menu: NativeMenu | null, path: readonly string[]): NativeMen
 const sessionField = {
   sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
 }
+
+/** A non-empty label/role path from the top of the menu down to the target item (shared by find + invoke). */
+const pathSchema = z
+  .array(z.string().min(1))
+  .min(1)
+  .describe('Labels or roles from the top of the menu down to the target item.')
 
 const menuTool: AnyToolDefinition = defineTool({
   name: 'menu',
@@ -116,13 +125,7 @@ const menuItemTool: AnyToolDefinition = defineTool({
     'when the path does not resolve or the app has no menu). Errors: native.UNSUPPORTED, NOT_RUNNING,',
     'BAD_ARGUMENT (empty path).',
   ].join(' '),
-  inputSchema: z.object({
-    path: z
-      .array(z.string().min(1))
-      .min(1)
-      .describe('Labels or roles from the top of the menu down to the target item.'),
-    ...sessionField,
-  }),
+  inputSchema: z.object({ path: pathSchema, ...sessionField }),
   operationType: 'query',
   handler: async (args, ctx) => {
     const meta = { startedAt: ctx.startedAt, now: ctx.now }
@@ -134,9 +137,33 @@ const menuItemTool: AnyToolDefinition = defineTool({
   },
 })
 
+const menuInvokeTool: AnyToolDefinition = defineTool({
+  name: 'menu_invoke',
+  title: 'Invoke an application-menu item',
+  description: [
+    'Trigger an application-menu item by its `path` (labels or roles from the top of the menu, e.g.',
+    '["File","Save"] or ["View","Dark Mode"]) — fires the app’s own menu handler, the deterministic way',
+    'to run a menu action without simulating a keyboard accelerator. Read the item first with',
+    'native_menu_item to confirm it is enabled and is not a role/submenu item. Returns:',
+    '{ ok, invoked, label?, role?, reason? }. On success invoked is true and the resolved label/role are',
+    'echoed; otherwise invoked is false and reason is one of not_found, disabled, role (a built-in role',
+    'item — press its accelerator instead), submenu (descend into it), separator, or no_handler. Errors:',
+    'native.UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (empty path).',
+  ].join(' '),
+  inputSchema: z.object({ path: pathSchema, ...sessionField }),
+  operationType: 'command',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireNativeUI(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const result = await guard.session.invokeApplicationMenuItem(args.path)
+    return makeSuccess(result, meta)
+  },
+})
+
 /**
  * The native-UI plugin. Load with `--plugin @electron-stagewright/plugin-native-ui` (NO eval flag — it
- * does not run app JS) or `createServer({ plugins: [nativeUiPlugin] })`. No configuration.
+ * does not run agent-supplied JS) or `createServer({ plugins: [nativeUiPlugin] })`. No configuration.
  */
 export const nativeUiPlugin: StagewrightPlugin = {
   name: NATIVE_NAMESPACE,
@@ -146,10 +173,10 @@ export const nativeUiPlugin: StagewrightPlugin = {
     UNSUPPORTED: {
       http: 409,
       retryable: false,
-      hint: 'This transport cannot read the native UI; use the default Playwright launch transport.',
+      hint: 'This transport cannot access the native UI; use the default Playwright launch transport.',
     },
   },
-  tools: [menuTool, menuItemTool],
+  tools: [menuTool, menuItemTool, menuInvokeTool],
 }
 
 export default nativeUiPlugin

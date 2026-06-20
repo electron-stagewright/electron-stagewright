@@ -22,6 +22,7 @@ import type {
   DialogPolicy,
   ITransport,
   InteractionOptions,
+  MenuInvokeResult,
   NativeMenu,
   NetworkCaptureFilter,
   NetworkEvent,
@@ -287,6 +288,14 @@ export class FakeSession implements TransportSession {
   applicationMenu: NativeMenu | null = null
   async getApplicationMenu(): Promise<NativeMenu | null> {
     return this.applicationMenu
+  }
+
+  /** The result `invokeApplicationMenuItem` returns, and the paths it was called with. */
+  invokeResult: MenuInvokeResult = { invoked: true, label: 'fake' }
+  readonly invokeCalls: Array<readonly string[]> = []
+  async invokeApplicationMenuItem(path: readonly string[]): Promise<MenuInvokeResult> {
+    this.invokeCalls.push(path)
+    return this.invokeResult
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

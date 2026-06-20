@@ -73,6 +73,7 @@ const FAKE_SESSION: TransportSession = {
   clearCookies: async () => undefined,
   storageSnapshot: async () => ({ cookies: [], origins: [] }),
   getApplicationMenu: async () => null,
+  invokeApplicationMenuItem: async () => ({ invoked: false, reason: 'not_found' }) as const,
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -1836,6 +1837,207 @@ describe('PlaywrightSession native UI', () => {
     const { session } = await launchWithMenu({ Menu: { getApplicationMenu: () => fakeAppMenu() } })
     await session.dispose()
     await expect(session.getApplicationMenu()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+
+  // A live menu whose click handlers push to `record`, plus a disabled item, a role item, a separator,
+  // a no-handler item, and a throwing item — one instance reused across invokes so `record` accumulates.
+  function fakeInvokeMenu(
+    record: string[],
+    clickArgs: { event: unknown; window: unknown; webContents: unknown }[],
+  ) {
+    // Electron MenuItem instances always expose a click wrapper. When an app supplied a click option,
+    // the click property keeps the option slot before Electron's default fields; default-only wrappers
+    // appear at the end. These fakes mirror that observable shape so `no_handler` stays covered.
+    const save = {
+      label: 'Save',
+      click: (event: unknown, window: unknown, webContents: unknown) => {
+        record.push('Save')
+        clickArgs.push({ event, window, webContents })
+      },
+      submenu: null,
+      type: 'normal',
+      role: null,
+      enabled: true,
+      visible: true,
+      checked: false,
+      commandId: 1,
+      userAccelerator: null,
+    }
+    const inertDefaultClick = {
+      label: 'DefaultClick',
+      submenu: null,
+      type: 'normal',
+      role: null,
+      enabled: true,
+      visible: true,
+      checked: false,
+      commandId: 2,
+      userAccelerator: null,
+      click: () => record.push('DefaultClick'),
+    }
+    return {
+      items: [
+        {
+          label: 'File',
+          type: 'submenu',
+          enabled: true,
+          submenu: {
+            items: [
+              save,
+              {
+                label: 'Locked',
+                type: 'normal',
+                enabled: false,
+                click: () => record.push('Locked'),
+              },
+              {
+                label: '',
+                type: 'separator',
+                enabled: true,
+                click: () => record.push('Separator'),
+              },
+              { label: 'Inert', type: 'normal', enabled: true },
+              inertDefaultClick,
+              {
+                label: 'Boom',
+                type: 'normal',
+                enabled: true,
+                click: () => {
+                  throw new Error('boom')
+                },
+              },
+            ],
+          },
+        },
+        {
+          label: 'Help',
+          type: 'submenu',
+          enabled: true,
+          submenu: {
+            items: [
+              {
+                label: 'Quit',
+                role: 'quit',
+                type: 'normal',
+                enabled: true,
+                click: () => record.push('Quit'),
+              },
+            ],
+          },
+        },
+      ],
+    }
+  }
+
+  async function launchWithInvokeMenu() {
+    const record: string[] = []
+    const clickArgs: { event: unknown; window: unknown; webContents: unknown }[] = []
+    const focusedWebContents = { id: 'focused-web-contents' }
+    const focusedWindow = { webContents: focusedWebContents }
+    const menu = fakeInvokeMenu(record, clickArgs)
+    const { session } = await launchWithMenu({
+      Menu: { getApplicationMenu: () => menu },
+      BrowserWindow: {
+        getFocusedWindow: () => focusedWindow,
+        getAllWindows: () => [focusedWindow],
+      },
+    })
+    return { session, record, clickArgs, focusedWindow, focusedWebContents }
+  }
+
+  it('invokes an app-defined click handler and echoes the resolved item', async () => {
+    const { session, record, clickArgs, focusedWindow, focusedWebContents } =
+      await launchWithInvokeMenu()
+    expect(await session.invokeApplicationMenuItem(['File', 'Save'])).toEqual({
+      invoked: true,
+      label: 'Save',
+    })
+    expect(record).toEqual(['Save'])
+    expect(clickArgs).toHaveLength(1)
+    expect(clickArgs[0]?.event).toEqual({})
+    expect(clickArgs[0]?.window).toBe(focusedWindow)
+    expect(clickArgs[0]?.webContents).toBe(focusedWebContents)
+  })
+
+  it('falls back to the first app window when no window is focused', async () => {
+    const record: string[] = []
+    const clickArgs: { event: unknown; window: unknown; webContents: unknown }[] = []
+    const firstWebContents = { id: 'first-web-contents' }
+    const firstWindow = { webContents: firstWebContents }
+    const menu = fakeInvokeMenu(record, clickArgs)
+    const { session } = await launchWithMenu({
+      Menu: { getApplicationMenu: () => menu },
+      BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => [firstWindow] },
+    })
+
+    expect(await session.invokeApplicationMenuItem(['File', 'Save'])).toEqual({
+      invoked: true,
+      label: 'Save',
+    })
+    expect(record).toEqual(['Save'])
+    expect(clickArgs[0]?.window).toBe(firstWindow)
+    expect(clickArgs[0]?.webContents).toBe(firstWebContents)
+  })
+
+  it('refuses a disabled item without firing its handler', async () => {
+    const { session, record } = await launchWithInvokeMenu()
+    expect(await session.invokeApplicationMenuItem(['File', 'Locked'])).toEqual({
+      invoked: false,
+      reason: 'disabled',
+    })
+    expect(record).toEqual([])
+  })
+
+  it('classifies the no-handler refusals (role / submenu / separator / no_handler / not_found)', async () => {
+    const { session, record } = await launchWithInvokeMenu()
+    expect(await session.invokeApplicationMenuItem(['Help', 'quit'])).toEqual({
+      invoked: false,
+      reason: 'role',
+    })
+    expect(await session.invokeApplicationMenuItem(['File'])).toEqual({
+      invoked: false,
+      reason: 'submenu',
+    })
+    expect(await session.invokeApplicationMenuItem(['File', ''])).toEqual({
+      invoked: false,
+      reason: 'separator',
+    })
+    expect(await session.invokeApplicationMenuItem(['File', 'Inert'])).toEqual({
+      invoked: false,
+      reason: 'no_handler',
+    })
+    expect(await session.invokeApplicationMenuItem(['File', 'DefaultClick'])).toEqual({
+      invoked: false,
+      reason: 'no_handler',
+    })
+    expect(await session.invokeApplicationMenuItem(['File', 'Nope'])).toEqual({
+      invoked: false,
+      reason: 'not_found',
+    })
+    expect(record).toEqual([])
+  })
+
+  it('surfaces a throwing handler as a clean error', async () => {
+    const { session } = await launchWithInvokeMenu()
+    await expect(session.invokeApplicationMenuItem(['File', 'Boom'])).rejects.toThrow(
+      /menu item handler threw/,
+    )
+  })
+
+  it('returns not_found when the app has no application menu', async () => {
+    const { session } = await launchWithMenu({ Menu: { getApplicationMenu: () => null } })
+    expect(await session.invokeApplicationMenuItem(['File'])).toEqual({
+      invoked: false,
+      reason: 'not_found',
+    })
+  })
+
+  it('rejects invokeApplicationMenuItem after dispose', async () => {
+    const { session } = await launchWithInvokeMenu()
+    await session.dispose()
+    await expect(session.invokeApplicationMenuItem(['File', 'Save'])).rejects.toMatchObject({
+      code: 'NOT_RUNNING',
+    })
   })
 })
 

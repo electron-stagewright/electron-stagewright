@@ -604,6 +604,9 @@ describe('CdpSession native-UI seam (honest-false)', () => {
     expect(transport.capabilities.canAccessNativeUI).toBe(false)
     const session = await transport.attach({ port: 9222 })
     await expect(session.getApplicationMenu()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+    await expect(session.invokeApplicationMenuItem(['File', 'Save'])).rejects.toMatchObject({
+      code: 'NOT_IMPLEMENTED',
+    })
   })
 })
 

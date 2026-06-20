@@ -20,6 +20,10 @@
  *   `page.route` (the stub seam: fulfill/abort) — both halves of "intercept".
  * - `canControlClock: true` — deterministic virtual time via Playwright's `page.clock` (install /
  *   freeze / advance / resume); the clock seam's first consumer (the clock plugin, ADR-017).
+ * - `canAccessStorage: true` — cookies + the storage snapshot via the page `BrowserContext` (the
+ *   storage seam, ADR-018).
+ * - `canAccessNativeUI: true` — read and invoke the application menu via `electronApp.evaluate` over
+ *   `Menu.getApplicationMenu()` (the native-UI seam, ADR-019).
  * - `supportsMainEval: true` — `electronApp.evaluate()`.
  * - `supportsRendererEval: true` — `page.evaluate()`.
  *
@@ -76,6 +80,7 @@ import type {
   CookieFilter,
   IpcChannel,
   LaunchOptions,
+  MenuInvokeResult,
   NativeMenu,
   NativeMenuItem,
   NetworkCaptureFilter,
@@ -852,7 +857,7 @@ class PlaywrightSession implements TransportSession {
     }
   }
 
-  // --- Native UI: read the application menu from the main process (ADR-019, no agent eval). ---
+  // --- Native UI: read/invoke the application menu from the main process (ADR-019, no agent eval). ---
 
   async getApplicationMenu(): Promise<NativeMenu | null> {
     const app = this.requireRunning()
@@ -925,6 +930,114 @@ class PlaywrightSession implements TransportSession {
       const items = (root as { items?: unknown }).items
       return { items: Array.isArray(items) ? items.map((i) => serializeItem(i as RawItem)) : [] }
     })
+  }
+
+  async invokeApplicationMenuItem(path: readonly string[]): Promise<MenuInvokeResult> {
+    const app = this.requireRunning()
+    // The walker runs in the Electron MAIN process via electronApp.evaluate and MUST be self-contained
+    // (no closure refs). It resolves the path in the LIVE menu (matching each segment by label OR role,
+    // like the read), refuses a disabled item, then calls the app's own `click` handler. A throwing
+    // handler is re-surfaced as a clean error rather than a raw app stack.
+    return app.evaluate<MenuInvokeResult>(
+      (electron, payload) => {
+        const mod = electron as {
+          Menu?: { getApplicationMenu?: () => unknown }
+          BrowserWindow?: { getFocusedWindow?: () => unknown; getAllWindows?: () => unknown[] }
+        }
+        const segments = ((payload?.arg as { path?: readonly string[] } | undefined)?.path ??
+          []) as readonly string[]
+        const root =
+          mod.Menu !== undefined && typeof mod.Menu.getApplicationMenu === 'function'
+            ? mod.Menu.getApplicationMenu()
+            : null
+        if (root === null || root === undefined) return { invoked: false, reason: 'not_found' }
+        interface RawItem {
+          label?: unknown
+          role?: unknown
+          type?: unknown
+          enabled?: unknown
+          click?: unknown
+          submenu?: unknown
+        }
+        const submenuItems = (raw: RawItem): readonly unknown[] | null => {
+          const submenu = raw.submenu
+          if (submenu === null || typeof submenu !== 'object') return null
+          const nested = (submenu as { items?: unknown }).items
+          return Array.isArray(nested) ? nested : null
+        }
+        const isElectronMenuItem = (raw: RawItem): boolean => {
+          const keys = Object.keys(raw as Record<string, unknown>)
+          return keys.includes('commandId') || keys.includes('userAccelerator')
+        }
+        const hasAppDefinedClick = (raw: RawItem): boolean => {
+          if (typeof raw.click !== 'function') return false
+          if (!isElectronMenuItem(raw)) return true
+          // Electron installs a default MenuItem.click wrapper on every item. When the app supplied a
+          // click option, Electron preserves that option's property slot before its default fields; the
+          // default-only wrapper is appended after userAccelerator. This keeps `no_handler` honest instead
+          // of treating every inert normal item as successfully invoked.
+          const keys = Object.keys(raw as Record<string, unknown>)
+          const clickIndex = keys.indexOf('click')
+          const submenuIndex = keys.indexOf('submenu')
+          return clickIndex !== -1 && submenuIndex !== -1 && clickIndex < submenuIndex
+        }
+        let items: unknown = (root as { items?: unknown }).items
+        let item: RawItem | null = null
+        for (const seg of segments) {
+          const arr = Array.isArray(items) ? (items as RawItem[]) : []
+          item = arr.find((i) => i.label === seg || i.role === seg) ?? null
+          if (item === null) return { invoked: false, reason: 'not_found' }
+          if (item.enabled === false) return { invoked: false, reason: 'disabled' }
+          items = submenuItems(item) ?? []
+        }
+        if (item === null) return { invoked: false, reason: 'not_found' }
+        if (typeof item.role === 'string' && item.role !== '')
+          return { invoked: false, reason: 'role' }
+        if (item.type === 'submenu' || submenuItems(item) !== null)
+          return { invoked: false, reason: 'submenu' }
+        if (item.type === 'separator') return { invoked: false, reason: 'separator' }
+        if (hasAppDefinedClick(item)) {
+          // In parallel smoke runs the app may not be frontmost, so Electron can report no focused
+          // window even though the menu belongs to a live single-window app. Fall back to the first app
+          // window so handlers that use their `window` argument remain deterministic.
+          const focusedWindow =
+            mod.BrowserWindow !== undefined &&
+            typeof mod.BrowserWindow.getFocusedWindow === 'function'
+              ? mod.BrowserWindow.getFocusedWindow()
+              : undefined
+          const windows =
+            mod.BrowserWindow !== undefined && typeof mod.BrowserWindow.getAllWindows === 'function'
+              ? mod.BrowserWindow.getAllWindows()
+              : []
+          const win = focusedWindow ?? windows[0]
+          const focusedWebContents =
+            win !== null &&
+            typeof win === 'object' &&
+            'webContents' in win &&
+            (win as { webContents?: unknown }).webContents !== undefined
+              ? (win as { webContents?: unknown }).webContents
+              : undefined
+          const clickFn = item.click as (
+            event: unknown,
+            focusedWindow: unknown,
+            focusedWebContents: unknown,
+          ) => void
+          try {
+            clickFn({}, win ?? undefined, focusedWebContents)
+          } catch (err) {
+            throw new Error(
+              'menu item handler threw: ' + (err instanceof Error ? err.message : String(err)),
+            )
+          }
+          const label = typeof item.label === 'string' ? item.label : ''
+          return typeof item.role === 'string' && item.role !== ''
+            ? { invoked: true, label, role: item.role }
+            : { invoked: true, label }
+        }
+        return { invoked: false, reason: 'no_handler' }
+      },
+      { body: '', arg: { path } },
+    )
   }
 
   private requireRunning(): PWElectronApp {

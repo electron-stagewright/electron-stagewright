@@ -45,6 +45,7 @@ export type {
   StorageSnapshot,
   NativeMenu,
   NativeMenuItem,
+  MenuInvokeResult,
   TransportSession,
   ITransport,
 } from './types.js'

@@ -209,12 +209,56 @@ describe('native-ui plugin', () => {
     for (const [tool, args] of [
       ['native_menu', {}],
       ['native_menu_item', { path: ['View'] }],
+      ['native_menu_invoke', { path: ['View'] }],
     ] as const) {
       expect(await server.dispatcher.dispatch(tool, { sessionId, ...args })).toMatchObject({
         ok: false,
         code: 'native.UNSUPPORTED',
       })
     }
+  })
+
+  it('relays an invoke to the seam and echoes the success result', async () => {
+    const session = new FakeSession()
+    session.invokeResult = { invoked: true, label: 'Save', role: 'save' }
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('native_menu_invoke', { sessionId, path: ['File', 'Save'] }),
+    ).toMatchObject({ ok: true, invoked: true, label: 'Save', role: 'save' })
+    expect(session.invokeCalls).toEqual([['File', 'Save']])
+  })
+
+  it('surfaces an invoke refusal reason verbatim', async () => {
+    const session = new FakeSession()
+    session.invokeResult = { invoked: false, reason: 'role' }
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('native_menu_invoke', { sessionId, path: ['Help', 'quit'] }),
+    ).toMatchObject({ ok: true, invoked: false, reason: 'role' })
+  })
+
+  it('rejects an empty invoke path with BAD_ARGUMENT', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('native_menu_invoke', { sessionId, path: [] }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(session.invokeCalls).toEqual([])
+  })
+
+  it('returns a wire-serialisable invoke result (no Map/Set/Date round-trip loss)', async () => {
+    const session = new FakeSession()
+    session.invokeResult = { invoked: true, label: 'Save', role: 'save' }
+    const server = await open(session)
+    const sessionId = await launch(server)
+    const res = (await server.dispatcher.dispatch('native_menu_invoke', {
+      sessionId,
+      path: ['File', 'Save'],
+    })) as unknown as Record<string, unknown>
+    expect(JSON.parse(JSON.stringify(res))).toEqual(res)
   })
 
   it('returns a wire-serialisable menu payload (no Map/Set/Date round-trip loss)', async () => {

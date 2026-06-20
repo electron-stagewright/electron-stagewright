@@ -5,8 +5,8 @@
  * checkbox with an accelerator, a disabled item, and role-based items (`reload`, `quit`) found by role.
  *
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (with `electron` + `playwright` installed). Skipped by
- * default so `pnpm test` stays fast and headless-CI-safe. No eval opt-in is needed — the menu read rides
- * the transport seam (a fixed serializer), not agent eval.
+ * default so `pnpm test` stays fast and headless-CI-safe. No eval opt-in is needed — menu access rides
+ * the transport seam (a fixed serializer/walker), not agent eval.
  *
  * @module
  */
@@ -43,9 +43,15 @@ interface ItemEnvelope {
   readonly item?: NativeMenuItem
 }
 
+interface InvokeEnvelope {
+  readonly ok: boolean
+  readonly invoked: boolean
+  readonly reason?: string
+}
+
 describe('native-ui plugin smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
-    'reads the application menu and resolves items by label and by role',
+    'reads the menu, resolves items by label/role, and invokes an item with a real side effect',
     async () => {
       const server = await createServer({ plugins: [nativeUiPlugin] })
       closers.push(() => server.close())
@@ -89,6 +95,38 @@ describe('native-ui plugin smoke (real Electron)', () => {
       })) as unknown as ItemEnvelope
       expect(quit.found).toBe(true)
       expect(quit.item?.role).toBe('quit')
+
+      // Invoking File > Mark fires its handler, which writes a sentinel into the page — proving the
+      // handler actually ran, not just that invoked:true came back.
+      const marked = (await server.dispatcher.dispatch('native_menu_invoke', {
+        sessionId,
+        path: ['File', 'Mark'],
+      })) as unknown as InvokeEnvelope
+      expect(marked.invoked).toBe(true)
+      const sentinel = (await server.dispatcher.dispatch('electron_expect_text', {
+        sessionId,
+        selector: '#invoked',
+        contains: 'INVOKED',
+      })) as { ok?: boolean }
+      expect(sentinel.ok).toBe(true)
+
+      // A built-in role item cannot be invoked programmatically — it refuses with reason 'role'.
+      const roleInvoke = (await server.dispatcher.dispatch('native_menu_invoke', {
+        sessionId,
+        path: ['Help', 'quit'],
+      })) as unknown as InvokeEnvelope
+      expect(roleInvoke.invoked).toBe(false)
+      expect(roleInvoke.reason).toBe('role')
+
+      // An item with no click option still carries Electron's default click wrapper — validate against
+      // REAL Electron that the app-defined-click heuristic reports no_handler, not a false invoked:true
+      // (the heuristic is otherwise only exercised against the fake menu in the unit tests).
+      const inertInvoke = (await server.dispatcher.dispatch('native_menu_invoke', {
+        sessionId,
+        path: ['File', 'Inert'],
+      })) as unknown as InvokeEnvelope
+      expect(inertInvoke.invoked).toBe(false)
+      expect(inertInvoke.reason).toBe('no_handler')
 
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },

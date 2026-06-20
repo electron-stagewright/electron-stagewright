@@ -1,6 +1,6 @@
 # ADR-019: Native UI plugin via a transport native-UI seam
 
-Status: Accepted (application-menu read on the Playwright transport; tray / notification capture deferred)
+Status: Accepted (application-menu read + invoke on the Playwright transport; tray / notification capture deferred)
 
 ## Context
 
@@ -48,9 +48,9 @@ inherit the eval threat model or the `--allow-eval` opt-in.
 - **NOT `--allow-eval` gated** — the read runs no agent JavaScript (a fixed main-process serializer), so
   it does not require the eval opt-in. Like the network, clock, and storage plugins, unlike the IPC
   plugin.
-- **A read, not a modify; not a secret surface.** Reading the menu is observation of app chrome. Menu
-  labels are no more sensitive than the DOM text the agent already reads via a snapshot, so there is no
-  redaction concern, and there is no menu _invocation_ (clicking an item) in this slice.
+- **The original read slice is not a secret surface.** Reading the menu is observation of app chrome.
+  Menu labels are no more sensitive than the DOM text the agent already reads via a snapshot, so there is
+  no redaction concern. The status update below adds bounded menu invocation as a separate modify action.
 
 ## Rationale
 
@@ -111,3 +111,29 @@ inherit the eval threat model or the `--allow-eval` opt-in.
 - `packages/core/src/transports/playwright-electron.ts` — the main-process menu serializer.
 - `packages/plugin-native-ui/src/index.ts` — the tools, the capability gate, the path walk.
 - `packages/plugin-native-ui/tests/` — simulated-seam integration + the gated real-Electron smoke.
+
+## Status Update — 2026-06-19: menu invocation (read → read+act)
+
+The native-UI seam, read-only at acceptance, gains a second method —
+`TransportSession.invokeApplicationMenuItem(path)` — driven by a new `native_menu_invoke` tool, so an
+agent can not only read the application menu but TRIGGER a menu action ("click File → Save") without
+simulating a keyboard accelerator. The decision holds the seam's shape:
+
+- **Same capability, same mechanism.** Invocation rides the same `canAccessNativeUI` (its doc broadens
+  from "read" to "read and invoke") and the same `electronApp.evaluate` path. A self-contained
+  main-process walker resolves the label/role path in the LIVE menu, refuses non-actionable items, and
+  calls `MenuItem.click` with the focused window/webContents (falling back to the first app window when no
+  window is focused) so Electron dispatches the app-provided handler with stable window context. CDP and
+  injector reject it `NOT_IMPLEMENTED`, like the read.
+- **NOT `--allow-eval` gated.** The agent supplies a path (data), not code; firing an app-defined menu
+  handler is the native-UI analog of `electron_click` firing a DOM handler — a modify, but not eval. The
+  security model gains a native-UI **modify** row alongside the read row.
+- **Honest about its one limit.** Electron's built-in **role-based** items (`quit`, `reload`, …) are
+  handled internally by Electron, so the plugin refuses them instead of pretending it invoked an
+  app-owned handler. Rather than fake success, the result reports `{ invoked: false, reason }` with a
+  precise reason — `not_found`, `disabled` (a greyed-out item is refused, never force-fired), `role`
+  (press the accelerator instead), `submenu` (descend, don't invoke), `separator`, or `no_handler`. On
+  success the resolved `label`/`role` are echoed so the agent confirms which item fired.
+
+Menu invocation flips the native-UI surface from read-only to read+act. Tray and notification capture,
+and a broader native-action surface, remain the deferred follow-ups.
