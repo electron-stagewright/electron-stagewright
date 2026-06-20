@@ -15,6 +15,7 @@ import {
   NOOP_LOGGER,
   TransportRegistry,
   type NativeMenu,
+  type NativeNotification,
   type TransportCapabilities,
 } from '@electron-stagewright/core'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -210,6 +211,9 @@ describe('native-ui plugin', () => {
       ['native_menu', {}],
       ['native_menu_item', { path: ['View'] }],
       ['native_menu_invoke', { path: ['View'] }],
+      ['native_notifications_start', {}],
+      ['native_notifications', {}],
+      ['native_notifications_stop', {}],
     ] as const) {
       expect(await server.dispatcher.dispatch(tool, { sessionId, ...args })).toMatchObject({
         ok: false,
@@ -272,5 +276,92 @@ describe('native-ui plugin', () => {
       menu: unknown
     }
     expect(JSON.parse(JSON.stringify(res.menu))).toEqual(res.menu)
+  })
+
+  const SAMPLE_NOTIFICATIONS: NativeNotification[] = [
+    { title: 'Saved', body: 'All changes saved', silent: false, at: 1000 },
+    { title: 'Error', body: 'Could not connect', urgency: 'critical', at: 2000 },
+  ]
+
+  it('arms capture, relays the filter, reads, and stops', async () => {
+    const session = new FakeSession()
+    session.notifications = SAMPLE_NOTIFICATIONS
+    const server = await open(session)
+    const sessionId = await launch(server)
+
+    expect(
+      await server.dispatcher.dispatch('native_notifications_start', {
+        sessionId,
+        titleContains: 'Sav',
+      }),
+    ).toMatchObject({ ok: true, capturing: true })
+    expect(session.notificationStartCalls).toEqual([{ titleContains: 'Sav' }])
+
+    expect(await server.dispatcher.dispatch('native_notifications', { sessionId })).toMatchObject({
+      ok: true,
+      count: 2,
+      notifications: SAMPLE_NOTIFICATIONS,
+    })
+
+    expect(
+      await server.dispatcher.dispatch('native_notifications_stop', { sessionId }),
+    ).toMatchObject({ ok: true, count: 2, notifications: SAMPLE_NOTIFICATIONS })
+    expect(session.notificationStopCalls).toBe(1)
+  })
+
+  it('arms with no filter (capture all) when titleContains is omitted', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('native_notifications_start', { sessionId })
+    expect(session.notificationStartCalls).toEqual([{}])
+  })
+
+  it('refuses a double-arm with native.ALREADY_CAPTURING', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('native_notifications_start', { sessionId })
+    expect(
+      await server.dispatcher.dispatch('native_notifications_start', { sessionId }),
+    ).toMatchObject({ ok: false, code: 'native.ALREADY_CAPTURING' })
+    // Only the first arm reached the seam.
+    expect(session.notificationStartCalls).toHaveLength(1)
+  })
+
+  it('refuses read/stop before arming with native.NOT_CAPTURING', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    for (const tool of ['native_notifications', 'native_notifications_stop'] as const) {
+      expect(await server.dispatcher.dispatch(tool, { sessionId })).toMatchObject({
+        ok: false,
+        code: 'native.NOT_CAPTURING',
+      })
+    }
+    expect(session.notificationStopCalls).toBe(0)
+  })
+
+  it('can re-arm after a stop', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('native_notifications_start', { sessionId })
+    await server.dispatcher.dispatch('native_notifications_stop', { sessionId })
+    expect(
+      await server.dispatcher.dispatch('native_notifications_start', { sessionId }),
+    ).toMatchObject({ ok: true, capturing: true })
+  })
+
+  it('returns a wire-serialisable notifications payload (no Map/Set/Date round-trip loss)', async () => {
+    const session = new FakeSession()
+    session.notifications = SAMPLE_NOTIFICATIONS
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('native_notifications_start', { sessionId })
+    const res = (await server.dispatcher.dispatch('native_notifications', {
+      sessionId,
+    })) as unknown as { notifications: unknown }
+    expect(JSON.parse(JSON.stringify(res.notifications))).toEqual(res.notifications)
   })
 })

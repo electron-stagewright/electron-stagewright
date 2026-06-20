@@ -24,11 +24,13 @@ import type {
   InteractionOptions,
   MenuInvokeResult,
   NativeMenu,
+  NativeNotification,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
   NetworkEventsResult,
   NetworkStub,
+  NotificationCaptureFilter,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -296,6 +298,20 @@ export class FakeSession implements TransportSession {
   async invokeApplicationMenuItem(path: readonly string[]): Promise<MenuInvokeResult> {
     this.invokeCalls.push(path)
     return this.invokeResult
+  }
+
+  /** Notifications the fake returns, the arm/stop record, and the filters seen — for the capture relay. */
+  notifications: NativeNotification[] = []
+  readonly notificationStartCalls: Array<NotificationCaptureFilter | undefined> = []
+  notificationStopCalls = 0
+  async startNotificationCapture(filter?: NotificationCaptureFilter): Promise<void> {
+    this.notificationStartCalls.push(filter)
+  }
+  async capturedNotifications(): Promise<readonly NativeNotification[]> {
+    return this.notifications
+  }
+  async stopNotificationCapture(): Promise<void> {
+    this.notificationStopCalls += 1
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

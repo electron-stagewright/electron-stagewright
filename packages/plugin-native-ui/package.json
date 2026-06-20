@@ -1,7 +1,7 @@
 {
   "name": "@electron-stagewright/plugin-native-ui",
-  "version": "0.2.0",
-  "description": "Native UI plugin for Electron Stagewright: read, assert, and invoke an Electron app's application menu (the macOS menu bar) for agent-driven testing.",
+  "version": "0.3.0",
+  "description": "Native UI plugin for Electron Stagewright: read, assert, invoke app menus, and capture shown notifications for agent-driven testing.",
   "type": "module",
   "license": "MIT",
   "author": "johnny4young <johnny.iv.young@gmail.com>",
@@ -19,6 +19,7 @@
     "mcp",
     "stagewright",
     "menu",
+    "notifications",
     "native-ui",
     "macos",
     "testing",

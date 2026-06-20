@@ -83,11 +83,13 @@ import type {
   MenuInvokeResult,
   NativeMenu,
   NativeMenuItem,
+  NativeNotification,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
   NetworkEventsResult,
   NetworkStub,
+  NotificationCaptureFilter,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -1038,6 +1040,108 @@ class PlaywrightSession implements TransportSession {
       },
       { body: '', arg: { path } },
     )
+  }
+
+  // --- Native notifications: capture each shown notification via a main-process prototype hook. ---
+
+  async startNotificationCapture(filter?: NotificationCaptureFilter): Promise<void> {
+    const app = this.requireRunning()
+    const titleContains = filter?.titleContains
+    // Patch Notification.prototype.show (NOT the constructor) in the main process: every instance shares
+    // the prototype, so this catches every shown notification regardless of how the app referenced the
+    // class (it survives `const { Notification } = require('electron')`). The hook + buffer live on a
+    // main-process global so a later capturedNotifications/stop can reach them. Self-contained (B5).
+    await app.evaluate<void>(
+      (electron, payload) => {
+        const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
+          .Notification?.prototype
+        if (proto === undefined || typeof proto['show'] !== 'function') return
+        const g = globalThis as unknown as Record<string, unknown>
+        const KEY = '__stagewright_notificationCapture'
+        if (g[KEY] !== undefined) return
+        const arg = payload?.arg as { titleContains?: unknown } | undefined
+        const needle = typeof arg?.titleContains === 'string' ? arg.titleContains : undefined
+        interface Rec {
+          title: string
+          body?: string
+          subtitle?: string
+          silent?: boolean
+          urgency?: 'normal' | 'critical' | 'low'
+          at: number
+        }
+        // Bound the buffer so a notification-spamming app cannot grow main-process memory without limit
+        // (mirrors the network capture's ring buffer); past the cap the OLDEST entries are dropped.
+        const CAP = 1000
+        const buffer: Rec[] = []
+        const origShow = proto['show'] as (...args: unknown[]) => unknown
+        const state: {
+          buffer: Rec[]
+          origShow: (...args: unknown[]) => unknown
+          patchedShow?: (...args: unknown[]) => unknown
+          active: boolean
+        } = { buffer, origShow, active: true }
+        const patchedShow = function (this: Record<string, unknown>, ...args: unknown[]): unknown {
+          const result = origShow.apply(this, args)
+          if (!state.active) return result
+          try {
+            const title = typeof this['title'] === 'string' ? (this['title'] as string) : ''
+            if (needle === undefined || title.includes(needle)) {
+              const rec: Rec = { title, at: Date.now() }
+              if (typeof this['body'] === 'string' && this['body'] !== '')
+                rec.body = this['body'] as string
+              if (typeof this['subtitle'] === 'string' && this['subtitle'] !== '')
+                rec.subtitle = this['subtitle'] as string
+              if (typeof this['silent'] === 'boolean') rec.silent = this['silent'] as boolean
+              const u = this['urgency']
+              if (u === 'normal' || u === 'critical' || u === 'low') rec.urgency = u
+              buffer.push(rec)
+              if (buffer.length > CAP) buffer.shift()
+            }
+          } catch {
+            // Recording must never break the app's own notification.
+          }
+          return result
+        }
+        state.patchedShow = patchedShow
+        proto['show'] = patchedShow
+        g[KEY] = state
+      },
+      { body: '', arg: { titleContains } },
+    )
+  }
+
+  async capturedNotifications(): Promise<readonly NativeNotification[]> {
+    const app = this.requireRunning()
+    return app.evaluate<NativeNotification[]>(() => {
+      const g = globalThis as unknown as Record<string, unknown>
+      const state = g['__stagewright_notificationCapture'] as { buffer?: unknown } | undefined
+      const buffer = state?.buffer
+      return Array.isArray(buffer) ? (buffer.slice() as NativeNotification[]) : []
+    })
+  }
+
+  async stopNotificationCapture(): Promise<void> {
+    const app = this.requireRunning()
+    await app.evaluate<void>((electron) => {
+      const g = globalThis as unknown as Record<string, unknown>
+      const KEY = '__stagewright_notificationCapture'
+      const state = g[KEY] as
+        | { origShow?: unknown; patchedShow?: unknown; active?: boolean }
+        | undefined
+      if (state === undefined) return
+      state.active = false
+      const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
+        .Notification?.prototype
+      if (
+        proto !== undefined &&
+        typeof state.origShow === 'function' &&
+        typeof state.patchedShow === 'function' &&
+        proto['show'] === state.patchedShow
+      ) {
+        proto['show'] = state.origShow
+      }
+      delete g[KEY]
+    })
   }
 
   private requireRunning(): PWElectronApp {

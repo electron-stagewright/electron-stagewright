@@ -1,20 +1,20 @@
 # @electron-stagewright/plugin-native-ui
 
-Read, assert, and **invoke** an Electron app's **native chrome** — the application menu (the macOS menu
-bar / app menu) — under agent-driven testing (ADR-019, built on the ADR-004 plugin contract). Ask "is the
-_Save_ item enabled?", "did _Dark Mode_ get checked under _View_?", or "does the _Edit_ menu have a
-_Paste_ item?", then **trigger** the action ("click File → Save") — state and actions that live in the
-Electron **main process**, outside the DOM the agent already reads — all **without running
-agent-supplied JavaScript**.
+Read, assert, **invoke**, and **capture** an Electron app's **native chrome** — the application menu (the
+macOS menu bar / app menu) and the notifications it shows — under agent-driven testing (ADR-019, built on
+the ADR-004 plugin contract). Ask "is the _Save_ item enabled?", "did _Dark Mode_ get checked under
+_View_?", then **trigger** the action ("click File → Save"), and **assert the app notified the user** ("a
+_Saved_ notification appeared") — state, actions, and events that live in the Electron **main process**,
+outside the DOM the agent already reads — all **without running agent-supplied JavaScript**.
 
 Like the network, clock, and storage plugins, the tools ride a dedicated **transport seam** (a fixed
-main-process serializer/walker over `Menu.getApplicationMenu()`), not eval — so they do **not** require
-`--allow-eval`. They run on the default **Playwright** launch transport (the only transport with real
-Electron main-process access); the CDP attach and injector transports return `native.UNSUPPORTED`.
+main-process serializer/walker over `Menu.getApplicationMenu()`, and a fixed `Notification.prototype.show`
+hook), not eval — so they do **not** require `--allow-eval`. They run on the default **Playwright** launch
+transport (the only transport with real Electron main-process access); the CDP attach and injector
+transports return `native.UNSUPPORTED`.
 
 The application menu is cross-platform (Electron's `Menu` API); the **macOS menu bar** is its most
-prominent surface. Tray and notification capture are deferred follow-ups (they need constructor-hook
-instrumentation, not this bounded menu seam).
+prominent surface. Tray capture is the deferred follow-up.
 
 ## Load it
 
@@ -56,8 +56,20 @@ The loader namespaces each tool under the plugin name `native`:
 Each path segment matches an item by its **label OR its role**, so role-based items (e.g. `quit`,
 `paste`, `reload`) that carry no explicit label until rendered are still findable.
 
-Error codes: `native.UNSUPPORTED` (the transport cannot access the native UI). Invalid arguments (an
-empty `path`) are core `BAD_ARGUMENT`.
+### Notification capture
+
+- **`native_notifications_start`** `{ titleContains?, sessionId? }` — arm capture of the notifications
+  the app shows (`new Notification(...).show()`), optionally narrowed to titles containing `titleContains`.
+  Notifications shown **before** arming are not captured — arm, then drive the app. Returns `{ capturing }`.
+- **`native_notifications`** `{ sessionId? }` — return the notifications shown since arming, oldest first
+  — each with `title`, `body`/`subtitle`/`silent`/`urgency` (when set), and `at` (epoch ms). The no-eval
+  way to **assert the app notified the user**. Returns `{ count, notifications }`.
+- **`native_notifications_stop`** `{ sessionId? }` — disarm (restore the original `Notification.show`) and
+  return what was captured. Returns `{ count, notifications }`.
+
+Error codes: `native.UNSUPPORTED` (the transport cannot access the native UI), `native.ALREADY_CAPTURING`
+(a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming). Invalid arguments (an
+empty menu `path` or empty `titleContains`) are core `BAD_ARGUMENT`.
 
 ## Security
 
@@ -73,11 +85,21 @@ not code, so it is still **not** `--allow-eval` gated; it is bounded by the `can
 and the operator's choice to load the plugin. A disabled item is refused, and a built-in role item cannot
 be invoked (press its accelerator).
 
+Notification capture **observes** the notifications the app shows by patching `Notification.prototype.show`
+in the main process and recording only the data fields (title/body/subtitle/silent/urgency — never
+handlers or refs). Although the fixed hook is installed via `evaluate`, the agent supplies only
+arm/read/stop (no executable input), so it is **not** `--allow-eval` gated — an observe surface bounded by
+the capability and the operator-loaded plugin, no more sensitive than the notification text the user sees.
+
 ## Scope and limitations
 
-- **Application menu only (read + invoke).** This plugin reads and invokes the application menu. There is
-  no tray or notification surface yet — those need main-process instrumentation (hooking the `Tray` /
-  `Notification` constructors), a separate lift, and are deferred.
+- **Application menu (read + invoke) and notification capture.** This plugin reads/invokes the
+  application menu and captures shown notifications. **Tray** capture (icon, tooltip, context menu) is the
+  remaining deferred surface — the same hook mechanism, a separate lift.
+- **Notification capture is arm-then-observe.** Notifications shown before `native_notifications_start`
+  are not recorded, and only **shown** notifications (`.show()`) are captured — a constructed-but-unshown
+  notification notified no one. The hook patches the shared `Notification.prototype`, so it catches every
+  shown notification regardless of how the app referenced the class.
 - **Playwright launch transport only.** The application menu lives in the Electron main-process Node
   context; only the Playwright transport reaches it (`electronApp.evaluate`). A CDP attach session
   evaluates against the browser target, which has no Electron `Menu` module, so it returns

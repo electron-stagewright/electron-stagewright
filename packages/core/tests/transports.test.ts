@@ -15,7 +15,7 @@
  */
 
 import { JSDOM } from 'jsdom'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { StagewrightError } from '../src/errors/registry.js'
 import {
@@ -74,6 +74,9 @@ const FAKE_SESSION: TransportSession = {
   storageSnapshot: async () => ({ cookies: [], origins: [] }),
   getApplicationMenu: async () => null,
   invokeApplicationMenuItem: async () => ({ invoked: false, reason: 'not_found' }) as const,
+  startNotificationCapture: async () => undefined,
+  capturedNotifications: async () => [],
+  stopNotificationCapture: async () => undefined,
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -2038,6 +2041,120 @@ describe('PlaywrightSession native UI', () => {
     await expect(session.invokeApplicationMenuItem(['File', 'Save'])).rejects.toMatchObject({
       code: 'NOT_RUNNING',
     })
+  })
+})
+
+describe('PlaywrightSession notification capture', () => {
+  const NOTIF_KEY = '__stagewright_notificationCapture'
+  afterEach(() => {
+    // The hook stores state on the (real) test-process global; clean it so tests do not leak into each
+    // other (a failed test that never reached stop would otherwise keep the patched prototype global).
+    delete (globalThis as Record<string, unknown>)[NOTIF_KEY]
+  })
+
+  async function launchWithNotifications() {
+    const shown: string[] = []
+    class FakeNotification {
+      title?: string
+      body?: string
+      subtitle?: string
+      silent?: boolean
+      urgency?: string
+      constructor(opts?: Record<string, unknown>) {
+        Object.assign(this, opts ?? {})
+      }
+      show(): void {
+        shown.push(String(this.title))
+      }
+    }
+    const app = createFakeElectronApp([createFakePage('A')], { Notification: FakeNotification })
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    return { session, FakeNotification, shown }
+  }
+
+  it('records each shown notification (data fields only) and still runs the original show', async () => {
+    const { session, FakeNotification, shown } = await launchWithNotifications()
+    await session.startNotificationCapture()
+    new FakeNotification({ title: 'Saved', body: 'All changes saved', silent: false }).show()
+    new FakeNotification({ title: 'Hi' }).show()
+    expect(shown).toEqual(['Saved', 'Hi']) // the original show still fired
+
+    const caught = await session.capturedNotifications()
+    expect(caught).toHaveLength(2)
+    expect(caught[0]).toMatchObject({ title: 'Saved', body: 'All changes saved', silent: false })
+    expect(typeof caught[0]?.at).toBe('number')
+    expect(caught[1]).toMatchObject({ title: 'Hi' })
+    expect(caught[1]).not.toHaveProperty('body') // an absent field is omitted, not null
+    expect(JSON.parse(JSON.stringify(caught))).toEqual(caught) // wire-serialisable
+  })
+
+  it('applies the titleContains filter', async () => {
+    const { session, FakeNotification } = await launchWithNotifications()
+    await session.startNotificationCapture({ titleContains: 'Save' })
+    new FakeNotification({ title: 'Saved' }).show()
+    new FakeNotification({ title: 'Error' }).show()
+    expect((await session.capturedNotifications()).map((n) => n.title)).toEqual(['Saved'])
+  })
+
+  it('records a notification shown via a reference captured BEFORE arming (prototype patch)', async () => {
+    const { session, FakeNotification } = await launchWithNotifications()
+    // Simulate `const { Notification } = require('electron')` at app import — a reference taken before the
+    // hook installs. A prototype patch (not a constructor swap) still catches its `.show()`.
+    const Destructured = FakeNotification
+    await session.startNotificationCapture()
+    new Destructured({ title: 'ViaRef' }).show()
+    expect((await session.capturedNotifications()).map((n) => n.title)).toEqual(['ViaRef'])
+  })
+
+  it('bounds the buffer at the cap, dropping the oldest', async () => {
+    const { session, FakeNotification } = await launchWithNotifications()
+    await session.startNotificationCapture()
+    const CAP = 1000
+    for (let i = 0; i < CAP + 5; i += 1) new FakeNotification({ title: `n${i}` }).show()
+    const caught = await session.capturedNotifications()
+    expect(caught).toHaveLength(CAP)
+    // The 5 oldest were dropped; the newest is retained.
+    expect(caught[0]?.title).toBe('n5')
+    expect(caught[caught.length - 1]?.title).toBe(`n${CAP + 4}`)
+  })
+
+  it('stop restores the original show and drops the buffer', async () => {
+    const { session, FakeNotification } = await launchWithNotifications()
+    const origShow = FakeNotification.prototype.show
+    await session.startNotificationCapture()
+    expect(FakeNotification.prototype.show).not.toBe(origShow) // patched
+    await session.stopNotificationCapture()
+    expect(FakeNotification.prototype.show).toBe(origShow) // restored
+    new FakeNotification({ title: 'After' }).show()
+    expect(await session.capturedNotifications()).toEqual([]) // buffer gone
+  })
+
+  it('does not clobber a later app patch when capture stops', async () => {
+    const { session, FakeNotification, shown } = await launchWithNotifications()
+    await session.startNotificationCapture()
+    const stagewrightShow = FakeNotification.prototype.show
+    const appPatchedShow = function (this: InstanceType<typeof FakeNotification>): void {
+      stagewrightShow.call(this)
+    }
+    FakeNotification.prototype.show = appPatchedShow
+
+    await session.stopNotificationCapture()
+
+    expect(FakeNotification.prototype.show).toBe(appPatchedShow)
+    new FakeNotification({ title: 'AfterStop' }).show()
+    expect(shown).toEqual(['AfterStop'])
+    expect(await session.capturedNotifications()).toEqual([])
+  })
+
+  it('rejects capture ops after dispose', async () => {
+    const { session } = await launchWithNotifications()
+    await session.dispose()
+    await expect(session.startNotificationCapture()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+    await expect(session.capturedNotifications()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+    await expect(session.stopNotificationCapture()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })
 })
 

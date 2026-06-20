@@ -41,7 +41,7 @@ export interface TransportCapabilities {
   readonly canControlClock: boolean
   /** The transport can read and seed the app's storage (cookies + the storage snapshot) via the seam. */
   readonly canAccessStorage: boolean
-  /** The transport can read and invoke the app's native UI (the application menu) from the main process via the seam. */
+  /** The transport can read, invoke, and capture the app's native UI (the application menu + notifications) from the main process via the seam. */
   readonly canAccessNativeUI: boolean
   /** The transport can evaluate JavaScript in the main process context. */
   readonly supportsMainEval: boolean
@@ -624,6 +624,30 @@ export type MenuInvokeResult =
       readonly reason: 'not_found' | 'disabled' | 'role' | 'submenu' | 'separator' | 'no_handler'
     }
 
+/** Narrows a notification capture to those whose title contains this substring. Absent = capture all. */
+export interface NotificationCaptureFilter {
+  /** Only record notifications whose `title` contains this substring. */
+  readonly titleContains?: string
+}
+
+/**
+ * One native notification the app showed (`new Notification(...).show()`), recorded from the main
+ * process. JSON-serialisable: only the data fields are read off the instance at show time (no handlers
+ * or refs). `at` is epoch milliseconds when the notification was shown. Optional fields are present only
+ * when the app set them.
+ */
+export interface NativeNotification {
+  readonly title: string
+  readonly body?: string
+  readonly subtitle?: string
+  /** Whether the notification suppressed its sound. */
+  readonly silent?: boolean
+  /** Linux urgency hint, when set. */
+  readonly urgency?: 'normal' | 'critical' | 'low'
+  /** Epoch milliseconds when `.show()` was called. */
+  readonly at: number
+}
+
 /**
  * A live session against an Electron app, returned by `launch`, `attach`, or
  * `inject`. Disposal is idempotent: calling `dispose()` twice MUST NOT throw,
@@ -768,6 +792,19 @@ export interface TransportSession {
    * Fires the app's own `click` handler; see {@link MenuInvokeResult} for the success/refusal outcomes.
    */
   invokeApplicationMenuItem(path: readonly string[]): Promise<MenuInvokeResult>
+
+  /**
+   * Arm notification capture: install a main-process hook that records each notification the app shows
+   * (`new Notification(...).show()`), optionally narrowed by `filter`. Idempotent re-arm is the caller's
+   * concern (the plugin refuses a double-arm). Subsequent shows accumulate until {@link stopNotificationCapture}.
+   */
+  startNotificationCapture(filter?: NotificationCaptureFilter): Promise<void>
+
+  /** Read the notifications recorded since {@link startNotificationCapture}, oldest first. */
+  capturedNotifications(): Promise<readonly NativeNotification[]>
+
+  /** Disarm notification capture: restore the original `Notification.show` and drop the buffer. Idempotent. */
+  stopNotificationCapture(): Promise<void>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

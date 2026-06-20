@@ -1,21 +1,23 @@
 /**
- * `@electron-stagewright/plugin-native-ui` — read, assert, and invoke an Electron app's **native chrome**:
- * the application menu (the macOS menu bar / app menu), for agent-driven testing (ADR-019, built on the
- * ADR-004 plugin contract). Ask "is the *Save* item enabled?", "did *Dark Mode* get checked under
- * *View*?", "does the *Edit* menu have a *Paste* item?", then trigger the action — state and actions that
- * live in the Electron main process, outside the DOM the agent already reads, without agent-supplied
- * JavaScript.
+ * `@electron-stagewright/plugin-native-ui` — read, assert, invoke, and capture an Electron app's
+ * **native chrome**: the application menu (the macOS menu bar / app menu) and the notifications it shows,
+ * for agent-driven testing (ADR-019, built on the ADR-004 plugin contract). Ask "is the *Save* item
+ * enabled?", "did *Dark Mode* get checked under *View*?", trigger the action, then assert that the app
+ * showed a notification — state, actions, and events that live in the Electron main process, outside the
+ * DOM the agent already reads, without agent-supplied JavaScript.
  *
  * Like the network, clock, and storage plugins, the tools ride a dedicated TRANSPORT SEAM (a fixed
- * main-process serializer/walker over `Menu.getApplicationMenu()`), not eval, so this plugin is NOT
- * `--allow-eval` gated. It IS gated on the transport's `canAccessNativeUI` capability
- * (`native.UNSUPPORTED` otherwise). Tools (namespaced by the loader): `native_menu`, `native_menu_item`,
- * `native_menu_invoke`.
+ * main-process serializer/walker over `Menu.getApplicationMenu()` plus a fixed
+ * `Notification.prototype.show` hook), not eval, so this plugin is NOT `--allow-eval` gated. It IS gated
+ * on the transport's `canAccessNativeUI` capability (`native.UNSUPPORTED` otherwise). Tools (namespaced
+ * by the loader): `native_menu`, `native_menu_item`, `native_menu_invoke`,
+ * `native_notifications_start`, `native_notifications`, `native_notifications_stop`.
  *
- * Reading the menu is observation of app chrome — not a secret surface (menu labels are no more sensitive
- * than the DOM text the agent already sees). Invoking a menu item modifies app behaviour by firing the
- * app's own handler, bounded by the same capability and plugin opt-in. The application menu is
- * cross-platform (Electron's `Menu` API); the macOS menu bar is its most prominent surface.
+ * Reading the menu and notification capture are observation of app chrome — not a secret surface (menu
+ * labels and shown notification text are no more sensitive than user-visible DOM text). Invoking a menu
+ * item modifies app behaviour by firing the app's own handler, bounded by the same capability and plugin
+ * opt-in. The application menu is cross-platform (Electron's `Menu` API); the macOS menu bar is its most
+ * prominent surface.
  *
  * @module
  */
@@ -27,6 +29,7 @@ import {
   type AnyToolDefinition,
   type NativeMenu,
   type NativeMenuItem,
+  type NotificationCaptureFilter,
   type StagewrightPlugin,
   type ToolContext,
   type ToolResult,
@@ -37,7 +40,7 @@ import { z } from 'zod'
 /** Plugin namespace — must match {@link nativeUiPlugin.name}; the loader prefixes its tools with it. */
 const NATIVE_NAMESPACE = 'native'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const NATIVE_PLUGIN_VERSION = '0.2.0'
+const NATIVE_PLUGIN_VERSION = '0.3.0'
 
 /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
 interface PluginMeta {
@@ -53,7 +56,7 @@ function requireNativeUI(
   ctx: ToolContext,
   sessionId: string | undefined,
   meta: PluginMeta,
-): { session: TransportSession } | { error: ToolResult } {
+): { session: TransportSession; sessionId: string } | { error: ToolResult } {
   const managed = ctx.sessions.resolve(sessionId)
   if (!managed.transport.capabilities.canAccessNativeUI) {
     return {
@@ -64,8 +67,14 @@ function requireNativeUI(
       }),
     }
   }
-  return { session: managed.session }
+  return { session: managed.session, sessionId: managed.id }
 }
+
+// Per-session notification-capture state, keyed by the (globally-unique) session id, so concurrent app
+// sessions capture independently. Only presence gates the read/stop tools; the filter is retained for a
+// future capture-status surface (mirroring the network plugin). Module-level, so co-resident servers in
+// the SAME process share it — run independent lifecycles in separate Node processes.
+const notificationCaptures = new Map<string, NotificationCaptureFilter>()
 
 /** A path segment matches an item by its visible label OR its built-in role (so role-only items resolve). */
 function itemMatches(item: NativeMenuItem, segment: string): boolean {
@@ -161,6 +170,96 @@ const menuInvokeTool: AnyToolDefinition = defineTool({
   },
 })
 
+const notificationsStartTool: AnyToolDefinition = defineTool({
+  name: 'notifications_start',
+  title: 'Start capturing notifications',
+  description: [
+    'Arm capture of the native notifications the app shows (new Notification(...).show()), optionally',
+    'narrowed to titles containing `titleContains`. Notifications shown BEFORE arming are not captured',
+    '(arm, then drive the app). Returns: { ok, capturing }. Errors: native.UNSUPPORTED (transport cannot',
+    'access the native UI), native.ALREADY_CAPTURING (call native_notifications_stop first), NOT_RUNNING,',
+    'BAD_ARGUMENT (empty titleContains).',
+  ].join(' '),
+  inputSchema: z.object({
+    titleContains: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Only capture notifications whose title contains this substring.'),
+    ...sessionField,
+  }),
+  operationType: 'command',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireNativeUI(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    if (notificationCaptures.has(guard.sessionId)) {
+      return makePluginError('native.ALREADY_CAPTURING', {
+        ...meta,
+        message: `Notification capture is already active on session ${guard.sessionId}; call native_notifications_stop first.`,
+      })
+    }
+    const filter: NotificationCaptureFilter =
+      args.titleContains !== undefined ? { titleContains: args.titleContains } : {}
+    await guard.session.startNotificationCapture(filter)
+    notificationCaptures.set(guard.sessionId, filter)
+    return makeSuccess({ capturing: true }, meta)
+  },
+})
+
+const notificationsTool: AnyToolDefinition = defineTool({
+  name: 'notifications',
+  title: 'Read captured notifications',
+  description: [
+    'Return the notifications the app has shown since native_notifications_start, oldest first — each',
+    'with its title, body/subtitle/silent/urgency when set, and `at` (epoch ms). The no-eval way to',
+    'ASSERT the app notified the user. Returns: { ok, count, notifications }. Errors:',
+    'native.NOT_CAPTURING (call native_notifications_start first), native.UNSUPPORTED, NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({ ...sessionField }),
+  operationType: 'query',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireNativeUI(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    if (!notificationCaptures.has(guard.sessionId)) {
+      return makePluginError('native.NOT_CAPTURING', {
+        ...meta,
+        message: `No active notification capture on session ${guard.sessionId}; call native_notifications_start first.`,
+      })
+    }
+    const notifications = await guard.session.capturedNotifications()
+    return makeSuccess({ count: notifications.length, notifications }, meta)
+  },
+})
+
+const notificationsStopTool: AnyToolDefinition = defineTool({
+  name: 'notifications_stop',
+  title: 'Stop capturing notifications',
+  description: [
+    'Disarm notification capture (restore the original Notification.show) and return the notifications',
+    'captured during the session. Returns: { ok, count, notifications }. Errors: native.NOT_CAPTURING',
+    '(nothing to stop), native.UNSUPPORTED, NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({ ...sessionField }),
+  operationType: 'command',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireNativeUI(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    if (!notificationCaptures.has(guard.sessionId)) {
+      return makePluginError('native.NOT_CAPTURING', {
+        ...meta,
+        message: `No active notification capture on session ${guard.sessionId}; nothing to stop.`,
+      })
+    }
+    const notifications = await guard.session.capturedNotifications()
+    await guard.session.stopNotificationCapture()
+    notificationCaptures.delete(guard.sessionId)
+    return makeSuccess({ count: notifications.length, notifications }, meta)
+  },
+})
+
 /**
  * The native-UI plugin. Load with `--plugin @electron-stagewright/plugin-native-ui` (NO eval flag — it
  * does not run agent-supplied JS) or `createServer({ plugins: [nativeUiPlugin] })`. No configuration.
@@ -175,8 +274,30 @@ export const nativeUiPlugin: StagewrightPlugin = {
       retryable: false,
       hint: 'This transport cannot access the native UI; use the default Playwright launch transport.',
     },
+    ALREADY_CAPTURING: {
+      http: 409,
+      retryable: false,
+      hint: 'Notification capture is already active on this session; call native_notifications_stop first.',
+    },
+    NOT_CAPTURING: {
+      http: 409,
+      retryable: false,
+      hint: 'No active notification capture on this session; call native_notifications_start first.',
+    },
   },
-  tools: [menuTool, menuItemTool, menuInvokeTool],
+  tools: [
+    menuTool,
+    menuItemTool,
+    menuInvokeTool,
+    notificationsStartTool,
+    notificationsTool,
+    notificationsStopTool,
+  ],
+  teardown: async () => {
+    // Forget every session's capture flag. The hook + buffer live in the transport session's main
+    // process, which the server stops before plugin teardown.
+    notificationCaptures.clear()
+  },
 }
 
 export default nativeUiPlugin

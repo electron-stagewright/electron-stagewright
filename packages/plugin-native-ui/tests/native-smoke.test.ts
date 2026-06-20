@@ -128,6 +128,25 @@ describe('native-ui plugin smoke (real Electron)', () => {
       expect(inertInvoke.invoked).toBe(false)
       expect(inertInvoke.reason).toBe('no_handler')
 
+      // Notification capture end to end: arm, invoke File > Notify (which shows a real notification),
+      // then read it back — proving the Notification.prototype.show hook records against real Electron.
+      expect(
+        (
+          (await server.dispatcher.dispatch('native_notifications_start', {
+            sessionId,
+          })) as { ok?: boolean }
+        ).ok,
+      ).toBe(true)
+      await server.dispatcher.dispatch('native_menu_invoke', {
+        sessionId,
+        path: ['File', 'Notify'],
+      })
+      const captured = (await server.dispatcher.dispatch('native_notifications_stop', {
+        sessionId,
+      })) as unknown as { count: number; notifications: Array<{ title: string; body?: string }> }
+      expect(captured.count).toBe(1)
+      expect(captured.notifications[0]).toMatchObject({ title: 'Saved', body: 'All changes saved' })
+
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },
     60_000,

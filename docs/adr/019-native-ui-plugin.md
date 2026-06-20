@@ -1,6 +1,6 @@
 # ADR-019: Native UI plugin via a transport native-UI seam
 
-Status: Accepted (application-menu read + invoke on the Playwright transport; tray / notification capture deferred)
+Status: Accepted (application-menu read + invoke and notification capture on the Playwright transport; tray capture deferred)
 
 ## Context
 
@@ -135,5 +135,37 @@ simulating a keyboard accelerator. The decision holds the seam's shape:
   (press the accelerator instead), `submenu` (descend, don't invoke), `separator`, or `no_handler`. On
   success the resolved `label`/`role` are echoed so the agent confirms which item fired.
 
-Menu invocation flips the native-UI surface from read-only to read+act. Tray and notification capture,
-and a broader native-action surface, remain the deferred follow-ups.
+Menu invocation flips the native-UI surface from read-only to read+act. Tray capture and a broader
+native-action surface remain deferred follow-ups.
+
+## Status Update — 2026-06-19: notification capture (a native-event capture model)
+
+The native-UI plugin gains a **capture** mechanism alongside the menu read/invoke seam:
+`TransportSession` gains `startNotificationCapture(filter?)` / `capturedNotifications()` /
+`stopNotificationCapture()` (plus the types `NativeNotification` / `NotificationCaptureFilter`), driven
+by three `native_notifications_*` tools, so an agent can assert "the app showed a _Saved_ notification".
+Unlike the menu's one-shot read, this is an arm → read → stop capture model (like the network and IPC
+plugins): `native.ALREADY_CAPTURING` / `native.NOT_CAPTURING` gate the lifecycle.
+
+- **The hook is a prototype patch, not a constructor swap.** The Playwright transport patches
+  `Notification.prototype.show` in the main process via `electronApp.evaluate`. This is deliberate: every
+  notification instance shares the prototype, so it catches every shown notification **regardless of how
+  the app referenced the class** — it survives the common `const { Notification } = require('electron')`
+  at import time, which a constructor swap (`electron.Notification = Wrapper`) would miss. It also records
+  only **shown** notifications (`.show()`), which is the correct semantics for "did the app notify the
+  user" — a constructed-but-unshown notification notified no one. The recorder reads only the instance's
+  data fields (title/body/subtitle/silent/urgency), never handlers or refs, so `NativeNotification`
+  round-trips through `JSON.stringify`. The buffer is bounded by a ring-buffer cap (the oldest entries
+  are dropped past the cap), so a notification-spamming app cannot grow main-process memory without
+  limit — mirroring the network capture.
+- **NOT `--allow-eval` gated.** Although the hook is installed via `evaluate`, the agent supplies nothing
+  executable — only arm (with an optional `titleContains` filter), read, and stop. The hook is fixed
+  transport-owned code, and it **observes** user-facing notifications, a read surface lower-risk than the
+  IPC plugin's arbitrary main-process interaction (which IS eval-gated). So capture rides the same
+  `canAccessNativeUI` capability, not the eval opt-in, consistent with the menu read/invoke. The security
+  model gains a native-event-capture row.
+- **Limitation, documented.** Notifications shown before the capture is armed are not recorded (arm,
+  then drive the app) — the same arm-then-observe contract as network capture.
+
+Tray capture (the richer sibling — icon, tooltip, context menu, click events, same hook mechanism)
+remains the deferred native-UI follow-up.

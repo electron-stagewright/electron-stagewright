@@ -66,10 +66,12 @@ import type {
   LaunchOptions,
   MenuInvokeResult,
   NativeMenu,
+  NativeNotification,
   NetworkCaptureFilter,
   NetworkEventsOptions,
   NetworkEventsResult,
   NetworkStub,
+  NotificationCaptureFilter,
   StopOptions,
   StopResult,
   StorageCookie,
@@ -390,6 +392,15 @@ class InjectorSession implements TransportSession {
   }
   invokeApplicationMenuItem(_path: readonly string[]): Promise<MenuInvokeResult> {
     return Promise.reject(notImplemented('invokeApplicationMenuItem'))
+  }
+  startNotificationCapture(_filter?: NotificationCaptureFilter): Promise<void> {
+    return Promise.reject(notImplemented('startNotificationCapture'))
+  }
+  capturedNotifications(): Promise<readonly NativeNotification[]> {
+    return Promise.reject(notImplemented('capturedNotifications'))
+  }
+  stopNotificationCapture(): Promise<void> {
+    return Promise.reject(notImplemented('stopNotificationCapture'))
   }
 
   // --- Interaction surface: the main process has no renderer to drive. ---

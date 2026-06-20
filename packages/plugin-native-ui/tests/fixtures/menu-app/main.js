@@ -1,8 +1,9 @@
 // Minimal Electron main process for the gated native-UI smoke. Sets a KNOWN application menu so the
 // smoke can read it back and assert the interesting fields — a checkbox (checked), an accelerator, a
-// disabled item, and a role-based item — and an invokable File > Mark item whose click writes a sentinel
-// into the page, so the smoke can prove the handler actually ran. Quits when the window closes.
-import { BrowserWindow, Menu, app } from 'electron'
+// disabled item, and a role-based item — an invokable File > Mark item whose click writes a sentinel
+// into the page, and a File > Notify item whose click shows a native notification so the smoke can prove
+// notification capture works end to end. Quits when the window closes.
+import { BrowserWindow, Menu, Notification, app } from 'electron'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,6 +24,14 @@ const template = [
               "document.getElementById('invoked').textContent = 'INVOKED'",
             )
           }
+        },
+      },
+      {
+        // The smoke arms notification capture, invokes this, and asserts the captured title/body —
+        // proving the real Notification.prototype.show hook records against REAL Electron.
+        label: 'Notify',
+        click: () => {
+          new Notification({ title: 'Saved', body: 'All changes saved' }).show()
         },
       },
       // No click option — Electron still installs a default click wrapper, so this validates against REAL

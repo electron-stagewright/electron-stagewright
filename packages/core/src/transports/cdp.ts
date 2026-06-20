@@ -103,12 +103,14 @@ import type {
   LaunchOptions,
   MenuInvokeResult,
   NativeMenu,
+  NativeNotification,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
   NetworkEventsResult,
   NetworkStub,
   NetworkStubResponse,
+  NotificationCaptureFilter,
   PressOptions,
   ScreenshotOptions,
   ScrollOptions,
@@ -1101,6 +1103,15 @@ class CdpSession implements TransportSession {
   }
   invokeApplicationMenuItem(_path: readonly string[]): Promise<MenuInvokeResult> {
     return Promise.reject(notImplemented('invokeApplicationMenuItem'))
+  }
+  startNotificationCapture(_filter?: NotificationCaptureFilter): Promise<void> {
+    return Promise.reject(notImplemented('startNotificationCapture'))
+  }
+  capturedNotifications(): Promise<readonly NativeNotification[]> {
+    return Promise.reject(notImplemented('capturedNotifications'))
+  }
+  stopNotificationCapture(): Promise<void> {
+    return Promise.reject(notImplemented('stopNotificationCapture'))
   }
 
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---
