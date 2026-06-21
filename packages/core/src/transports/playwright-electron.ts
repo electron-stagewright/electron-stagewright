@@ -1772,9 +1772,21 @@ export class PlaywrightElectronTransport implements ITransport {
     let effectiveOpts = opts
     if (opts.instrumentNative === true && opts.appPath !== undefined) {
       shimDir = await mkdtemp(join(tmpdir(), 'sw-instrument-'))
-      const shimPath = join(shimDir, 'stagewright-shim.cjs')
-      await writeFile(shimPath, buildInstrumentationShim(opts.appPath), 'utf8')
-      effectiveOpts = { ...opts, appPath: shimPath }
+      try {
+        const shimPath = join(shimDir, 'stagewright-shim.cjs')
+        await writeFile(shimPath, buildInstrumentationShim(opts.appPath), 'utf8')
+        effectiveOpts = { ...opts, appPath: shimPath }
+      } catch (cause) {
+        // mkdtemp succeeded but writing the shim failed (disk full, permissions). Remove the temp dir
+        // now so the cleanup guarantee holds on this path too, not only on the launch/firstWindow paths.
+        await removeShimDir(shimDir)
+        const message = cause instanceof Error ? cause.message : String(cause)
+        throw new StagewrightError(
+          'INTERNAL_ERROR',
+          `Failed to write the launch-time instrumentation shim: ${message}`,
+          { transport: TRANSPORT_ID, appPath: opts.appPath },
+        )
+      }
     }
     const launchOpts = buildPlaywrightLaunchOptions(effectiveOpts)
     let app: PWElectronApp

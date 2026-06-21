@@ -196,7 +196,11 @@ try {
   console.error('[stagewright] native notification instrumentation failed:', e)
 }
 import(${JSON.stringify(realMainUrl)}).catch(function (err) {
+  // The real main failed to load/execute. Exit non-zero so the launch fails fast and transparently:
+  // continuing would leave Electron alive with no window, surfacing as a LAUNCH_TIMEOUT that hides the
+  // real cause. The stderr above carries the original error for the operator.
   console.error('[stagewright] failed to load the instrumented app main:', err)
+  process.exit(1)
 })
 `
 }
