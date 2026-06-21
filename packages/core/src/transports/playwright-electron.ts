@@ -31,8 +31,12 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { StagewrightError } from '../errors/registry.js'
+import { TRAY_REGISTRY_GLOBAL, buildInstrumentationShim } from './native-instrumentation.js'
 import type {
   EvalPayload,
   PWConsoleMessage,
@@ -84,6 +88,7 @@ import type {
   NativeMenu,
   NativeMenuItem,
   NativeNotification,
+  NativeTray,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
@@ -130,6 +135,12 @@ function timedOut(settled: Promise<unknown>, ms: number): Promise<boolean> {
       resolve(false)
     })
   })
+}
+
+/** Remove the launch-shim temp dir (best-effort, idempotent — a no-op when not instrumented). */
+async function removeShimDir(shimDir: string | undefined): Promise<void> {
+  if (shimDir === undefined) return
+  await rm(shimDir, { recursive: true, force: true }).catch(() => undefined)
 }
 
 /** Sleep helper for the window-recovery poll loop. */
@@ -356,6 +367,10 @@ class PlaywrightSession implements TransportSession {
   private disposed = false
   private readonly windowIds = new WeakMap<PWPage, string>()
   private nextWindowId = 0
+  /** True when this session was launched with `instrumentNative` (the tray hook is in place). */
+  private readonly instrumented: boolean
+  /** Temp dir holding the launch shim, removed on dispose; undefined when not instrumented. */
+  private readonly shimDir: string | undefined
 
   /** Max console entries retained; older ones are dropped and counted in `#consoleOverflow`. */
   static readonly #CONSOLE_CAP = 1000
@@ -402,9 +417,16 @@ class PlaywrightSession implements TransportSession {
   /** Window-recovery budget — how long `activePage` waits for a window to (re)appear. */
   private readonly windowRecoveryBudgetMs: number
 
-  constructor(app: PWElectronApp, initialPage?: PWPage, windowRecoveryBudgetMs?: number) {
+  constructor(
+    app: PWElectronApp,
+    initialPage?: PWPage,
+    windowRecoveryBudgetMs?: number,
+    instrumentation?: { readonly instrumented: boolean; readonly shimDir?: string },
+  ) {
     this.id = `pw-${randomUUID()}`
     this.app = app
+    this.instrumented = instrumentation?.instrumented ?? false
+    this.shimDir = instrumentation?.shimDir
     this.windowRecoveryBudgetMs =
       windowRecoveryBudgetMs ?? PlaywrightSession.#WINDOW_RECOVERY_BUDGET_MS
     // Best-effort console + dialog capture across EVERY window: the launch-time
@@ -1144,6 +1166,27 @@ class PlaywrightSession implements TransportSession {
     })
   }
 
+  // --- Native trays: read the launch-time instrumentation registry (ADR-020). ---
+
+  async getTrays(): Promise<readonly NativeTray[] | null> {
+    const app = this.requireRunning()
+    // Not launched with instrumentNative -> the tray hook was never installed, so trays are invisible
+    // (no registry). Signal that distinctly (the plugin maps null to native.NOT_INSTRUMENTED).
+    if (!this.instrumented) return null
+    return app.evaluate<NativeTray[]>(
+      (_electron, payload) => {
+        const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
+        const registry = (globalThis as unknown as Record<string, unknown>)[key]
+        if (!Array.isArray(registry)) return []
+        // The shim stores { inst, rec } entries; the rec is the JSON-serialisable NativeTray.
+        return registry
+          .map((entry) => (entry as { rec?: unknown }).rec)
+          .filter((rec): rec is NativeTray => rec !== null && typeof rec === 'object')
+      },
+      { body: '', arg: { key: TRAY_REGISTRY_GLOBAL } },
+    )
+  }
+
   private requireRunning(): PWElectronApp {
     if (this.disposed || this.app === null) {
       throw new StagewrightError(
@@ -1512,6 +1555,9 @@ class PlaywrightSession implements TransportSession {
   async stopGracefully(opts: StopOptions): Promise<StopResult> {
     if (this.disposed) return { escalated: false }
     this.disposed = true
+    // Remove the launch shim temp dir exactly once (idempotent; no-op when not instrumented). Awaited —
+    // a temp-dir rm is fast and best-effort (never rejects), so it cannot wedge the bounded shutdown.
+    await removeShimDir(this.shimDir)
     const app = this.app
     this.app = null
     if (app === null) return { escalated: false }
@@ -1589,12 +1635,31 @@ export class PlaywrightElectronTransport implements ITransport {
   }
 
   async launch(opts: LaunchOptions): Promise<TransportSession> {
+    if (opts.instrumentNative === true && opts.appPath === undefined) {
+      throw new StagewrightError(
+        'BAD_ARGUMENT',
+        'instrumentNative requires appPath; executablePath-only launches cannot be wrapped with launch-time native instrumentation.',
+        { transport: TRANSPORT_ID },
+      )
+    }
     const electron = await this.loadElectron()
-    const launchOpts = buildPlaywrightLaunchOptions(opts)
+    // Launch-time native instrumentation (ADR-020): when opted in (and we own the main entry), launch a
+    // generated shim main that installs the Tray hook before the app's real main, so a startup-created
+    // tray is observable. The real main is embedded in the shim; the shim replaces appPath as args[0].
+    let shimDir: string | undefined
+    let effectiveOpts = opts
+    if (opts.instrumentNative === true && opts.appPath !== undefined) {
+      shimDir = await mkdtemp(join(tmpdir(), 'sw-instrument-'))
+      const shimPath = join(shimDir, 'stagewright-shim.cjs')
+      await writeFile(shimPath, buildInstrumentationShim(opts.appPath), 'utf8')
+      effectiveOpts = { ...opts, appPath: shimPath }
+    }
+    const launchOpts = buildPlaywrightLaunchOptions(effectiveOpts)
     let app: PWElectronApp
     try {
       app = await electron.launch(launchOpts)
     } catch (cause) {
+      await removeShimDir(shimDir)
       const message = cause instanceof Error ? cause.message : String(cause)
       const isTimeout = /timeout/i.test(message)
       throw new StagewrightError(
@@ -1614,6 +1679,7 @@ export class PlaywrightElectronTransport implements ITransport {
       } catch {
         // A failed launch can leave the app half-open; closing is best-effort.
       }
+      await removeShimDir(shimDir)
       const message = cause instanceof Error ? cause.message : String(cause)
       const isTimeout = /timeout/i.test(message)
       throw new StagewrightError(
@@ -1624,7 +1690,10 @@ export class PlaywrightElectronTransport implements ITransport {
     }
     // Reuse the window we already awaited for console capture, so launch makes a
     // single firstWindow() call rather than one here and one in the session.
-    return new PlaywrightSession(app, initialPage, this.windowRecoveryBudgetMs)
+    return new PlaywrightSession(app, initialPage, this.windowRecoveryBudgetMs, {
+      instrumented: shimDir !== undefined,
+      ...(shimDir !== undefined ? { shimDir } : {}),
+    })
   }
 
   attach(_opts: AttachOptions): Promise<TransportSession> {

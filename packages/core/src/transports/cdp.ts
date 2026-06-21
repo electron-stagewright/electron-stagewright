@@ -104,6 +104,7 @@ import type {
   MenuInvokeResult,
   NativeMenu,
   NativeNotification,
+  NativeTray,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
@@ -1112,6 +1113,9 @@ class CdpSession implements TransportSession {
   }
   stopNotificationCapture(): Promise<void> {
     return Promise.reject(notImplemented('stopNotificationCapture'))
+  }
+  getTrays(): Promise<readonly NativeTray[] | null> {
+    return Promise.reject(notImplemented('getTrays'))
   }
 
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---

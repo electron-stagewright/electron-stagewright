@@ -1,23 +1,25 @@
 /**
- * `@electron-stagewright/plugin-native-ui` — read, assert, invoke, and capture an Electron app's
- * **native chrome**: the application menu (the macOS menu bar / app menu) and the notifications it shows,
- * for agent-driven testing (ADR-019, built on the ADR-004 plugin contract). Ask "is the *Save* item
- * enabled?", "did *Dark Mode* get checked under *View*?", trigger the action, then assert that the app
- * showed a notification — state, actions, and events that live in the Electron main process, outside the
- * DOM the agent already reads, without agent-supplied JavaScript.
+ * `@electron-stagewright/plugin-native-ui` — read, assert, invoke, capture, and inspect an Electron
+ * app's **native chrome**: the application menu (the macOS menu bar / app menu), the notifications it
+ * shows, and launch-time system-tray state, for agent-driven testing (ADR-019, built on the ADR-004
+ * plugin contract). Ask "is the *Save* item enabled?", "did *Dark Mode* get checked under *View*?",
+ * trigger the action, assert that the app showed a notification, and read tray tooltip/menu state —
+ * state, actions, and events that live in the Electron main process, outside the DOM the agent already
+ * reads, without agent-supplied JavaScript.
  *
  * Like the network, clock, and storage plugins, the tools ride a dedicated TRANSPORT SEAM (a fixed
- * main-process serializer/walker over `Menu.getApplicationMenu()` plus a fixed
- * `Notification.prototype.show` hook), not eval, so this plugin is NOT `--allow-eval` gated. It IS gated
- * on the transport's `canAccessNativeUI` capability (`native.UNSUPPORTED` otherwise). Tools (namespaced
- * by the loader): `native_menu`, `native_menu_item`, `native_menu_invoke`,
- * `native_notifications_start`, `native_notifications`, `native_notifications_stop`.
+ * main-process serializer/walker over `Menu.getApplicationMenu()`, a fixed
+ * `Notification.prototype.show` hook, and the opt-in launch-time `Tray` hook from ADR-020), not eval, so
+ * this plugin is NOT `--allow-eval` gated. It IS gated on the transport's `canAccessNativeUI` capability
+ * (`native.UNSUPPORTED` otherwise). Tools (namespaced by the loader): `native_menu`, `native_menu_item`,
+ * `native_menu_invoke`, `native_notifications_start`, `native_notifications`,
+ * `native_notifications_stop`, `native_trays`.
  *
- * Reading the menu and notification capture are observation of app chrome — not a secret surface (menu
- * labels and shown notification text are no more sensitive than user-visible DOM text). Invoking a menu
- * item modifies app behaviour by firing the app's own handler, bounded by the same capability and plugin
- * opt-in. The application menu is cross-platform (Electron's `Menu` API); the macOS menu bar is its most
- * prominent surface.
+ * Reading the menu, notification capture, and tray read are observation of app chrome — not a secret
+ * surface (menu labels, shown notification text, and tray labels are no more sensitive than user-visible
+ * DOM text). Invoking a menu item modifies app behaviour by firing the app's own handler, bounded by the
+ * same capability and plugin opt-in. The application menu is cross-platform (Electron's `Menu` API); the
+ * macOS menu bar is its most prominent surface.
  *
  * @module
  */
@@ -40,7 +42,7 @@ import { z } from 'zod'
 /** Plugin namespace — must match {@link nativeUiPlugin.name}; the loader prefixes its tools with it. */
 const NATIVE_NAMESPACE = 'native'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const NATIVE_PLUGIN_VERSION = '0.3.0'
+const NATIVE_PLUGIN_VERSION = '0.4.0'
 
 /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
 interface PluginMeta {
@@ -260,6 +262,34 @@ const notificationsStopTool: AnyToolDefinition = defineTool({
   },
 })
 
+const traysTool: AnyToolDefinition = defineTool({
+  name: 'trays',
+  title: 'Read the app system-tray icons',
+  description: [
+    'Return the app’s system-tray icons — each with its tooltip, title, whether it has an icon image, and',
+    'its context menu (serialised like the application menu). Trays have no registry and are created at',
+    'startup, so the session MUST have been launched with electron_launch { main, instrumentNative: true }.',
+    'Returns: { ok, count, trays }. Errors: native.NOT_INSTRUMENTED (relaunch with main +',
+    'instrumentNative), native.UNSUPPORTED (transport cannot access the native UI), NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({ ...sessionField }),
+  operationType: 'query',
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireNativeUI(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const trays = await guard.session.getTrays()
+    if (trays === null) {
+      return makePluginError('native.NOT_INSTRUMENTED', {
+        ...meta,
+        message:
+          'This session was not launched with native instrumentation; relaunch with electron_launch { instrumentNative: true } to read trays.',
+      })
+    }
+    return makeSuccess({ count: trays.length, trays }, meta)
+  },
+})
+
 /**
  * The native-UI plugin. Load with `--plugin @electron-stagewright/plugin-native-ui` (NO eval flag — it
  * does not run agent-supplied JS) or `createServer({ plugins: [nativeUiPlugin] })`. No configuration.
@@ -284,6 +314,11 @@ export const nativeUiPlugin: StagewrightPlugin = {
       retryable: false,
       hint: 'No active notification capture on this session; call native_notifications_start first.',
     },
+    NOT_INSTRUMENTED: {
+      http: 409,
+      retryable: false,
+      hint: 'This session was not launched with native instrumentation; relaunch with electron_launch { instrumentNative: true }.',
+    },
   },
   tools: [
     menuTool,
@@ -292,6 +327,7 @@ export const nativeUiPlugin: StagewrightPlugin = {
     notificationsStartTool,
     notificationsTool,
     notificationsStopTool,
+    traysTool,
   ],
   teardown: async () => {
     // Forget every session's capture flag. The hook + buffer live in the transport session's main

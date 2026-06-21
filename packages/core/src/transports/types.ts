@@ -96,6 +96,14 @@ export interface LaunchOptions {
   readonly cwd?: string
   /** Maximum time to wait for the first window to appear. */
   readonly timeoutMs?: number
+  /**
+   * Opt in to launch-time native instrumentation (default off). When `true`, the transport wraps the
+   * app's main entry with a fixed, transport-owned hook installed BEFORE the app's own main runs, so
+   * native UI created at startup (e.g. the system `Tray`) is observable from t=0 — which a hook armed
+   * after launch would miss. Requires `appPath`/`main`; executablePath-only launches cannot be wrapped.
+   * Runs no agent code; the operator opts into the main-entry wrapping.
+   */
+  readonly instrumentNative?: boolean
 }
 
 /** Options accepted by `ITransport.attach`. At least one identifier MUST be provided. */
@@ -649,6 +657,25 @@ export interface NativeNotification {
 }
 
 /**
+ * One system-tray icon the app created, read from the main process via launch-time instrumentation. The
+ * icon image is reported as `hasImage` (a boolean), never pixels — the assertable state is the tooltip,
+ * the title (macOS menu-bar text), and the context menu. JSON-serialisable. Requires the session to have
+ * been launched with `LaunchOptions.instrumentNative`; otherwise the tray is invisible (no registry).
+ */
+export interface NativeTray {
+  /** Stable per-session index (creation order), so a future invoke can name a tray + its menu item. */
+  readonly id: number
+  /** The tray's hover tooltip, when set. */
+  readonly toolTip?: string
+  /** The tray's title (macOS menu-bar text next to the icon), when set. */
+  readonly title?: string
+  /** Whether the tray has an icon image set (the pixels are not returned). */
+  readonly hasImage: boolean
+  /** The tray's context menu, when one was set (serialised like the application menu). */
+  readonly menu?: NativeMenu
+}
+
+/**
  * A live session against an Electron app, returned by `launch`, `attach`, or
  * `inject`. Disposal is idempotent: calling `dispose()` twice MUST NOT throw,
  * and MUST NOT double-free underlying resources.
@@ -805,6 +832,15 @@ export interface TransportSession {
 
   /** Disarm notification capture: restore the original `Notification.show` and drop the buffer. Idempotent. */
   stopNotificationCapture(): Promise<void>
+
+  /**
+   * Read the app's system-tray icons ({@link NativeTray}) from the main process. Requires the session to
+   * have been launched with `instrumentNative` (trays have no registry and are created at startup):
+   * resolves `null` when the session was NOT instrumented (the plugin maps that to a distinct error), an
+   * empty array when instrumented but no tray exists, otherwise the trays. A transport that cannot
+   * instrument rejects with `NOT_IMPLEMENTED`.
+   */
+  getTrays(): Promise<readonly NativeTray[] | null>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports

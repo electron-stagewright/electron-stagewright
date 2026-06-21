@@ -614,6 +614,7 @@ describe('CdpSession native-UI seam (honest-false)', () => {
     await expect(session.stopNotificationCapture()).rejects.toMatchObject({
       code: 'NOT_IMPLEMENTED',
     })
+    await expect(session.getTrays()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
   })
 })
 

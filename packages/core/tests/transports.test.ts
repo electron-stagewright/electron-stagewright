@@ -14,6 +14,8 @@
  *   contract via the type system and a lightweight runtime fake).
  */
 
+import { existsSync } from 'node:fs'
+
 import { JSDOM } from 'jsdom'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -77,6 +79,7 @@ const FAKE_SESSION: TransportSession = {
   startNotificationCapture: async () => undefined,
   capturedNotifications: async () => [],
   stopNotificationCapture: async () => undefined,
+  getTrays: async () => null,
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -2155,6 +2158,96 @@ describe('PlaywrightSession notification capture', () => {
     await expect(session.startNotificationCapture()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.capturedNotifications()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.stopNotificationCapture()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+})
+
+describe('PlaywrightSession native trays (launch-time instrumentation)', () => {
+  const TRAY_KEY = '__stagewright_trayRegistry'
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[TRAY_KEY]
+  })
+
+  function makeTransport(app: ReturnType<typeof createFakeElectronApp>) {
+    return new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+  }
+
+  it('getTrays returns null when the session was NOT launched with instrumentNative', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({ appPath: '/abs/main.js' })
+    expect(await session.getTrays()).toBeNull()
+  })
+
+  it('rejects instrumentNative when there is no appPath to wrap', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    await expect(
+      makeTransport(app).launch({
+        executablePath: '/abs/App.app/Contents/MacOS/App',
+        instrumentNative: true,
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_ARGUMENT' })
+  })
+
+  it('launch writes a shim main as args[0] and instruments the session', async () => {
+    let launchedArgs: readonly string[] | undefined
+    const app = createFakeElectronApp([createFakePage('A')])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({
+        launch: async (opts: { args?: readonly string[] }) => {
+          launchedArgs = opts.args
+          return app
+        },
+      }),
+    })
+    const session = await transport.launch({ appPath: '/abs/app/main.js', instrumentNative: true })
+    // The first arg is the generated shim, not the app's real main.
+    expect(launchedArgs?.[0]).toMatch(/stagewright-shim\.cjs$/)
+    expect(launchedArgs?.[0]).not.toBe('/abs/app/main.js')
+    // The shim file exists on disk while the session lives, and is removed on dispose.
+    const shimPath = launchedArgs?.[0] as string
+    expect(existsSync(shimPath)).toBe(true)
+    await session.dispose()
+    expect(existsSync(shimPath)).toBe(false)
+  })
+
+  it('getTrays reads the registry the shim populates when instrumented', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    // The fake app.evaluate runs against the test-process global; stand in for the shim's registry.
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = [
+      { inst: {}, rec: { id: 0, hasImage: true, toolTip: 'Status', menu: { items: [] } } },
+      { inst: {}, rec: { id: 1, hasImage: false, title: 'Second' } },
+    ]
+    expect(await session.getTrays()).toEqual([
+      { id: 0, hasImage: true, toolTip: 'Status', menu: { items: [] } },
+      { id: 1, hasImage: false, title: 'Second' },
+    ])
+    await session.dispose()
+  })
+
+  it('getTrays returns [] when instrumented but no tray was created', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = []
+    expect(await session.getTrays()).toEqual([])
+    await session.dispose()
+  })
+
+  it('rejects getTrays after dispose', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    await session.dispose()
+    await expect(session.getTrays()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })
 })
 

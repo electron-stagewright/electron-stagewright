@@ -448,3 +448,12 @@ driven by the native-UI plugin (see ADR-019). Like the clock seam, it is Playwri
 The lesson is the same the matrix keeps teaching: a capability is advertised true only where the whole
 seam is honestly wired. The application menu lives in the main-process Node context, which only the
 Playwright `electronApp.evaluate` path reaches, so only it advertises true.
+
+## Status Update — 2026-06-19: `LaunchOptions.instrumentNative`
+
+`LaunchOptions` gains an optional `instrumentNative` flag (default off). When set on the Playwright launch
+transport, the transport wraps the app's main entry with a fixed hook installed before the app runs, so
+native UI created at startup (the system `Tray`) is observable — see ADR-020 for the mechanism and threat
+reasoning. It requires a `main`/`appPath` entry (executablePath-only launches cannot be wrapped). It is a
+launch-transport-only opt-in; CDP/injector cannot wrap a running app's entry, so the consuming seam
+(`getTrays`) rejects `NOT_IMPLEMENTED` there.

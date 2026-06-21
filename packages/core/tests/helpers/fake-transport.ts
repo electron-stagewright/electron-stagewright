@@ -25,6 +25,7 @@ import type {
   MenuInvokeResult,
   NativeMenu,
   NativeNotification,
+  NativeTray,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
@@ -312,6 +313,12 @@ export class FakeSession implements TransportSession {
   }
   async stopNotificationCapture(): Promise<void> {
     this.notificationStopCalls += 1
+  }
+
+  /** Trays the fake returns from `getTrays`; `null` models a session not launched with instrumentNative. */
+  trays: NativeTray[] | null = null
+  async getTrays(): Promise<readonly NativeTray[] | null> {
+    return this.trays
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

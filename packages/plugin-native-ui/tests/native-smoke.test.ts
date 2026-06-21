@@ -58,6 +58,7 @@ describe('native-ui plugin smoke (real Electron)', () => {
 
       const launched = (await server.dispatcher.dispatch('electron_launch', {
         main: FIXTURE_MAIN,
+        instrumentNative: true,
       })) as { ok: boolean; session_id?: string; _meta?: { session_id?: string } }
       expect(launched.ok).toBe(true)
       const sessionId = launched.session_id ?? launched._meta?.session_id
@@ -146,6 +147,20 @@ describe('native-ui plugin smoke (real Electron)', () => {
       })) as unknown as { count: number; notifications: Array<{ title: string; body?: string }> }
       expect(captured.count).toBe(1)
       expect(captured.notifications[0]).toMatchObject({ title: 'Saved', body: 'All changes saved' })
+
+      // The tray was created at STARTUP, before any agent could arm — proving launch-time
+      // instrumentation (instrumentNative) catches the t=0 setup that an after-launch hook would miss.
+      const trays = (await server.dispatcher.dispatch('native_trays', {
+        sessionId,
+      })) as unknown as {
+        ok: boolean
+        count: number
+        trays: Array<{ toolTip?: string; menu?: { items: Array<{ label: string }> } }>
+      }
+      expect(trays.ok).toBe(true)
+      expect(trays.count).toBe(1)
+      expect(trays.trays[0]?.toolTip).toBe('Stagewright fixture tray')
+      expect(trays.trays[0]?.menu?.items.some((i) => i.label === 'Tray Action')).toBe(true)
 
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },

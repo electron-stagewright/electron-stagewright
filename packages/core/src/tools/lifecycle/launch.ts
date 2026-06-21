@@ -147,6 +147,12 @@ const inputSchema = z.object({
     .boolean()
     .optional()
     .describe('Allow launching when a session already exists. Default false (single instance).'),
+  instrumentNative: z
+    .boolean()
+    .optional()
+    .describe(
+      'Wrap the app main entry with a fixed hook installed before it runs, so native UI created at startup (the system Tray) is readable (required for native_trays). Off by default; runs no agent code. Requires main; executablePath-only launches cannot be instrumented. Launch transport only.',
+    ),
 })
 
 const DESCRIPTION = [
@@ -159,7 +165,8 @@ const DESCRIPTION = [
   'Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one',
   'or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not',
   'retryable), BAD_ARGUMENT (neither main nor executablePath given; a runtime-altering env var like',
-  'NODE_OPTIONS; or, when the server set --app-root, a main/executablePath/cwd outside that root),',
+  'NODE_OPTIONS; instrumentNative without main; or, when the server set --app-root, a',
+  'main/executablePath/cwd outside that root),',
   'SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable),',
   'LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).',
 ].join(' ')
@@ -207,6 +214,7 @@ function toLaunchOptions(args: z.infer<typeof inputSchema>): LaunchOptions {
     ...(args.env !== undefined ? { env: args.env } : {}),
     ...(args.cwd !== undefined ? { cwd: args.cwd } : {}),
     ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+    ...(args.instrumentNative !== undefined ? { instrumentNative: args.instrumentNative } : {}),
   }
 }
 
@@ -243,6 +251,13 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         return makeError('BAD_ARGUMENT', {
           ...meta,
           message: 'Provide main (the app entry) or executablePath.',
+        })
+      }
+      if (args.instrumentNative === true && args.main === undefined) {
+        return makeError('BAD_ARGUMENT', {
+          ...meta,
+          message:
+            'instrumentNative requires main (the app entry); executablePath-only launches cannot be wrapped with launch-time native instrumentation.',
         })
       }
       if (args.env !== undefined) {

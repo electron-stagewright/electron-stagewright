@@ -208,7 +208,7 @@ Type text as real per-character keystrokes (fires keydown/keypress/input/keyup p
 
 **Launch Electron app**
 
-Launch an Electron app and start a driving session. Provide main (absolute path to the main-process entry) or executablePath. Returns: { ok, session_id, transport, windows, renderer_ready }. Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed in time (the session is still usable — retry the read, or wait_for_selector on an expected element). By default refuses a second launch while a session is live (pass allowMultiple: true to override). Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not retryable), BAD_ARGUMENT (neither main nor executablePath given; a runtime-altering env var like NODE_OPTIONS; or, when the server set --app-root, a main/executablePath/cwd outside that root), SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable), LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).
+Launch an Electron app and start a driving session. Provide main (absolute path to the main-process entry) or executablePath. Returns: { ok, session_id, transport, windows, renderer_ready }. Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed in time (the session is still usable — retry the read, or wait_for_selector on an expected element). By default refuses a second launch while a session is live (pass allowMultiple: true to override). Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not retryable), BAD_ARGUMENT (neither main nor executablePath given; a runtime-altering env var like NODE_OPTIONS; instrumentNative without main; or, when the server set --app-root, a main/executablePath/cwd outside that root), SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable), LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).
 
 - Operation: `command`
 
@@ -222,6 +222,7 @@ Launch an Electron app and start a driving session. Provide main (absolute path 
 | `timeoutMs` | integer | no | Max wait for the first window. |
 | `readyTimeoutMs` | integer | no | Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state. |
 | `allowMultiple` | boolean | no | Allow launching when a session already exists. Default false (single instance). |
+| `instrumentNative` | boolean | no | Wrap the app main entry with a fixed hook installed before it runs, so native UI created at startup (the system Tray) is readable (required for native_trays). Off by default; runs no agent code. Requires main; executablePath-only launches cannot be instrumented. Launch transport only. |
 
 ### `electron_press_sequence`
 

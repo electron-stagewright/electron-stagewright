@@ -246,6 +246,17 @@ describe('electron_launch', () => {
     expect((res as ErrorResponse).code).toBe('BAD_ARGUMENT')
   })
 
+  it('rejects instrumentNative without a main entry', async () => {
+    const { dispatcher, transport } = setup()
+    const res = await dispatcher.dispatch('electron_launch', {
+      executablePath: '/abs/App.app/Contents/MacOS/App',
+      instrumentNative: true,
+    })
+    expect((res as ErrorResponse).code).toBe('BAD_ARGUMENT')
+    expect((res as ErrorResponse).error).toContain('instrumentNative requires main')
+    expect(transport.launchCount).toBe(0)
+  })
+
   it('refuses a second launch while a session is live (single-instance guard)', async () => {
     const { sessions, transport, dispatcher } = setup()
     sessions.register(transport, new FakeSession({ id: 'existing' }))

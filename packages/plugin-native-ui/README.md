@@ -1,20 +1,21 @@
 # @electron-stagewright/plugin-native-ui
 
-Read, assert, **invoke**, and **capture** an Electron app's **native chrome** — the application menu (the
-macOS menu bar / app menu) and the notifications it shows — under agent-driven testing (ADR-019, built on
-the ADR-004 plugin contract). Ask "is the _Save_ item enabled?", "did _Dark Mode_ get checked under
-_View_?", then **trigger** the action ("click File → Save"), and **assert the app notified the user** ("a
-_Saved_ notification appeared") — state, actions, and events that live in the Electron **main process**,
-outside the DOM the agent already reads — all **without running agent-supplied JavaScript**.
+Read, assert, **invoke**, **capture**, and **inspect** an Electron app's **native chrome** — the
+application menu (the macOS menu bar / app menu), the notifications it shows, and system-tray state —
+under agent-driven testing (ADR-019, built on the ADR-004 plugin contract). Ask "is the _Save_ item
+enabled?", "did _Dark Mode_ get checked under _View_?", then **trigger** the action ("click File → Save"),
+**assert the app notified the user** ("a _Saved_ notification appeared"), and **read the tray tooltip /
+menu** — state, actions, and events that live in the Electron **main process**, outside the DOM the agent
+already reads — all **without running agent-supplied JavaScript**.
 
 Like the network, clock, and storage plugins, the tools ride a dedicated **transport seam** (a fixed
-main-process serializer/walker over `Menu.getApplicationMenu()`, and a fixed `Notification.prototype.show`
-hook), not eval — so they do **not** require `--allow-eval`. They run on the default **Playwright** launch
-transport (the only transport with real Electron main-process access); the CDP attach and injector
-transports return `native.UNSUPPORTED`.
+main-process serializer/walker over `Menu.getApplicationMenu()`, a fixed `Notification.prototype.show`
+hook, and the opt-in launch-time `Tray` hook from ADR-020), not eval — so they do **not** require
+`--allow-eval`. They run on the default **Playwright** launch transport (the only transport with real
+Electron main-process access); the CDP attach and injector transports return `native.UNSUPPORTED`.
 
 The application menu is cross-platform (Electron's `Menu` API); the **macOS menu bar** is its most
-prominent surface. Tray capture is the deferred follow-up.
+prominent surface. Tray event capture is the deferred follow-up.
 
 ## Load it
 
@@ -67,9 +68,20 @@ Each path segment matches an item by its **label OR its role**, so role-based it
 - **`native_notifications_stop`** `{ sessionId? }` — disarm (restore the original `Notification.show`) and
   return what was captured. Returns `{ count, notifications }`.
 
+### Tray read
+
+- **`native_trays`** `{ sessionId? }` — return the app's system-tray icons — each with its `id`, `toolTip`,
+  `title`, `hasImage` (whether an icon is set; the pixels are not returned), and `menu` (the context menu,
+  serialised like the application menu). Trays have no registry and are created at startup, so the session
+  **must** have been launched with `electron_launch { main, instrumentNative: true }` (which installs the
+  tray hook before the app runs; executablePath-only launches cannot be instrumented). Returns
+  `{ count, trays }`; `native.NOT_INSTRUMENTED` if the session was not instrumented (relaunch with the
+  flag).
+
 Error codes: `native.UNSUPPORTED` (the transport cannot access the native UI), `native.ALREADY_CAPTURING`
-(a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming). Invalid arguments (an
-empty menu `path` or empty `titleContains`) are core `BAD_ARGUMENT`.
+(a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming), `native.NOT_INSTRUMENTED`
+(`native_trays` without `instrumentNative`). Invalid arguments (an empty menu `path` or empty
+`titleContains`) are core `BAD_ARGUMENT`.
 
 ## Security
 
@@ -91,11 +103,17 @@ handlers or refs). Although the fixed hook is installed via `evaluate`, the agen
 arm/read/stop (no executable input), so it is **not** `--allow-eval` gated — an observe surface bounded by
 the capability and the operator-loaded plugin, no more sensitive than the notification text the user sees.
 
+Tray read **observes** system-tray state by using launch-time native instrumentation (`electron_launch
+{ main, instrumentNative: true }`) to install a fixed `Tray` hook before the app main runs. The agent
+supplies only the opt-in flag, not code; the read returns tooltip/title, `hasImage`, and serialised context
+menu state, never icon pixels.
+
 ## Scope and limitations
 
-- **Application menu (read + invoke) and notification capture.** This plugin reads/invokes the
-  application menu and captures shown notifications. **Tray** capture (icon, tooltip, context menu) is the
-  remaining deferred surface — the same hook mechanism, a separate lift.
+- **Application menu (read + invoke), notification capture, and tray read.** This plugin reads/invokes the
+  application menu, captures shown notifications, and reads system-tray state. The tray read needs
+  `electron_launch { instrumentNative: true }` (a launch-time hook — trays are created at startup with no
+  registry). Tray _event_ capture (clicks) is the remaining deferred surface.
 - **Notification capture is arm-then-observe.** Notifications shown before `native_notifications_start`
   are not recorded, and only **shown** notifications (`.show()`) are captured — a constructed-but-unshown
   notification notified no one. The hook patches the shared `Notification.prototype`, so it catches every

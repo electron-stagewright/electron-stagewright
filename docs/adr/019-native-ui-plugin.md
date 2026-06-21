@@ -1,6 +1,6 @@
 # ADR-019: Native UI plugin via a transport native-UI seam
 
-Status: Accepted (application-menu read + invoke and notification capture on the Playwright transport; tray capture deferred)
+Status: Accepted (application-menu read + invoke, notification capture, and tray read on the Playwright transport; tray event capture deferred)
 
 ## Context
 
@@ -167,5 +167,26 @@ plugins): `native.ALREADY_CAPTURING` / `native.NOT_CAPTURING` gate the lifecycle
 - **Limitation, documented.** Notifications shown before the capture is armed are not recorded (arm,
   then drive the app) — the same arm-then-observe contract as network capture.
 
-Tray capture (the richer sibling — icon, tooltip, context menu, click events, same hook mechanism)
-remains the deferred native-UI follow-up.
+Tray read is now covered by the status update below; tray event capture remains the deferred native-UI
+follow-up.
+
+## Status Update — 2026-06-19: system-tray read (on launch-time instrumentation)
+
+The native-UI plugin gains a tray read, built on the launch-time instrumentation foundation (ADR-020):
+`TransportSession.getTrays()` + a `native_trays` tool return the app's system-tray icons — each with its
+tooltip, title, whether it has an icon image (`hasImage`, never pixels), and its context menu (serialised
+with the same field set as the application menu). A stable per-tray `id` is included so a future
+context-menu invocation has a handle.
+
+- **Requires `instrumentNative`.** Unlike the menu read, a tray has no registry and is created at startup,
+  so the read only works when the session was launched with
+  `electron_launch { main, instrumentNative: true }` (ADR-020 installs the `Tray` hook before the app's
+  main runs; executablePath-only launches cannot be instrumented). `getTrays` resolves `null` when the
+  session was not instrumented; the plugin surfaces that as a distinct `native.NOT_INSTRUMENTED` error
+  with a hint to relaunch with the flag, rather than a misleading empty result. Still gated on the same
+  `canAccessNativeUI` capability; CDP/injector reject `NOT_IMPLEMENTED`.
+- **Not `--allow-eval` gated.** The hook is a fixed transport-owned source (ADR-020), the agent supplies
+  nothing executable, and the read returns only UI state.
+
+Tray _event_ capture (click / right-click) and retrofitting notification capture to install at t=0 (so it
+catches notifications shown before any arm) are the remaining native-UI follow-ups on the same foundation.
