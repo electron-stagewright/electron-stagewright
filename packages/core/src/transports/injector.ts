@@ -67,6 +67,7 @@ import type {
   MenuInvokeResult,
   NativeMenu,
   NativeNotification,
+  NativeTray,
   NetworkCaptureFilter,
   NetworkEventsOptions,
   NetworkEventsResult,
@@ -79,6 +80,8 @@ import type {
   TransportCapabilities,
   TransportId,
   TransportSession,
+  TrayEventName,
+  TrayInvokeResult,
   WindowDescriptor,
 } from './types.js'
 
@@ -401,6 +404,12 @@ class InjectorSession implements TransportSession {
   }
   stopNotificationCapture(): Promise<void> {
     return Promise.reject(notImplemented('stopNotificationCapture'))
+  }
+  getTrays(): Promise<readonly NativeTray[] | null> {
+    return Promise.reject(notImplemented('getTrays'))
+  }
+  invokeTrayEvent(_id: number, _event: TrayEventName): Promise<TrayInvokeResult | null> {
+    return Promise.reject(notImplemented('invokeTrayEvent'))
   }
 
   // --- Interaction surface: the main process has no renderer to drive. ---

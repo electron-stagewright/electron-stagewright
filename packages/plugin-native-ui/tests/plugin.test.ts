@@ -16,6 +16,7 @@ import {
   TransportRegistry,
   type NativeMenu,
   type NativeNotification,
+  type NativeTray,
   type TransportCapabilities,
 } from '@electron-stagewright/core'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -214,6 +215,8 @@ describe('native-ui plugin', () => {
       ['native_notifications_start', {}],
       ['native_notifications', {}],
       ['native_notifications_stop', {}],
+      ['native_trays', {}],
+      ['native_tray_invoke', { id: 0, event: 'click' }],
     ] as const) {
       expect(await server.dispatcher.dispatch(tool, { sessionId, ...args })).toMatchObject({
         ok: false,
@@ -363,5 +366,116 @@ describe('native-ui plugin', () => {
       sessionId,
     })) as unknown as { notifications: unknown }
     expect(JSON.parse(JSON.stringify(res.notifications))).toEqual(res.notifications)
+  })
+
+  const SAMPLE_TRAYS: NativeTray[] = [
+    { id: 0, hasImage: true, toolTip: 'Status: OK', menu: { items: [] } },
+    { id: 1, hasImage: false, title: 'Second' },
+  ]
+
+  it('relays the trays from the seam', async () => {
+    const session = new FakeSession()
+    session.trays = SAMPLE_TRAYS
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(await server.dispatcher.dispatch('native_trays', { sessionId })).toMatchObject({
+      ok: true,
+      count: 2,
+      trays: SAMPLE_TRAYS,
+    })
+  })
+
+  it('returns native.NOT_INSTRUMENTED when the session was not instrumented', async () => {
+    const session = new FakeSession()
+    session.trays = null // a session not launched with instrumentNative
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(await server.dispatcher.dispatch('native_trays', { sessionId })).toMatchObject({
+      ok: false,
+      code: 'native.NOT_INSTRUMENTED',
+    })
+  })
+
+  it('returns a wire-serialisable trays payload (no Map/Set/Date round-trip loss)', async () => {
+    const session = new FakeSession()
+    session.trays = SAMPLE_TRAYS
+    const server = await open(session)
+    const sessionId = await launch(server)
+    const res = (await server.dispatcher.dispatch('native_trays', {
+      sessionId,
+    })) as unknown as { trays: unknown }
+    expect(JSON.parse(JSON.stringify(res.trays))).toEqual(res.trays)
+  })
+
+  it('relays a tray-invoke to the seam and echoes the success result', async () => {
+    const session = new FakeSession()
+    session.trayInvokeResult = {
+      emitted: true,
+      id: 1,
+      event: 'right-click',
+      tray: { id: 1, hasImage: false, title: 'Second' },
+    }
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('native_tray_invoke', {
+        sessionId,
+        id: 1,
+        event: 'right-click',
+      }),
+    ).toMatchObject({ ok: true, emitted: true, id: 1, event: 'right-click' })
+    expect(session.trayInvokeCalls).toEqual([[1, 'right-click']])
+  })
+
+  it('surfaces a tray-invoke refusal reason verbatim', async () => {
+    const session = new FakeSession()
+    session.trayInvokeResult = { emitted: false, reason: 'no_listener' }
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('native_tray_invoke', { sessionId, id: 0, event: 'click' }),
+    ).toMatchObject({ ok: true, emitted: false, reason: 'no_listener' })
+  })
+
+  it('returns native.NOT_INSTRUMENTED when invoking on a non-instrumented session', async () => {
+    const session = new FakeSession()
+    session.trayInvokeResult = null // a session not launched with instrumentNative
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('native_tray_invoke', { sessionId, id: 0, event: 'click' }),
+    ).toMatchObject({ ok: false, code: 'native.NOT_INSTRUMENTED' })
+  })
+
+  it('rejects an unknown event with BAD_ARGUMENT', async () => {
+    const session = new FakeSession()
+    const server = await open(session)
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('native_tray_invoke', {
+        sessionId,
+        id: 0,
+        event: 'triple-click',
+      }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(session.trayInvokeCalls).toEqual([])
+  })
+
+  it('returns a wire-serialisable tray-invoke result (no Map/Set/Date round-trip loss)', async () => {
+    const session = new FakeSession()
+    session.trayInvokeResult = {
+      emitted: true,
+      id: 0,
+      event: 'click',
+      tray: { id: 0, hasImage: true, toolTip: 'Status', menu: { items: [] } },
+    }
+    const server = await open(session)
+    const sessionId = await launch(server)
+    const res = (await server.dispatcher.dispatch('native_tray_invoke', {
+      sessionId,
+      id: 0,
+      event: 'click',
+    })) as unknown as Record<string, unknown>
+    expect(JSON.parse(JSON.stringify(res))).toEqual(res)
   })
 })

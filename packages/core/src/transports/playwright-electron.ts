@@ -22,8 +22,8 @@
  *   freeze / advance / resume); the clock seam's first consumer (the clock plugin, ADR-017).
  * - `canAccessStorage: true` — cookies + the storage snapshot via the page `BrowserContext` (the
  *   storage seam, ADR-018).
- * - `canAccessNativeUI: true` — read and invoke the application menu via `electronApp.evaluate` over
- *   `Menu.getApplicationMenu()` (the native-UI seam, ADR-019).
+ * - `canAccessNativeUI: true` — read/invoke native UI (application menu, notification capture, and
+ *   launch-time tray read + event invocation) via the transport-owned native-UI seam (ADR-019/020).
  * - `supportsMainEval: true` — `electronApp.evaluate()`.
  * - `supportsRendererEval: true` — `page.evaluate()`.
  *
@@ -31,8 +31,16 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { StagewrightError } from '../errors/registry.js'
+import {
+  NOTIFICATION_REGISTRY_GLOBAL,
+  TRAY_REGISTRY_GLOBAL,
+  buildInstrumentationShim,
+} from './native-instrumentation.js'
 import type {
   EvalPayload,
   PWConsoleMessage,
@@ -84,6 +92,7 @@ import type {
   NativeMenu,
   NativeMenuItem,
   NativeNotification,
+  NativeTray,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
@@ -100,6 +109,8 @@ import type {
   TransportCapabilities,
   TransportId,
   TransportSession,
+  TrayEventName,
+  TrayInvokeResult,
   WindowDescriptor,
   WindowRef,
 } from './types.js'
@@ -130,6 +141,12 @@ function timedOut(settled: Promise<unknown>, ms: number): Promise<boolean> {
       resolve(false)
     })
   })
+}
+
+/** Remove the launch-shim temp dir (best-effort, idempotent — a no-op when not instrumented). */
+async function removeShimDir(shimDir: string | undefined): Promise<void> {
+  if (shimDir === undefined) return
+  await rm(shimDir, { recursive: true, force: true }).catch(() => undefined)
 }
 
 /** Sleep helper for the window-recovery poll loop. */
@@ -356,6 +373,10 @@ class PlaywrightSession implements TransportSession {
   private disposed = false
   private readonly windowIds = new WeakMap<PWPage, string>()
   private nextWindowId = 0
+  /** True when this session was launched with `instrumentNative` (the tray hook is in place). */
+  private readonly instrumented: boolean
+  /** Temp dir holding the launch shim, removed on dispose; undefined when not instrumented. */
+  private readonly shimDir: string | undefined
 
   /** Max console entries retained; older ones are dropped and counted in `#consoleOverflow`. */
   static readonly #CONSOLE_CAP = 1000
@@ -402,9 +423,16 @@ class PlaywrightSession implements TransportSession {
   /** Window-recovery budget — how long `activePage` waits for a window to (re)appear. */
   private readonly windowRecoveryBudgetMs: number
 
-  constructor(app: PWElectronApp, initialPage?: PWPage, windowRecoveryBudgetMs?: number) {
+  constructor(
+    app: PWElectronApp,
+    initialPage?: PWPage,
+    windowRecoveryBudgetMs?: number,
+    instrumentation?: { readonly instrumented: boolean; readonly shimDir?: string },
+  ) {
     this.id = `pw-${randomUUID()}`
     this.app = app
+    this.instrumented = instrumentation?.instrumented ?? false
+    this.shimDir = instrumentation?.shimDir
     this.windowRecoveryBudgetMs =
       windowRecoveryBudgetMs ?? PlaywrightSession.#WINDOW_RECOVERY_BUDGET_MS
     // Best-effort console + dialog capture across EVERY window: the launch-time
@@ -1047,101 +1075,238 @@ class PlaywrightSession implements TransportSession {
   async startNotificationCapture(filter?: NotificationCaptureFilter): Promise<void> {
     const app = this.requireRunning()
     const titleContains = filter?.titleContains
-    // Patch Notification.prototype.show (NOT the constructor) in the main process: every instance shares
-    // the prototype, so this catches every shown notification regardless of how the app referenced the
-    // class (it survives `const { Notification } = require('electron')`). The hook + buffer live on a
-    // main-process global so a later capturedNotifications/stop can reach them. Self-contained (B5).
+    // Adopt-or-install. When the session was launched with `instrumentNative`, the launch shim already
+    // installed the notification hook at t=0 (so startup notifications are already buffered) — arming just
+    // ADOPTS that state: it sets the read-time filter, snapshots `armedSeq` (records before it are t=0 /
+    // beforeArm), re-activates, and NEVER re-patches or resets the buffer. Otherwise it installs the hook
+    // inline now. The inline installer MUST mirror NOTIFICATION_HOOK_BODY's record shape exactly (same
+    // fields, same `_seq`/`needle`/`armedSeq`/`active` state) so `capturedNotifications` reads either path
+    // identically — keep the two in sync. Self-contained (B5); records UNFILTERED (the filter applies at
+    // read time). A prototype patch (not a constructor swap) survives `const { Notification } = require(...)`.
     await app.evaluate<void>(
       (electron, payload) => {
-        const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
-          .Notification?.prototype
-        if (proto === undefined || typeof proto['show'] !== 'function') return
+        const arg = payload?.arg as { key?: string; titleContains?: unknown } | undefined
+        const key = arg?.key ?? ''
         const g = globalThis as unknown as Record<string, unknown>
-        const KEY = '__stagewright_notificationCapture'
-        if (g[KEY] !== undefined) return
-        const arg = payload?.arg as { titleContains?: unknown } | undefined
-        const needle = typeof arg?.titleContains === 'string' ? arg.titleContains : undefined
-        interface Rec {
-          title: string
-          body?: string
-          subtitle?: string
-          silent?: boolean
-          urgency?: 'normal' | 'critical' | 'low'
-          at: number
-        }
-        // Bound the buffer so a notification-spamming app cannot grow main-process memory without limit
-        // (mirrors the network capture's ring buffer); past the cap the OLDEST entries are dropped.
-        const CAP = 1000
-        const buffer: Rec[] = []
-        const origShow = proto['show'] as (...args: unknown[]) => unknown
-        const state: {
-          buffer: Rec[]
-          origShow: (...args: unknown[]) => unknown
-          patchedShow?: (...args: unknown[]) => unknown
-          active: boolean
-        } = { buffer, origShow, active: true }
-        const patchedShow = function (this: Record<string, unknown>, ...args: unknown[]): unknown {
-          const result = origShow.apply(this, args)
-          if (!state.active) return result
-          try {
-            const title = typeof this['title'] === 'string' ? (this['title'] as string) : ''
-            if (needle === undefined || title.includes(needle)) {
-              const rec: Rec = { title, at: Date.now() }
-              if (typeof this['body'] === 'string' && this['body'] !== '')
-                rec.body = this['body'] as string
-              if (typeof this['subtitle'] === 'string' && this['subtitle'] !== '')
-                rec.subtitle = this['subtitle'] as string
-              if (typeof this['silent'] === 'boolean') rec.silent = this['silent'] as boolean
-              const u = this['urgency']
-              if (u === 'normal' || u === 'critical' || u === 'low') rec.urgency = u
-              buffer.push(rec)
-              if (buffer.length > CAP) buffer.shift()
+        if (g[key] === undefined) {
+          const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
+            .Notification?.prototype
+          if (proto !== undefined && typeof proto['show'] === 'function') {
+            const CAP = 1000
+            const buffer: Array<Record<string, unknown>> = []
+            const origShow = proto['show'] as (...args: unknown[]) => unknown
+            const st: {
+              buffer: Array<Record<string, unknown>>
+              origShow: (...args: unknown[]) => unknown
+              patchedShow?: (...args: unknown[]) => unknown
+              active: boolean
+              needle?: string
+              nextSeq: number
+              armedSeq?: number
+            } = { buffer, origShow, active: true, nextSeq: 0 }
+            const patchedShow = function (this: Record<string, unknown>, ...a: unknown[]): unknown {
+              const result = origShow.apply(this, a)
+              if (!st.active) return result
+              try {
+                const title = typeof this['title'] === 'string' ? (this['title'] as string) : ''
+                const rec: Record<string, unknown> = { title, at: Date.now(), _seq: st.nextSeq++ }
+                if (typeof this['body'] === 'string' && this['body'] !== '')
+                  rec['body'] = this['body']
+                if (typeof this['subtitle'] === 'string' && this['subtitle'] !== '')
+                  rec['subtitle'] = this['subtitle']
+                if (typeof this['silent'] === 'boolean') rec['silent'] = this['silent']
+                const u = this['urgency']
+                if (u === 'normal' || u === 'critical' || u === 'low') rec['urgency'] = u
+                buffer.push(rec)
+                if (buffer.length > CAP) buffer.shift()
+              } catch {
+                // Recording must never break the app's own notification.
+              }
+              return result
             }
-          } catch {
-            // Recording must never break the app's own notification.
+            st.patchedShow = patchedShow
+            proto['show'] = patchedShow
+            g[key] = st
           }
-          return result
         }
-        state.patchedShow = patchedShow
-        proto['show'] = patchedShow
-        g[KEY] = state
+        const state = g[key] as
+          | { needle?: unknown; active?: boolean; nextSeq?: number; armedSeq?: number }
+          | undefined
+        if (state !== undefined) {
+          state.needle = typeof arg?.titleContains === 'string' ? arg.titleContains : undefined
+          state.active = true
+          state.armedSeq = typeof state.nextSeq === 'number' ? state.nextSeq : 0
+        }
       },
-      { body: '', arg: { titleContains } },
+      { body: '', arg: { key: NOTIFICATION_REGISTRY_GLOBAL, titleContains } },
     )
   }
 
   async capturedNotifications(): Promise<readonly NativeNotification[]> {
     const app = this.requireRunning()
-    return app.evaluate<NativeNotification[]>(() => {
-      const g = globalThis as unknown as Record<string, unknown>
-      const state = g['__stagewright_notificationCapture'] as { buffer?: unknown } | undefined
-      const buffer = state?.buffer
-      return Array.isArray(buffer) ? (buffer.slice() as NativeNotification[]) : []
-    })
+    return app.evaluate<NativeNotification[]>(
+      (_electron, payload) => {
+        const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
+        const state = (globalThis as unknown as Record<string, unknown>)[key] as
+          | { buffer?: unknown; needle?: unknown; armedSeq?: unknown }
+          | undefined
+        const buffer = state?.buffer
+        if (!Array.isArray(buffer)) return []
+        // The hook records UNFILTERED; apply `titleContains` here so pre-arm (t=0) and post-arm records
+        // filter uniformly. Rebuild each output object (the internal `_seq` never crosses the wire) and tag
+        // a record shown before the arm snapshot as `beforeArm`.
+        const needle = typeof state?.needle === 'string' ? (state.needle as string) : undefined
+        const armedSeq =
+          typeof state?.armedSeq === 'number' ? (state.armedSeq as number) : undefined
+        const out: NativeNotification[] = []
+        for (const raw of buffer as Array<Record<string, unknown>>) {
+          const title = typeof raw['title'] === 'string' ? (raw['title'] as string) : ''
+          if (needle !== undefined && !title.includes(needle)) continue
+          const rec: Record<string, unknown> = {
+            title,
+            at: typeof raw['at'] === 'number' ? raw['at'] : 0,
+          }
+          // Mirror the recorders' emptiness guard so the reader stays in sync with the record shape.
+          if (typeof raw['body'] === 'string' && raw['body'] !== '') rec['body'] = raw['body']
+          if (typeof raw['subtitle'] === 'string' && raw['subtitle'] !== '')
+            rec['subtitle'] = raw['subtitle']
+          if (typeof raw['silent'] === 'boolean') rec['silent'] = raw['silent']
+          const u = raw['urgency']
+          if (u === 'normal' || u === 'critical' || u === 'low') rec['urgency'] = u
+          if (
+            armedSeq !== undefined &&
+            typeof raw['_seq'] === 'number' &&
+            (raw['_seq'] as number) < armedSeq
+          ) {
+            rec['beforeArm'] = true
+          }
+          out.push(rec as unknown as NativeNotification)
+        }
+        return out
+      },
+      { body: '', arg: { key: NOTIFICATION_REGISTRY_GLOBAL } },
+    )
   }
 
   async stopNotificationCapture(): Promise<void> {
     const app = this.requireRunning()
-    await app.evaluate<void>((electron) => {
-      const g = globalThis as unknown as Record<string, unknown>
-      const KEY = '__stagewright_notificationCapture'
-      const state = g[KEY] as
-        | { origShow?: unknown; patchedShow?: unknown; active?: boolean }
-        | undefined
-      if (state === undefined) return
-      state.active = false
-      const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
-        .Notification?.prototype
-      if (
-        proto !== undefined &&
-        typeof state.origShow === 'function' &&
-        typeof state.patchedShow === 'function' &&
-        proto['show'] === state.patchedShow
-      ) {
-        proto['show'] = state.origShow
-      }
-      delete g[KEY]
-    })
+    await app.evaluate<void>(
+      (electron, payload) => {
+        const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
+        const g = globalThis as unknown as Record<string, unknown>
+        const state = g[key] as
+          | { origShow?: unknown; patchedShow?: unknown; active?: boolean }
+          | undefined
+        if (state === undefined) return
+        state.active = false
+        // Restore the original show only when it is still OUR patch (never clobber a later app patch
+        // stacked on top), then drop the buffer. On an instrumented session this also tears down the
+        // launch-installed t=0 hook — a subsequent re-arm installs fresh (t=0 is already past).
+        const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
+          .Notification?.prototype
+        if (
+          proto !== undefined &&
+          typeof state.origShow === 'function' &&
+          typeof state.patchedShow === 'function' &&
+          proto['show'] === state.patchedShow
+        ) {
+          proto['show'] = state.origShow
+        }
+        delete g[key]
+      },
+      { body: '', arg: { key: NOTIFICATION_REGISTRY_GLOBAL } },
+    )
+  }
+
+  // --- Native trays: read the launch-time instrumentation registry (ADR-020). ---
+
+  async getTrays(): Promise<readonly NativeTray[] | null> {
+    const app = this.requireRunning()
+    // Not launched with instrumentNative -> the tray hook was never installed, so trays are invisible
+    // (no registry). Signal that distinctly (the plugin maps null to native.NOT_INSTRUMENTED).
+    if (!this.instrumented) return null
+    return app.evaluate<NativeTray[]>(
+      (_electron, payload) => {
+        const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
+        const registry = (globalThis as unknown as Record<string, unknown>)[key]
+        if (!Array.isArray(registry)) return []
+        // The shim stores { inst, rec } entries; the rec is the JSON-serialisable NativeTray.
+        return registry
+          .map((entry) => (entry as { rec?: unknown }).rec)
+          .filter((rec): rec is NativeTray => rec !== null && typeof rec === 'object')
+      },
+      { body: '', arg: { key: TRAY_REGISTRY_GLOBAL } },
+    )
+  }
+
+  async invokeTrayEvent(id: number, event: TrayEventName): Promise<TrayInvokeResult | null> {
+    const app = this.requireRunning()
+    // Like getTrays, an uninstrumented session has no tray registry to act on -> null (the plugin maps
+    // null to native.NOT_INSTRUMENTED).
+    if (!this.instrumented) return null
+    // The body runs in the Electron MAIN process via electronApp.evaluate and MUST be self-contained (B5,
+    // no closure refs). It finds the live Tray by its registry id, refuses when the tray is gone or has no
+    // listener for the event, synthesizes the (event, bounds, position) args a real tray click carries,
+    // then emits — re-surfacing a throwing app handler as a clean error rather than a raw stack.
+    return app.evaluate<TrayInvokeResult>(
+      (_electron, payload) => {
+        const arg = payload?.arg as { key?: string; id?: number; event?: string } | undefined
+        const key = arg?.key ?? ''
+        const targetId = arg?.id
+        const eventName = arg?.event ?? ''
+        if (typeof targetId !== 'number') return { emitted: false, reason: 'not_found' }
+        const registry = (globalThis as unknown as Record<string, unknown>)[key]
+        if (!Array.isArray(registry)) return { emitted: false, reason: 'not_found' }
+        const entry = registry.find(
+          (e) => (e as { rec?: { id?: unknown } }).rec?.id === targetId,
+        ) as { inst?: unknown; rec?: unknown } | undefined
+        if (entry === undefined || entry.inst === null || typeof entry.inst !== 'object') {
+          return { emitted: false, reason: 'not_found' }
+        }
+        const inst = entry.inst as {
+          emit?: (event: string, ...args: unknown[]) => boolean
+          listenerCount?: (event: string) => number
+          getBounds?: () => unknown
+        }
+        if (typeof inst.emit !== 'function') return { emitted: false, reason: 'not_found' }
+        // Use the tray's real bounds when available so a handler that positions a popup/window at the tray
+        // behaves faithfully; getBounds can throw on a destroyed tray / headless platform, so fall back.
+        let bounds: unknown = { x: 0, y: 0, width: 0, height: 0 }
+        try {
+          if (typeof inst.getBounds === 'function') {
+            const b = inst.getBounds()
+            if (b !== null && typeof b === 'object') bounds = b
+          }
+        } catch {
+          // Fall back to zero bounds.
+        }
+        // EventEmitter.emit returns true iff the event had listeners — the honest source of truth for "did
+        // the app's handler run?". A false return means the tray registered no handler for this event, so
+        // the fire was inert: report no_listener rather than claim a successful fire (the tray analog of
+        // menu no_handler). Our event set never includes 'error', so emit-with-no-listeners is a safe no-op
+        // (it does not throw). A throwing handler is re-surfaced as a clean error, not a raw app stack.
+        let hadListeners: boolean
+        try {
+          hadListeners = inst.emit(eventName, {}, bounds, { x: 0, y: 0 }) === true
+        } catch (err) {
+          throw new Error(
+            'tray handler threw: ' + (err instanceof Error ? err.message : String(err)),
+          )
+        }
+        if (!hadListeners) return { emitted: false, reason: 'no_listener' }
+        // Read the tray's record back AFTER the handler ran (the setter patches keep `rec` current), so a
+        // handler that mutated its own tray is observable in one call. Re-find the registry entry instead
+        // of using the pre-emit reference: the handler might have called tray.destroy(), which removes the
+        // entry and should be reported as `tray: null` rather than a stale pre-destroy record.
+        const afterEntry = registry.find(
+          (e) => (e as { rec?: { id?: unknown } }).rec?.id === targetId,
+        ) as { rec?: unknown } | undefined
+        const rec = afterEntry?.rec
+        const tray = rec !== null && typeof rec === 'object' ? (rec as NativeTray) : null
+        return { emitted: true, id: targetId, event: eventName as TrayEventName, tray }
+      },
+      { body: '', arg: { key: TRAY_REGISTRY_GLOBAL, id, event } },
+    )
   }
 
   private requireRunning(): PWElectronApp {
@@ -1512,6 +1677,9 @@ class PlaywrightSession implements TransportSession {
   async stopGracefully(opts: StopOptions): Promise<StopResult> {
     if (this.disposed) return { escalated: false }
     this.disposed = true
+    // Remove the launch shim temp dir exactly once (idempotent; no-op when not instrumented). Awaited —
+    // a temp-dir rm is fast and best-effort (never rejects), so it cannot wedge the bounded shutdown.
+    await removeShimDir(this.shimDir)
     const app = this.app
     this.app = null
     if (app === null) return { escalated: false }
@@ -1589,12 +1757,43 @@ export class PlaywrightElectronTransport implements ITransport {
   }
 
   async launch(opts: LaunchOptions): Promise<TransportSession> {
+    if (opts.instrumentNative === true && opts.appPath === undefined) {
+      throw new StagewrightError(
+        'BAD_ARGUMENT',
+        'instrumentNative requires appPath; executablePath-only launches cannot be wrapped with launch-time native instrumentation.',
+        { transport: TRANSPORT_ID },
+      )
+    }
     const electron = await this.loadElectron()
-    const launchOpts = buildPlaywrightLaunchOptions(opts)
+    // Launch-time native instrumentation (ADR-020): when opted in (and we own the main entry), launch a
+    // generated shim main that installs the Tray hook before the app's real main, so a startup-created
+    // tray is observable. The real main is embedded in the shim; the shim replaces appPath as args[0].
+    let shimDir: string | undefined
+    let effectiveOpts = opts
+    if (opts.instrumentNative === true && opts.appPath !== undefined) {
+      shimDir = await mkdtemp(join(tmpdir(), 'sw-instrument-'))
+      try {
+        const shimPath = join(shimDir, 'stagewright-shim.cjs')
+        await writeFile(shimPath, buildInstrumentationShim(opts.appPath), 'utf8')
+        effectiveOpts = { ...opts, appPath: shimPath }
+      } catch (cause) {
+        // mkdtemp succeeded but writing the shim failed (disk full, permissions). Remove the temp dir
+        // now so the cleanup guarantee holds on this path too, not only on the launch/firstWindow paths.
+        await removeShimDir(shimDir)
+        const message = cause instanceof Error ? cause.message : String(cause)
+        throw new StagewrightError(
+          'INTERNAL_ERROR',
+          `Failed to write the launch-time instrumentation shim: ${message}`,
+          { transport: TRANSPORT_ID, appPath: opts.appPath },
+        )
+      }
+    }
+    const launchOpts = buildPlaywrightLaunchOptions(effectiveOpts)
     let app: PWElectronApp
     try {
       app = await electron.launch(launchOpts)
     } catch (cause) {
+      await removeShimDir(shimDir)
       const message = cause instanceof Error ? cause.message : String(cause)
       const isTimeout = /timeout/i.test(message)
       throw new StagewrightError(
@@ -1614,6 +1813,7 @@ export class PlaywrightElectronTransport implements ITransport {
       } catch {
         // A failed launch can leave the app half-open; closing is best-effort.
       }
+      await removeShimDir(shimDir)
       const message = cause instanceof Error ? cause.message : String(cause)
       const isTimeout = /timeout/i.test(message)
       throw new StagewrightError(
@@ -1624,7 +1824,10 @@ export class PlaywrightElectronTransport implements ITransport {
     }
     // Reuse the window we already awaited for console capture, so launch makes a
     // single firstWindow() call rather than one here and one in the session.
-    return new PlaywrightSession(app, initialPage, this.windowRecoveryBudgetMs)
+    return new PlaywrightSession(app, initialPage, this.windowRecoveryBudgetMs, {
+      instrumented: shimDir !== undefined,
+      ...(shimDir !== undefined ? { shimDir } : {}),
+    })
   }
 
   attach(_opts: AttachOptions): Promise<TransportSession> {

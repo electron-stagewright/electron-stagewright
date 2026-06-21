@@ -6,12 +6,20 @@
 # from ci.yml and marked continue-on-error — a red run here must never block
 # the main gate while the cache + explicit-install path below proves itself.
 #
-# Mitigations for the known failure mode:
-# - ~/.cache/electron is cached keyed by the locked Electron version, so the
-#   zip download survives across runs.
-# - After install, the binary's presence is verified and, when absent, the
-#   packaged install.js is invoked explicitly (it resolves the zip from the
-#   cache first).
+# The root failure: electron's packaged postinstall (node install.js) is
+# unreliable here. On a binary-cache miss it no-ops in well under a second
+# without downloading the binary or writing path.txt, yet exits 0 — whether run
+# by pnpm during install or invoked directly afterward. Green runs only worked
+# because a warm cache supplied a pre-extracted binary; a cache miss left every
+# smoke launching a non-existent binary, surfacing as ~20 opaque LAUNCH_TIMEOUTs.
+#
+# Mitigations:
+# - When the binary is absent we install it deterministically from the official
+#   GitHub release (download + unzip + write path.txt) instead of trusting
+#   install.js. ~/.cache/electron caches that release zip across runs.
+# - A hard gate then re-requires electron: if path.txt is still absent the job
+#   fails loudly at this step instead of degrading into opaque LAUNCH_TIMEOUTs
+#   across every smoke.
 # - ELECTRON_DISABLE_SANDBOX works around the unprivileged-userns AppArmor
 #   restriction on ubuntu-24.04 runners.
 name: E2E (real Electron)
@@ -52,7 +60,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "Locked Electron version: ${version}"
 
-      - name: Cache the Electron binary download
+      - name: Cache the Electron release zip
         uses: actions/cache@v4
         with:
           path: ~/.cache/electron
@@ -60,16 +68,37 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # require('electron') throws when the package's path.txt is absent (the
-      # postinstall never ran), so it doubles as the binary-presence probe.
+      # require('electron') throws when the package's path.txt is absent, so it doubles as the
+      # binary-presence probe. When absent we install the binary directly rather than via the
+      # unreliable packaged install.js (see the header comment).
       - name: Ensure the Electron binary is present
+        shell: bash
+        env:
+          ELECTRON_VERSION: ${{ steps.electron.outputs.version }}
         run: |
+          electron_dir="$(node -p "require('path').dirname(require.resolve('electron/package.json'))")"
           if node -e "require('electron')" 2>/dev/null; then
             echo "Electron binary already present."
           else
-            echo "Electron binary missing — running the packaged installer."
-            node "$(node -p "require('path').dirname(require.resolve('electron/package.json'))")/install.js"
+            # This job runs only on ubuntu, so the artifact is the linux-x64 build and the in-dist
+            # executable that path.txt must point at is named "electron".
+            zip="electron-v${ELECTRON_VERSION}-linux-x64.zip"
+            cache_zip="${HOME}/.cache/electron/${zip}"
+            echo "Electron binary missing — installing ${zip} directly from the official release."
+            if [ ! -s "${cache_zip}" ]; then
+              mkdir -p "${HOME}/.cache/electron"
+              curl -fsSL --retry 3 --retry-all-errors \
+                "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/${zip}" \
+                -o "${cache_zip}"
+            fi
+            rm -rf "${electron_dir}/dist" "${electron_dir}/path.txt"
+            mkdir -p "${electron_dir}/dist"
+            unzip -q "${cache_zip}" -d "${electron_dir}/dist"
+            printf 'electron' > "${electron_dir}/path.txt"
           fi
+          # Hard gate: re-require electron (unsuppressed) so a genuine install failure fails loudly
+          # here with a clear error rather than as opaque LAUNCH_TIMEOUTs across every smoke below.
+          node -e "console.log('Electron resolved to:', require('electron'))"
         working-directory: packages/core
 
       - run: pnpm build

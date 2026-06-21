@@ -48,6 +48,9 @@ export type {
   MenuInvokeResult,
   NotificationCaptureFilter,
   NativeNotification,
+  NativeTray,
+  TrayEventName,
+  TrayInvokeResult,
   TransportSession,
   ITransport,
 } from './types.js'

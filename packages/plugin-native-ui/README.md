@@ -1,20 +1,21 @@
 # @electron-stagewright/plugin-native-ui
 
-Read, assert, **invoke**, and **capture** an Electron app's **native chrome** — the application menu (the
-macOS menu bar / app menu) and the notifications it shows — under agent-driven testing (ADR-019, built on
-the ADR-004 plugin contract). Ask "is the _Save_ item enabled?", "did _Dark Mode_ get checked under
-_View_?", then **trigger** the action ("click File → Save"), and **assert the app notified the user** ("a
-_Saved_ notification appeared") — state, actions, and events that live in the Electron **main process**,
-outside the DOM the agent already reads — all **without running agent-supplied JavaScript**.
+Read, assert, **invoke**, **capture**, and **inspect** an Electron app's **native chrome** — the
+application menu (the macOS menu bar / app menu), the notifications it shows, and system-tray state —
+under agent-driven testing (ADR-019, built on the ADR-004 plugin contract). Ask "is the _Save_ item
+enabled?", "did _Dark Mode_ get checked under _View_?", then **trigger** the action ("click File → Save"),
+**assert the app notified the user** ("a _Saved_ notification appeared"), and **read the tray tooltip /
+menu** — state, actions, and events that live in the Electron **main process**, outside the DOM the agent
+already reads — all **without running agent-supplied JavaScript**.
 
 Like the network, clock, and storage plugins, the tools ride a dedicated **transport seam** (a fixed
-main-process serializer/walker over `Menu.getApplicationMenu()`, and a fixed `Notification.prototype.show`
-hook), not eval — so they do **not** require `--allow-eval`. They run on the default **Playwright** launch
-transport (the only transport with real Electron main-process access); the CDP attach and injector
-transports return `native.UNSUPPORTED`.
+main-process serializer/walker over `Menu.getApplicationMenu()`, a fixed `Notification.prototype.show`
+hook, and the opt-in launch-time `Tray` hook from ADR-020), not eval — so they do **not** require
+`--allow-eval`. They run on the default **Playwright** launch transport (the only transport with real
+Electron main-process access); the CDP attach and injector transports return `native.UNSUPPORTED`.
 
 The application menu is cross-platform (Electron's `Menu` API); the **macOS menu bar** is its most
-prominent surface. Tray capture is the deferred follow-up.
+prominent surface. Tray event capture is the deferred follow-up.
 
 ## Load it
 
@@ -60,16 +61,43 @@ Each path segment matches an item by its **label OR its role**, so role-based it
 
 - **`native_notifications_start`** `{ titleContains?, sessionId? }` — arm capture of the notifications
   the app shows (`new Notification(...).show()`), optionally narrowed to titles containing `titleContains`.
-  Notifications shown **before** arming are not captured — arm, then drive the app. Returns `{ capturing }`.
-- **`native_notifications`** `{ sessionId? }` — return the notifications shown since arming, oldest first
-  — each with `title`, `body`/`subtitle`/`silent`/`urgency` (when set), and `at` (epoch ms). The no-eval
-  way to **assert the app notified the user**. Returns `{ count, notifications }`.
+  Notifications shown **before** arming are not captured — arm, then drive the app — **unless** the session
+  was launched with `electron_launch { instrumentNative: true }`, in which case the launch shim installs
+  the same hook at t=0 and startup notifications are captured too (tagged `beforeArm`). Returns `{ capturing }`.
+- **`native_notifications`** `{ sessionId? }` — return the captured notifications, oldest first — each with
+  `title`, `body`/`subtitle`/`silent`/`urgency` (when set), `at` (epoch ms), and `beforeArm: true` for a
+  notification shown before the agent armed (a startup / t=0 notification, instrumented sessions only). The
+  no-eval way to **assert the app notified the user**. Returns `{ count, notifications }`.
 - **`native_notifications_stop`** `{ sessionId? }` — disarm (restore the original `Notification.show`) and
   return what was captured. Returns `{ count, notifications }`.
 
+### Tray read
+
+- **`native_trays`** `{ sessionId? }` — return the app's system-tray icons — each with its `id`, `toolTip`,
+  `title`, `hasImage` (whether an icon is set; the pixels are not returned), and `menu` (the context menu,
+  serialised like the application menu). Trays have no registry and are created at startup, so the session
+  **must** have been launched with `electron_launch { main, instrumentNative: true }` (which installs the
+  tray hook before the app runs; executablePath-only launches cannot be instrumented). Returns
+  `{ count, trays }`; `native.NOT_INSTRUMENTED` if the session was not instrumented (relaunch with the
+  flag).
+
+### Tray invocation
+
+- **`native_tray_invoke`** `{ id, event, sessionId? }` — fire an interaction event on the tray with `id`
+  (from `native_trays`), running the app's own `tray.on(event, …)` handler — the act half of the tray
+  surface. `event` is `click` / `right-click` / `double-click` (cross-platform) or a platform `mouse-up` /
+  `mouse-down` / `mouse-enter` / `mouse-leave` / `balloon-click`. Like `native_trays` it needs the session
+  launched with `instrumentNative` (returns `native.NOT_INSTRUMENTED` otherwise). Returns
+  `{ emitted, id?, event?, tray?, reason? }`: on success `emitted` is `true` and `tray` is the tray read
+  back **after** the handler ran (so a handler that mutated its own tray is visible in one call), or `null`
+  if the handler destroyed it; otherwise `emitted` is `false` and `reason` is `not_found` (no tray with that
+  id) or `no_listener` (the tray has no handler for that event). Firing `right-click` runs the handler but
+  does **not** auto-open the tray's context menu the way a native right-click does.
+
 Error codes: `native.UNSUPPORTED` (the transport cannot access the native UI), `native.ALREADY_CAPTURING`
-(a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming). Invalid arguments (an
-empty menu `path` or empty `titleContains`) are core `BAD_ARGUMENT`.
+(a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming), `native.NOT_INSTRUMENTED`
+(`native_trays` / `native_tray_invoke` without `instrumentNative`). Invalid arguments (an empty menu `path`
+or empty `titleContains`, a negative tray `id`, or an unknown tray `event`) are core `BAD_ARGUMENT`.
 
 ## Security
 
@@ -91,15 +119,31 @@ handlers or refs). Although the fixed hook is installed via `evaluate`, the agen
 arm/read/stop (no executable input), so it is **not** `--allow-eval` gated — an observe surface bounded by
 the capability and the operator-loaded plugin, no more sensitive than the notification text the user sees.
 
+Tray read **observes** system-tray state by using launch-time native instrumentation (`electron_launch
+{ main, instrumentNative: true }`) to install a fixed `Tray` hook before the app main runs. The agent
+supplies only the opt-in flag, not code; the read returns tooltip/title, `hasImage`, and serialised context
+menu state, never icon pixels.
+
+Invoking a tray event (`native_tray_invoke`) **modifies** app behaviour — it fires the app's own tray
+handler on the live `Tray`, the tray analog of `native_menu_invoke`. The agent supplies a tray id + an
+event name (data), not code, so it is still **not** `--allow-eval` gated; it is bounded by the
+`canAccessNativeUI` capability, the `instrumentNative` launch opt-in, and the operator's choice to load the
+plugin. A tray with no listener for the event is refused, not faked.
+
 ## Scope and limitations
 
-- **Application menu (read + invoke) and notification capture.** This plugin reads/invokes the
-  application menu and captures shown notifications. **Tray** capture (icon, tooltip, context menu) is the
-  remaining deferred surface — the same hook mechanism, a separate lift.
-- **Notification capture is arm-then-observe.** Notifications shown before `native_notifications_start`
-  are not recorded, and only **shown** notifications (`.show()`) are captured — a constructed-but-unshown
-  notification notified no one. The hook patches the shared `Notification.prototype`, so it catches every
-  shown notification regardless of how the app referenced the class.
+- **Application menu (read + invoke), notification capture, and tray (read + invoke).** This plugin
+  reads/invokes the application menu, captures shown notifications (including startup ones under
+  `instrumentNative`), and reads + fires tray events. The tray read/invoke and t=0 notification capture need
+  `electron_launch { instrumentNative: true }` (a launch-time hook — trays and startup notifications happen
+  before any agent could arm).
+- **Notification capture is arm-then-observe, plus optional t=0.** Without `instrumentNative`, notifications
+  shown before `native_notifications_start` are not recorded; **with** it, the launch shim installs the same
+  hook before the app's main runs, so startup notifications are captured and tagged `beforeArm`. Only
+  **shown** notifications (`.show()`) are captured — a constructed-but-unshown notification notified no one.
+  The hook patches the shared `Notification.prototype`, so it catches every shown notification regardless of
+  how the app referenced the class. Under a `titleContains` filter the buffer records all and filters at
+  read, so on a very noisy app a matching startup notification could be evicted past the 1000 cap before the read.
 - **Playwright launch transport only.** The application menu lives in the Electron main-process Node
   context; only the Playwright transport reaches it (`electronApp.evaluate`). A CDP attach session
   evaluates against the browser target, which has no Electron `Menu` module, so it returns

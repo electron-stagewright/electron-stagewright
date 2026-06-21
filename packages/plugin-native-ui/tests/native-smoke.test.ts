@@ -51,13 +51,14 @@ interface InvokeEnvelope {
 
 describe('native-ui plugin smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
-    'reads the menu, resolves items by label/role, and invokes an item with a real side effect',
+    'reads the menu/trays, invokes a menu item + a tray event with real side effects, and captures a notification',
     async () => {
       const server = await createServer({ plugins: [nativeUiPlugin] })
       closers.push(() => server.close())
 
       const launched = (await server.dispatcher.dispatch('electron_launch', {
         main: FIXTURE_MAIN,
+        instrumentNative: true,
       })) as { ok: boolean; session_id?: string; _meta?: { session_id?: string } }
       expect(launched.ok).toBe(true)
       const sessionId = launched.session_id ?? launched._meta?.session_id
@@ -130,6 +131,8 @@ describe('native-ui plugin smoke (real Electron)', () => {
 
       // Notification capture end to end: arm, invoke File > Notify (which shows a real notification),
       // then read it back — proving the Notification.prototype.show hook records against real Electron.
+      // Because the session was launched with instrumentNative, the t=0 startup notification (shown in
+      // app.whenReady, before this arm) is ALSO captured and tagged beforeArm — the t=0 retrofit.
       expect(
         (
           (await server.dispatcher.dispatch('native_notifications_start', {
@@ -143,9 +146,56 @@ describe('native-ui plugin smoke (real Electron)', () => {
       })
       const captured = (await server.dispatcher.dispatch('native_notifications_stop', {
         sessionId,
-      })) as unknown as { count: number; notifications: Array<{ title: string; body?: string }> }
-      expect(captured.count).toBe(1)
-      expect(captured.notifications[0]).toMatchObject({ title: 'Saved', body: 'All changes saved' })
+      })) as unknown as {
+        count: number
+        notifications: Array<{ title: string; body?: string; beforeArm?: boolean }>
+      }
+      // Both the t=0 startup notification and the post-arm File > Notify one are present.
+      expect(captured.count).toBe(2)
+      const startup = captured.notifications.find((n) => n.title === 'Welcome back')
+      expect(startup).toMatchObject({ body: 'Restored your session', beforeArm: true })
+      const saved = captured.notifications.find((n) => n.title === 'Saved')
+      expect(saved).toMatchObject({ body: 'All changes saved' })
+      expect(saved).not.toHaveProperty('beforeArm') // shown after arming
+
+      // The tray was created at STARTUP, before any agent could arm — proving launch-time
+      // instrumentation (instrumentNative) catches the t=0 setup that an after-launch hook would miss.
+      const trays = (await server.dispatcher.dispatch('native_trays', {
+        sessionId,
+      })) as unknown as {
+        ok: boolean
+        count: number
+        trays: Array<{ toolTip?: string; menu?: { items: Array<{ label: string }> } }>
+      }
+      expect(trays.ok).toBe(true)
+      expect(trays.count).toBe(1)
+      expect(trays.trays[0]?.toolTip).toBe('Stagewright fixture tray')
+      expect(trays.trays[0]?.menu?.items.some((i) => i.label === 'Tray Action')).toBe(true)
+
+      // Firing the tray's click event runs the app's own tray.on('click') handler, which writes a sentinel
+      // into the page — proving native_tray_invoke reaches the real tray handler (the act half of trays).
+      const trayInvoked = (await server.dispatcher.dispatch('native_tray_invoke', {
+        sessionId,
+        id: 0,
+        event: 'click',
+      })) as unknown as { ok: boolean; emitted: boolean }
+      expect(trayInvoked.ok).toBe(true)
+      expect(trayInvoked.emitted).toBe(true)
+      const traySentinel = (await server.dispatcher.dispatch('electron_expect_text', {
+        sessionId,
+        selector: '#tray-clicked',
+        contains: 'TRAY_CLICKED',
+      })) as { ok?: boolean }
+      expect(traySentinel.ok).toBe(true)
+
+      // Firing an event the tray has no handler for is reported, not faked as a successful fire.
+      const noListener = (await server.dispatcher.dispatch('native_tray_invoke', {
+        sessionId,
+        id: 0,
+        event: 'double-click',
+      })) as unknown as { emitted: boolean; reason?: string }
+      expect(noListener.emitted).toBe(false)
+      expect(noListener.reason).toBe('no_listener')
 
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },

@@ -25,6 +25,7 @@ import type {
   MenuInvokeResult,
   NativeMenu,
   NativeNotification,
+  NativeTray,
   NetworkCaptureFilter,
   NetworkEvent,
   NetworkEventsOptions,
@@ -41,6 +42,8 @@ import type {
   TransportCapabilities,
   TransportId,
   TransportSession,
+  TrayEventName,
+  TrayInvokeResult,
   WindowDescriptor,
   WindowRef,
 } from '../../src/transports/index.js'
@@ -312,6 +315,25 @@ export class FakeSession implements TransportSession {
   }
   async stopNotificationCapture(): Promise<void> {
     this.notificationStopCalls += 1
+  }
+
+  /** Trays the fake returns from `getTrays`; `null` models a session not launched with instrumentNative. */
+  trays: NativeTray[] | null = null
+  async getTrays(): Promise<readonly NativeTray[] | null> {
+    return this.trays
+  }
+
+  /** The result `invokeTrayEvent` returns (`null` = not instrumented), and the (id, event) pairs seen. */
+  trayInvokeResult: TrayInvokeResult | null = {
+    emitted: true,
+    id: 0,
+    event: 'click',
+    tray: { id: 0, hasImage: false },
+  }
+  readonly trayInvokeCalls: Array<readonly [number, TrayEventName]> = []
+  async invokeTrayEvent(id: number, event: TrayEventName): Promise<TrayInvokeResult | null> {
+    this.trayInvokeCalls.push([id, event])
+    return this.trayInvokeResult
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

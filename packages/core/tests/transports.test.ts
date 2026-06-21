@@ -14,6 +14,8 @@
  *   contract via the type system and a lightweight runtime fake).
  */
 
+import { existsSync } from 'node:fs'
+
 import { JSDOM } from 'jsdom'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -38,6 +40,7 @@ import type {
   PWRoute,
 } from '../src/transports/playwright-electron-api.js'
 import { buildPlaywrightLaunchOptions } from '../src/transports/playwright-electron.js'
+import { NOTIFICATION_HOOK_BODY } from '../src/transports/native-instrumentation.js'
 import {
   bodyContentTypeAllowed,
   captureBodyField,
@@ -77,6 +80,8 @@ const FAKE_SESSION: TransportSession = {
   startNotificationCapture: async () => undefined,
   capturedNotifications: async () => [],
   stopNotificationCapture: async () => undefined,
+  getTrays: async () => null,
+  invokeTrayEvent: async () => null,
   click: async () => undefined,
   fill: async () => undefined,
   hover: async () => undefined,
@@ -2155,6 +2160,316 @@ describe('PlaywrightSession notification capture', () => {
     await expect(session.startNotificationCapture()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.capturedNotifications()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.stopNotificationCapture()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+
+  // Simulate the launch shim installing the t=0 notification hook (the fake app never runs the real shim).
+  function installLaunchNotificationHook(FakeNotification: unknown): void {
+    new Function('electron', 'host', NOTIFICATION_HOOK_BODY)(
+      { Notification: FakeNotification },
+      globalThis,
+    )
+  }
+
+  it('captures a notification shown BEFORE arming on an instrumented session (t=0), tagging it beforeArm', async () => {
+    const { session, FakeNotification } = await launchWithNotifications()
+    installLaunchNotificationHook(FakeNotification) // the launch shim's t=0 hook
+    // A startup notification fires before the agent could arm.
+    new FakeNotification({ title: 'Startup', body: 'Restored your session' }).show()
+    // The agent arms (ADOPTS the t=0 buffer, does not reset it) and the app shows another.
+    await session.startNotificationCapture()
+    new FakeNotification({ title: 'Later' }).show()
+
+    const caught = await session.capturedNotifications()
+    expect(caught.map((n) => n.title)).toEqual(['Startup', 'Later'])
+    expect(caught[0]).toMatchObject({
+      title: 'Startup',
+      body: 'Restored your session',
+      beforeArm: true,
+    })
+    expect(caught[1]).toMatchObject({ title: 'Later' })
+    expect(caught[1]).not.toHaveProperty('beforeArm') // shown after arming
+    expect(caught[0]).not.toHaveProperty('_seq') // the internal sequence never crosses the wire
+    expect(JSON.parse(JSON.stringify(caught))).toEqual(caught) // wire-serialisable
+  })
+
+  it('applies the titleContains filter at read time across pre-arm and post-arm records', async () => {
+    const { session, FakeNotification } = await launchWithNotifications()
+    installLaunchNotificationHook(FakeNotification)
+    new FakeNotification({ title: 'Saved at startup' }).show()
+    new FakeNotification({ title: 'Error at startup' }).show()
+    await session.startNotificationCapture({ titleContains: 'Saved' })
+    new FakeNotification({ title: 'Saved again' }).show()
+    new FakeNotification({ title: 'Error again' }).show()
+    // The launch hook records ALL; the filter applies at read, uniformly over pre-arm and post-arm records.
+    expect((await session.capturedNotifications()).map((n) => n.title)).toEqual([
+      'Saved at startup',
+      'Saved again',
+    ])
+  })
+})
+
+describe('PlaywrightSession native trays (launch-time instrumentation)', () => {
+  const TRAY_KEY = '__stagewright_trayRegistry'
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[TRAY_KEY]
+  })
+
+  function makeTransport(app: ReturnType<typeof createFakeElectronApp>) {
+    return new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+  }
+
+  it('getTrays returns null when the session was NOT launched with instrumentNative', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({ appPath: '/abs/main.js' })
+    expect(await session.getTrays()).toBeNull()
+  })
+
+  it('rejects instrumentNative when there is no appPath to wrap', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    await expect(
+      makeTransport(app).launch({
+        executablePath: '/abs/App.app/Contents/MacOS/App',
+        instrumentNative: true,
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_ARGUMENT' })
+  })
+
+  it('launch writes a shim main as args[0] and instruments the session', async () => {
+    let launchedArgs: readonly string[] | undefined
+    const app = createFakeElectronApp([createFakePage('A')])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({
+        launch: async (opts: { args?: readonly string[] }) => {
+          launchedArgs = opts.args
+          return app
+        },
+      }),
+    })
+    const session = await transport.launch({ appPath: '/abs/app/main.js', instrumentNative: true })
+    // The first arg is the generated shim, not the app's real main.
+    expect(launchedArgs?.[0]).toMatch(/stagewright-shim\.cjs$/)
+    expect(launchedArgs?.[0]).not.toBe('/abs/app/main.js')
+    // The shim file exists on disk while the session lives, and is removed on dispose.
+    const shimPath = launchedArgs?.[0] as string
+    expect(existsSync(shimPath)).toBe(true)
+    await session.dispose()
+    expect(existsSync(shimPath)).toBe(false)
+  })
+
+  it('getTrays reads the registry the shim populates when instrumented', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    // The fake app.evaluate runs against the test-process global; stand in for the shim's registry.
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = [
+      { inst: {}, rec: { id: 0, hasImage: true, toolTip: 'Status', menu: { items: [] } } },
+      { inst: {}, rec: { id: 1, hasImage: false, title: 'Second' } },
+    ]
+    expect(await session.getTrays()).toEqual([
+      { id: 0, hasImage: true, toolTip: 'Status', menu: { items: [] } },
+      { id: 1, hasImage: false, title: 'Second' },
+    ])
+    await session.dispose()
+  })
+
+  it('getTrays returns [] when instrumented but no tray was created', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = []
+    expect(await session.getTrays()).toEqual([])
+    await session.dispose()
+  })
+
+  it('rejects getTrays after dispose', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    await session.dispose()
+    await expect(session.getTrays()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+
+  // A fake live Tray standing in for the registry `inst`. `emit` mirrors Node's EventEmitter: it returns
+  // true iff the event had listeners (`listeners`, default 1), and only records a run when one exists —
+  // so `listeners: 0` models a tray with no handler for the event (emit is inert and returns false).
+  function fakeTrayInst(
+    opts: {
+      listeners?: number
+      bounds?: unknown
+      throwOnEmit?: boolean
+      throwOnGetBounds?: boolean
+    } = {},
+  ) {
+    const calls: Array<{ event: string; args: unknown[] }> = []
+    return {
+      calls,
+      getBounds: () => {
+        // getBounds can throw on a destroyed tray / headless platform; the transport falls back to zero
+        // bounds rather than letting the throw abort the whole invoke.
+        if (opts.throwOnGetBounds === true) throw new Error('no display')
+        return opts.bounds ?? { x: 1, y: 2, width: 3, height: 4 }
+      },
+      emit: (event: string, ...args: unknown[]): boolean => {
+        if (opts.throwOnEmit === true) throw new Error('boom')
+        const hadListeners = (opts.listeners ?? 1) > 0
+        if (hadListeners) calls.push({ event, args })
+        return hadListeners
+      },
+    }
+  }
+
+  it('invokeTrayEvent emits on the live tray with synthesized args and echoes id+event+tray', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    const inst = fakeTrayInst({ bounds: { x: 10, y: 20, width: 30, height: 40 } })
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = [
+      { inst, rec: { id: 0, hasImage: true, toolTip: 'Status' } },
+    ]
+    expect(await session.invokeTrayEvent(0, 'click')).toEqual({
+      emitted: true,
+      id: 0,
+      event: 'click',
+      tray: { id: 0, hasImage: true, toolTip: 'Status' },
+    })
+    // The handler ran with the real tray bounds and an empty event + zero position.
+    expect(inst.calls).toEqual([
+      { event: 'click', args: [{}, { x: 10, y: 20, width: 30, height: 40 }, { x: 0, y: 0 }] },
+    ])
+    await session.dispose()
+  })
+
+  it('invokeTrayEvent falls back to zero bounds when getBounds throws (headless/destroyed tray)', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    const inst = fakeTrayInst({ throwOnGetBounds: true })
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = [{ inst, rec: { id: 0, hasImage: false } }]
+    // A throwing getBounds must not abort the invoke: the handler still fires, with the zero-bounds fallback.
+    expect(await session.invokeTrayEvent(0, 'click')).toEqual({
+      emitted: true,
+      id: 0,
+      event: 'click',
+      tray: { id: 0, hasImage: false },
+    })
+    expect(inst.calls).toEqual([
+      { event: 'click', args: [{}, { x: 0, y: 0, width: 0, height: 0 }, { x: 0, y: 0 }] },
+    ])
+    await session.dispose()
+  })
+
+  it('invokeTrayEvent returns not_found for an unknown tray id', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = [
+      { inst: fakeTrayInst(), rec: { id: 0, hasImage: false } },
+    ]
+    expect(await session.invokeTrayEvent(99, 'click')).toEqual({
+      emitted: false,
+      reason: 'not_found',
+    })
+    await session.dispose()
+  })
+
+  it('invokeTrayEvent returns no_listener when the tray has no handler for the event', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    const inst = fakeTrayInst({ listeners: 0 })
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = [{ inst, rec: { id: 0, hasImage: false } }]
+    expect(await session.invokeTrayEvent(0, 'right-click')).toEqual({
+      emitted: false,
+      reason: 'no_listener',
+    })
+    expect(inst.calls).toEqual([]) // no handler ran (emit returned false)
+    await session.dispose()
+  })
+
+  it('invokeTrayEvent reports a null readback when the handler destroys the tray', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    const registry: Array<{ inst?: unknown; rec: { id: number; hasImage: boolean } }> = [
+      { rec: { id: 0, hasImage: true } },
+    ]
+    registry[0]!.inst = {
+      getBounds: () => ({ x: 1, y: 2, width: 3, height: 4 }),
+      emit: () => {
+        registry.splice(0, 1) // mirrors the launch-time hook's destroy() cleanup
+        return true
+      },
+    }
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = registry
+    expect(await session.invokeTrayEvent(0, 'click')).toEqual({
+      emitted: true,
+      id: 0,
+      event: 'click',
+      tray: null,
+    })
+    await session.dispose()
+  })
+
+  it('invokeTrayEvent returns null when the session was NOT instrumented', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({ appPath: '/abs/main.js' })
+    expect(await session.invokeTrayEvent(0, 'click')).toBeNull()
+    await session.dispose()
+  })
+
+  it('invokeTrayEvent re-surfaces a throwing handler as a clean error', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = [
+      { inst: fakeTrayInst({ throwOnEmit: true }), rec: { id: 0, hasImage: false } },
+    ]
+    await expect(session.invokeTrayEvent(0, 'click')).rejects.toThrow(/tray handler threw/)
+    await session.dispose()
+  })
+
+  it('invokeTrayEvent result is wire-serialisable', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    ;(globalThis as Record<string, unknown>)[TRAY_KEY] = [
+      { inst: fakeTrayInst(), rec: { id: 0, hasImage: true, toolTip: 'T' } },
+    ]
+    const result = await session.invokeTrayEvent(0, 'click')
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result)
+    await session.dispose()
+  })
+
+  it('rejects invokeTrayEvent after dispose', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const session = await makeTransport(app).launch({
+      appPath: '/abs/main.js',
+      instrumentNative: true,
+    })
+    await session.dispose()
+    await expect(session.invokeTrayEvent(0, 'click')).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })
 })
 
