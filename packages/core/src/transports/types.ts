@@ -654,6 +654,13 @@ export interface NativeNotification {
   readonly urgency?: 'normal' | 'critical' | 'low'
   /** Epoch milliseconds when `.show()` was called. */
   readonly at: number
+  /**
+   * Present and `true` only for a notification shown BEFORE the agent armed capture — a startup / t=0
+   * notification caught by launch-time instrumentation (requires `instrumentNative`). Omitted for a
+   * notification shown after arming. Lets the agent distinguish "the app notified at startup" from "the
+   * app notified in response to what I did".
+   */
+  readonly beforeArm?: boolean
 }
 
 /**

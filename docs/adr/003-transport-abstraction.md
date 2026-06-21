@@ -452,11 +452,13 @@ Playwright `electronApp.evaluate` path reaches, so only it advertises true.
 ## Status Update — 2026-06-19: `LaunchOptions.instrumentNative`
 
 `LaunchOptions` gains an optional `instrumentNative` flag (default off). When set on the Playwright launch
-transport, the transport wraps the app's main entry with a fixed hook installed before the app runs, so
-native UI created at startup (the system `Tray`) is observable — see ADR-020 for the mechanism and threat
-reasoning. It requires a `main`/`appPath` entry (executablePath-only launches cannot be wrapped). It is a
-launch-transport-only opt-in; CDP/injector cannot wrap a running app's entry, so the consuming seam
-(`getTrays` and `invokeTrayEvent`) rejects `NOT_IMPLEMENTED` there.
+transport, the transport wraps the app's main entry with fixed hooks installed before the app runs, so
+native state created at startup (the system `Tray`, and notifications shown in `app.whenReady()`) is
+observable — see ADR-020 for the mechanism and threat reasoning. It requires a `main`/`appPath` entry
+(executablePath-only launches cannot be wrapped). It is a launch-transport-only opt-in; CDP/injector cannot
+wrap a running app's entry, so the consuming seam (`getTrays` and `invokeTrayEvent`) rejects
+`NOT_IMPLEMENTED` there. The notification-capture seam adopts the launch-installed t=0 hook when present, so
+on an instrumented session it also returns startup notifications (tagged `beforeArm`).
 
 The native-UI seam also gains `invokeTrayEvent(id, event)` (the tray analog of `invokeApplicationMenuItem`,
 returning a `TrayInvokeResult`): it acts on the same launch-time tray registry, so like `getTrays` it

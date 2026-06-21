@@ -118,13 +118,68 @@ try {
 }
 `
 
+/** The global key the notification hook installs its capture state on; read by the notification seam. */
+export const NOTIFICATION_REGISTRY_GLOBAL = '__stagewright_notificationCapture'
+
 /**
- * Build the self-contained shim-main source (CommonJS) that runs {@link TRAY_HOOK_BODY} then loads
- * `realMainPath`. The real main is embedded as a `file://` URL so the shim's dynamic `import()` resolves
- * a CommonJS or an ESM main identically.
+ * The notification-hook installer body, run by the launch shim at t=0 (before the app's main). Given
+ * `electron` (the module) and `host` (the object to hang the capture state on — `globalThis` at runtime),
+ * it patches `electron.Notification.prototype.show` so EVERY shown notification's data fields are recorded
+ * into a bounded ring buffer on `host[NOTIFICATION_REGISTRY_GLOBAL]`. The notification seam's
+ * `startNotificationCapture` ADOPTS this state when it exists (an instrumented session) and otherwise
+ * installs an inline hook that MUST mirror this record shape exactly — keep the two in sync.
+ *
+ * It records UNFILTERED (the `titleContains` filter is unknown at t=0 and is applied at READ time by
+ * {@link PlaywrightSession.capturedNotifications}). Each record carries an internal monotonic `_seq`; on
+ * arm the seam snapshots `state.armedSeq`, so a record with `_seq < armedSeq` was shown BEFORE the agent
+ * armed (a t=0 / startup notification) and is reported with `beforeArm: true`. The installer is idempotent
+ * (`host[KEY]` already set ⇒ no-op), so the launch shim and a later arm never double-patch. It calls the
+ * original `show` FIRST, so recording can never suppress the app's own notification. A prototype patch
+ * (not a constructor swap) survives `const { Notification } = require('electron')`. Exported as a string so
+ * it is BOTH embedded in the launch shim and runnable in tests via `new Function('electron', 'host', BODY)`.
+ */
+export const NOTIFICATION_HOOK_BODY = `
+try {
+  var Notif = electron && electron.Notification
+  var proto = Notif && Notif.prototype
+  if (!proto || typeof proto.show !== 'function') return
+  var KEY = ${JSON.stringify(NOTIFICATION_REGISTRY_GLOBAL)}
+  if (host[KEY] !== undefined) return
+  var CAP = 1000
+  var buffer = []
+  var origShow = proto.show
+  var state = { buffer: buffer, origShow: origShow, active: true, needle: undefined, nextSeq: 0, armedSeq: undefined }
+  var patchedShow = function () {
+    var result = origShow.apply(this, arguments)
+    if (!state.active) return result
+    try {
+      var title = typeof this.title === 'string' ? this.title : ''
+      var rec = { title: title, at: Date.now(), _seq: state.nextSeq++ }
+      if (typeof this.body === 'string' && this.body !== '') rec.body = this.body
+      if (typeof this.subtitle === 'string' && this.subtitle !== '') rec.subtitle = this.subtitle
+      if (typeof this.silent === 'boolean') rec.silent = this.silent
+      var u = this.urgency
+      if (u === 'normal' || u === 'critical' || u === 'low') rec.urgency = u
+      buffer.push(rec)
+      if (buffer.length > CAP) buffer.shift()
+    } catch (e) {}
+    return result
+  }
+  state.patchedShow = patchedShow
+  proto.show = patchedShow
+  host[KEY] = state
+} catch (e) {
+  // Instrumentation must never break the app's own notification.
+}
+`
+
+/**
+ * Build the self-contained shim-main source (CommonJS) that runs {@link TRAY_HOOK_BODY} and
+ * {@link NOTIFICATION_HOOK_BODY} then loads `realMainPath`. The real main is embedded as a `file://` URL
+ * so the shim's dynamic `import()` resolves a CommonJS or an ESM main identically.
  */
 export function buildInstrumentationShim(realMainPath: string): string {
-  // {@link TRAY_HOOK_BODY} is a compile-time constant (no untrusted interpolation). `realMainPath` is the
+  // The hook bodies are compile-time constants (no untrusted interpolation). `realMainPath` is the
   // operator's own preflighted launch entry (absolute, existing, inside --app-root); it is JSON-escaped
   // into a string LITERAL and written to a file Electron runs — it is never passed to `new Function`/eval.
   const realMainUrl = pathToFileURL(realMainPath).href
@@ -133,7 +188,12 @@ export function buildInstrumentationShim(realMainPath: string): string {
 try {
   (function (electron, host) {${TRAY_HOOK_BODY}})(require('electron'), globalThis)
 } catch (e) {
-  console.error('[stagewright] native instrumentation failed:', e)
+  console.error('[stagewright] native tray instrumentation failed:', e)
+}
+try {
+  (function (electron, host) {${NOTIFICATION_HOOK_BODY}})(require('electron'), globalThis)
+} catch (e) {
+  console.error('[stagewright] native notification instrumentation failed:', e)
 }
 import(${JSON.stringify(realMainUrl)}).catch(function (err) {
   console.error('[stagewright] failed to load the instrumented app main:', err)

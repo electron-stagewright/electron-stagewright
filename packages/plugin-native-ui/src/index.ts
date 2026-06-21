@@ -178,16 +178,17 @@ const notificationsStartTool: AnyToolDefinition = defineTool({
   description: [
     'Arm capture of the native notifications the app shows (new Notification(...).show()), optionally',
     'narrowed to titles containing `titleContains`. Notifications shown BEFORE arming are not captured',
-    '(arm, then drive the app). Returns: { ok, capturing }. Errors: native.UNSUPPORTED (transport cannot',
-    'access the native UI), native.ALREADY_CAPTURING (call native_notifications_stop first), NOT_RUNNING,',
-    'BAD_ARGUMENT (empty titleContains).',
+    'unless the session was launched with electron_launch { instrumentNative: true }, in which case',
+    'startup notifications are captured and returned with beforeArm:true. Returns: { ok, capturing }.',
+    'Errors: native.UNSUPPORTED (transport cannot access the native UI), native.ALREADY_CAPTURING (call',
+    'native_notifications_stop first), NOT_RUNNING, BAD_ARGUMENT (empty titleContains).',
   ].join(' '),
   inputSchema: z.object({
     titleContains: z
       .string()
       .min(1)
       .optional()
-      .describe('Only capture notifications whose title contains this substring.'),
+      .describe('Only return notifications whose title contains this substring.'),
     ...sessionField,
   }),
   operationType: 'command',
@@ -213,10 +214,11 @@ const notificationsTool: AnyToolDefinition = defineTool({
   name: 'notifications',
   title: 'Read captured notifications',
   description: [
-    'Return the notifications the app has shown since native_notifications_start, oldest first — each',
-    'with its title, body/subtitle/silent/urgency when set, and `at` (epoch ms). The no-eval way to',
-    'ASSERT the app notified the user. Returns: { ok, count, notifications }. Errors:',
-    'native.NOT_CAPTURING (call native_notifications_start first), native.UNSUPPORTED, NOT_RUNNING.',
+    'Return captured notifications, oldest first — each with title, body/subtitle/silent/urgency when set,',
+    'at (epoch ms), and beforeArm:true when launch-time instrumentation caught a startup notification',
+    'before the agent armed capture. The no-eval way to ASSERT the app notified the user. Returns:',
+    '{ ok, count, notifications }. Errors: native.NOT_CAPTURING (call native_notifications_start first),',
+    'native.UNSUPPORTED, NOT_RUNNING.',
   ].join(' '),
   inputSchema: z.object({ ...sessionField }),
   operationType: 'query',

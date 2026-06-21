@@ -131,6 +131,8 @@ describe('native-ui plugin smoke (real Electron)', () => {
 
       // Notification capture end to end: arm, invoke File > Notify (which shows a real notification),
       // then read it back — proving the Notification.prototype.show hook records against real Electron.
+      // Because the session was launched with instrumentNative, the t=0 startup notification (shown in
+      // app.whenReady, before this arm) is ALSO captured and tagged beforeArm — the t=0 retrofit.
       expect(
         (
           (await server.dispatcher.dispatch('native_notifications_start', {
@@ -144,9 +146,17 @@ describe('native-ui plugin smoke (real Electron)', () => {
       })
       const captured = (await server.dispatcher.dispatch('native_notifications_stop', {
         sessionId,
-      })) as unknown as { count: number; notifications: Array<{ title: string; body?: string }> }
-      expect(captured.count).toBe(1)
-      expect(captured.notifications[0]).toMatchObject({ title: 'Saved', body: 'All changes saved' })
+      })) as unknown as {
+        count: number
+        notifications: Array<{ title: string; body?: string; beforeArm?: boolean }>
+      }
+      // Both the t=0 startup notification and the post-arm File > Notify one are present.
+      expect(captured.count).toBe(2)
+      const startup = captured.notifications.find((n) => n.title === 'Welcome back')
+      expect(startup).toMatchObject({ body: 'Restored your session', beforeArm: true })
+      const saved = captured.notifications.find((n) => n.title === 'Saved')
+      expect(saved).toMatchObject({ body: 'All changes saved' })
+      expect(saved).not.toHaveProperty('beforeArm') // shown after arming
 
       // The tray was created at STARTUP, before any agent could arm — proving launch-time
       // instrumentation (instrumentNative) catches the t=0 setup that an after-launch hook would miss.

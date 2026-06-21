@@ -2,9 +2,10 @@
 // smoke can read it back and assert the interesting fields — a checkbox (checked), an accelerator, a
 // disabled item, and a role-based item — an invokable File > Mark item whose click writes a sentinel
 // into the page, a File > Notify item whose click shows a native notification, and (at startup, before
-// any agent could arm) a system Tray with a tooltip + context menu + a click handler, so the smoke proves
-// launch-time instrumentation catches the t=0 tray setup AND that native_tray_invoke fires the handler.
-// Quits when the window closes.
+// any agent could arm) a system Tray with a tooltip + context menu + a click handler AND a startup
+// Notification, so the smoke proves launch-time instrumentation catches the t=0 tray setup, fires the tray
+// handler via native_tray_invoke, AND captures the t=0 notification (tagged beforeArm). Quits when the
+// window closes.
 import { BrowserWindow, Menu, Notification, Tray, app, nativeImage } from 'electron'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -61,6 +62,14 @@ let tray
 let mainWindow
 
 app.whenReady().then(() => {
+  // A startup notification fires at t=0 — before any agent could arm capture. Launch-time instrumentation
+  // (instrumentNative) must catch it; the smoke asserts it comes back tagged beforeArm.
+  new Notification({
+    title: 'Welcome back',
+    body: 'Restored your session',
+    subtitle: 'Stagewright',
+    silent: true,
+  }).show()
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
   // The tray is created ONCE at startup — before any agent could arm a capture. Launch-time
   // instrumentation must catch it; an after-launch hook would miss it entirely.

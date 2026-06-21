@@ -151,7 +151,7 @@ const inputSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Wrap the app main entry with a fixed hook installed before it runs, so native UI created at startup (the system Tray) is readable and invokable (required for native_trays / native_tray_invoke). Off by default; runs no agent code. Requires main; executablePath-only launches cannot be instrumented. Launch transport only.',
+      'Wrap the app main entry with fixed hooks installed before it runs, so startup Tray state is readable/invokable (native_trays / native_tray_invoke) and startup notifications can be captured with beforeArm. Off by default; runs no agent code. Requires main; executablePath-only launches cannot be instrumented. Launch transport only.',
     ),
 })
 

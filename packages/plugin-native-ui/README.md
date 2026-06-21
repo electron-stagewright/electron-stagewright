@@ -61,10 +61,13 @@ Each path segment matches an item by its **label OR its role**, so role-based it
 
 - **`native_notifications_start`** `{ titleContains?, sessionId? }` — arm capture of the notifications
   the app shows (`new Notification(...).show()`), optionally narrowed to titles containing `titleContains`.
-  Notifications shown **before** arming are not captured — arm, then drive the app. Returns `{ capturing }`.
-- **`native_notifications`** `{ sessionId? }` — return the notifications shown since arming, oldest first
-  — each with `title`, `body`/`subtitle`/`silent`/`urgency` (when set), and `at` (epoch ms). The no-eval
-  way to **assert the app notified the user**. Returns `{ count, notifications }`.
+  Notifications shown **before** arming are not captured — arm, then drive the app — **unless** the session
+  was launched with `electron_launch { instrumentNative: true }`, in which case the launch shim installs
+  the same hook at t=0 and startup notifications are captured too (tagged `beforeArm`). Returns `{ capturing }`.
+- **`native_notifications`** `{ sessionId? }` — return the captured notifications, oldest first — each with
+  `title`, `body`/`subtitle`/`silent`/`urgency` (when set), `at` (epoch ms), and `beforeArm: true` for a
+  notification shown before the agent armed (a startup / t=0 notification, instrumented sessions only). The
+  no-eval way to **assert the app notified the user**. Returns `{ count, notifications }`.
 - **`native_notifications_stop`** `{ sessionId? }` — disarm (restore the original `Notification.show`) and
   return what was captured. Returns `{ count, notifications }`.
 
@@ -93,8 +96,8 @@ Each path segment matches an item by its **label OR its role**, so role-based it
 
 Error codes: `native.UNSUPPORTED` (the transport cannot access the native UI), `native.ALREADY_CAPTURING`
 (a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming), `native.NOT_INSTRUMENTED`
-(`native_trays` without `instrumentNative`). Invalid arguments (an empty menu `path` or empty
-`titleContains`, a negative tray `id`, or an unknown tray `event`) are core `BAD_ARGUMENT`.
+(`native_trays` / `native_tray_invoke` without `instrumentNative`). Invalid arguments (an empty menu `path`
+or empty `titleContains`, a negative tray `id`, or an unknown tray `event`) are core `BAD_ARGUMENT`.
 
 ## Security
 
@@ -130,13 +133,17 @@ plugin. A tray with no listener for the event is refused, not faked.
 ## Scope and limitations
 
 - **Application menu (read + invoke), notification capture, and tray (read + invoke).** This plugin
-  reads/invokes the application menu, captures shown notifications, and reads + fires tray events. The tray
-  read and invoke need `electron_launch { instrumentNative: true }` (a launch-time hook — trays are created
-  at startup with no registry). Retrofitting notification capture to t=0 is the remaining deferred surface.
-- **Notification capture is arm-then-observe.** Notifications shown before `native_notifications_start`
-  are not recorded, and only **shown** notifications (`.show()`) are captured — a constructed-but-unshown
-  notification notified no one. The hook patches the shared `Notification.prototype`, so it catches every
-  shown notification regardless of how the app referenced the class.
+  reads/invokes the application menu, captures shown notifications (including startup ones under
+  `instrumentNative`), and reads + fires tray events. The tray read/invoke and t=0 notification capture need
+  `electron_launch { instrumentNative: true }` (a launch-time hook — trays and startup notifications happen
+  before any agent could arm).
+- **Notification capture is arm-then-observe, plus optional t=0.** Without `instrumentNative`, notifications
+  shown before `native_notifications_start` are not recorded; **with** it, the launch shim installs the same
+  hook before the app's main runs, so startup notifications are captured and tagged `beforeArm`. Only
+  **shown** notifications (`.show()`) are captured — a constructed-but-unshown notification notified no one.
+  The hook patches the shared `Notification.prototype`, so it catches every shown notification regardless of
+  how the app referenced the class. Under a `titleContains` filter the buffer records all and filters at
+  read, so on a very noisy app a matching startup notification could be evicted past the 1000 cap before the read.
 - **Playwright launch transport only.** The application menu lives in the Electron main-process Node
   context; only the Playwright transport reaches it (`electronApp.evaluate`). A CDP attach session
   evaluates against the browser target, which has no Electron `Menu` module, so it returns

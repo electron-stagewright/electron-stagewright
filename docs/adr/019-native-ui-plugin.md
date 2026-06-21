@@ -1,6 +1,6 @@
 # ADR-019: Native UI plugin via a transport native-UI seam
 
-Status: Accepted (application-menu read + invoke, notification capture, and tray read + event invocation on the Playwright transport)
+Status: Accepted (application-menu read + invoke, notification capture incl. startup/t=0, and tray read + event invocation on the Playwright transport)
 
 ## Context
 
@@ -135,8 +135,8 @@ simulating a keyboard accelerator. The decision holds the seam's shape:
   (press the accelerator instead), `submenu` (descend, don't invoke), `separator`, or `no_handler`. On
   success the resolved `label`/`role` are echoed so the agent confirms which item fired.
 
-Menu invocation flips the native-UI surface from read-only to read+act. Tray capture and a broader
-native-action surface remain deferred follow-ups.
+Menu invocation flips the native-UI surface from read-only to read+act. Tray read/invoke and startup
+notification capture follow in later Status Updates below.
 
 ## Status Update — 2026-06-19: notification capture (a native-event capture model)
 
@@ -164,11 +164,12 @@ plugins): `native.ALREADY_CAPTURING` / `native.NOT_CAPTURING` gate the lifecycle
   IPC plugin's arbitrary main-process interaction (which IS eval-gated). So capture rides the same
   `canAccessNativeUI` capability, not the eval opt-in, consistent with the menu read/invoke. The security
   model gains a native-event-capture row.
-- **Limitation, documented.** Notifications shown before the capture is armed are not recorded (arm,
-  then drive the app) — the same arm-then-observe contract as network capture.
+- **Limitation, documented.** Without launch-time instrumentation, notifications shown before the capture
+  is armed are not recorded (arm, then drive the app) — the same arm-then-observe contract as network
+  capture. A later Status Update adds startup notification capture when the session is launched with
+  `instrumentNative`.
 
-Tray read is now covered by the status update below; tray event capture remains the deferred native-UI
-follow-up.
+Tray read/invoke and startup notification capture are covered by the Status Updates below.
 
 ## Status Update — 2026-06-19: system-tray read (on launch-time instrumentation)
 
@@ -214,5 +215,28 @@ finds the tray by id, synthesizes the `(event, bounds, position)` arguments a re
   and CDP/injector reject `NOT_IMPLEMENTED`. **Not `--allow-eval` gated** — the agent supplies a tray id +
   an event name, not code.
 
-Retrofitting notification capture to install at t=0 (so it catches notifications shown before any arm)
-is the remaining native-UI follow-up on the same launch-time-instrumentation foundation.
+## Status Update — 2026-06-20: notification capture at t=0 (startup notifications)
+
+Notification capture was arm-then-observe: the hook patched `Notification.prototype.show` only AFTER launch,
+so a notification the app fires at startup (`app.whenReady()`) was gone before the agent could arm. This
+retrofit catches it, on the same launch-time instrumentation as the tray hook (ADR-020). When a session is
+launched with `instrumentNative`, the shim installs a second fixed hook (`NOTIFICATION_HOOK_BODY`) BEFORE
+the app's main runs, so every shown notification is buffered from t=0. The plugin API is unchanged — the
+agent still arms, drives, and reads — but on an instrumented session the read now includes the startup
+notifications too.
+
+- **Adopt-or-install.** `startNotificationCapture` adopts the launch-installed buffer when it exists (sets
+  the filter, snapshots the arm point, never re-patches or resets it — preserving the t=0 records),
+  otherwise installs the hook inline (the non-instrumented path, whose arm-then-observe behaviour is
+  unchanged). The launch hook records
+  UNFILTERED (the `titleContains` filter is unknown at t=0), so the filter applies at READ time, uniformly
+  over pre-arm and post-arm records.
+- **`beforeArm` marker.** Each record carries an internal monotonic sequence; the read tags a notification
+  shown before the arm point with `beforeArm: true`, so the agent can tell "the app notified at startup"
+  apart from "the app notified in response to what I did". The internal sequence never crosses the wire.
+- **Documented trade-off.** Because the launch hook records all shown notifications and filters at read,
+  the bounded buffer holds non-matching entries too; under a `titleContains` filter on a very noisy app,
+  matching startup notifications could be evicted past the cap before the read. Acceptable for the common
+  assert-a-startup-notification case; the cap mirrors the network capture.
+- **Still not `--allow-eval` gated** (the agent supplies arm/read/stop, no code); CDP/injector are
+  unaffected (they have no launch hook and capture nothing). This closes the native-UI follow-up set.

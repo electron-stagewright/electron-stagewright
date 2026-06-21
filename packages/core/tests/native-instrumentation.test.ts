@@ -1,9 +1,9 @@
 /**
- * Launch-time native instrumentation (ADR-020) — unit tests for the shim builder and, above all, the
- * tray-hook body. The hook body is exported as a string so it can be run here via `new Function` against
- * a FAKE electron module (no real Electron): we patch a fake `Tray`, construct + configure trays, and
- * assert the registry the real shim would expose. The shim source's shape (the real-main import) is
- * checked directly; the real launch path is the gated real-Electron smoke.
+ * Launch-time native instrumentation (ADR-020) — unit tests for the shim builder and the hook bodies (the
+ * tray hook and the notification hook). Each hook body is exported as a string so it can be run here via
+ * `new Function` against a FAKE electron module (no real Electron): we patch a fake `Tray` / `Notification`,
+ * drive it, and assert the registry/buffer the real shim would expose. The shim source's shape (both hooks
+ * before the real-main import) is checked directly; the real launch path is the gated real-Electron smoke.
  */
 
 import { pathToFileURL } from 'node:url'
@@ -11,6 +11,8 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  NOTIFICATION_HOOK_BODY,
+  NOTIFICATION_REGISTRY_GLOBAL,
   TRAY_HOOK_BODY,
   TRAY_REGISTRY_GLOBAL,
   buildInstrumentationShim,
@@ -45,14 +47,46 @@ function registry(host: Record<string, unknown>): Array<{ rec: Record<string, un
   return host[TRAY_REGISTRY_GLOBAL] as Array<{ rec: Record<string, unknown> }>
 }
 
+/** Run the notification hook body against a fake electron + host, returning both for assertions. */
+function installNotificationHook(): {
+  electron: { Notification: unknown }
+  host: Record<string, unknown>
+  FakeNotification: new (opts?: Record<string, unknown>) => { show: () => void }
+  shown: string[]
+} {
+  const shown: string[] = []
+  class FakeNotification {
+    [key: string]: unknown
+    constructor(opts?: Record<string, unknown>) {
+      Object.assign(this, opts ?? {})
+    }
+    show(): void {
+      shown.push(String((this as { title?: unknown }).title))
+    }
+  }
+  const electron: { Notification: unknown } = { Notification: FakeNotification }
+  const host: Record<string, unknown> = {}
+  // NOTIFICATION_HOOK_BODY is a compile-time constant (no interpolation) — safe to run here.
+  new Function('electron', 'host', NOTIFICATION_HOOK_BODY)(electron, host)
+  return { electron, host, FakeNotification, shown }
+}
+
+function captureBuffer(host: Record<string, unknown>): Array<Record<string, unknown>> {
+  return (
+    (host[NOTIFICATION_REGISTRY_GLOBAL] as { buffer?: Array<Record<string, unknown>> }).buffer ?? []
+  )
+}
+
 describe('buildInstrumentationShim', () => {
-  it('embeds the real main as a file URL and imports it after the hook', () => {
+  it('embeds the real main as a file URL and imports it after BOTH hooks', () => {
     const shim = buildInstrumentationShim('/abs/app/main.js')
     expect(shim).toContain(JSON.stringify(pathToFileURL('/abs/app/main.js').href))
     expect(shim).toContain(`import(`)
     expect(shim).toContain(TRAY_REGISTRY_GLOBAL)
-    // The hook runs before the real main is imported.
+    expect(shim).toContain(NOTIFICATION_REGISTRY_GLOBAL)
+    // Both hooks run before the real main is imported.
     expect(shim.indexOf(TRAY_REGISTRY_GLOBAL)).toBeLessThan(shim.lastIndexOf('import('))
+    expect(shim.indexOf(NOTIFICATION_REGISTRY_GLOBAL)).toBeLessThan(shim.lastIndexOf('import('))
   })
 
   it('JSON-escapes the path into a string literal (no break-out)', () => {
@@ -141,5 +175,63 @@ describe('TRAY_HOOK_BODY (run against a fake electron)', () => {
     ;(tray['setToolTip'] as (t: string) => void).call(tray, 'T')
     const recs = registry(host).map((e) => e.rec)
     expect(JSON.parse(JSON.stringify(recs))).toEqual(recs)
+  })
+})
+
+describe('NOTIFICATION_HOOK_BODY (run against a fake electron)', () => {
+  it('records each shown notification (data fields + a monotonic _seq) and still runs the original show', () => {
+    const { electron, host, shown } = installNotificationHook()
+    const Notification = electron.Notification as new (opts?: Record<string, unknown>) => {
+      show: () => void
+    }
+    new Notification({ title: 'Saved', body: 'All changes saved', silent: false }).show()
+    new Notification({ title: 'Hi' }).show()
+    expect(shown).toEqual(['Saved', 'Hi']) // the original show still fired
+
+    const buffer = captureBuffer(host)
+    expect(buffer).toHaveLength(2)
+    expect(buffer[0]).toMatchObject({
+      title: 'Saved',
+      body: 'All changes saved',
+      silent: false,
+      _seq: 0,
+    })
+    expect(typeof buffer[0]?.['at']).toBe('number')
+    expect(buffer[1]).toMatchObject({ title: 'Hi', _seq: 1 })
+    expect(buffer[1]).not.toHaveProperty('body') // an absent field is omitted, not null
+  })
+
+  it('records via a reference captured BEFORE the hook ran (prototype patch)', () => {
+    const { FakeNotification, host } = installNotificationHook()
+    // Simulate `const { Notification } = require('electron')` at app import — a reference taken before the
+    // hook installed. A prototype patch (not a constructor swap) still catches its `.show()`.
+    const Destructured = FakeNotification
+    new Destructured({ title: 'ViaRef' }).show()
+    expect(captureBuffer(host).map((r) => r['title'])).toEqual(['ViaRef'])
+  })
+
+  it('is idempotent — a second install is a no-op (never resets the buffer)', () => {
+    const { electron, host } = installNotificationHook()
+    const Notification = electron.Notification as new (opts?: Record<string, unknown>) => {
+      show: () => void
+    }
+    new Notification({ title: 'First' }).show()
+    // Re-running the hook against the same host (e.g. the shim then a redundant install) must no-op.
+    new Function('electron', 'host', NOTIFICATION_HOOK_BODY)(electron, host)
+    new Notification({ title: 'Second' }).show()
+    expect(captureBuffer(host).map((r) => r['title'])).toEqual(['First', 'Second'])
+  })
+
+  it('bounds the buffer at the cap, dropping the oldest', () => {
+    const { electron, host } = installNotificationHook()
+    const Notification = electron.Notification as new (opts?: Record<string, unknown>) => {
+      show: () => void
+    }
+    const CAP = 1000
+    for (let i = 0; i < CAP + 5; i += 1) new Notification({ title: `n${i}` }).show()
+    const buffer = captureBuffer(host)
+    expect(buffer).toHaveLength(CAP)
+    expect(buffer[0]?.['title']).toBe('n5') // the 5 oldest were dropped
+    expect(buffer[buffer.length - 1]?.['title']).toBe(`n${CAP + 4}`)
   })
 })

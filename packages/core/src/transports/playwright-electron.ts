@@ -36,7 +36,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { StagewrightError } from '../errors/registry.js'
-import { TRAY_REGISTRY_GLOBAL, buildInstrumentationShim } from './native-instrumentation.js'
+import {
+  NOTIFICATION_REGISTRY_GLOBAL,
+  TRAY_REGISTRY_GLOBAL,
+  buildInstrumentationShim,
+} from './native-instrumentation.js'
 import type {
   EvalPayload,
   PWConsoleMessage,
@@ -1071,101 +1075,147 @@ class PlaywrightSession implements TransportSession {
   async startNotificationCapture(filter?: NotificationCaptureFilter): Promise<void> {
     const app = this.requireRunning()
     const titleContains = filter?.titleContains
-    // Patch Notification.prototype.show (NOT the constructor) in the main process: every instance shares
-    // the prototype, so this catches every shown notification regardless of how the app referenced the
-    // class (it survives `const { Notification } = require('electron')`). The hook + buffer live on a
-    // main-process global so a later capturedNotifications/stop can reach them. Self-contained (B5).
+    // Adopt-or-install. When the session was launched with `instrumentNative`, the launch shim already
+    // installed the notification hook at t=0 (so startup notifications are already buffered) — arming just
+    // ADOPTS that state: it sets the read-time filter, snapshots `armedSeq` (records before it are t=0 /
+    // beforeArm), re-activates, and NEVER re-patches or resets the buffer. Otherwise it installs the hook
+    // inline now. The inline installer MUST mirror NOTIFICATION_HOOK_BODY's record shape exactly (same
+    // fields, same `_seq`/`needle`/`armedSeq`/`active` state) so `capturedNotifications` reads either path
+    // identically — keep the two in sync. Self-contained (B5); records UNFILTERED (the filter applies at
+    // read time). A prototype patch (not a constructor swap) survives `const { Notification } = require(...)`.
     await app.evaluate<void>(
       (electron, payload) => {
-        const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
-          .Notification?.prototype
-        if (proto === undefined || typeof proto['show'] !== 'function') return
+        const arg = payload?.arg as { key?: string; titleContains?: unknown } | undefined
+        const key = arg?.key ?? ''
         const g = globalThis as unknown as Record<string, unknown>
-        const KEY = '__stagewright_notificationCapture'
-        if (g[KEY] !== undefined) return
-        const arg = payload?.arg as { titleContains?: unknown } | undefined
-        const needle = typeof arg?.titleContains === 'string' ? arg.titleContains : undefined
-        interface Rec {
-          title: string
-          body?: string
-          subtitle?: string
-          silent?: boolean
-          urgency?: 'normal' | 'critical' | 'low'
-          at: number
-        }
-        // Bound the buffer so a notification-spamming app cannot grow main-process memory without limit
-        // (mirrors the network capture's ring buffer); past the cap the OLDEST entries are dropped.
-        const CAP = 1000
-        const buffer: Rec[] = []
-        const origShow = proto['show'] as (...args: unknown[]) => unknown
-        const state: {
-          buffer: Rec[]
-          origShow: (...args: unknown[]) => unknown
-          patchedShow?: (...args: unknown[]) => unknown
-          active: boolean
-        } = { buffer, origShow, active: true }
-        const patchedShow = function (this: Record<string, unknown>, ...args: unknown[]): unknown {
-          const result = origShow.apply(this, args)
-          if (!state.active) return result
-          try {
-            const title = typeof this['title'] === 'string' ? (this['title'] as string) : ''
-            if (needle === undefined || title.includes(needle)) {
-              const rec: Rec = { title, at: Date.now() }
-              if (typeof this['body'] === 'string' && this['body'] !== '')
-                rec.body = this['body'] as string
-              if (typeof this['subtitle'] === 'string' && this['subtitle'] !== '')
-                rec.subtitle = this['subtitle'] as string
-              if (typeof this['silent'] === 'boolean') rec.silent = this['silent'] as boolean
-              const u = this['urgency']
-              if (u === 'normal' || u === 'critical' || u === 'low') rec.urgency = u
-              buffer.push(rec)
-              if (buffer.length > CAP) buffer.shift()
+        if (g[key] === undefined) {
+          const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
+            .Notification?.prototype
+          if (proto !== undefined && typeof proto['show'] === 'function') {
+            const CAP = 1000
+            const buffer: Array<Record<string, unknown>> = []
+            const origShow = proto['show'] as (...args: unknown[]) => unknown
+            const st: {
+              buffer: Array<Record<string, unknown>>
+              origShow: (...args: unknown[]) => unknown
+              patchedShow?: (...args: unknown[]) => unknown
+              active: boolean
+              needle?: string
+              nextSeq: number
+              armedSeq?: number
+            } = { buffer, origShow, active: true, nextSeq: 0 }
+            const patchedShow = function (this: Record<string, unknown>, ...a: unknown[]): unknown {
+              const result = origShow.apply(this, a)
+              if (!st.active) return result
+              try {
+                const title = typeof this['title'] === 'string' ? (this['title'] as string) : ''
+                const rec: Record<string, unknown> = { title, at: Date.now(), _seq: st.nextSeq++ }
+                if (typeof this['body'] === 'string' && this['body'] !== '')
+                  rec['body'] = this['body']
+                if (typeof this['subtitle'] === 'string' && this['subtitle'] !== '')
+                  rec['subtitle'] = this['subtitle']
+                if (typeof this['silent'] === 'boolean') rec['silent'] = this['silent']
+                const u = this['urgency']
+                if (u === 'normal' || u === 'critical' || u === 'low') rec['urgency'] = u
+                buffer.push(rec)
+                if (buffer.length > CAP) buffer.shift()
+              } catch {
+                // Recording must never break the app's own notification.
+              }
+              return result
             }
-          } catch {
-            // Recording must never break the app's own notification.
+            st.patchedShow = patchedShow
+            proto['show'] = patchedShow
+            g[key] = st
           }
-          return result
         }
-        state.patchedShow = patchedShow
-        proto['show'] = patchedShow
-        g[KEY] = state
+        const state = g[key] as
+          | { needle?: unknown; active?: boolean; nextSeq?: number; armedSeq?: number }
+          | undefined
+        if (state !== undefined) {
+          state.needle = typeof arg?.titleContains === 'string' ? arg.titleContains : undefined
+          state.active = true
+          state.armedSeq = typeof state.nextSeq === 'number' ? state.nextSeq : 0
+        }
       },
-      { body: '', arg: { titleContains } },
+      { body: '', arg: { key: NOTIFICATION_REGISTRY_GLOBAL, titleContains } },
     )
   }
 
   async capturedNotifications(): Promise<readonly NativeNotification[]> {
     const app = this.requireRunning()
-    return app.evaluate<NativeNotification[]>(() => {
-      const g = globalThis as unknown as Record<string, unknown>
-      const state = g['__stagewright_notificationCapture'] as { buffer?: unknown } | undefined
-      const buffer = state?.buffer
-      return Array.isArray(buffer) ? (buffer.slice() as NativeNotification[]) : []
-    })
+    return app.evaluate<NativeNotification[]>(
+      (_electron, payload) => {
+        const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
+        const state = (globalThis as unknown as Record<string, unknown>)[key] as
+          | { buffer?: unknown; needle?: unknown; armedSeq?: unknown }
+          | undefined
+        const buffer = state?.buffer
+        if (!Array.isArray(buffer)) return []
+        // The hook records UNFILTERED; apply `titleContains` here so pre-arm (t=0) and post-arm records
+        // filter uniformly. Rebuild each output object (the internal `_seq` never crosses the wire) and tag
+        // a record shown before the arm snapshot as `beforeArm`.
+        const needle = typeof state?.needle === 'string' ? (state.needle as string) : undefined
+        const armedSeq =
+          typeof state?.armedSeq === 'number' ? (state.armedSeq as number) : undefined
+        const out: NativeNotification[] = []
+        for (const raw of buffer as Array<Record<string, unknown>>) {
+          const title = typeof raw['title'] === 'string' ? (raw['title'] as string) : ''
+          if (needle !== undefined && !title.includes(needle)) continue
+          const rec: Record<string, unknown> = {
+            title,
+            at: typeof raw['at'] === 'number' ? raw['at'] : 0,
+          }
+          // Mirror the recorders' emptiness guard so the reader stays in sync with the record shape.
+          if (typeof raw['body'] === 'string' && raw['body'] !== '') rec['body'] = raw['body']
+          if (typeof raw['subtitle'] === 'string' && raw['subtitle'] !== '')
+            rec['subtitle'] = raw['subtitle']
+          if (typeof raw['silent'] === 'boolean') rec['silent'] = raw['silent']
+          const u = raw['urgency']
+          if (u === 'normal' || u === 'critical' || u === 'low') rec['urgency'] = u
+          if (
+            armedSeq !== undefined &&
+            typeof raw['_seq'] === 'number' &&
+            (raw['_seq'] as number) < armedSeq
+          ) {
+            rec['beforeArm'] = true
+          }
+          out.push(rec as unknown as NativeNotification)
+        }
+        return out
+      },
+      { body: '', arg: { key: NOTIFICATION_REGISTRY_GLOBAL } },
+    )
   }
 
   async stopNotificationCapture(): Promise<void> {
     const app = this.requireRunning()
-    await app.evaluate<void>((electron) => {
-      const g = globalThis as unknown as Record<string, unknown>
-      const KEY = '__stagewright_notificationCapture'
-      const state = g[KEY] as
-        | { origShow?: unknown; patchedShow?: unknown; active?: boolean }
-        | undefined
-      if (state === undefined) return
-      state.active = false
-      const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
-        .Notification?.prototype
-      if (
-        proto !== undefined &&
-        typeof state.origShow === 'function' &&
-        typeof state.patchedShow === 'function' &&
-        proto['show'] === state.patchedShow
-      ) {
-        proto['show'] = state.origShow
-      }
-      delete g[KEY]
-    })
+    await app.evaluate<void>(
+      (electron, payload) => {
+        const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
+        const g = globalThis as unknown as Record<string, unknown>
+        const state = g[key] as
+          | { origShow?: unknown; patchedShow?: unknown; active?: boolean }
+          | undefined
+        if (state === undefined) return
+        state.active = false
+        // Restore the original show only when it is still OUR patch (never clobber a later app patch
+        // stacked on top), then drop the buffer. On an instrumented session this also tears down the
+        // launch-installed t=0 hook — a subsequent re-arm installs fresh (t=0 is already past).
+        const proto = (electron as { Notification?: { prototype?: Record<string, unknown> } })
+          .Notification?.prototype
+        if (
+          proto !== undefined &&
+          typeof state.origShow === 'function' &&
+          typeof state.patchedShow === 'function' &&
+          proto['show'] === state.patchedShow
+        ) {
+          proto['show'] = state.origShow
+        }
+        delete g[key]
+      },
+      { body: '', arg: { key: NOTIFICATION_REGISTRY_GLOBAL } },
+    )
   }
 
   // --- Native trays: read the launch-time instrumentation registry (ADR-020). ---

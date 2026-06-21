@@ -40,6 +40,7 @@ import type {
   PWRoute,
 } from '../src/transports/playwright-electron-api.js'
 import { buildPlaywrightLaunchOptions } from '../src/transports/playwright-electron.js'
+import { NOTIFICATION_HOOK_BODY } from '../src/transports/native-instrumentation.js'
 import {
   bodyContentTypeAllowed,
   captureBodyField,
@@ -2159,6 +2160,51 @@ describe('PlaywrightSession notification capture', () => {
     await expect(session.startNotificationCapture()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.capturedNotifications()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
     await expect(session.stopNotificationCapture()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+
+  // Simulate the launch shim installing the t=0 notification hook (the fake app never runs the real shim).
+  function installLaunchNotificationHook(FakeNotification: unknown): void {
+    new Function('electron', 'host', NOTIFICATION_HOOK_BODY)(
+      { Notification: FakeNotification },
+      globalThis,
+    )
+  }
+
+  it('captures a notification shown BEFORE arming on an instrumented session (t=0), tagging it beforeArm', async () => {
+    const { session, FakeNotification } = await launchWithNotifications()
+    installLaunchNotificationHook(FakeNotification) // the launch shim's t=0 hook
+    // A startup notification fires before the agent could arm.
+    new FakeNotification({ title: 'Startup', body: 'Restored your session' }).show()
+    // The agent arms (ADOPTS the t=0 buffer, does not reset it) and the app shows another.
+    await session.startNotificationCapture()
+    new FakeNotification({ title: 'Later' }).show()
+
+    const caught = await session.capturedNotifications()
+    expect(caught.map((n) => n.title)).toEqual(['Startup', 'Later'])
+    expect(caught[0]).toMatchObject({
+      title: 'Startup',
+      body: 'Restored your session',
+      beforeArm: true,
+    })
+    expect(caught[1]).toMatchObject({ title: 'Later' })
+    expect(caught[1]).not.toHaveProperty('beforeArm') // shown after arming
+    expect(caught[0]).not.toHaveProperty('_seq') // the internal sequence never crosses the wire
+    expect(JSON.parse(JSON.stringify(caught))).toEqual(caught) // wire-serialisable
+  })
+
+  it('applies the titleContains filter at read time across pre-arm and post-arm records', async () => {
+    const { session, FakeNotification } = await launchWithNotifications()
+    installLaunchNotificationHook(FakeNotification)
+    new FakeNotification({ title: 'Saved at startup' }).show()
+    new FakeNotification({ title: 'Error at startup' }).show()
+    await session.startNotificationCapture({ titleContains: 'Saved' })
+    new FakeNotification({ title: 'Saved again' }).show()
+    new FakeNotification({ title: 'Error again' }).show()
+    // The launch hook records ALL; the filter applies at read, uniformly over pre-arm and post-arm records.
+    expect((await session.capturedNotifications()).map((n) => n.title)).toEqual([
+      'Saved at startup',
+      'Saved again',
+    ])
   })
 })
 
