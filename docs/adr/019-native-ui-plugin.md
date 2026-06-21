@@ -1,6 +1,6 @@
 # ADR-019: Native UI plugin via a transport native-UI seam
 
-Status: Accepted (application-menu read + invoke, notification capture, and tray read on the Playwright transport; tray event capture deferred)
+Status: Accepted (application-menu read + invoke, notification capture, and tray read + event invocation on the Playwright transport)
 
 ## Context
 
@@ -188,5 +188,31 @@ context-menu invocation has a handle.
 - **Not `--allow-eval` gated.** The hook is a fixed transport-owned source (ADR-020), the agent supplies
   nothing executable, and the read returns only UI state.
 
-Tray _event_ capture (click / right-click) and retrofitting notification capture to install at t=0 (so it
-catches notifications shown before any arm) are the remaining native-UI follow-ups on the same foundation.
+## Status Update — 2026-06-20: tray event invocation (tray read → read+act)
+
+The tray surface gains its act half, mirroring how menu read grew a menu invoke. The seam gains
+`TransportSession.invokeTrayEvent(id, event)` + a `native_tray_invoke { id, event }` tool (plugin
+0.4.0 → 0.5.0): name a tray by the `id` from `native_trays` and fire a `click` / `right-click` /
+`double-click` (or a platform `mouse-*` / `balloon-click`) event so the app's own `tray.on(event, …)`
+handler runs — the deterministic way to drive tray behaviour without a real mouse. It rides the same
+launch-time instrumentation registry (ADR-020), which already holds the live `Tray` instance next to its
+serialised record, so the invoke is a pure addition: a fixed self-contained `electronApp.evaluate` body
+finds the tray by id, synthesizes the `(event, bounds, position)` arguments a real tray click carries
+(using the tray's own `getBounds()` when available), and `emit`s on the live instance.
+
+- **Honest about Electron's behaviour**, like menu invoke. A tray with no listener for the event is
+  refused with `{ emitted: false, reason: 'no_listener' }` rather than reported as a successful fire (the
+  tray analog of menu `no_handler`); an unknown / destroyed id is `not_found`. A throwing app handler is
+  re-surfaced as a clean error, not a raw stack. Firing `right-click` runs the app's handler but does NOT
+  reproduce the native side effect of auto-opening the tray's context menu — documented on the tool.
+- **One-call effect read.** On success the result echoes the resolved `id` + `event` and includes the
+  tray read back AFTER the handler ran (`tray`), so a handler that mutated its own tray — e.g. toggled the
+  tooltip — is observable without a second `native_trays` call. If the handler destroys the tray, the
+  read-back is `null` rather than a stale pre-destroy record.
+- **Requires `instrumentNative`** and is gated on the same `canAccessNativeUI` capability; `invokeTrayEvent`
+  resolves `null` when the session was not instrumented (the plugin surfaces `native.NOT_INSTRUMENTED`),
+  and CDP/injector reject `NOT_IMPLEMENTED`. **Not `--allow-eval` gated** — the agent supplies a tray id +
+  an event name, not code.
+
+Retrofitting notification capture to install at t=0 (so it catches notifications shown before any arm)
+is the remaining native-UI follow-up on the same launch-time-instrumentation foundation.

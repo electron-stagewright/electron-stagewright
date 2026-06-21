@@ -456,4 +456,9 @@ transport, the transport wraps the app's main entry with a fixed hook installed 
 native UI created at startup (the system `Tray`) is observable — see ADR-020 for the mechanism and threat
 reasoning. It requires a `main`/`appPath` entry (executablePath-only launches cannot be wrapped). It is a
 launch-transport-only opt-in; CDP/injector cannot wrap a running app's entry, so the consuming seam
-(`getTrays`) rejects `NOT_IMPLEMENTED` there.
+(`getTrays` and `invokeTrayEvent`) rejects `NOT_IMPLEMENTED` there.
+
+The native-UI seam also gains `invokeTrayEvent(id, event)` (the tray analog of `invokeApplicationMenuItem`,
+returning a `TrayInvokeResult`): it acts on the same launch-time tray registry, so like `getTrays` it
+resolves `null` on a session launched without `instrumentNative` and is Playwright-only (CDP/injector
+reject `NOT_IMPLEMENTED`). See ADR-019's tray-invocation Status Update.

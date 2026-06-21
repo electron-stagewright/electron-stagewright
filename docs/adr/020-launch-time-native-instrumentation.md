@@ -1,6 +1,6 @@
 # ADR-020: Launch-time native instrumentation
 
-Status: Accepted (Playwright transport; opt-in; first consumer is tray read, ADR-019)
+Status: Accepted (Playwright transport; opt-in; tray read + event invocation consumers, ADR-019)
 
 ## Context
 
@@ -48,8 +48,8 @@ best-effort).
   a file Electron runs — never `eval`/`new Function`. The agent supplies nothing executable. So this is
   NOT an `--allow-eval` surface; it is a launch-mechanism opt-in.
 - **Launch transport only.** Only the Playwright launch path owns the app's entry. The CDP attach and
-  injector transports cannot wrap a main that is already running, so consumers of the registry (`getTrays`)
-  reject `NOT_IMPLEMENTED` there.
+  injector transports cannot wrap a main that is already running, so consumers of the registry (`getTrays`
+  and `invokeTrayEvent`) reject `NOT_IMPLEMENTED` there.
 
 ## Rationale
 
@@ -76,10 +76,12 @@ best-effort).
 ## Consequences
 
 - `LaunchOptions.instrumentNative` + the `electron_launch` `instrumentNative` input; `TransportSession`
-  gains `getTrays(): Promise<readonly NativeTray[] | null>` — `null` distinctly signals a session launched
-  WITHOUT instrumentation (the plugin maps it to `native.NOT_INSTRUMENTED`), `[]` means instrumented with
-  no tray, otherwise the trays. `instrumentNative` requires a `main` entry; executablePath-only launches
-  cannot be wrapped. CDP/injector reject `NOT_IMPLEMENTED`.
+  gains `getTrays(): Promise<readonly NativeTray[] | null>` and
+  `invokeTrayEvent(id, event): Promise<TrayInvokeResult | null>` — `null` distinctly signals a session
+  launched WITHOUT instrumentation (the plugin maps it to `native.NOT_INSTRUMENTED`), `[]` means
+  instrumented with no tray, and an invoke result reports whether the tray handler ran. `instrumentNative`
+  requires a `main` entry; executablePath-only launches cannot be wrapped. CDP/injector reject
+  `NOT_IMPLEMENTED`.
 - New `packages/core/src/transports/native-instrumentation.ts` — `buildInstrumentationShim(realMain)` and
   the exported `TRAY_HOOK_BODY` / `TRAY_REGISTRY_GLOBAL`. The shim writer + temp-dir cleanup live in the
   Playwright transport.
@@ -88,18 +90,19 @@ best-effort).
   `process.argv[1]` would observe the shim path; documented.
 - **Security model** gains a row: the server wraps the app's main entry only on `instrumentNative` opt-in,
   runs a fixed hook (no agent code), and removes the shim on stop.
-- This is the foundation tray read (ADR-019) builds on; retrofitting notification capture to t=0 and tray
-  event capture are clean follow-ups on the same mechanism.
+- This is the foundation tray read + event invocation (ADR-019) builds on; retrofitting notification
+  capture to t=0 remains a clean follow-up on the same mechanism.
 
 ## Related decisions
 
 - ADR-003 (transport abstraction) — `LaunchOptions` gains `instrumentNative`.
-- ADR-019 (native UI plugin) — the first consumer (`getTrays` + `native_trays`), amended with a Status
-  Update.
+- ADR-019 (native UI plugin) — the consumers (`getTrays` / `native_trays` and `invokeTrayEvent` /
+  `native_tray_invoke`), amended with Status Updates.
 - ADR-014 (security posture) — the launch-surface threat model this opt-in extends.
 
 ## References
 
 - `packages/core/src/transports/native-instrumentation.ts` — the shim builder + the tray-hook body.
-- `packages/core/src/transports/playwright-electron.ts` — the shim writer, `getTrays`, temp cleanup.
+- `packages/core/src/transports/playwright-electron.ts` — the shim writer, `getTrays`,
+  `invokeTrayEvent`, temp cleanup.
 - `packages/core/tests/native-instrumentation.test.ts` — the hook body run against a fake electron module.

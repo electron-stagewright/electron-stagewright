@@ -22,8 +22,8 @@
  *   freeze / advance / resume); the clock seam's first consumer (the clock plugin, ADR-017).
  * - `canAccessStorage: true` — cookies + the storage snapshot via the page `BrowserContext` (the
  *   storage seam, ADR-018).
- * - `canAccessNativeUI: true` — read and invoke the application menu via `electronApp.evaluate` over
- *   `Menu.getApplicationMenu()` (the native-UI seam, ADR-019).
+ * - `canAccessNativeUI: true` — read/invoke native UI (application menu, notification capture, and
+ *   launch-time tray read + event invocation) via the transport-owned native-UI seam (ADR-019/020).
  * - `supportsMainEval: true` — `electronApp.evaluate()`.
  * - `supportsRendererEval: true` — `page.evaluate()`.
  *
@@ -105,6 +105,8 @@ import type {
   TransportCapabilities,
   TransportId,
   TransportSession,
+  TrayEventName,
+  TrayInvokeResult,
   WindowDescriptor,
   WindowRef,
 } from './types.js'
@@ -1184,6 +1186,76 @@ class PlaywrightSession implements TransportSession {
           .filter((rec): rec is NativeTray => rec !== null && typeof rec === 'object')
       },
       { body: '', arg: { key: TRAY_REGISTRY_GLOBAL } },
+    )
+  }
+
+  async invokeTrayEvent(id: number, event: TrayEventName): Promise<TrayInvokeResult | null> {
+    const app = this.requireRunning()
+    // Like getTrays, an uninstrumented session has no tray registry to act on -> null (the plugin maps
+    // null to native.NOT_INSTRUMENTED).
+    if (!this.instrumented) return null
+    // The body runs in the Electron MAIN process via electronApp.evaluate and MUST be self-contained (B5,
+    // no closure refs). It finds the live Tray by its registry id, refuses when the tray is gone or has no
+    // listener for the event, synthesizes the (event, bounds, position) args a real tray click carries,
+    // then emits — re-surfacing a throwing app handler as a clean error rather than a raw stack.
+    return app.evaluate<TrayInvokeResult>(
+      (_electron, payload) => {
+        const arg = payload?.arg as { key?: string; id?: number; event?: string } | undefined
+        const key = arg?.key ?? ''
+        const targetId = arg?.id
+        const eventName = arg?.event ?? ''
+        if (typeof targetId !== 'number') return { emitted: false, reason: 'not_found' }
+        const registry = (globalThis as unknown as Record<string, unknown>)[key]
+        if (!Array.isArray(registry)) return { emitted: false, reason: 'not_found' }
+        const entry = registry.find(
+          (e) => (e as { rec?: { id?: unknown } }).rec?.id === targetId,
+        ) as { inst?: unknown; rec?: unknown } | undefined
+        if (entry === undefined || entry.inst === null || typeof entry.inst !== 'object') {
+          return { emitted: false, reason: 'not_found' }
+        }
+        const inst = entry.inst as {
+          emit?: (event: string, ...args: unknown[]) => boolean
+          listenerCount?: (event: string) => number
+          getBounds?: () => unknown
+        }
+        if (typeof inst.emit !== 'function') return { emitted: false, reason: 'not_found' }
+        // Use the tray's real bounds when available so a handler that positions a popup/window at the tray
+        // behaves faithfully; getBounds can throw on a destroyed tray / headless platform, so fall back.
+        let bounds: unknown = { x: 0, y: 0, width: 0, height: 0 }
+        try {
+          if (typeof inst.getBounds === 'function') {
+            const b = inst.getBounds()
+            if (b !== null && typeof b === 'object') bounds = b
+          }
+        } catch {
+          // Fall back to zero bounds.
+        }
+        // EventEmitter.emit returns true iff the event had listeners — the honest source of truth for "did
+        // the app's handler run?". A false return means the tray registered no handler for this event, so
+        // the fire was inert: report no_listener rather than claim a successful fire (the tray analog of
+        // menu no_handler). Our event set never includes 'error', so emit-with-no-listeners is a safe no-op
+        // (it does not throw). A throwing handler is re-surfaced as a clean error, not a raw app stack.
+        let hadListeners: boolean
+        try {
+          hadListeners = inst.emit(eventName, {}, bounds, { x: 0, y: 0 }) === true
+        } catch (err) {
+          throw new Error(
+            'tray handler threw: ' + (err instanceof Error ? err.message : String(err)),
+          )
+        }
+        if (!hadListeners) return { emitted: false, reason: 'no_listener' }
+        // Read the tray's record back AFTER the handler ran (the setter patches keep `rec` current), so a
+        // handler that mutated its own tray is observable in one call. Re-find the registry entry instead
+        // of using the pre-emit reference: the handler might have called tray.destroy(), which removes the
+        // entry and should be reported as `tray: null` rather than a stale pre-destroy record.
+        const afterEntry = registry.find(
+          (e) => (e as { rec?: { id?: unknown } }).rec?.id === targetId,
+        ) as { rec?: unknown } | undefined
+        const rec = afterEntry?.rec
+        const tray = rec !== null && typeof rec === 'object' ? (rec as NativeTray) : null
+        return { emitted: true, id: targetId, event: eventName as TrayEventName, tray }
+      },
+      { body: '', arg: { key: TRAY_REGISTRY_GLOBAL, id, event } },
     )
   }
 

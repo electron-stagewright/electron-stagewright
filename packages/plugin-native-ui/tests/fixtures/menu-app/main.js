@@ -2,8 +2,9 @@
 // smoke can read it back and assert the interesting fields — a checkbox (checked), an accelerator, a
 // disabled item, and a role-based item — an invokable File > Mark item whose click writes a sentinel
 // into the page, a File > Notify item whose click shows a native notification, and (at startup, before
-// any agent could arm) a system Tray with a tooltip + context menu, so the smoke proves launch-time
-// instrumentation catches the t=0 tray setup. Quits when the window closes.
+// any agent could arm) a system Tray with a tooltip + context menu + a click handler, so the smoke proves
+// launch-time instrumentation catches the t=0 tray setup AND that native_tray_invoke fires the handler.
+// Quits when the window closes.
 import { BrowserWindow, Menu, Notification, Tray, app, nativeImage } from 'electron'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -55,8 +56,9 @@ const template = [
   },
 ]
 
-// Keep the tray referenced so it is not garbage-collected (which would remove the icon).
+// Keep the tray + window referenced so they are not garbage-collected (which would remove the icon).
 let tray
+let mainWindow
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
@@ -65,13 +67,23 @@ app.whenReady().then(() => {
   tray = new Tray(nativeImage.createEmpty())
   tray.setToolTip('Stagewright fixture tray')
   tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Tray Action' }, { role: 'quit' }]))
-  const win = new BrowserWindow({
+  // The smoke fires native_tray_invoke for this tray; the click handler writes a sentinel into the page
+  // so the side effect (not just emitted:true) is observable — proving the event reached the app handler.
+  tray.on('click', () => {
+    const win = mainWindow ?? BrowserWindow.getAllWindows()[0]
+    if (win) {
+      void win.webContents.executeJavaScript(
+        "document.getElementById('tray-clicked').textContent = 'TRAY_CLICKED'",
+      )
+    }
+  })
+  mainWindow = new BrowserWindow({
     width: 400,
     height: 300,
     show: true,
     webPreferences: { contextIsolation: true },
   })
-  void win.loadFile(join(fixtureDir, 'index.html'))
+  void mainWindow.loadFile(join(fixtureDir, 'index.html'))
 })
 
 app.on('window-all-closed', () => {

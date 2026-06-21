@@ -78,10 +78,23 @@ Each path segment matches an item by its **label OR its role**, so role-based it
   `{ count, trays }`; `native.NOT_INSTRUMENTED` if the session was not instrumented (relaunch with the
   flag).
 
+### Tray invocation
+
+- **`native_tray_invoke`** `{ id, event, sessionId? }` — fire an interaction event on the tray with `id`
+  (from `native_trays`), running the app's own `tray.on(event, …)` handler — the act half of the tray
+  surface. `event` is `click` / `right-click` / `double-click` (cross-platform) or a platform `mouse-up` /
+  `mouse-down` / `mouse-enter` / `mouse-leave` / `balloon-click`. Like `native_trays` it needs the session
+  launched with `instrumentNative` (returns `native.NOT_INSTRUMENTED` otherwise). Returns
+  `{ emitted, id?, event?, tray?, reason? }`: on success `emitted` is `true` and `tray` is the tray read
+  back **after** the handler ran (so a handler that mutated its own tray is visible in one call), or `null`
+  if the handler destroyed it; otherwise `emitted` is `false` and `reason` is `not_found` (no tray with that
+  id) or `no_listener` (the tray has no handler for that event). Firing `right-click` runs the handler but
+  does **not** auto-open the tray's context menu the way a native right-click does.
+
 Error codes: `native.UNSUPPORTED` (the transport cannot access the native UI), `native.ALREADY_CAPTURING`
 (a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming), `native.NOT_INSTRUMENTED`
 (`native_trays` without `instrumentNative`). Invalid arguments (an empty menu `path` or empty
-`titleContains`) are core `BAD_ARGUMENT`.
+`titleContains`, a negative tray `id`, or an unknown tray `event`) are core `BAD_ARGUMENT`.
 
 ## Security
 
@@ -108,12 +121,18 @@ Tray read **observes** system-tray state by using launch-time native instrumenta
 supplies only the opt-in flag, not code; the read returns tooltip/title, `hasImage`, and serialised context
 menu state, never icon pixels.
 
+Invoking a tray event (`native_tray_invoke`) **modifies** app behaviour — it fires the app's own tray
+handler on the live `Tray`, the tray analog of `native_menu_invoke`. The agent supplies a tray id + an
+event name (data), not code, so it is still **not** `--allow-eval` gated; it is bounded by the
+`canAccessNativeUI` capability, the `instrumentNative` launch opt-in, and the operator's choice to load the
+plugin. A tray with no listener for the event is refused, not faked.
+
 ## Scope and limitations
 
-- **Application menu (read + invoke), notification capture, and tray read.** This plugin reads/invokes the
-  application menu, captures shown notifications, and reads system-tray state. The tray read needs
-  `electron_launch { instrumentNative: true }` (a launch-time hook — trays are created at startup with no
-  registry). Tray _event_ capture (clicks) is the remaining deferred surface.
+- **Application menu (read + invoke), notification capture, and tray (read + invoke).** This plugin
+  reads/invokes the application menu, captures shown notifications, and reads + fires tray events. The tray
+  read and invoke need `electron_launch { instrumentNative: true }` (a launch-time hook — trays are created
+  at startup with no registry). Retrofitting notification capture to t=0 is the remaining deferred surface.
 - **Notification capture is arm-then-observe.** Notifications shown before `native_notifications_start`
   are not recorded, and only **shown** notifications (`.show()`) are captured — a constructed-but-unshown
   notification notified no one. The hook patches the shared `Notification.prototype`, so it catches every

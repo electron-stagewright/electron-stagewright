@@ -122,6 +122,8 @@ import type {
   TransportCapabilities,
   TransportId,
   TransportSession,
+  TrayEventName,
+  TrayInvokeResult,
   WindowDescriptor,
   WindowRef,
 } from './types.js'
@@ -1116,6 +1118,9 @@ class CdpSession implements TransportSession {
   }
   getTrays(): Promise<readonly NativeTray[] | null> {
     return Promise.reject(notImplemented('getTrays'))
+  }
+  invokeTrayEvent(_id: number, _event: TrayEventName): Promise<TrayInvokeResult | null> {
+    return Promise.reject(notImplemented('invokeTrayEvent'))
   }
 
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---

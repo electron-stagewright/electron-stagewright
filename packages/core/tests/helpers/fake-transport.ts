@@ -42,6 +42,8 @@ import type {
   TransportCapabilities,
   TransportId,
   TransportSession,
+  TrayEventName,
+  TrayInvokeResult,
   WindowDescriptor,
   WindowRef,
 } from '../../src/transports/index.js'
@@ -319,6 +321,19 @@ export class FakeSession implements TransportSession {
   trays: NativeTray[] | null = null
   async getTrays(): Promise<readonly NativeTray[] | null> {
     return this.trays
+  }
+
+  /** The result `invokeTrayEvent` returns (`null` = not instrumented), and the (id, event) pairs seen. */
+  trayInvokeResult: TrayInvokeResult | null = {
+    emitted: true,
+    id: 0,
+    event: 'click',
+    tray: { id: 0, hasImage: false },
+  }
+  readonly trayInvokeCalls: Array<readonly [number, TrayEventName]> = []
+  async invokeTrayEvent(id: number, event: TrayEventName): Promise<TrayInvokeResult | null> {
+    this.trayInvokeCalls.push([id, event])
+    return this.trayInvokeResult
   }
 
   /** Recorded screenshot calls, for asserting window targeting / clip / format. */

@@ -51,7 +51,7 @@ interface InvokeEnvelope {
 
 describe('native-ui plugin smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
-    'reads the menu, resolves items by label/role, and invokes an item with a real side effect',
+    'reads the menu/trays, invokes a menu item + a tray event with real side effects, and captures a notification',
     async () => {
       const server = await createServer({ plugins: [nativeUiPlugin] })
       closers.push(() => server.close())
@@ -161,6 +161,31 @@ describe('native-ui plugin smoke (real Electron)', () => {
       expect(trays.count).toBe(1)
       expect(trays.trays[0]?.toolTip).toBe('Stagewright fixture tray')
       expect(trays.trays[0]?.menu?.items.some((i) => i.label === 'Tray Action')).toBe(true)
+
+      // Firing the tray's click event runs the app's own tray.on('click') handler, which writes a sentinel
+      // into the page — proving native_tray_invoke reaches the real tray handler (the act half of trays).
+      const trayInvoked = (await server.dispatcher.dispatch('native_tray_invoke', {
+        sessionId,
+        id: 0,
+        event: 'click',
+      })) as unknown as { ok: boolean; emitted: boolean }
+      expect(trayInvoked.ok).toBe(true)
+      expect(trayInvoked.emitted).toBe(true)
+      const traySentinel = (await server.dispatcher.dispatch('electron_expect_text', {
+        sessionId,
+        selector: '#tray-clicked',
+        contains: 'TRAY_CLICKED',
+      })) as { ok?: boolean }
+      expect(traySentinel.ok).toBe(true)
+
+      // Firing an event the tray has no handler for is reported, not faked as a successful fire.
+      const noListener = (await server.dispatcher.dispatch('native_tray_invoke', {
+        sessionId,
+        id: 0,
+        event: 'double-click',
+      })) as unknown as { emitted: boolean; reason?: string }
+      expect(noListener.emitted).toBe(false)
+      expect(noListener.reason).toBe('no_listener')
 
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },

@@ -663,7 +663,7 @@ export interface NativeNotification {
  * been launched with `LaunchOptions.instrumentNative`; otherwise the tray is invisible (no registry).
  */
 export interface NativeTray {
-  /** Stable per-session index (creation order), so a future invoke can name a tray + its menu item. */
+  /** Stable per-session id (creation order), used by tray event invocation. */
   readonly id: number
   /** The tray's hover tooltip, when set. */
   readonly toolTip?: string
@@ -674,6 +674,44 @@ export interface NativeTray {
   /** The tray's context menu, when one was set (serialised like the application menu). */
   readonly menu?: NativeMenu
 }
+
+/**
+ * A tray interaction event an agent can fire programmatically via {@link TransportSession.invokeTrayEvent}.
+ * `click` / `right-click` / `double-click` are the cross-platform primary events; the `mouse-*` events
+ * (macOS) and `balloon-click` (Windows) are platform-specific. Firing an event runs the app's own
+ * `tray.on(event, …)` handler — it does NOT reproduce a native click's side effects (notably a real
+ * `right-click` auto-opens the tray's context menu; emitting the event does not).
+ */
+export type TrayEventName =
+  | 'click'
+  | 'right-click'
+  | 'double-click'
+  | 'mouse-up'
+  | 'mouse-down'
+  | 'mouse-enter'
+  | 'mouse-leave'
+  | 'balloon-click'
+
+/**
+ * The outcome of firing a tray event by id ({@link TransportSession.invokeTrayEvent}). JSON-serialisable,
+ * mirroring {@link MenuInvokeResult} for the tray surface.
+ *
+ * On success (`emitted: true`) the resolved `id` + `event` are echoed, plus `tray` — the tray's record
+ * read back AFTER the handler ran, so a handler that mutates its own tray (e.g. toggles the tooltip) is
+ * observable in one call; `tray` is `null` if the handler destroyed the tray. On failure
+ * (`emitted: false`) `reason` says why nothing fired:
+ * - `not_found` — no live tray has that id (it was never created, or has since been destroyed).
+ * - `no_listener` — the tray exists but registered no handler for `event`; emitting would be inert, so it
+ *   is reported rather than reported as a successful fire (the tray analog of menu `no_handler`).
+ */
+export type TrayInvokeResult =
+  | {
+      readonly emitted: true
+      readonly id: number
+      readonly event: TrayEventName
+      readonly tray: NativeTray | null
+    }
+  | { readonly emitted: false; readonly reason: 'not_found' | 'no_listener' }
 
 /**
  * A live session against an Electron app, returned by `launch`, `attach`, or
@@ -807,9 +845,9 @@ export interface TransportSession {
   storageSnapshot(): Promise<StorageSnapshot>
 
   // --- Native UI surface (requires `capabilities.canAccessNativeUI`) ---
-  // Read and invoke the app's native chrome (the application menu) from the main process, the no-eval way
-  // to assert native-UI state and trigger menu actions. A transport that cannot reach the main process
-  // rejects these with `NOT_IMPLEMENTED`.
+  // Read and invoke the app's native chrome (the application menu + system trays) from the main process,
+  // the no-eval way to assert native-UI state and trigger menu/tray actions. A transport that cannot reach
+  // the main process rejects these with `NOT_IMPLEMENTED`.
 
   /** Read the app's application menu ({@link NativeMenu}), or `null` when the app has none set. */
   getApplicationMenu(): Promise<NativeMenu | null>
@@ -841,6 +879,15 @@ export interface TransportSession {
    * instrument rejects with `NOT_IMPLEMENTED`.
    */
   getTrays(): Promise<readonly NativeTray[] | null>
+
+  /**
+   * Fire a tray interaction event (`click` / `right-click` / `double-click`, …) on the tray with `id`
+   * (from {@link getTrays}), running the app's own `tray.on(event, …)` handler — the act half of the tray
+   * surface. Like {@link getTrays} it requires the session to have been launched with `instrumentNative`:
+   * resolves `null` when NOT instrumented (the plugin maps that to a distinct error), otherwise a
+   * {@link TrayInvokeResult}. A transport that cannot instrument rejects with `NOT_IMPLEMENTED`.
+   */
+  invokeTrayEvent(id: number, event: TrayEventName): Promise<TrayInvokeResult | null>
 
   // --- Interaction surface (requires `capabilities.supportsInteraction`) ---
   // All operate on the active/default window with real user input. Transports
