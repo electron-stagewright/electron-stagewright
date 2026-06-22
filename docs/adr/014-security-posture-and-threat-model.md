@@ -164,3 +164,24 @@ the eval-hardening list remains deferred.
   The `--allow-eval` opt-in and the privileged-local-tool trust boundary remain the primary
   controls. The security model documents exactly what the pass does and does not catch, so the
   guarantee is never over-claimed — the concern §5 raised about a weak analyzer.
+
+## Status Update — 2026-06-22: renderer-eval surfaced to plugins (`ctx.allowEvalRenderer`)
+
+The per-target eval policy gains a plugin-facing renderer signal, consumed by the storage plugin's new
+per-key `localStorage` / `sessionStorage` tools (ADR-018 Status Update).
+
+- **`ctx.allowEvalRenderer` mirrors `ctx.allowEval`.** `ToolContext` already exposed `allowEval`
+  (mapped to `EvalPolicy.main`) so a plugin reaching `transport.evaluate('main', …)` directly — the IPC
+  plugin — could re-assert the gate (the contract that the transport method bypasses the
+  tool-registration gate). The storage plugin needs the renderer analog, so `ctx.allowEvalRenderer` now
+  exposes `EvalPolicy.renderer`. This is NOT a new permission: it surfaces the existing
+  `--allow-eval=renderer` authorization to the plugin layer. A new dedicated storage-eval permission was
+  rejected — it would fragment the per-target least-privilege model for no gain.
+- **The storage per-key tools gate at registration AND re-assert at runtime.** They declare
+  `evalTarget: 'renderer'`, so the dispatcher hides them under a policy that denies renderer eval (the
+  primary control, identical to how `electron_eval_renderer` hides). Their handlers also re-assert
+  `if (!ctx.allowEvalRenderer) → storage.EVAL_REQUIRED` as defense in depth. The renderer-eval threat
+  model is unchanged — this is a new CONSUMER of the existing renderer-eval grant, not a new escape hatch.
+- **Web Storage values are not redacted.** The new read tools return `localStorage` / `sessionStorage`
+  values verbatim (app state, consistent with the snapshot's documented asymmetry). The security model
+  gains a row for this surface; the renderer-eval opt-in is the operator's control over it.

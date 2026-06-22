@@ -155,6 +155,24 @@ describe('ctx.allowEval maps to the main target (the main-process instrumentatio
   })
 })
 
+describe('ctx.allowEvalRenderer maps to the renderer target (the renderer-instrumentation gate)', () => {
+  it('is true only when renderer eval is permitted, regardless of main', () => {
+    const sessions = new SessionManager()
+    const mainOnly = new Dispatcher({ sessions, allowEval: { main: true, renderer: false } })
+    const rendererOnly = new Dispatcher({ sessions, allowEval: { main: false, renderer: true } })
+    const both = new Dispatcher({ sessions, allowEval: true })
+    const neither = new Dispatcher({ sessions, allowEval: false })
+    // The storage plugin reads ctx.allowEvalRenderer to gate per-key localStorage/sessionStorage, so a
+    // main-only policy must read as false here even though main eval is on — the mirror of allowEval.
+    expect(mainOnly.allowEvalRenderer).toBe(false)
+    expect(rendererOnly.allowEvalRenderer).toBe(true)
+    expect(both.allowEvalRenderer).toBe(true)
+    expect(neither.allowEvalRenderer).toBe(false)
+    // And the two targets are independent: a renderer-only policy denies main, permits renderer.
+    expect(rendererOnly.allowEval).toBe(false)
+  })
+})
+
 describe('main-eval startup warning', () => {
   it('warns when main eval is granted', () => {
     const { logger, warns } = captureLogger()

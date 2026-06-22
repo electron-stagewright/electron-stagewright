@@ -278,6 +278,16 @@ export class Dispatcher {
   }
 
   /**
+   * Whether RENDERER eval is permitted by this dispatcher's policy. The page-context twin of
+   * {@link Dispatcher.allowEval}; surfaced to plugins via `ctx.allowEvalRenderer` (see
+   * {@link ToolContext.allowEvalRenderer}) so a plugin doing renderer-context instrumentation can
+   * re-assert the gate. Maps to the renderer target so a main-only policy correctly denies it.
+   */
+  get allowEvalRenderer(): boolean {
+    return this.#evalPolicy.renderer
+  }
+
+  /**
    * Whether the eval policy permits an eval-gated tool to register. A tool with a declared
    * {@link EvalTarget} is gated on THAT target; an eval-gated tool with no declared target registers
    * whenever any eval target is permitted, so a future generic eval-gated tool is not silently hidden
@@ -535,6 +545,7 @@ export class Dispatcher {
       snapshots: this.#snapshots,
       logger: this.#logger,
       allowEval: this.#evalPolicy.main,
+      allowEvalRenderer: this.#evalPolicy.renderer,
       ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
       ...(this.#appRoot !== undefined ? { appRoot: this.#appRoot } : {}),
       startedAt,

@@ -464,3 +464,15 @@ The native-UI seam also gains `invokeTrayEvent(id, event)` (the tray analog of `
 returning a `TrayInvokeResult`): it acts on the same launch-time tray registry, so like `getTrays` it
 resolves `null` on a session launched without `instrumentNative` and is Playwright-only (CDP/injector
 reject `NOT_IMPLEMENTED`). See ADR-019's tray-invocation Status Update.
+
+## Status Update — 2026-06-22: supportsRendererEval gains a plugin consumer (per-key storage)
+
+`supportsRendererEval` previously had a single consumer — the core `electron_eval_renderer` tool. The
+storage plugin's new per-key `localStorage` / `sessionStorage` tools (ADR-018 Status Update) become its
+first plugin consumer: they reach `TransportSession.evaluate('renderer', …)` directly with a fixed source
+string, so they require `supportsRendererEval` (and the operator's `--allow-eval=renderer` grant). No new
+seam method or capability is added — this consumes the existing `evaluate` seam and `supportsRendererEval`
+flag. Both observe-capable transports already advertise it: the **Playwright** transport via
+`page.evaluate`, the **CDP** transport via `Runtime.evaluate` against a page target; the **injector**
+keeps `supportsRendererEval: false`, so the per-key tools return `storage.UNSUPPORTED` there — the same
+two-implementers-plus-injector shape the storage seam itself has.

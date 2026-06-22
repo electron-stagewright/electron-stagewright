@@ -1,6 +1,6 @@
 # ADR-018: Storage plugin via a transport storage seam
 
-Status: Accepted (cookies + storage snapshot on both Playwright and CDP; per-key localStorage / IndexedDB deferred)
+Status: Accepted (cookies + storage snapshot on both Playwright and CDP; per-key localStorage / sessionStorage shipped via a renderer-eval gate — see Status Update; IndexedDB deferred)
 
 ## Context
 
@@ -102,6 +102,64 @@ plugin.
   values in the snapshot are NOT redacted** — they are app state, and redacting them wholesale would
   defeat the snapshot's assert-a-persisted-value purpose; the asymmetry is documented so an operator
   whose app stores tokens in `localStorage` treats the snapshot output as sensitive.
+
+## Status Update — per-key Web Storage via a renderer-eval gate
+
+The deferred "per-key `localStorage` / `sessionStorage` get/set/remove" alternative shipped, resolving
+the permission fork the original ADR left open. IndexedDB stays deferred.
+
+### What landed
+
+The plugin gains a SECOND tool family — `storage_local_*` and `storage_session_*` (get/set/remove/keys/
+clear, ten tools) — for single-key Web Storage access. Reading or mutating one key needs renderer
+JavaScript (`localStorage.getItem` / `setItem` / `removeItem`, the same for `sessionStorage`), which the
+no-eval cookie/snapshot seam cannot serve. They ride the existing `transport.evaluate('renderer', …)`
+seam via a fixed source string (`web-storage.ts` `WEB_STORAGE_BODY`); the agent supplies op/scope/key/
+value DATA, never code. `storage_*_get` also takes a `keys[]` multi-key form (one round-trip), and every
+result carries the active page's `origin` (Web Storage is per-origin). The cookie + snapshot tools are
+unchanged and stay no-eval.
+
+### The permission decision (the fork the original ADR named)
+
+The original "Alternatives considered" entry noted that folding renderer storage in would "either bypass
+the operator's renderer-eval opt-in or require a new plugin-facing eval permission in the core
+dispatcher." It is resolved by **reusing the existing per-target eval opt-in** (`--allow-eval=renderer`,
+ADR-014), surfaced to plugins through a new `ctx.allowEvalRenderer` — the renderer twin of the existing
+`ctx.allowEval` (which maps to the main target). This is NOT a new permission concept: it exposes the
+`EvalPolicy.renderer` flag that already exists. A new dedicated storage-eval permission was REJECTED — it
+would fragment ADR-014's per-target least-privilege model and duplicate an opt-in with the same blast
+radius. So the plugin is now **hybrid**: the cookie/snapshot tools are no-eval; the per-key tools are
+renderer-eval gated.
+
+### Gating (registration-time primary, runtime defense-in-depth)
+
+The per-key tools declare `requiresEvalFlag: true, evalTarget: 'renderer'`, so the dispatcher **hides**
+them unless the server permits renderer eval — the operator-facing authorization (a no-renderer-eval
+server never registers them; calling one then names `--allow-eval=renderer`). The handlers ALSO re-assert
+`if (!ctx.allowEvalRenderer) → storage.EVAL_REQUIRED` at the tool boundary: the transport `evaluate`
+method bypasses the tool-registration gate, so the re-assert keeps an authorization bypass impossible if
+the tool is ever registered unconditionally (the C9 implementation contract). The transport capability is
+checked at runtime too (`supportsRendererEval` → `storage.UNSUPPORTED`), since the eval POLICY is
+server-wide but a session's transport may still not support renderer eval (the injector). A renderer
+storage-access failure (quota exceeded, opaque origin) becomes `storage.ACCESS_FAILED`, never a raw throw.
+
+### Security
+
+Web Storage **values are returned verbatim, not redacted** — they are app state, and redacting them would
+defeat the read tools' assert-a-persisted-value purpose (the same asymmetry the snapshot already
+documents for its `localStorage` half). The security model gains a row for the renderer-eval per-key
+storage surface. The renderer-eval gate is the operator's primary control over this surface.
+
+### Both transports
+
+`supportsRendererEval` is `true` on both the Playwright launch transport (`page.evaluate`) and the CDP
+attach transport (`Runtime.evaluate` against a page target), and `false` on the injector — so the per-key
+tools work on the same transports as the cookie/snapshot seam, and `storage.UNSUPPORTED` on the injector.
+
+### Still deferred
+
+IndexedDB read/write — async and structured (databases / object stores / cursors), a materially larger
+surface that warrants its own slice. The per-key Web Storage tools cover the common single-value case.
 
 ## Related decisions
 

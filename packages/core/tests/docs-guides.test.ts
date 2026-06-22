@@ -2,11 +2,11 @@
  * Drift and integrity guards for the public guides (ADR-013) — prose rots silently, so both
  * failure modes that matter are checked mechanically:
  *
- * 1. **Tool-name drift** — every `electron_*` / `trace_*` / `production_*` / `ipc_*` name in the
- *    current-facing docs (guides, root README, GitHub community files, llms.txt) must exist in the
- *    live core manifest (including eval-gated tools) or in the corresponding plugin's tool list. A
- *    current doc citing a renamed or misspelled tool fails CI the same way TOOL-REFERENCE drift does.
- *    Wildcard family mentions (`electron_expect_*`) are validated as prefixes.
+ * 1. **Tool-name drift** — every current tool-name namespace in the current-facing docs (guides, root
+ *    README, GitHub community files, llms.txt) must exist in the live core manifest (including
+ *    eval-gated tools) or in the corresponding plugin's tool list. A current doc citing a renamed or
+ *    misspelled tool fails CI the same way TOOL-REFERENCE drift does. Wildcard family mentions
+ *    (`electron_expect_*`) are validated as prefixes.
  * 2. **Relative-link integrity** — every relative markdown link in the public docs (guides, ADRs,
  *    the root README, GitHub community files, llms.txt) must resolve to a file that exists AND is
  *    tracked-eligible (not gitignored). This mechanises the content-policy rule that tracked files
@@ -23,9 +23,12 @@ import { describe, expect, it } from 'vitest'
 
 import { createServer } from '../src/server/server.js'
 import { NOOP_LOGGER } from '../src/server/logger.js'
+import clockPlugin from '../../plugin-clock/src/index.js'
 import ipcPlugin from '../../plugin-ipc/src/index.js'
+import nativeUiPlugin from '../../plugin-native-ui/src/index.js'
 import networkPlugin from '../../plugin-network/src/index.js'
 import productionPlugin from '../../plugin-production/src/index.js'
+import storagePlugin from '../../plugin-storage/src/index.js'
 import tracePlugin from '../../plugin-trace/src/index.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -33,7 +36,15 @@ const REPO_ROOT = path.resolve(HERE, '..', '..', '..')
 const GUIDES_DIR = path.join(REPO_ROOT, 'docs', 'guides')
 const ADR_DIR = path.join(REPO_ROOT, 'docs', 'adr')
 const GITHUB_DIR = path.join(REPO_ROOT, '.github')
-const FIRST_PARTY_PLUGINS = [tracePlugin, productionPlugin, ipcPlugin, networkPlugin] as const
+const FIRST_PARTY_PLUGINS = [
+  tracePlugin,
+  productionPlugin,
+  ipcPlugin,
+  networkPlugin,
+  clockPlugin,
+  storagePlugin,
+  nativeUiPlugin,
+] as const
 
 /** One markdown document loaded for scanning. */
 interface MarkdownDoc {
@@ -90,7 +101,8 @@ async function loadLinkCheckedDocs(): Promise<MarkdownDoc[]> {
  * Namespaced tool-name mentions. A trailing underscore (from a wildcard family mention like
  * `electron_expect_*`) survives the match and is validated as a prefix.
  */
-const TOOL_MENTION = /\b(?:electron|trace|ipc|network|production)_[a-z][a-z0-9_]*/g
+const TOOL_MENTION =
+  /\b(?:electron|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
 
 /** The full set of real tool names: the live core manifest plus every first-party plugin. */
 async function collectKnownToolNames(): Promise<ReadonlySet<string>> {
@@ -112,12 +124,27 @@ function collectRuntimeEvalGatedPluginTools(): string[] {
   const names: string[] = []
   for (const plugin of FIRST_PARTY_PLUGINS) {
     for (const tool of plugin.tools ?? []) {
-      if (tool.description.includes('--allow-eval') || tool.description.includes('EVAL_REQUIRED')) {
+      if (
+        tool.requiresEvalFlag === true ||
+        tool.description.includes('--allow-eval') ||
+        tool.description.includes('EVAL_REQUIRED')
+      ) {
         names.push(`${plugin.name}_${tool.name}`)
       }
     }
   }
   return names.sort((a, b) => a.localeCompare(b))
+}
+
+function securityModelMentionsTool(securityModel: string, name: string): boolean {
+  if (securityModel.includes(name)) return true
+  let index = name.lastIndexOf('_')
+  while (index >= 0) {
+    const family = `${name.slice(0, index + 1)}*`
+    if (securityModel.includes(family)) return true
+    index = name.lastIndexOf('_', index - 1)
+  }
+  return false
 }
 
 describe('public guides — tool-name drift', () => {
@@ -275,7 +302,7 @@ describe('security model — eval-gated tool coverage', () => {
     ).replace(/\r\n/g, '\n')
     const runtimeGatedPluginTools = collectRuntimeEvalGatedPluginTools()
     const missing = [...evalGated, ...runtimeGatedPluginTools].filter(
-      (name) => !securityModel.includes(name),
+      (name) => !securityModelMentionsTool(securityModel, name),
     )
     expect(
       missing,

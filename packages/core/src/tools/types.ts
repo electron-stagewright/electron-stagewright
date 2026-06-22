@@ -121,6 +121,20 @@ export interface ToolContext {
    */
   readonly allowEval: boolean
   /**
+   * Whether the eval policy permits RENDERER eval — the page-context twin of
+   * {@link ToolContext.allowEval} (which maps to the main target). Surfaced for
+   * plugins that reach `transport.evaluate('renderer', …)` directly to read or
+   * mutate renderer state the no-eval seams do not cover (e.g. per-key
+   * `localStorage` / `sessionStorage` in the storage plugin). Such a plugin should
+   * gate its renderer-eval tools at registration (`evalTarget: 'renderer'`, so the
+   * dispatcher hides them under a policy that denies renderer eval) AND re-assert
+   * `if (!ctx.allowEvalRenderer) …` at the tool boundary — the transport method
+   * bypasses the tool-registration gate, so the re-assert is the defense-in-depth
+   * that keeps an authorization bypass impossible if the tool is ever registered
+   * unconditionally. See ADR-014, ADR-018.
+   */
+  readonly allowEvalRenderer: boolean
+  /**
    * Directory the screenshot tool writes captures into when the caller does not
    * pass an explicit absolute `path`/`dir`. Configured by the server and already
    * resolved to an absolute path; `undefined` means the tool falls back to the OS temp dir.

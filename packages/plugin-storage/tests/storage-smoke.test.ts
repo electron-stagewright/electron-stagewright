@@ -1,14 +1,19 @@
 /**
- * Real-Electron storage smoke (ADR-018) — drives the actual Playwright transport storage seam
- * (`BrowserContext` cookies + `storageState`) end to end against a page served over loopback HTTP:
- * seed a cookie for the page's origin, prove the page itself sees it via document.cookie (the cookie
- * reached the real Chromium cookie store), read it back through `storage_cookies` (proving the default
- * value redaction in a real flow), then take a `storage_snapshot` and assert both the cookie and the
- * origin's localStorage are captured.
+ * Real-Electron storage smoke (ADR-018 + Status Update) — drives the actual Playwright transport
+ * against a page served over loopback HTTP, covering BOTH storage families:
+ *
+ * 1. The no-eval seam (`BrowserContext` cookies + `storageState`): seed a cookie for the page's origin,
+ *    prove the page itself sees it via document.cookie (the cookie reached the real Chromium cookie
+ *    store), read it back through `storage_cookies` (proving the default value redaction in a real
+ *    flow), then take a `storage_snapshot` and assert both the cookie and the origin's localStorage.
+ * 2. The renderer-eval per-key tools (`storage_local_*` / `storage_session_*`): read the page's seeded
+ *    `localStorage` key, set/get/remove a new one, and exercise `sessionStorage` independently — proving
+ *    the real `page.evaluate` round-trip and the per-origin behaviour.
  *
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (with `electron` + `playwright` installed). Skipped by
- * default so `pnpm test` stays fast and headless-CI-safe. No eval opt-in is needed — storage access
- * rides the transport seam, not main-process eval.
+ * default so `pnpm test` stays fast and headless-CI-safe. The cookie/snapshot half needs no eval opt-in
+ * (it rides the transport seam); the per-key half needs `--allow-eval=renderer`, modelled here by the
+ * `allowEval: { renderer: true }` server option.
  *
  * @module
  */
@@ -70,7 +75,12 @@ describe('storage plugin smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
     'seeds a cookie the page can see, redacts it on read, and snapshots localStorage',
     async () => {
-      const server = await createServer({ plugins: [storagePlugin] })
+      // Renderer eval granted so the per-key storage_local_* / storage_session_* tools register; the
+      // cookie/snapshot half does not need it.
+      const server = await createServer({
+        plugins: [storagePlugin],
+        allowEval: { main: false, renderer: true },
+      })
       closers.push(() => server.close())
 
       const launched = (await server.dispatcher.dispatch('electron_launch', {
@@ -132,6 +142,46 @@ describe('storage plugin smoke (real Electron)', () => {
         url: origin,
       })) as unknown as Envelope & { cookies: ReadonlyArray<{ name: string }> }
       expect(after.cookies.some((c) => c.name === 'session')).toBe(false)
+
+      // --- Per-key Web Storage (renderer-eval) ---
+
+      // The page seeded localStorage.cart on load; the per-key read sees it and reports the origin.
+      const cart = (await server.dispatcher.dispatch('storage_local_get', {
+        sessionId,
+        key: 'cart',
+      })) as unknown as Envelope & { value: string | null; origin: string }
+      expect(cart).toMatchObject({ ok: true, value: '3-items', origin })
+
+      // Set, read back, then remove a fresh localStorage key.
+      expect(
+        await server.dispatcher.dispatch('storage_local_set', {
+          sessionId,
+          key: 'flag',
+          value: 'on',
+        }),
+      ).toMatchObject({ ok: true, set: 'flag' })
+      expect(
+        await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'flag' }),
+      ).toMatchObject({ ok: true, value: 'on' })
+      expect(
+        await server.dispatcher.dispatch('storage_local_remove', { sessionId, key: 'flag' }),
+      ).toMatchObject({ ok: true, removed: 'flag' })
+      expect(
+        await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'flag' }),
+      ).toMatchObject({ ok: true, value: null })
+
+      // sessionStorage is a separate area: a key set there is invisible to localStorage.
+      await server.dispatcher.dispatch('storage_session_set', {
+        sessionId,
+        key: 'tab',
+        value: '42',
+      })
+      expect(
+        await server.dispatcher.dispatch('storage_session_get', { sessionId, key: 'tab' }),
+      ).toMatchObject({ ok: true, scope: 'session', value: '42' })
+      expect(
+        await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'tab' }),
+      ).toMatchObject({ ok: true, value: null })
 
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },
