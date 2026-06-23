@@ -1,11 +1,11 @@
 /**
  * `@electron-stagewright/plugin-storage` — read, seed, and assert an Electron app's storage (cookies,
- * the storage snapshot, and per-key Web Storage) for agent-driven testing (ADR-018, built on the
+ * the storage snapshot, per-key Web Storage, and IndexedDB) for agent-driven testing (ADR-018, built on the
  * ADR-004 plugin contract). Seed a cookie before a flow ("skip the login screen"), assert a cookie or
- * localStorage value after ("the cart survived a reload"), or read/set/remove a single
- * `localStorage` / `sessionStorage` key.
+ * localStorage value after ("the cart survived a reload"), read/set/remove a single
+ * `localStorage` / `sessionStorage` key, or read/write IndexedDB records.
  *
- * This plugin is HYBRID — two families with different trust postures:
+ * This plugin is HYBRID — three families with different trust postures:
  *
  * - **No-eval seam tools** (`storage_cookies`, `storage_set_cookie`, `storage_clear_cookies`,
  *   `storage_snapshot`) ride a dedicated TRANSPORT SEAM (Playwright's BrowserContext / the CDP Storage
@@ -19,15 +19,19 @@
  *   defense in depth. They also require the transport's `supportsRendererEval` capability
  *   (`storage.UNSUPPORTED`). The agent supplies op/scope/key/value DATA, not code: the renderer body is
  *   a fixed source string (see `web-storage.ts`).
+ * - **IndexedDB tools** (`storage_idb_*` — schema/get/keys/count/set/delete/clear) read and mutate
+ *   records in EXISTING databases / object stores; also renderer-eval gated (the async `indexeddb.ts`
+ *   body), bounded to existing databases/stores (it never creates or upgrades a schema) and refusing a
+ *   missing one (`storage.NOT_FOUND`).
  *
  * SECURITY: a cookie VALUE can carry a secret (an auth token), so cookie values are redacted by default
  * before they reach the agent (`revealValues` opts out, mirroring the network plugin's
  * `redactSecureDefaults`). Reading is the secret-surface concern; writing (`storage_set_cookie`) uses
  * the agent's own value. Web Storage VALUES are NOT redacted — they are app state, and redacting them
  * would defeat the read tools' assert-a-persisted-value purpose; treat the output as sensitive if the
- * app stores tokens in `localStorage` (the same asymmetry the snapshot documents).
- *
- * Deferred: IndexedDB read/write (ADR-018) — async + structured, a larger surface for a later slice.
+ * app stores tokens in `localStorage` (the same asymmetry the snapshot documents). IndexedDB record
+ * values are likewise returned verbatim by default, with an opt-in `redactValues` config for apps that
+ * keep secrets there.
  *
  * @module
  */
@@ -53,11 +57,12 @@ import {
   type WebStorageRequest,
   type WebStorageResult,
 } from './web-storage.js'
+import { INDEXEDDB_BODY, type IdbRequest, type IdbResult } from './indexeddb.js'
 
 /** Plugin namespace — must match {@link storagePlugin.name}; the loader prefixes its tools with it. */
 const STORAGE_NAMESPACE = 'storage'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const STORAGE_PLUGIN_VERSION = '0.2.0'
+const STORAGE_PLUGIN_VERSION = '0.3.0'
 
 const configSchema = z.object({
   revealValues: z
@@ -66,13 +71,19 @@ const configSchema = z.object({
     .describe(
       'Return cookie VALUES verbatim instead of redacting them. Off by default — a cookie value can be an auth token.',
     ),
+  redactValues: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Redact IndexedDB record VALUES (replace with "[redacted]") in read results. Off by default (IndexedDB values are app state); turn on if the app stores secrets there.',
+    ),
 })
 
 /** Resolved plugin configuration — the validated output of {@link configSchema}. */
 type StorageConfig = z.infer<typeof configSchema>
 
 /** Defaults used until `setup` runs (mirror the schema defaults). */
-const DEFAULT_CONFIG: StorageConfig = { revealValues: false }
+const DEFAULT_CONFIG: StorageConfig = { revealValues: false, redactValues: false }
 
 let config: StorageConfig = DEFAULT_CONFIG
 
@@ -287,7 +298,7 @@ function requireRendererEval(
       error: makePluginError('storage.EVAL_REQUIRED', {
         ...meta,
         message:
-          'Per-key localStorage/sessionStorage runs renderer JS; start the server with --allow-eval=renderer (or bare --allow-eval) to enable it.',
+          'This storage tool runs renderer JS (per-key localStorage/sessionStorage or IndexedDB); start the server with --allow-eval=renderer (or bare --allow-eval) to enable it.',
       }),
     }
   }
@@ -563,11 +574,502 @@ const webStorageTools: AnyToolDefinition[] = [
   ...makeWebStorageTools('session'),
 ]
 
+// --- IndexedDB (existing databases / stores only) — renderer-eval gated ---
+//
+// The last storage surface ADR-018 deferred. Like the per-key Web Storage tools, these run renderer JS
+// (the async `INDEXEDDB_BODY`), so they carry `evalGated` (hidden unless renderer eval is permitted) and
+// re-assert via `requireRendererEval`. Scope is bounded to EXISTING databases/stores — the body opens
+// without a version (never creating/upgrading) and refuses a missing database/store (`storage.NOT_FOUND`).
+
+/**
+ * Run one {@link IdbRequest} in the renderer via the fixed {@link INDEXEDDB_BODY}, returning the
+ * validated success or the plugin-error envelope. Maps the body's failure reasons: `database_not_found`
+ * / `store_not_found` → `storage.NOT_FOUND` (actionable: a wrong name); everything else (a transaction
+ * fault, `key_required`, a malformed/absent result) → `storage.ACCESS_FAILED`.
+ */
+async function runIndexedDb(
+  session: TransportSession,
+  req: IdbRequest,
+  meta: PluginMeta,
+): Promise<{ result: Extract<IdbResult, { ok: true }> } | { error: ToolResult }> {
+  const result = await session.evaluate<unknown>('renderer', INDEXEDDB_BODY, req)
+  if (result === null || typeof result !== 'object' || !('ok' in result)) {
+    return {
+      error: makePluginError('storage.ACCESS_FAILED', {
+        ...meta,
+        message: 'The renderer returned no usable IndexedDB result.',
+      }),
+    }
+  }
+  const raw = result as RawIdbResult
+  if (raw.ok === false) {
+    const reason = typeof raw.reason === 'string' ? raw.reason : 'unknown'
+    if (reason === 'database_not_found') {
+      return {
+        error: makePluginError('storage.NOT_FOUND', {
+          ...meta,
+          message: `No IndexedDB database named "${req.database ?? ''}" (this plugin operates on existing databases only; it never creates one).`,
+        }),
+      }
+    }
+    if (reason === 'store_not_found') {
+      return {
+        error: makePluginError('storage.NOT_FOUND', {
+          ...meta,
+          message: `No object store named "${req.store ?? ''}" in database "${req.database ?? ''}".`,
+        }),
+      }
+    }
+    const message =
+      reason === 'key_required'
+        ? 'This object store uses out-of-line keys; provide a key for the write.'
+        : `IndexedDB access failed: ${reason}`
+    return { error: makePluginError('storage.ACCESS_FAILED', { ...meta, message }) }
+  }
+  if (!isUsableIdbSuccess(req, raw)) {
+    return {
+      error: makePluginError('storage.ACCESS_FAILED', {
+        ...meta,
+        message: 'The renderer returned a malformed IndexedDB result.',
+      }),
+    }
+  }
+  return { result: raw as Extract<IdbResult, { ok: true }> }
+}
+
+/**
+ * The raw, UNTRUSTED shape of whatever `evaluate('renderer', INDEXEDDB_BODY)` returns. The body is fixed,
+ * but `evaluate<T>` is still an unchecked process-boundary cast, so the plugin revalidates op-specific
+ * success payloads before turning them into wire-visible success envelopes.
+ */
+interface RawIdbResult {
+  readonly ok?: unknown
+  readonly origin?: unknown
+  readonly reason?: unknown
+  readonly databases?: unknown
+  readonly stores?: unknown
+  readonly record?: unknown
+  readonly records?: unknown
+  readonly keys?: unknown
+  readonly count?: unknown
+  readonly truncated?: unknown
+  readonly key?: unknown
+  readonly deleted?: unknown
+  readonly cleared?: unknown
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function isIdbDatabaseInfo(
+  value: unknown,
+): value is { readonly name?: string | undefined; readonly version?: number | undefined } {
+  if (typeof value !== 'object' || value === null) return false
+  const info = value as { readonly name?: unknown; readonly version?: unknown }
+  return (
+    (info.name === undefined || typeof info.name === 'string') &&
+    (info.version === undefined ||
+      (typeof info.version === 'number' && Number.isFinite(info.version)))
+  )
+}
+
+function isIdbKeyPath(value: unknown): value is string | readonly string[] | null {
+  return (
+    value === null ||
+    typeof value === 'string' ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === 'string'))
+  )
+}
+
+function isIdbStoreInfo(value: unknown): value is {
+  readonly name: string
+  readonly keyPath: string | readonly string[] | null
+  readonly autoIncrement: boolean
+  readonly indexes: readonly string[]
+} {
+  if (typeof value !== 'object' || value === null) return false
+  const store = value as {
+    readonly name?: unknown
+    readonly keyPath?: unknown
+    readonly autoIncrement?: unknown
+    readonly indexes?: unknown
+  }
+  return (
+    typeof store.name === 'string' &&
+    isIdbKeyPath(store.keyPath) &&
+    typeof store.autoIncrement === 'boolean' &&
+    Array.isArray(store.indexes) &&
+    store.indexes.every((index) => typeof index === 'string')
+  )
+}
+
+function isIdbRecord(value: unknown): value is { readonly key: unknown; readonly value: unknown } {
+  return (
+    typeof value === 'object' && value !== null && hasOwn(value, 'key') && hasOwn(value, 'value')
+  )
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isUsableIdbSuccess(
+  req: IdbRequest,
+  result: RawIdbResult,
+): result is Extract<IdbResult, { ok: true }> {
+  if (result.ok !== true || typeof result.origin !== 'string') return false
+  switch (req.op) {
+    case 'schema':
+      return req.database === undefined
+        ? Array.isArray(result.databases) && result.databases.every(isIdbDatabaseInfo)
+        : Array.isArray(result.stores) && result.stores.every(isIdbStoreInfo)
+    case 'get':
+      if (req.key !== undefined && req.key !== null) {
+        return result.record === null || isIdbRecord(result.record)
+      }
+      return (
+        Array.isArray(result.records) &&
+        result.records.every(isIdbRecord) &&
+        typeof result.truncated === 'boolean'
+      )
+    case 'keys':
+      return (
+        Array.isArray(result.keys) &&
+        isFiniteNumber(result.count) &&
+        typeof result.truncated === 'boolean'
+      )
+    case 'count':
+      return isFiniteNumber(result.count)
+    case 'set':
+      return hasOwn(result, 'key')
+    case 'delete':
+      return hasOwn(result, 'deleted')
+    case 'clear':
+      return result.cleared === true
+  }
+  return false
+}
+
+/** Replace a record's value with `[redacted]` when the `redactValues` config is on (the opt-in secret bound). */
+function redactRecord<T extends { value: unknown }>(record: T): T {
+  return config.redactValues ? { ...record, value: '[redacted]' } : record
+}
+
+/** A JSON key (string / number / composite array) the agent can name a record by. */
+const idbKeySchema = z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))])
+
+/** A key range for the multi-record read / keys / count ops. */
+const idbRangeSchema = z.object({
+  lower: idbKeySchema.optional(),
+  upper: idbKeySchema.optional(),
+  lowerOpen: z.boolean().optional(),
+  upperOpen: z.boolean().optional(),
+})
+
+const idbStoreField = {
+  database: z.string().min(1).describe('The IndexedDB database name (must already exist).'),
+  store: z.string().min(1).describe('The object store name (must already exist in the database).'),
+  ...sessionField,
+}
+
+const idbSchemaTool: AnyToolDefinition = defineTool({
+  name: 'idb_schema',
+  title: 'List IndexedDB databases or stores',
+  description: [
+    'Discover IndexedDB structure: with no `database`, list the app’s databases ({ name, version });',
+    'with a `database`, list its object stores ({ name, keyPath, autoIncrement, indexes }). Returns:',
+    '{ ok, origin, databases } or { ok, origin, database, stores }. Errors: storage.EVAL_REQUIRED,',
+    'storage.UNSUPPORTED, storage.NOT_FOUND (named database absent), storage.ACCESS_FAILED, NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({
+    database: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Omit to list databases; give a name to list its stores.'),
+    ...sessionField,
+  }),
+  operationType: 'query',
+  ...evalGated,
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireRendererEval(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const run = await runIndexedDb(
+      guard.session,
+      { op: 'schema', ...(args.database !== undefined ? { database: args.database } : {}) },
+      meta,
+    )
+    if ('error' in run) return run.error
+    if (args.database === undefined) {
+      return makeSuccess({ origin: run.result.origin, databases: run.result.databases ?? [] }, meta)
+    }
+    return makeSuccess(
+      { origin: run.result.origin, database: args.database, stores: run.result.stores ?? [] },
+      meta,
+    )
+  },
+})
+
+const idbGetTool: AnyToolDefinition = defineTool({
+  name: 'idb_get',
+  title: 'Read IndexedDB records',
+  description: [
+    'Read from an object store: one record by `key`, a `range` of records, or all records (bounded by',
+    '`limit`, default 1000, with a `truncated` flag). Use `index` to read via a store index instead of',
+    'the primary key. Values are returned VERBATIM (configure redactValues to mask them). Provide at most',
+    'one of `key` / `range`. Returns: { ok, origin, record } or { ok, origin, records, truncated }.',
+    'Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED, storage.NOT_FOUND, storage.ACCESS_FAILED,',
+    'NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z
+    .object({
+      key: idbKeySchema
+        .optional()
+        .describe('Read the single record with this primary (or index) key.'),
+      index: z
+        .string()
+        .optional()
+        .describe('Read via this store index instead of the primary key.'),
+      range: idbRangeSchema.optional().describe('Read records whose key falls in this range.'),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Max records for a range/all read (default 1000).'),
+      ...idbStoreField,
+    })
+    .refine((v) => !(v.key !== undefined && v.range !== undefined), {
+      message: 'Provide at most one of key or range.',
+    }),
+  operationType: 'query',
+  ...evalGated,
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireRendererEval(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const req: IdbRequest = {
+      op: 'get',
+      database: args.database,
+      store: args.store,
+      ...(args.key !== undefined ? { key: args.key } : {}),
+      ...(args.index !== undefined ? { index: args.index } : {}),
+      ...(args.range !== undefined ? { range: args.range } : {}),
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    }
+    const run = await runIndexedDb(guard.session, req, meta)
+    if ('error' in run) return run.error
+    if (args.key !== undefined) {
+      const record = run.result.record ?? null
+      return makeSuccess(
+        { origin: run.result.origin, record: record === null ? null : redactRecord(record) },
+        meta,
+      )
+    }
+    const records = (run.result.records ?? []).map(redactRecord)
+    return makeSuccess(
+      { origin: run.result.origin, records, truncated: run.result.truncated ?? false },
+      meta,
+    )
+  },
+})
+
+const idbKeysTool: AnyToolDefinition = defineTool({
+  name: 'idb_keys',
+  title: 'List IndexedDB keys',
+  description: [
+    'List the primary keys in an object store (no values — cheap discovery), optionally narrowed by an',
+    '`index` and/or a key `range`, bounded by `limit` (default 1000, with a `truncated` flag). Returns:',
+    '{ ok, origin, count, keys, truncated }. Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED,',
+    'storage.NOT_FOUND, storage.ACCESS_FAILED, NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({
+    index: z
+      .string()
+      .optional()
+      .describe('List keys via this store index instead of the primary key.'),
+    range: idbRangeSchema.optional().describe('Only keys in this range.'),
+    limit: z.number().int().positive().optional().describe('Max keys (default 1000).'),
+    ...idbStoreField,
+  }),
+  operationType: 'query',
+  ...evalGated,
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireRendererEval(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const run = await runIndexedDb(
+      guard.session,
+      {
+        op: 'keys',
+        database: args.database,
+        store: args.store,
+        ...(args.index !== undefined ? { index: args.index } : {}),
+        ...(args.range !== undefined ? { range: args.range } : {}),
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      },
+      meta,
+    )
+    if ('error' in run) return run.error
+    const keys = run.result.keys ?? []
+    return makeSuccess(
+      {
+        origin: run.result.origin,
+        count: keys.length,
+        keys,
+        truncated: run.result.truncated ?? false,
+      },
+      meta,
+    )
+  },
+})
+
+const idbCountTool: AnyToolDefinition = defineTool({
+  name: 'idb_count',
+  title: 'Count IndexedDB records',
+  description: [
+    'Count records in an object store (cheaper than reading them), optionally narrowed by an `index`',
+    'and/or a key `range`. Returns: { ok, origin, count }. Errors: storage.EVAL_REQUIRED,',
+    'storage.UNSUPPORTED, storage.NOT_FOUND, storage.ACCESS_FAILED, NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({
+    index: z.string().optional().describe('Count via this store index.'),
+    range: idbRangeSchema.optional().describe('Only records in this range.'),
+    ...idbStoreField,
+  }),
+  operationType: 'query',
+  ...evalGated,
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireRendererEval(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const run = await runIndexedDb(
+      guard.session,
+      {
+        op: 'count',
+        database: args.database,
+        store: args.store,
+        ...(args.index !== undefined ? { index: args.index } : {}),
+        ...(args.range !== undefined ? { range: args.range } : {}),
+      },
+      meta,
+    )
+    if ('error' in run) return run.error
+    return makeSuccess({ origin: run.result.origin, count: run.result.count ?? 0 }, meta)
+  },
+})
+
+const idbSetTool: AnyToolDefinition = defineTool({
+  name: 'idb_set',
+  title: 'Put an IndexedDB record',
+  description: [
+    'Add or overwrite one record in an existing object store (seed app state). Omit `key` for a store',
+    'with an in-line key path or autoIncrement; provide `key` for an out-of-line-key store. Returns:',
+    '{ ok, origin, key } (the effective key). Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED,',
+    'storage.NOT_FOUND, storage.ACCESS_FAILED (incl. a missing required key), NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({
+    value: z
+      .unknown()
+      .describe('The record value (any JSON; structured-clone superset is not supported).'),
+    key: idbKeySchema
+      .optional()
+      .describe('Explicit key — required only for out-of-line-key stores.'),
+    ...idbStoreField,
+  }),
+  operationType: 'command',
+  ...evalGated,
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireRendererEval(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const run = await runIndexedDb(
+      guard.session,
+      {
+        op: 'set',
+        database: args.database,
+        store: args.store,
+        value: args.value,
+        ...(args.key !== undefined ? { key: args.key } : {}),
+      },
+      meta,
+    )
+    if ('error' in run) return run.error
+    return makeSuccess({ origin: run.result.origin, key: run.result.key ?? null }, meta)
+  },
+})
+
+const idbDeleteTool: AnyToolDefinition = defineTool({
+  name: 'idb_delete',
+  title: 'Delete an IndexedDB record',
+  description: [
+    'Delete one record by primary `key` from an object store. Idempotent. Returns:',
+    '{ ok, origin, deleted }. Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED, storage.NOT_FOUND,',
+    'storage.ACCESS_FAILED, NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({
+    key: idbKeySchema.describe('The primary key to delete.'),
+    ...idbStoreField,
+  }),
+  operationType: 'command',
+  ...evalGated,
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireRendererEval(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const run = await runIndexedDb(
+      guard.session,
+      { op: 'delete', database: args.database, store: args.store, key: args.key },
+      meta,
+    )
+    if ('error' in run) return run.error
+    return makeSuccess({ origin: run.result.origin, deleted: run.result.deleted ?? args.key }, meta)
+  },
+})
+
+const idbClearTool: AnyToolDefinition = defineTool({
+  name: 'idb_clear',
+  title: 'Clear an IndexedDB store',
+  description: [
+    'Remove every record from an object store (the store itself stays). Idempotent. Returns:',
+    '{ ok, origin, cleared }. Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED, storage.NOT_FOUND,',
+    'storage.ACCESS_FAILED, NOT_RUNNING.',
+  ].join(' '),
+  inputSchema: z.object({ ...idbStoreField }),
+  operationType: 'command',
+  ...evalGated,
+  handler: async (args, ctx) => {
+    const meta = { startedAt: ctx.startedAt, now: ctx.now }
+    const guard = requireRendererEval(ctx, args.sessionId, meta)
+    if ('error' in guard) return guard.error
+    const run = await runIndexedDb(
+      guard.session,
+      { op: 'clear', database: args.database, store: args.store },
+      meta,
+    )
+    if ('error' in run) return run.error
+    return makeSuccess({ origin: run.result.origin, cleared: true }, meta)
+  },
+})
+
+const indexedDbTools: AnyToolDefinition[] = [
+  idbSchemaTool,
+  idbGetTool,
+  idbKeysTool,
+  idbCountTool,
+  idbSetTool,
+  idbDeleteTool,
+  idbClearTool,
+]
+
 /**
  * The storage plugin. Load with `--plugin @electron-stagewright/plugin-storage` or
  * `createServer({ plugins: [storagePlugin] })`. The cookie + snapshot tools need NO eval flag; the
- * per-key `storage_local_*` / `storage_session_*` tools register only under `--allow-eval=renderer`
- * (or bare `--allow-eval`). Configure via `pluginConfigs.storage` (`{ revealValues? }`).
+ * per-key `storage_local_*` / `storage_session_*` and `storage_idb_*` tools register only under
+ * `--allow-eval=renderer` (or bare `--allow-eval`). Configure via `pluginConfigs.storage`
+ * (`{ revealValues?, redactValues? }`).
  */
 export const storagePlugin: StagewrightPlugin = {
   name: STORAGE_NAMESPACE,
@@ -583,15 +1085,27 @@ export const storagePlugin: StagewrightPlugin = {
     EVAL_REQUIRED: {
       http: 403,
       retryable: false,
-      hint: 'Per-key localStorage/sessionStorage runs renderer JS; start the server with --allow-eval=renderer (or bare --allow-eval).',
+      hint: 'Per-key localStorage/sessionStorage and IndexedDB tools run renderer JS; start the server with --allow-eval=renderer (or bare --allow-eval).',
     },
     ACCESS_FAILED: {
       http: 422,
       retryable: false,
       hint: 'The renderer could not read or write the storage area (e.g. quota exceeded or an opaque origin).',
     },
+    NOT_FOUND: {
+      http: 404,
+      retryable: false,
+      hint: 'The named IndexedDB database or object store does not exist; this plugin operates on existing databases/stores only.',
+    },
   },
-  tools: [cookiesTool, setCookieTool, clearCookiesTool, snapshotTool, ...webStorageTools],
+  tools: [
+    cookiesTool,
+    setCookieTool,
+    clearCookiesTool,
+    snapshotTool,
+    ...webStorageTools,
+    ...indexedDbTools,
+  ],
   setup: (raw) => {
     config = raw as StorageConfig
   },

@@ -28,6 +28,7 @@ import {
   type WebStorageRequest,
   type WebStorageResult,
 } from '../src/web-storage.js'
+import { INDEXEDDB_BODY, type IdbRequest, type IdbResult } from '../src/indexeddb.js'
 
 const created: string[] = []
 
@@ -64,15 +65,17 @@ async function open(
   opts: {
     capabilities?: TransportCapabilities
     revealValues?: boolean
+    redactValues?: boolean
     allowEval?: boolean | EvalPolicy
   } = {},
 ): Promise<Awaited<ReturnType<typeof createServer>>> {
   const transport = new FakeTransport({ session, capabilities: opts.capabilities ?? FULL_CAPS })
+  const storageConfig: { revealValues?: boolean; redactValues?: boolean } = {}
+  if (opts.revealValues !== undefined) storageConfig.revealValues = opts.revealValues
+  if (opts.redactValues !== undefined) storageConfig.redactValues = opts.redactValues
   const server = await createServer({
     plugins: [storagePlugin],
-    ...(opts.revealValues !== undefined
-      ? { pluginConfigs: { storage: { revealValues: opts.revealValues } } }
-      : {}),
+    ...(Object.keys(storageConfig).length > 0 ? { pluginConfigs: { storage: storageConfig } } : {}),
     ...(opts.allowEval !== undefined ? { allowEval: opts.allowEval } : {}),
     logger: NOOP_LOGGER,
     transports: new TransportRegistry({ transports: [transport] }),
@@ -586,6 +589,401 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
       ['storage_local_get', { key: 'a' }],
       ['storage_local_get', { keys: ['a', 'z'] }],
       ['storage_local_keys', {}],
+    ] as const) {
+      const res = await server.dispatcher.dispatch(tool, { sessionId, ...args })
+      expect(JSON.parse(JSON.stringify(res))).toEqual(res)
+    }
+  })
+})
+
+const IDB_ORIGIN = 'https://app.example.com'
+
+/** Canned IdbResult per op — the body is covered in indexeddb.test.ts; these tests assert the relay. */
+function cannedIdb(req: IdbRequest): IdbResult {
+  switch (req.op) {
+    case 'schema':
+      return req.database === undefined
+        ? { ok: true, origin: IDB_ORIGIN, databases: [{ name: 'appdb', version: 1 }] }
+        : {
+            ok: true,
+            origin: IDB_ORIGIN,
+            stores: [{ name: 'docs', keyPath: 'id', autoIncrement: false, indexes: ['byKind'] }],
+          }
+    case 'get':
+      return req.key !== undefined
+        ? {
+            ok: true,
+            origin: IDB_ORIGIN,
+            record: { key: req.key, value: { id: req.key, secret: 'tok' } },
+          }
+        : {
+            ok: true,
+            origin: IDB_ORIGIN,
+            records: [{ key: 'a', value: { id: 'a', secret: 'tok' } }],
+            truncated: false,
+          }
+    case 'keys':
+      return { ok: true, origin: IDB_ORIGIN, keys: ['a', 'b'], count: 2, truncated: false }
+    case 'count':
+      return { ok: true, origin: IDB_ORIGIN, count: 2 }
+    case 'set':
+      return { ok: true, origin: IDB_ORIGIN, key: req.key ?? 'gen-1' }
+    case 'delete':
+      return { ok: true, origin: IDB_ORIGIN, deleted: req.key }
+    case 'clear':
+      return { ok: true, origin: IDB_ORIGIN, cleared: true }
+  }
+}
+
+/**
+ * A FakeSession whose `evaluate('renderer', INDEXEDDB_BODY, req)` asserts the plugin relays the fixed
+ * body, records the request, and returns a canned result (or an override for error cases). The body
+ * itself runs for real against fake-indexeddb in indexeddb.test.ts.
+ */
+function idbSession(override?: (req: IdbRequest) => IdbResult | undefined): {
+  session: FakeSession
+  calls: IdbRequest[]
+} {
+  const calls: IdbRequest[] = []
+  const session = new FakeSession({
+    evaluate: async (target, body, arg) => {
+      expect(target).toBe('renderer')
+      expect(body).toBe(INDEXEDDB_BODY)
+      const req = arg as IdbRequest
+      calls.push(req)
+      return override?.(req) ?? cannedIdb(req)
+    },
+  })
+  return { session, calls }
+}
+
+describe('storage plugin — IndexedDB (renderer-eval gated)', () => {
+  it('hides the IndexedDB tools unless renderer eval is permitted (registration gate)', async () => {
+    const off = await open(new FakeSession())
+    const offNames = off.dispatcher.listManifest().map((e) => e.name)
+    expect(offNames).not.toContain('storage_idb_get')
+
+    const on = await open(new FakeSession(), { allowEval: RENDERER_ON })
+    const onNames = on.dispatcher.listManifest().map((e) => e.name)
+    for (const t of [
+      'storage_idb_schema',
+      'storage_idb_get',
+      'storage_idb_keys',
+      'storage_idb_count',
+      'storage_idb_set',
+      'storage_idb_delete',
+      'storage_idb_clear',
+    ]) {
+      expect(onNames).toContain(t)
+    }
+  })
+
+  it('marks the IndexedDB tools renderer-eval gated in the manifest', async () => {
+    const server = await open(new FakeSession(), { allowEval: RENDERER_ON })
+    const entry = server.dispatcher.listManifest().find((e) => e.name === 'storage_idb_set')
+    expect(entry).toMatchObject({ requiresEvalFlag: true, evalTarget: 'renderer' })
+  })
+
+  it('lists databases (schema, no database) and stores (schema, with database)', async () => {
+    const { session, calls } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(await server.dispatcher.dispatch('storage_idb_schema', { sessionId })).toMatchObject({
+      ok: true,
+      databases: [{ name: 'appdb', version: 1 }],
+    })
+    expect(
+      await server.dispatcher.dispatch('storage_idb_schema', { sessionId, database: 'appdb' }),
+    ).toMatchObject({
+      ok: true,
+      database: 'appdb',
+      stores: [{ name: 'docs', indexes: ['byKind'] }],
+    })
+    expect(calls.map((c) => c.op)).toEqual(['schema', 'schema'])
+  })
+
+  it('rejects an empty schema database name before the renderer', async () => {
+    const { session, calls } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_schema', { sessionId, database: '' }),
+    ).toMatchObject({
+      ok: false,
+      code: 'BAD_ARGUMENT',
+    })
+    expect(calls).toEqual([])
+  })
+
+  it('gets one record by key, relaying the database/store/key', async () => {
+    const { session, calls } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_get', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+        key: 'a',
+      }),
+    ).toMatchObject({ ok: true, origin: IDB_ORIGIN, record: { key: 'a', value: { id: 'a' } } })
+    expect(calls[0]).toMatchObject({ op: 'get', database: 'appdb', store: 'docs', key: 'a' })
+  })
+
+  it('gets all records (no key) with a truncated flag', async () => {
+    const { session } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_get', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+      }),
+    ).toMatchObject({ ok: true, records: [{ key: 'a' }], truncated: false })
+  })
+
+  it('relays index and range on a get', async () => {
+    const { session, calls } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    await server.dispatcher.dispatch('storage_idb_get', {
+      sessionId,
+      database: 'appdb',
+      store: 'docs',
+      index: 'byKind',
+      range: { lower: 'note', upper: 'task' },
+    })
+    expect(calls[0]).toMatchObject({
+      op: 'get',
+      index: 'byKind',
+      range: { lower: 'note', upper: 'task' },
+    })
+  })
+
+  it('rejects a get with both key and range as BAD_ARGUMENT', async () => {
+    const { session, calls } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_get', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+        key: 'a',
+        range: { lower: 'a' },
+      }),
+    ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(calls).toEqual([]) // schema rejected before the seam
+  })
+
+  it('lists keys and counts records', async () => {
+    const { session } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_keys', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+      }),
+    ).toMatchObject({ ok: true, count: 2, keys: ['a', 'b'], truncated: false })
+    expect(
+      await server.dispatcher.dispatch('storage_idb_count', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+      }),
+    ).toMatchObject({ ok: true, count: 2 })
+  })
+
+  it('puts a record (echoing the effective key, generated when none is given)', async () => {
+    const { session, calls } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_set', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+        value: { id: 'z', title: 'Zeta' },
+      }),
+    ).toMatchObject({ ok: true, key: 'gen-1' })
+    expect(calls[0]).toMatchObject({ op: 'set', value: { id: 'z', title: 'Zeta' } })
+  })
+
+  it('deletes and clears', async () => {
+    const { session } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_delete', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+        key: 'a',
+      }),
+    ).toMatchObject({ ok: true, deleted: 'a' })
+    expect(
+      await server.dispatcher.dispatch('storage_idb_clear', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+      }),
+    ).toMatchObject({ ok: true, cleared: true })
+  })
+
+  it('maps a missing database/store to storage.NOT_FOUND', async () => {
+    const { session } = idbSession(() => ({
+      ok: false,
+      origin: null,
+      reason: 'database_not_found',
+    }))
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_get', {
+        sessionId,
+        database: 'ghost',
+        store: 'docs',
+        key: 'a',
+      }),
+    ).toMatchObject({ ok: false, code: 'storage.NOT_FOUND' })
+
+    const { session: s2 } = idbSession(() => ({
+      ok: false,
+      origin: null,
+      reason: 'store_not_found',
+    }))
+    const server2 = await open(s2, { allowEval: RENDERER_ON })
+    const sid2 = await launch(server2)
+    expect(
+      await server2.dispatcher.dispatch('storage_idb_get', {
+        sessionId: sid2,
+        database: 'appdb',
+        store: 'ghost',
+        key: 'a',
+      }),
+    ).toMatchObject({ ok: false, code: 'storage.NOT_FOUND' })
+  })
+
+  it('maps a transaction fault and a malformed result to storage.ACCESS_FAILED', async () => {
+    const { session } = idbSession(() => ({
+      ok: false,
+      origin: IDB_ORIGIN,
+      reason: 'transaction_error',
+    }))
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_clear', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+      }),
+    ).toMatchObject({ ok: false, code: 'storage.ACCESS_FAILED' })
+
+    const malformed = new FakeSession({ evaluate: async () => undefined })
+    const server2 = await open(malformed, { allowEval: RENDERER_ON })
+    const sid2 = await launch(server2)
+    expect(
+      await server2.dispatcher.dispatch('storage_idb_count', {
+        sessionId: sid2,
+        database: 'appdb',
+        store: 'docs',
+      }),
+    ).toMatchObject({ ok: false, code: 'storage.ACCESS_FAILED' })
+
+    const malformedSuccess = new FakeSession({
+      evaluate: async () => ({ ok: true, origin: IDB_ORIGIN }),
+    })
+    const server3 = await open(malformedSuccess, { allowEval: RENDERER_ON })
+    const sid3 = await launch(server3)
+    expect(
+      await server3.dispatcher.dispatch('storage_idb_get', {
+        sessionId: sid3,
+        database: 'appdb',
+        store: 'docs',
+        key: 'a',
+      }),
+    ).toMatchObject({ ok: false, code: 'storage.ACCESS_FAILED' })
+  })
+
+  it('surfaces an out-of-line key_required as storage.ACCESS_FAILED with a guiding message', async () => {
+    const { session } = idbSession(() => ({
+      ok: false,
+      origin: IDB_ORIGIN,
+      reason: 'key_required',
+    }))
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    const res = (await server.dispatcher.dispatch('storage_idb_set', {
+      sessionId,
+      database: 'appdb',
+      store: 'blobs',
+      value: { x: 1 },
+    })) as { ok: boolean; code?: string; error?: string }
+    expect(res).toMatchObject({ ok: false, code: 'storage.ACCESS_FAILED' })
+    expect(res.error).toContain('out-of-line')
+  })
+
+  it('rejects a transport without renderer eval with storage.UNSUPPORTED', async () => {
+    const { session } = idbSession()
+    const server = await open(session, {
+      allowEval: RENDERER_ON,
+      capabilities: { ...FULL_CAPS, supportsRendererEval: false },
+    })
+    const sessionId = await launch(server)
+    expect(
+      await server.dispatcher.dispatch('storage_idb_count', {
+        sessionId,
+        database: 'appdb',
+        store: 'docs',
+      }),
+    ).toMatchObject({ ok: false, code: 'storage.UNSUPPORTED' })
+  })
+
+  it('returns record values verbatim by default, and redacts them when redactValues is configured', async () => {
+    const { session } = idbSession()
+    const shown = await open(session, { allowEval: RENDERER_ON })
+    const sid = await launch(shown)
+    expect(
+      await shown.dispatcher.dispatch('storage_idb_get', {
+        sessionId: sid,
+        database: 'appdb',
+        store: 'docs',
+        key: 'a',
+      }),
+    ).toMatchObject({ record: { value: { secret: 'tok' } } })
+
+    const { session: s2 } = idbSession()
+    const redacted = await open(s2, { allowEval: RENDERER_ON, redactValues: true })
+    const sid2 = await launch(redacted)
+    expect(
+      await redacted.dispatcher.dispatch('storage_idb_get', {
+        sessionId: sid2,
+        database: 'appdb',
+        store: 'docs',
+        key: 'a',
+      }),
+    ).toMatchObject({ record: { key: 'a', value: '[redacted]' } })
+    // A multi-record read redacts each value too.
+    const all = (await redacted.dispatcher.dispatch('storage_idb_get', {
+      sessionId: sid2,
+      database: 'appdb',
+      store: 'docs',
+    })) as unknown as { records: Array<{ value: unknown }> }
+    expect(all.records.every((r) => r.value === '[redacted]')).toBe(true)
+  })
+
+  it('returns wire-serialisable IndexedDB payloads', async () => {
+    const { session } = idbSession()
+    const server = await open(session, { allowEval: RENDERER_ON })
+    const sessionId = await launch(server)
+    for (const [tool, args] of [
+      ['storage_idb_schema', {}],
+      ['storage_idb_get', { database: 'appdb', store: 'docs', key: 'a' }],
+      ['storage_idb_keys', { database: 'appdb', store: 'docs' }],
     ] as const) {
       const res = await server.dispatcher.dispatch(tool, { sessionId, ...args })
       expect(JSON.parse(JSON.stringify(res))).toEqual(res)
