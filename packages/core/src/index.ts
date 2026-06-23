@@ -14,7 +14,12 @@
  * @packageDocumentation
  */
 
-export const VERSION = '0.0.0'
+/**
+ * The core package version, read from package.json (see `version.ts`) — the single source of truth,
+ * so the exported `VERSION`, the MCP `serverInfo.version`, and the plugin core-compatibility check
+ * never drift from the manifest.
+ */
+export { VERSION } from './version.js'
 
 /**
  * Error code registry, response envelope helpers, and operation-type routing.
