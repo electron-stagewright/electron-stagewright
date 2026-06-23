@@ -7,7 +7,8 @@
  *
  * Implements ADR-001 (the `@electron-stagewright` scope + MIT), ADR-002 (the ESM package shape and
  * Node floor), and the release posture of ADR-015. The matching release procedure is
- * `.github/RELEASING.md`.
+ * `.github/RELEASING.md`; a second suite here pins that doc's "What publishes" list to the real
+ * publishable-package set so it cannot silently go stale.
  */
 
 import { access, readdir, readFile } from 'node:fs/promises'
@@ -240,5 +241,212 @@ describe('publish-readiness — publishable package manifests', () => {
         'packages/core: files must include "LICENSE"',
       ]),
     )
+  })
+})
+
+// --- RELEASING.md "What publishes" drift guard ------------------------------
+// The release doc keeps a hand-maintained list of the packages a release pushes
+// to npm. That list has drifted before (it named fewer packages than actually
+// publish, and a human caught it, not CI). These checks pin the prose to the real
+// workspace so a stale list fails the build. Pairs with the manifest gate above;
+// both back the procedure in .github/RELEASING.md and the ADR-001/002/015 posture.
+
+const RELEASING_DOC = path.join(REPO_ROOT, '.github', 'RELEASING.md')
+
+/** One package entry parsed from the RELEASING.md "What publishes" bullet list. */
+interface ReleasingEntry {
+  /** Scoped package name, e.g. `@electron-stagewright/core`. */
+  readonly name: string
+  /** The human gloss from the trailing `(...)`, trimmed; empty string when absent. */
+  readonly gloss: string
+}
+
+/**
+ * The publish declarations parsed from RELEASING.md's "What publishes" section:
+ * the packages it lists as publishable, plus the `packages/` dirs the prose names
+ * as internal/private. Parsed (rather than hard-coded in the test) so the doc
+ * itself is the thing under test and a drift in either direction fails CI.
+ */
+interface ReleasingPublishables {
+  /** Each publishable entry, in document order. */
+  readonly entries: readonly ReleasingEntry[]
+  /** Convenience view: the scoped names from `entries`, deduplicated. */
+  readonly publishable: readonly string[]
+  /** `packages/<name>` dirs the prose names as private (e.g. `packages/bench`). */
+  readonly privatePackages: readonly string[]
+}
+
+/**
+ * Parse the "What publishes" section out of RELEASING.md markdown. Line-ending
+ * agnostic (a committed file checks out CRLF on Windows). Returns empty lists when
+ * the section is absent, so the caller MUST assert non-emptiness to stay fail-loud
+ * rather than vacuously green if the heading is ever renamed.
+ */
+function parseReleasingPublishables(markdown: string): ReleasingPublishables {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const start = lines.findIndex((line) => /^##\s+What publishes\s*$/.test(line))
+  const section: string[] = []
+  if (start !== -1) {
+    for (const line of lines.slice(start + 1)) {
+      if (/^##\s/.test(line)) break
+      section.push(line)
+    }
+  }
+
+  const entries: ReleasingEntry[] = []
+  for (const line of section) {
+    const bullet = /^-\s+`(@electron-stagewright\/[a-z0-9-]+)`\s*(.*)$/.exec(line.trim())
+    const name = bullet?.[1]
+    if (name === undefined) continue
+    const gloss = /^\(([^)]*)\)/.exec(bullet?.[2] ?? '')
+    entries.push({ name, gloss: gloss?.[1]?.trim() ?? '' })
+  }
+
+  const sectionText = section.join('\n')
+  const privatePackages = [
+    ...new Set(
+      [...sectionText.matchAll(/`(packages\/[a-z0-9-]+)`/g)]
+        .map((match) => match[1])
+        .filter((dir): dir is string => dir !== undefined),
+    ),
+  ]
+
+  return {
+    entries,
+    publishable: [...new Set(entries.map((entry) => entry.name))],
+    privatePackages,
+  }
+}
+
+/** Read and parse `.github/RELEASING.md`. */
+async function loadReleasingPublishables(): Promise<ReleasingPublishables> {
+  return parseReleasingPublishables(await readFile(RELEASING_DOC, 'utf8'))
+}
+
+/** Symmetric difference between a documented name list and the real one. */
+function publishableDrift(
+  documented: readonly string[],
+  actual: readonly string[],
+): { missingFromDoc: string[]; extraInDoc: string[] } {
+  const documentedSet = new Set(documented)
+  const actualSet = new Set(actual)
+  return {
+    missingFromDoc: [...actualSet].filter((name) => !documentedSet.has(name)).sort(),
+    extraInDoc: [...documentedSet].filter((name) => !actualSet.has(name)).sort(),
+  }
+}
+
+/** A "What publishes" section missing a publishable package (drives the negative test). */
+const STALE_RELEASING_FIXTURE = [
+  '# Releasing',
+  '',
+  '## What publishes',
+  '',
+  'The publishable packages are every `packages/` entry that is not private:',
+  '',
+  '- `@electron-stagewright/core` (the CLI)',
+  '- `@electron-stagewright/plugin-clock` (virtual time)',
+  '',
+  'Everything under `examples/` and `packages/bench` is `private: true`.',
+  '',
+  '## Versioning',
+  '',
+  'Semver.',
+  '',
+].join('\n')
+
+/** A "What publishes" entry with no parenthetical gloss (drives the description test). */
+const UNDESCRIBED_RELEASING_FIXTURE = [
+  '## What publishes',
+  '',
+  '- `@electron-stagewright/core` (the CLI)',
+  '- `@electron-stagewright/plugin-bare`',
+  '',
+  '## Versioning',
+].join('\n')
+
+describe('publish-readiness — RELEASING.md "What publishes" list', () => {
+  it('names exactly the publishable packages, with no drift in either direction', async () => {
+    const documented = await loadReleasingPublishables()
+    const actual = (await loadManifests('packages'))
+      .filter((m) => !isPrivate(m.pkg))
+      .map((m) => String(m.pkg['name']))
+
+    // Fail loud if the section is ever moved or renamed, instead of passing
+    // vacuously on an empty parse.
+    expect(
+      documented.publishable.length,
+      'parsed no packages from the "What publishes" section — has the heading changed?',
+    ).toBeGreaterThan(0)
+
+    const drift = publishableDrift(documented.publishable, actual)
+    expect(
+      drift,
+      'RELEASING.md "What publishes" is out of sync with the publishable packages.\n' +
+        `Missing from the doc: ${drift.missingFromDoc.join(', ') || '(none)'}\n` +
+        `Listed but not publishable: ${drift.extraInDoc.join(', ') || '(none)'}`,
+    ).toEqual({ missingFromDoc: [], extraInDoc: [] })
+  })
+
+  it('names exactly the internal (private) packages the workspace has', async () => {
+    const documented = await loadReleasingPublishables()
+    const actualPrivate = (await loadManifests('packages'))
+      .filter((m) => isPrivate(m.pkg))
+      .map((m) => m.relDir)
+
+    expect(actualPrivate.length, 'expected at least one private packages entry').toBeGreaterThan(0)
+    expect(
+      [...documented.privatePackages].sort(),
+      'RELEASING.md must name the same private packages dirs the workspace has',
+    ).toEqual([...actualPrivate].sort())
+  })
+
+  it('gives every listed package a human description', async () => {
+    const { entries } = await loadReleasingPublishables()
+    const undescribed = entries.filter((entry) => entry.gloss === '').map((entry) => entry.name)
+    expect(undescribed, 'every "What publishes" entry needs a parenthetical description').toEqual(
+      [],
+    )
+  })
+
+  it('lists the packages in sorted order', async () => {
+    const { publishable } = await loadReleasingPublishables()
+    expect(publishable, 'keep the "What publishes" list alphabetised by package name').toEqual(
+      [...publishable].sort(),
+    )
+  })
+
+  it('flags a package that is publishable but missing from the list', () => {
+    const stale = parseReleasingPublishables(STALE_RELEASING_FIXTURE)
+    const drift = publishableDrift(stale.publishable, [
+      '@electron-stagewright/core',
+      '@electron-stagewright/plugin-clock',
+      '@electron-stagewright/plugin-ipc',
+    ])
+    expect(drift.missingFromDoc).toEqual(['@electron-stagewright/plugin-ipc'])
+    expect(drift.extraInDoc).toEqual([])
+  })
+
+  it('flags a package that is listed but no longer publishable', () => {
+    const drift = publishableDrift(
+      ['@electron-stagewright/core', '@electron-stagewright/plugin-ghost'],
+      ['@electron-stagewright/core'],
+    )
+    expect(drift.extraInDoc).toEqual(['@electron-stagewright/plugin-ghost'])
+    expect(drift.missingFromDoc).toEqual([])
+  })
+
+  it('flags a list entry that has no description', () => {
+    const parsed = parseReleasingPublishables(UNDESCRIBED_RELEASING_FIXTURE)
+    const undescribed = parsed.entries
+      .filter((entry) => entry.gloss === '')
+      .map((entry) => entry.name)
+    expect(undescribed).toEqual(['@electron-stagewright/plugin-bare'])
+  })
+
+  it('parses nothing when the "What publishes" section is absent', () => {
+    const parsed = parseReleasingPublishables('# Releasing\n\nNo such section here.\n')
+    expect(parsed.publishable).toEqual([])
+    expect(parsed.entries).toEqual([])
   })
 })

@@ -3,7 +3,7 @@
 How a maintainer publishes the `@electron-stagewright/*` packages to npm. The project is
 pre-1.0; this is the checklist that turns a green `main` into a published release. The
 governance and semver policy behind it is [ADR-015](../docs/adr/015-project-governance.md);
-the package shape these steps assume is verified in CI by `packages/core/tests/packaging.test.ts`.
+the package shape these steps assume — and that this list names exactly the packages that publish — is verified in CI by `packages/core/tests/packaging.test.ts`.
 
 ## What publishes
 
