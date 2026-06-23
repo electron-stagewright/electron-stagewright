@@ -1,6 +1,6 @@
 # ADR-018: Storage plugin via a transport storage seam
 
-Status: Accepted (cookies + storage snapshot on both Playwright and CDP; per-key localStorage / sessionStorage shipped via a renderer-eval gate — see Status Update; IndexedDB deferred)
+Status: Accepted (cookies + storage snapshot on both Playwright and CDP; per-key localStorage / sessionStorage and IndexedDB shipped via a renderer-eval gate — see Status Updates)
 
 ## Context
 
@@ -160,6 +160,56 @@ tools work on the same transports as the cookie/snapshot seam, and `storage.UNSU
 
 IndexedDB read/write — async and structured (databases / object stores / cursors), a materially larger
 surface that warrants its own slice. The per-key Web Storage tools cover the common single-value case.
+
+## Status Update — IndexedDB read/write (the last deferred surface)
+
+The remaining deferral — IndexedDB — shipped on the same renderer-eval gate, completing the storage
+plugin's surface (cookies, the storage snapshot, per-key Web Storage, IndexedDB).
+
+### What landed
+
+A third tool family — `storage_idb_*` (schema / get / keys / count / set / delete / clear, seven tools) —
+over a fixed ASYNC renderer body (`indexeddb.ts` `INDEXEDDB_BODY`). `get` reads one record by key, a key
+range, or all (bounded by `limit`, with a `truncated` flag); `index` reads via a store index; `set` /
+`delete` / `clear` mutate records; `schema` lists databases or a database's stores. The agent supplies
+database / store / key / value / op as DATA, never code. Reuses the renderer-eval gate the per-key slice
+built: the same `evalGated` registration marker, `requireRendererEval` (→ `storage.EVAL_REQUIRED` /
+`storage.UNSUPPORTED`), and `ctx.allowEvalRenderer`. No core change.
+
+### Existing-schemas-only (the scope boundary)
+
+The body opens a database WITHOUT a version, so it never triggers a create/upgrade; an accidental open of
+a non-existent database is aborted in `onupgradeneeded` and reported as `database_not_found`. A missing
+database or object store is `storage.NOT_FOUND` (a new namespaced code) — the plugin never creates or
+upgrades a schema, because a version change mutates the app's own data model irreversibly, well beyond a
+testing seam. Creating stores via a version upgrade is explicitly out of scope (a foot-gun deliberately
+not exposed).
+
+### Async correctness + wire-safety
+
+The body promisifies the event-based IndexedDB API and resolves a WRITE only after the transaction
+COMMITS (`tx.oncomplete`), so a reported write has actually persisted (the gated real-Electron smoke
+re-reads a written record to prove it); the connection is closed in `finally` so a read never blocks a
+later app-driven upgrade. IndexedDB values are structured-clone (a superset of JSON), so the body
+normalises every returned value — `Date` → ISO string, and a `Blob` / `ArrayBuffer` / typed array or a
+circular reference → a typed placeholder (`{ __type, byteLength? }`) — so it round-trips over the MCP
+wire rather than shipping `{}` or crashing the read. This is a documented partial, like the CDP
+`localStorage` best-effort: binary values are described, not faithfully transferred.
+
+### Security
+
+IndexedDB record values are returned verbatim by default (app state, like the per-key tools), with an
+opt-in `redactValues` config that masks read values for an app that keeps secrets in IndexedDB. The
+security model gains an IndexedDB row alongside the Web Storage one; the renderer-eval grant is the
+operator's control over both. Writes (`set` / `delete` / `clear`) MODIFY app data, bounded by the same
+renderer-eval gate + operator-loaded plugin.
+
+### Both transports
+
+Reuses `supportsRendererEval` (Playwright `page.evaluate`, CDP `Runtime.evaluate`); the injector returns
+`storage.UNSUPPORTED`. The body unit tests run off-Electron against `fake-indexeddb` (a spec-compliant
+in-memory IndexedDB, a dev-only dependency) so the async/transaction logic is covered in CI without real
+Electron.
 
 ## Related decisions
 

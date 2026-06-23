@@ -10,6 +10,8 @@
     <pre id="origin"></pre>
     <button id="read">Read cookie</button>
     <pre id="cookie"></pre>
+    <!-- Readiness marker for the async IndexedDB seed below, so the smoke waits before reading IDB. -->
+    <pre id="idb"></pre>
     <script>
       // Seed a localStorage entry on load, so the storage snapshot can assert the origin's localStorage.
       localStorage.setItem('cart', '3-items')
@@ -19,6 +21,21 @@
       document.getElementById('read').addEventListener('click', () => {
         document.getElementById('cookie').textContent = document.cookie
       })
+      // Seed an IndexedDB database (appdb) + in-line-key store (docs) with one record, then flip the
+      // #idb readiness marker — the IDB smoke waits for it before reading.
+      const open = indexedDB.open('appdb', 1)
+      open.onupgradeneeded = () => {
+        open.result.createObjectStore('docs', { keyPath: 'id' })
+      }
+      open.onsuccess = () => {
+        const db = open.result
+        const tx = db.transaction('docs', 'readwrite')
+        tx.objectStore('docs').put({ id: 'seed', title: 'Seeded doc' })
+        tx.oncomplete = () => {
+          db.close()
+          document.getElementById('idb').textContent = 'seeded'
+        }
+      }
     </script>
   </body>
 </html>

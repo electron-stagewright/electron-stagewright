@@ -9,6 +9,9 @@
  * 2. The renderer-eval per-key tools (`storage_local_*` / `storage_session_*`): read the page's seeded
  *    `localStorage` key, set/get/remove a new one, and exercise `sessionStorage` independently — proving
  *    the real `page.evaluate` round-trip and the per-origin behaviour.
+ * 3. The renderer-eval IndexedDB tools (`storage_idb_*`): read the page's seeded record, then a full
+ *    write round-trip (set, read back, delete) against the real Chromium IndexedDB — proving the async
+ *    body actually commits its transactions.
  *
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (with `electron` + `playwright` installed). Skipped by
  * default so `pnpm test` stays fast and headless-CI-safe. The cookie/snapshot half needs no eval opt-in
@@ -182,6 +185,65 @@ describe('storage plugin smoke (real Electron)', () => {
       expect(
         await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'tab' }),
       ).toMatchObject({ ok: true, value: null })
+
+      // --- IndexedDB (renderer-eval) ---
+
+      // Wait for the fixture's async IndexedDB seed to finish (it flips #idb to "seeded").
+      await server.dispatcher.dispatch('electron_expect_text', {
+        sessionId,
+        selector: '#idb',
+        contains: 'seeded',
+      })
+
+      // The fixture seeded appdb/docs with one record; schema + get see it.
+      const schema = (await server.dispatcher.dispatch('storage_idb_schema', {
+        sessionId,
+        database: 'appdb',
+      })) as unknown as Envelope & { stores: ReadonlyArray<{ name: string; keyPath: unknown }> }
+      expect(schema.stores.some((s) => s.name === 'docs' && s.keyPath === 'id')).toBe(true)
+
+      expect(
+        await server.dispatcher.dispatch('storage_idb_get', {
+          sessionId,
+          database: 'appdb',
+          store: 'docs',
+          key: 'seed',
+        }),
+      ).toMatchObject({ ok: true, record: { key: 'seed', value: { title: 'Seeded doc' } } })
+
+      // Write round-trip: set a new record, read it back (proves the async transaction committed), delete it.
+      expect(
+        await server.dispatcher.dispatch('storage_idb_set', {
+          sessionId,
+          database: 'appdb',
+          store: 'docs',
+          value: { id: 'new', title: 'Written by the agent' },
+        }),
+      ).toMatchObject({ ok: true, key: 'new' })
+      expect(
+        await server.dispatcher.dispatch('storage_idb_get', {
+          sessionId,
+          database: 'appdb',
+          store: 'docs',
+          key: 'new',
+        }),
+      ).toMatchObject({ ok: true, record: { value: { title: 'Written by the agent' } } })
+      expect(
+        await server.dispatcher.dispatch('storage_idb_delete', {
+          sessionId,
+          database: 'appdb',
+          store: 'docs',
+          key: 'new',
+        }),
+      ).toMatchObject({ ok: true, deleted: 'new' })
+      expect(
+        await server.dispatcher.dispatch('storage_idb_get', {
+          sessionId,
+          database: 'appdb',
+          store: 'docs',
+          key: 'new',
+        }),
+      ).toMatchObject({ ok: true, record: null })
 
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
     },

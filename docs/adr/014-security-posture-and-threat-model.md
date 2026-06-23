@@ -185,3 +185,11 @@ per-key `localStorage` / `sessionStorage` tools (ADR-018 Status Update).
 - **Web Storage values are not redacted.** The new read tools return `localStorage` / `sessionStorage`
   values verbatim (app state, consistent with the snapshot's documented asymmetry). The security model
   gains a row for this surface; the renderer-eval opt-in is the operator's control over it.
+- **IndexedDB joins as a second consumer (no new permission).** The storage plugin's `storage_idb_*`
+  tools (read/write of records in existing databases/stores) gate the same way — registration gate +
+  `storage.EVAL_REQUIRED` re-assert + `supportsRendererEval` — over the same `ctx.allowEvalRenderer`
+  grant. Writes (`set`/`delete`/`clear`) MODIFY app data, bounded by the renderer-eval grant + the
+  operator-loaded plugin; they never create or upgrade a schema (existing databases/stores only). Record
+  values are returned verbatim by default, with an opt-in `redactValues` config; non-JSON
+  structured-clone values (Blob/ArrayBuffer/circular) are returned as a typed placeholder. The security
+  model gains an IndexedDB row alongside the Web Storage one.
