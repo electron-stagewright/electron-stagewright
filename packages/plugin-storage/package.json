@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/plugin-storage",
-  "version": "0.3.0",
+  "version": "0.1.0",
   "description": "Storage plugin for Electron Stagewright: read, seed, and assert an Electron app's cookies, storage snapshot, per-key localStorage/sessionStorage, and IndexedDB for agent-driven testing.",
   "type": "module",
   "license": "MIT",

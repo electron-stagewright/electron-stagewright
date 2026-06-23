@@ -62,7 +62,7 @@ import { INDEXEDDB_BODY, type IdbRequest, type IdbResult } from './indexeddb.js'
 /** Plugin namespace — must match {@link storagePlugin.name}; the loader prefixes its tools with it. */
 const STORAGE_NAMESPACE = 'storage'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const STORAGE_PLUGIN_VERSION = '0.3.0'
+const STORAGE_PLUGIN_VERSION = '0.1.0'
 
 const configSchema = z.object({
   revealValues: z

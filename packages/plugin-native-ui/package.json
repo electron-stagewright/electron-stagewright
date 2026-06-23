@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/plugin-native-ui",
-  "version": "0.5.0",
+  "version": "0.1.0",
   "description": "Native UI plugin for Electron Stagewright: read, assert, invoke app menus, capture shown notifications, and read or fire system-tray events.",
   "type": "module",
   "license": "MIT",
