@@ -18,6 +18,7 @@ import { definePluginsInfoTool, loadPlugins } from '../plugins/index.js'
 import type { StagewrightPlugin } from '../plugins/index.js'
 import { DEFAULT_TOOLS } from '../tools/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
+import { VERSION } from '../version.js'
 import { Dispatcher } from './dispatcher.js'
 import type { EvalPolicy } from './eval-policy.js'
 import { type Logger, type LogLevel, StderrLogger } from './logger.js'
@@ -28,11 +29,11 @@ import { TransportRegistry } from './transport-registry.js'
 /** Server name advertised to MCP clients. */
 const SERVER_NAME = '@electron-stagewright/core'
 /**
- * Server version advertised to MCP clients. Kept in step with the package
- * version manually for now (the package is pre-release at 0.0.0); a build-time
- * inject can replace this once a release pipeline exists.
+ * Server version advertised to MCP clients (the `initialize` `serverInfo.version`) and passed to the
+ * plugin loader's core-compatibility check. Sourced from package.json via `version.ts` so it never
+ * drifts from the published manifest.
  */
-const SERVER_VERSION = '0.0.0'
+const SERVER_VERSION = VERSION
 
 /** Options for {@link createServer}. */
 export interface CreateServerOptions {
