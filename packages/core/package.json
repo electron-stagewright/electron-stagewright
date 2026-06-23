@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Core MCP server for Electron Stagewright. Drive Electron apps the way Playwright drives browsers.",
   "type": "module",
   "license": "MIT",

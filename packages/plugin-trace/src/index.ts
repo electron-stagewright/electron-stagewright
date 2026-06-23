@@ -60,7 +60,7 @@ interface ActiveRecording {
 /** Plugin namespace — must match {@link tracePlugin.name}; the loader prefixes its tools with it. */
 const TRACE_NAMESPACE = 'trace'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const TRACE_PLUGIN_VERSION = '0.0.0'
+const TRACE_PLUGIN_VERSION = '0.1.0'
 
 const configSchema = z.object({
   dir: z

@@ -38,7 +38,7 @@ import { z } from 'zod'
 /** Plugin namespace — must match {@link networkPlugin.name}; the loader prefixes its tools with it. */
 const NETWORK_NAMESPACE = 'network'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const NETWORK_PLUGIN_VERSION = '0.3.0'
+const NETWORK_PLUGIN_VERSION = '0.1.0'
 
 /** Header names redacted by default when `redactSecureDefaults` is on (lower-cased). */
 const SECURE_DEFAULT_REDACT = ['authorization', 'cookie', 'set-cookie'] as const

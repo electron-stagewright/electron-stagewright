@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/plugin-trace",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Trace plugin for Electron Stagewright: record a driving session to JSONL, report token usage, and replay the recorded tool calls.",
   "type": "module",
   "license": "MIT",

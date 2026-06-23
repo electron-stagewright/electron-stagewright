@@ -37,7 +37,7 @@ import { INSTRUMENT_BODY, filterEvents, redactEvents, type IpcEvent } from './in
 /** Plugin namespace — must match {@link ipcPlugin.name}; the loader prefixes its tools with it. */
 const IPC_NAMESPACE = 'ipc'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const IPC_PLUGIN_VERSION = '0.4.0'
+const IPC_PLUGIN_VERSION = '0.1.0'
 
 const configSchema = z.object({
   redact: z

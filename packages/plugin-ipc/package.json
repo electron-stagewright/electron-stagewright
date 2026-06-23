@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/plugin-ipc",
-  "version": "0.4.0",
+  "version": "0.1.0",
   "description": "IPC plugin for Electron Stagewright: capture Electron IPC traffic by channel, invoke channels, and stub responses for agent-driven testing.",
   "type": "module",
   "license": "MIT",

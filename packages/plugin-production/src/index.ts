@@ -39,7 +39,7 @@ import { makeRunCommand } from './command.js'
 /** Plugin namespace — must match {@link productionPlugin.name}; the loader prefixes its tools. */
 const PRODUCTION_NAMESPACE = 'production'
 /** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const PRODUCTION_PLUGIN_VERSION = '0.3.0'
+const PRODUCTION_PLUGIN_VERSION = '0.1.0'
 
 const configSchema = z.object({
   commandTimeoutMs: z

@@ -10,9 +10,13 @@ the package shape these steps assume is verified in CI by `packages/core/tests/p
 The publishable packages are every `packages/*` that is **not** `private: true`:
 
 - `@electron-stagewright/core` (ships the `electron-stagewright` CLI)
-- `@electron-stagewright/plugin-trace`
-- `@electron-stagewright/plugin-ipc`
-- `@electron-stagewright/plugin-production`
+- `@electron-stagewright/plugin-clock` (virtual-time control)
+- `@electron-stagewright/plugin-ipc` (IPC capture, invoke, and stub)
+- `@electron-stagewright/plugin-native-ui` (app menus, notifications, and system tray)
+- `@electron-stagewright/plugin-network` (request/response capture and stub)
+- `@electron-stagewright/plugin-production` (packaged-app validation)
+- `@electron-stagewright/plugin-storage` (cookies, web storage, and IndexedDB)
+- `@electron-stagewright/plugin-trace` (session trace, token budget, and replay)
 
 Everything under `examples/` and `packages/bench` is `private: true` and never publishes. Each
 publishable package sets `publishConfig.access: "public"` (scoped packages default to restricted)
