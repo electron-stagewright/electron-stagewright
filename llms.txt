@@ -11,6 +11,7 @@
 - [Connect your MCP client](docs/guides/connect-your-mcp-client.md): wire the published package into Claude Desktop, Cursor, or any MCP host (npx/global/local command forms), verify it connected, troubleshoot stdio/config failures
 - [Launch, attach, or inject](docs/guides/launch-or-attach.md): the three ways to get a session against an app
 - [Assert UI state](docs/guides/assert-ui-state.md): refs, the expect family, waits, snapshot diffs
+- [Type into code editors](docs/guides/type-into-code-editors.md): the reliable Monaco/EditContext/CodeMirror typing path (electron_type_into_editor), replace and clear, the auto-pairing caveat, attached-not-visible waits, and verifying the text landed
 - [Capture diagnostics](docs/guides/capture-diagnostics.md): screenshots, console logs, dialogs, session traces
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md): tool-by-tool mapping
 - [Concepts](docs/guides/concepts.md): the agent-native model and why -- envelope, refs, snapshots, retrying assertions, sessions/transports, eval and plugins -- each linked to its ADR

@@ -119,6 +119,8 @@ The full tool list — every tool, its parameters, and operation type — is in
   app, including apps that are already running.
 - [Assert UI state](docs/guides/assert-ui-state.md) — refs vs selectors, the `expect_*` family,
   waits, and snapshot diffs.
+- [Type into code editors](docs/guides/type-into-code-editors.md) — the reliable Monaco / EditContext
+  typing path, `replace`, the auto-pairing caveat, and how to verify the text landed.
 - [Capture diagnostics](docs/guides/capture-diagnostics.md) — screenshots, console, dialogs, and
   session traces.
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md) — tool-by-tool

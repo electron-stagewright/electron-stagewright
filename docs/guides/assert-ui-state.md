@@ -60,7 +60,8 @@ longer, fix its input, or report a real regression — without an extra read.
 One sharp edge: intentionally offscreen or `aria-hidden` elements (a code editor's hidden
 textarea, for instance) are never "visible" — wait for `state: "attached"` instead, or the wait
 times out by design. The expiry is `WAIT_TIMEOUT` (retryable), and `wait_for_state` reports the
-last state it observed so the agent sees how close it got.
+last state it observed so the agent sees how close it got. Typing into that editor has its own
+reliable path — see [Type into code editors](./type-into-code-editors.md).
 
 ## Watching change: snapshot diffs
 
