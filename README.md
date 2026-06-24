@@ -4,7 +4,8 @@
 
 A Model Context Protocol (MCP) server that lets AI agents — Claude Code, Codex, Cursor, Cline, Aider, and any MCP-compatible host — operate real Electron desktop applications. The current core can launch Electron apps, inspect the renderer accessibility tree, click/type/select by stable refs or selectors, read state, wait on predicates, run opt-in eval, capture screenshots, read console logs, handle native dialogs, and assert expectations with retrying `expect_*` tools.
 
-> Status: pre-alpha. Core server and first-party plugin packages are active; the first npm release is still ahead. Star the repo to follow releases.
+> Status: pre-alpha. Core server and first-party plugin packages are published, but APIs may change
+> quickly. Star the repo to follow releases.
 
 ## Why this exists
 
@@ -35,17 +36,22 @@ Microsoft's official Playwright MCP team [explicitly declined](https://github.co
 
 ## Quick start
 
-> The package is not published yet. For now, use a local checkout:
+The default launch transport uses Playwright as an optional peer. For the published package, start
+the server with both packages available:
 
 ```bash
-# From a checkout, build the server and point your MCP host at the built CLI.
+claude mcp add electron-stagewright --scope user -- \
+  npx -y --package @electron-stagewright/core --package playwright electron-stagewright
+```
+
+For local development, build the checkout and point your MCP host at the built CLI:
+
+```bash
 pnpm install
 pnpm build
 
-claude mcp add electron-stagewright --scope user -- node /abs/path/to/electron-stagewright/packages/core/dist/cli.js
-
-# Once the package is published, the command will become:
-claude mcp add electron-stagewright --scope user -- npx -y @electron-stagewright/core
+claude mcp add electron-stagewright --scope user -- \
+  node /abs/path/to/electron-stagewright/packages/core/dist/cli.js
 ```
 
 Project `.mcp.json` shape:
@@ -54,8 +60,15 @@ Project `.mcp.json` shape:
 {
   "mcpServers": {
     "electron-stagewright": {
-      "command": "node",
-      "args": ["/abs/path/to/electron-stagewright/packages/core/dist/cli.js"]
+      "command": "npx",
+      "args": [
+        "-y",
+        "--package",
+        "@electron-stagewright/core",
+        "--package",
+        "playwright",
+        "electron-stagewright"
+      ]
     }
   }
 }
@@ -100,6 +113,8 @@ The full tool list — every tool, its parameters, and operation type — is in
 
 - [Getting started](docs/guides/getting-started.md) — from a clean checkout to a complete driven
   session against the bundled example app.
+- [Connect your MCP client](docs/guides/connect-your-mcp-client.md) — wire the published package
+  into Claude Desktop, Cursor, or any MCP host, and confirm it connected.
 - [Launch, attach, or inject](docs/guides/launch-or-attach.md) — getting a session against YOUR
   app, including apps that are already running.
 - [Assert UI state](docs/guides/assert-ui-state.md) — refs vs selectors, the `expect_*` family,

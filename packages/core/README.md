@@ -5,7 +5,23 @@ The core MCP server for [Electron Stagewright](https://github.com/electron-stage
 Drive Electron desktop applications from AI agents via the Model Context Protocol.
 
 > Pre-alpha. The core server is implemented enough to launch and drive a real
-> Electron app, but the package has not been published yet.
+> Electron app. APIs may change quickly.
+
+## Use the published package
+
+The default launch transport uses Playwright as an optional peer. Start the CLI with both packages
+available:
+
+```bash
+npx -y --package @electron-stagewright/core --package playwright electron-stagewright
+```
+
+Or install both once and run the bin directly:
+
+```bash
+npm install -g @electron-stagewright/core playwright
+electron-stagewright
+```
 
 ## Use from a checkout
 
@@ -24,10 +40,12 @@ Useful CLI flags:
 ## Use with Claude Code
 
 ```bash
-claude mcp add electron-stagewright --scope user -- node /abs/path/to/electron-stagewright/packages/core/dist/cli.js
+claude mcp add electron-stagewright --scope user -- \
+  npx -y --package @electron-stagewright/core --package playwright electron-stagewright
 ```
 
-After the first npm publish, this will switch to `npx -y @electron-stagewright/core`.
+For a local checkout, replace the command after `--` with
+`node /abs/path/to/electron-stagewright/packages/core/dist/cli.js`.
 
 ## License
 

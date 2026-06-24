@@ -44,6 +44,11 @@ Useful server flags (append to `args`): `--screenshot-dir <dir>` for a stable sc
 target with `--allow-eval=renderer` or `--allow-eval=main`), `--plugin <name>` to load a plugin. The
 full list is in the [tool reference](../../TOOL-REFERENCE.md).
 
+That `node …/dist/cli.js` form points at this cloned checkout, which is what runs the bundled
+example. To wire the **published** package into your client and drive **your own** app instead — with
+the `npx`/global command forms and per-client config — see
+[Connect your MCP client](./connect-your-mcp-client.md).
+
 **Option B — the scripted scenario**, no host required. It connects a real MCP client over stdio
 and prints a transcript of every call:
 
@@ -149,6 +154,8 @@ the graceful close, the stop escalates to SIGKILL after a bounded budget and rep
 
 ## Where next
 
+- [Connect your MCP client](./connect-your-mcp-client.md) — wire the published package into Claude
+  Desktop, Cursor, or any MCP host, and confirm it connected.
 - [Launch, attach, or inject](./launch-or-attach.md) — driving YOUR app, including apps that are
   already running.
 - [Assert UI state](./assert-ui-state.md) — the assertion and wait toolbox.
