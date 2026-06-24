@@ -8,6 +8,7 @@
 
 - [Tool reference](TOOL-REFERENCE.md): every tool with parameters, return shapes, and error codes — generated from the live manifest
 - [Getting started](docs/guides/getting-started.md): install, connect an MCP host, drive the bundled example end to end
+- [Connect your MCP client](docs/guides/connect-your-mcp-client.md): wire the published package into Claude Desktop, Cursor, or any MCP host (npx/global/local command forms), verify it connected, troubleshoot stdio/config failures
 - [Launch, attach, or inject](docs/guides/launch-or-attach.md): the three ways to get a session against an app
 - [Assert UI state](docs/guides/assert-ui-state.md): refs, the expect family, waits, snapshot diffs
 - [Capture diagnostics](docs/guides/capture-diagnostics.md): screenshots, console logs, dialogs, session traces

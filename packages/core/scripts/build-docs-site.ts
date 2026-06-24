@@ -216,6 +216,7 @@ function renderNav(
       {
         heading: 'How-to',
         items: [
+          { target: 'guides/connect-your-mcp-client.html', label: 'Connect your MCP client' },
           { target: 'guides/launch-or-attach.html', label: 'Launch, attach, or inject' },
           { target: 'guides/assert-ui-state.html', label: 'Assert UI state' },
           { target: 'guides/capture-diagnostics.html', label: 'Capture diagnostics' },

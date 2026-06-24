@@ -6,6 +6,7 @@ situation matches:
 | You are…                                                         | Read                                                              |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------- |
 | New here and want a working session in minutes                   | [Getting started](./getting-started.md)                           |
+| Wiring the server into Claude Desktop, Cursor, or another client | [Connect your MCP client](./connect-your-mcp-client.md)           |
 | Deciding how to get a session against YOUR app                   | [Launch, attach, or inject](./launch-or-attach.md)                |
 | Writing assertions an agent can act on                           | [Assert UI state](./assert-ui-state.md)                           |
 | Debugging a flow — screenshots, console, dialogs, session traces | [Capture diagnostics](./capture-diagnostics.md)                   |
@@ -20,8 +21,9 @@ is _for_:
 
 - **Tutorial** — learning-oriented. [Getting started](./getting-started.md) walks a first session
   end to end.
-- **How-to** — task-oriented. [Launch, attach, or inject](./launch-or-attach.md),
-  [Assert UI state](./assert-ui-state.md), [Capture diagnostics](./capture-diagnostics.md), and
+- **How-to** — task-oriented. [Connect your MCP client](./connect-your-mcp-client.md),
+  [Launch, attach, or inject](./launch-or-attach.md), [Assert UI state](./assert-ui-state.md),
+  [Capture diagnostics](./capture-diagnostics.md), and
   [Migrate from electron-driver](./migrate-from-electron-driver.md) each solve one job.
 - **Explanation** — understanding-oriented. [Concepts](./concepts.md) explains the agent-native
   model and why the server is shaped the way it is; the [Security model](./security-model.md)
