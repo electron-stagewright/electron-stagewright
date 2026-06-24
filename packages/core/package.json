@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "author": "johnny4young <johnny.iv.young@gmail.com>",
-  "homepage": "https://github.com/electron-stagewright/electron-stagewright",
+  "homepage": "https://electron-stagewright.github.io/electron-stagewright/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/electron-stagewright/electron-stagewright.git",
