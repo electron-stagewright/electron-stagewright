@@ -289,7 +289,11 @@ a{color:var(--accent);text-decoration:none}
 .skip{position:absolute;left:-9999px;top:0;z-index:10;background:var(--accent);color:#fff;padding:8px 14px;border-radius:8px}
 .skip:focus{left:12px;top:12px}
 .topbar{position:sticky;top:0;z-index:8;display:flex;align-items:center;justify-content:space-between;gap:16px;height:56px;padding:0 22px;border-bottom:1px solid var(--line);box-shadow:inset 0 2px 0 var(--accent);background:var(--bg);background:color-mix(in srgb,var(--bg) 80%,transparent);-webkit-backdrop-filter:saturate(1.4) blur(10px);backdrop-filter:saturate(1.4) blur(10px)}
-.topbar .brand{display:flex;align-items:center;gap:9px;font-family:var(--font-mono);font-weight:500;font-size:15px;letter-spacing:-.01em;color:var(--fg)}
+.topbar-left{display:flex;align-items:center;gap:10px;min-width:0}
+.topbar .brand{display:flex;align-items:center;gap:9px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--font-mono);font-weight:500;font-size:15px;letter-spacing:-.01em;color:var(--fg)}
+.hamburger{display:none;flex:0 0 auto;flex-direction:column;justify-content:center;gap:4px;width:38px;height:38px;padding:9px;border:1px solid var(--line-2);border-radius:9px;background:none;cursor:pointer}
+.hamburger span{display:block;height:2px;width:100%;background:var(--fg);border-radius:2px;transition:transform .2s,opacity .2s}
+.nav-scrim{display:none}
 .topbar .brand .mark{color:var(--accent);font-size:13px}
 .topbar .brand .tag{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--faint);border:1px solid var(--line-2);border-radius:5px;padding:1px 6px}
 .topnav{display:flex;gap:4px}
@@ -325,7 +329,26 @@ a{color:var(--accent);text-decoration:none}
 .content tbody tr:hover{background:var(--surface)}
 .content hr{border:0;border-top:1px solid var(--line);margin:2.4em 0}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
-@media (max-width:860px){.layout{flex-direction:column;max-width:none}.sidebar{width:100%;flex-basis:auto;height:auto;position:static;border-right:0;border-bottom:1px solid var(--line)}.content{padding:32px 22px 64px;max-width:none}}
+@media (max-width:860px){
+.topbar{padding:0 14px;gap:10px}
+.topbar .brand{font-size:14px}
+.topbar .brand .tag{display:none}
+.topnav{gap:2px}.topnav a{padding:6px 8px;font-size:13px}
+.js .hamburger{display:flex}
+.layout{flex-direction:column;align-items:stretch;max-width:none}
+.content{padding:28px 18px 72px;max-width:none;width:100%}
+.content h1{font-size:1.72rem}
+.content pre,.content table{font-size:.84em}
+.content code{overflow-wrap:anywhere}
+.sidebar{width:100%;flex-basis:auto;height:auto;position:static;border-right:0;border-bottom:1px solid var(--line)}
+.js .sidebar{position:fixed;top:56px;left:0;bottom:0;width:min(84vw,330px);transform:translateX(-100%);transition:transform .24s ease;z-index:9;background:var(--surface);border:0;border-right:1px solid var(--line);box-shadow:var(--shadow);overflow:auto;padding:20px 14px 40px}
+.nav-open .sidebar{transform:none}
+.js .nav-scrim{display:block;position:fixed;inset:56px 0 0 0;z-index:8;background:rgba(0,0,0,.42);opacity:0;pointer-events:none;transition:opacity .2s}
+.nav-open .nav-scrim{opacity:1;pointer-events:auto}
+.nav-open .hamburger span:nth-child(1){transform:translateY(6px) rotate(45deg)}
+.nav-open .hamburger span:nth-child(2){opacity:0}
+.nav-open .hamburger span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
+}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .hljs-comment,.hljs-quote{color:var(--hl-comment);font-style:italic}
 .hljs-keyword,.hljs-selector-tag,.hljs-built_in,.hljs-literal{color:var(--hl-kw)}
@@ -366,20 +389,48 @@ function renderTemplate(
 <meta name="twitter:image" content="${SOCIAL_CARD_URL}">
 <title>${pageTitle}</title>
 <style>${CSS}</style>
+<script>document.documentElement.classList.add('js')</script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
 <header class="topbar">
+<div class="topbar-left">
+<button class="hamburger" type="button" aria-label="Toggle navigation" aria-controls="sidebar" aria-expanded="false"><span></span><span></span><span></span></button>
 <a class="brand" href="${home}"><span class="mark" aria-hidden="true">▸</span> Electron Stagewright <span class="tag">docs</span></a>
+</div>
 <nav class="topnav" aria-label="Project links">
 <a href="https://github.com/electron-stagewright/electron-stagewright">GitHub</a>
 <a href="https://www.npmjs.com/package/@electron-stagewright/core">npm</a>
 </nav>
 </header>
 <div class="layout">
-<nav class="sidebar" aria-label="Documentation">${navHtml}</nav>
+<nav class="sidebar" id="sidebar" aria-label="Documentation">${navHtml}</nav>
 <main class="content" id="content">${bodyHtml}</main>
 </div>
+<div class="nav-scrim" aria-hidden="true"></div>
+<script>
+(function () {
+  var h = document.querySelector('.hamburger'),
+    root = document.documentElement,
+    scrim = document.querySelector('.nav-scrim')
+  if (!h) return
+  function closeNav() {
+    root.classList.remove('nav-open')
+    h.setAttribute('aria-expanded', 'false')
+  }
+  h.addEventListener('click', function () {
+    var open = root.classList.toggle('nav-open')
+    h.setAttribute('aria-expanded', open ? 'true' : 'false')
+  })
+  if (scrim) scrim.addEventListener('click', closeNav)
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeNav()
+  })
+  document.querySelectorAll('.sidebar a').forEach(function (a) {
+    a.addEventListener('click', closeNav)
+  })
+})()
+</script>
 </body>
 </html>
 `
