@@ -224,6 +224,7 @@ function renderNav(
           { target: 'guides/connect-your-mcp-client.html', label: 'Connect your MCP client' },
           { target: 'guides/launch-or-attach.html', label: 'Launch, attach, or inject' },
           { target: 'guides/assert-ui-state.html', label: 'Assert UI state' },
+          { target: 'guides/type-into-code-editors.html', label: 'Type into code editors' },
           { target: 'guides/capture-diagnostics.html', label: 'Capture diagnostics' },
           {
             target: 'guides/migrate-from-electron-driver.html',

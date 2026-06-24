@@ -9,6 +9,7 @@ situation matches:
 | Wiring the server into Claude Desktop, Cursor, or another client | [Connect your MCP client](./connect-your-mcp-client.md)           |
 | Deciding how to get a session against YOUR app                   | [Launch, attach, or inject](./launch-or-attach.md)                |
 | Writing assertions an agent can act on                           | [Assert UI state](./assert-ui-state.md)                           |
+| Driving a code editor (Monaco, CodeMirror, EditContext)          | [Type into code editors](./type-into-code-editors.md)             |
 | Debugging a flow — screenshots, console, dialogs, session traces | [Capture diagnostics](./capture-diagnostics.md)                   |
 | Coming from electron-driver                                      | [Migrate from electron-driver](./migrate-from-electron-driver.md) |
 | Deciding whether and how to expose the server                    | [Security model](./security-model.md)                             |
@@ -23,6 +24,7 @@ is _for_:
   end to end.
 - **How-to** — task-oriented. [Connect your MCP client](./connect-your-mcp-client.md),
   [Launch, attach, or inject](./launch-or-attach.md), [Assert UI state](./assert-ui-state.md),
+  [Type into code editors](./type-into-code-editors.md),
   [Capture diagnostics](./capture-diagnostics.md), and
   [Migrate from electron-driver](./migrate-from-electron-driver.md) each solve one job.
 - **Explanation** — understanding-oriented. [Concepts](./concepts.md) explains the agent-native
