@@ -225,7 +225,7 @@ electron_find({ role: 'button', name_contains: 'Submit', visible: true, enabled:
 
 **The principle**: when the renderer process reloads (e.g., Vite hot-module-reload), snapshot-producing tools report it explicitly. `electron_snapshot` and `electron_find` return a top-level `renderer_reloaded` flag, and the snapshot metadata keeps `renderer_reloaded_since_last_snapshot` for downstream reasoning. Agents know cached refs may need refreshing before blindly continuing.
 
-**Cost if skipped**: agents click ref 5, get REF_NOT_FOUND, ask why, get prose, take new snapshot, retry. 3 turns to recover from one HMR reload. On Vite-driven apps (common in modern Electron stacks like Lingua and Puntovivo), this happens dozens of times per session.
+**Cost if skipped**: agents click ref 5, get REF_NOT_FOUND, ask why, get prose, take new snapshot, retry. 3 turns to recover from one HMR reload. On Vite-driven apps (common in modern Electron stacks), this happens dozens of times per session.
 
 **Benefit if adopted**: agents see the reload signal, refresh snapshot proactively, and avoid silent staleness.
 
@@ -269,9 +269,9 @@ the agent recovers in one turn.
 
 ## References
 
-- Internal customer-discovery research — empirical citation of m13v measurements (LLM tool selection 20% → 3%) and the laststance v1→v2 split.
-- Internal audit of laststance/electron-mcp-server — independent validation of the granular-tools approach.
-- Internal audit of mesomya/electron-driver — the 26 findings that motivated several of these principles.
+- Customer-discovery research — empirical citation of m13v measurements (LLM tool selection 20% → 3%) and the laststance v1→v2 split.
+- Audit of laststance/electron-mcp-server — independent validation of the granular-tools approach.
+- Audit of mesomya/electron-driver — the 26 findings that motivated several of these principles.
 - [ADR-005](./005-snapshot-schema-v1.md) — Principle 6, 7, 9.
 - [ADR-006](./006-error-code-registry.md) — Principle 1, 3, 10.
 - [Playwright `@playwright/cli` skill experiment](https://scrolltest.com/playwright-mcp-llm-architecture-ai-augmented-test-automation/) — 4× token-economy data.
