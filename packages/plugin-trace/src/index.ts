@@ -28,6 +28,7 @@ import {
   defineTool,
   makePluginError,
   makeSuccess,
+  readPackageVersion,
   type AnyToolDefinition,
   type StagewrightPlugin,
   type ToolResult,
@@ -59,8 +60,8 @@ interface ActiveRecording {
 
 /** Plugin namespace — must match {@link tracePlugin.name}; the loader prefixes its tools with it. */
 const TRACE_NAMESPACE = 'trace'
-/** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const TRACE_PLUGIN_VERSION = '0.1.0'
+/** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
+const TRACE_PLUGIN_VERSION = readPackageVersion(import.meta.url)
 
 const configSchema = z.object({
   dir: z
