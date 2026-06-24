@@ -15,11 +15,13 @@
  */
 
 /**
- * The core package version, read from package.json (see `version.ts`) — the single source of truth,
- * so the exported `VERSION`, the MCP `serverInfo.version`, and the plugin core-compatibility check
- * never drift from the manifest.
+ * The core package version and the reader behind it. `VERSION` is read from package.json (see
+ * `version.ts`) — the single source of truth, so the exported `VERSION`, the MCP `serverInfo.version`,
+ * and the plugin core-compatibility check never drift from the manifest. `readPackageVersion` is that
+ * same reader, exported so first-party plugins advertise their own version from their manifest the same
+ * way (call it with `import.meta.url`).
  */
-export { VERSION } from './version.js'
+export { VERSION, readPackageVersion } from './version.js'
 
 /**
  * Error code registry, response envelope helpers, and operation-type routing.

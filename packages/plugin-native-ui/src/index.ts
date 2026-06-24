@@ -28,6 +28,7 @@ import {
   defineTool,
   makePluginError,
   makeSuccess,
+  readPackageVersion,
   type AnyToolDefinition,
   type NativeMenu,
   type NativeMenuItem,
@@ -41,8 +42,8 @@ import { z } from 'zod'
 
 /** Plugin namespace — must match {@link nativeUiPlugin.name}; the loader prefixes its tools with it. */
 const NATIVE_NAMESPACE = 'native'
-/** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const NATIVE_PLUGIN_VERSION = '0.1.0'
+/** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
+const NATIVE_PLUGIN_VERSION = readPackageVersion(import.meta.url)
 
 /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
 interface PluginMeta {

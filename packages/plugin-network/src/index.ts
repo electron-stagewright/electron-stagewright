@@ -25,6 +25,7 @@ import {
   defineTool,
   makePluginError,
   makeSuccess,
+  readPackageVersion,
   type AnyToolDefinition,
   type NetworkEvent,
   type NetworkStub,
@@ -37,8 +38,8 @@ import { z } from 'zod'
 
 /** Plugin namespace — must match {@link networkPlugin.name}; the loader prefixes its tools with it. */
 const NETWORK_NAMESPACE = 'network'
-/** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const NETWORK_PLUGIN_VERSION = '0.1.0'
+/** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
+const NETWORK_PLUGIN_VERSION = readPackageVersion(import.meta.url)
 
 /** Header names redacted by default when `redactSecureDefaults` is on (lower-cased). */
 const SECURE_DEFAULT_REDACT = ['authorization', 'cookie', 'set-cookie'] as const

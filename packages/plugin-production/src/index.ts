@@ -28,6 +28,7 @@ import {
   makeError,
   makePluginError,
   makeSuccess,
+  readPackageVersion,
   type AnyToolDefinition,
   type StagewrightPlugin,
 } from '@electron-stagewright/core'
@@ -38,8 +39,8 @@ import { makeRunCommand } from './command.js'
 
 /** Plugin namespace — must match {@link productionPlugin.name}; the loader prefixes its tools. */
 const PRODUCTION_NAMESPACE = 'production'
-/** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const PRODUCTION_PLUGIN_VERSION = '0.1.0'
+/** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
+const PRODUCTION_PLUGIN_VERSION = readPackageVersion(import.meta.url)
 
 const configSchema = z.object({
   commandTimeoutMs: z

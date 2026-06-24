@@ -22,6 +22,7 @@ import {
   defineTool,
   makePluginError,
   makeSuccess,
+  readPackageVersion,
   type AnyToolDefinition,
   type ClockTime,
   type StagewrightPlugin,
@@ -33,8 +34,8 @@ import { z } from 'zod'
 
 /** Plugin namespace — must match {@link clockPlugin.name}; the loader prefixes its tools with it. */
 const CLOCK_NAMESPACE = 'clock'
-/** Plugin package version advertised by `electron_plugins`; keep in sync with package.json. */
-const CLOCK_PLUGIN_VERSION = '0.1.0'
+/** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
+const CLOCK_PLUGIN_VERSION = readPackageVersion(import.meta.url)
 
 function isParseableClockTime(value: string): boolean {
   return Number.isFinite(Date.parse(value))
