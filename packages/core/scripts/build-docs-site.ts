@@ -258,49 +258,107 @@ function renderNav(
       return `${head}<ul>${items.map((i) => link(i.target, i.label)).join('')}</ul>`
     })
     .join('\n')
-  return `<a class="brand" href="${prefix}index.html">Electron Stagewright</a>\n${sections}`
+  return sections
 }
 
-/** Minimal, self-contained page styling plus a compact highlight.js token palette. */
+/** Self-contained styling: a refined technical theme with light + dark mode and a tuned hljs palette. */
 const CSS = `
-:root{--fg:#1b1f24;--muted:#57606a;--bg:#fff;--side:#f6f8fa;--line:#d0d7de;--link:#0969da;--code:#f6f8fa}
-*{box-sizing:border-box}body{margin:0;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;color:var(--fg);background:var(--bg)}
+:root{color-scheme:light dark;
+--bg:#fbfaf8;--bg-elev:#ffffff;--surface:#f4f2ec;--surface-2:#ece8df;
+--fg:#1c1b18;--muted:#6b685f;--faint:#928e83;--line:#e7e3d9;--line-2:#dad5c8;
+--accent:#b45309;--accent-soft:#fbeed7;
+--shadow:0 1px 2px rgba(28,27,24,.04),0 10px 30px -16px rgba(28,27,24,.18);
+--hl-comment:#9a9588;--hl-kw:#b03a2e;--hl-str:#3f7a45;--hl-num:#1f6f8b;--hl-fn:#9a5b06;--hl-type:#7a3e9d;
+--font-sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+--font-mono:ui-monospace,SFMono-Regular,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{
+--bg:#141310;--bg-elev:#1b1914;--surface:#1a1812;--surface-2:#262219;
+--fg:#ece8dc;--muted:#a09b8d;--faint:#7b776a;--line:#2a261d;--line-2:#3a3528;
+--accent:#f0b552;--accent-soft:rgba(240,181,82,.12);
+--shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px -16px rgba(0,0,0,.6);
+--hl-comment:#7b776a;--hl-kw:#f0876a;--hl-str:#a6cf8a;--hl-num:#6fc2d8;--hl-fn:#f0b552;--hl-type:#c79be8}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;font-family:var(--font-sans);font-size:16px;line-height:1.7;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+::selection{background:var(--accent-soft)}
+a{color:var(--accent);text-decoration:none}
+.skip{position:absolute;left:-9999px;top:0;z-index:10;background:var(--accent);color:#fff;padding:8px 14px;border-radius:8px}
+.skip:focus{left:12px;top:12px}
+.topbar{position:sticky;top:0;z-index:8;display:flex;align-items:center;justify-content:space-between;gap:16px;height:56px;padding:0 22px;border-bottom:1px solid var(--line);box-shadow:inset 0 2px 0 var(--accent);background:var(--bg);background:color-mix(in srgb,var(--bg) 80%,transparent);-webkit-backdrop-filter:saturate(1.4) blur(10px);backdrop-filter:saturate(1.4) blur(10px)}
+.topbar .brand{display:flex;align-items:center;gap:9px;font-family:var(--font-mono);font-weight:500;font-size:15px;letter-spacing:-.01em;color:var(--fg)}
+.topbar .brand .mark{color:var(--accent);font-size:13px}
+.topbar .brand .tag{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--faint);border:1px solid var(--line-2);border-radius:5px;padding:1px 6px}
+.topnav{display:flex;gap:4px}
+.topnav a{font-size:13.5px;color:var(--muted);padding:6px 11px;border-radius:8px;transition:background .15s,color .15s}
+.topnav a:hover{background:var(--surface-2);color:var(--fg)}
 .layout{display:flex;align-items:flex-start;max-width:1180px;margin:0 auto}
-.sidebar{width:280px;flex:0 0 280px;padding:24px 18px;background:var(--side);border-right:1px solid var(--line);height:100vh;position:sticky;top:0;overflow:auto}
-.sidebar .brand{display:block;font-weight:700;font-size:17px;color:var(--fg);text-decoration:none;margin-bottom:16px}
-.sidebar h3{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 0 6px}
-.sidebar ul{list-style:none;margin:0;padding:0}.sidebar li{margin:2px 0}
-.sidebar a{color:var(--fg);text-decoration:none;font-size:14px;display:block;padding:3px 8px;border-radius:6px}
-.sidebar a:hover{background:#eaeef2}.sidebar a.active{background:#ddf4ff;color:var(--link);font-weight:600}
-.content{flex:1 1 auto;min-width:0;padding:32px 40px;max-width:860px}
-.content h1,.content h2,.content h3{line-height:1.25}.content h1{margin-top:0}
-.content h2{border-bottom:1px solid var(--line);padding-bottom:.3em;margin-top:1.6em}
-.content a{color:var(--link);text-decoration:none}.content a:hover{text-decoration:underline}
-.content code{background:var(--code);padding:.15em .35em;border-radius:5px;font-size:.88em}
-.content pre{background:var(--code);padding:14px 16px;border-radius:8px;overflow:auto}
-.content pre code{background:none;padding:0;font-size:.84em}
-.content table{border-collapse:collapse;display:block;overflow:auto}
-.content th,.content td{border:1px solid var(--line);padding:6px 12px}.content th{background:var(--side)}
-.content blockquote{margin:0;padding:0 1em;color:var(--muted);border-left:.25em solid var(--line)}
-@media(max-width:800px){.layout{flex-direction:column}.sidebar{width:100%;height:auto;position:static;border-right:none;border-bottom:1px solid var(--line)}}
-.hljs-comment,.hljs-quote{color:#6a737d}.hljs-keyword,.hljs-selector-tag,.hljs-built_in,.hljs-literal{color:#d73a49}
-.hljs-string,.hljs-attr,.hljs-template-tag,.hljs-addition{color:#032f62}.hljs-number,.hljs-meta{color:#005cc5}
-.hljs-title,.hljs-section,.hljs-function .hljs-title{color:#6f42c1}.hljs-type,.hljs-class .hljs-title{color:#e36209}
+.sidebar{width:272px;flex:0 0 272px;padding:26px 16px 48px;height:calc(100vh - 56px);position:sticky;top:56px;overflow:auto;border-right:1px solid var(--line);scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+.sidebar::-webkit-scrollbar{width:9px}.sidebar::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:9px;border:3px solid var(--bg)}
+.sidebar h3{font-family:var(--font-mono);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.11em;color:var(--faint);margin:22px 6px 7px}
+.sidebar ul{list-style:none;margin:0;padding:0}.sidebar li{margin:1px 0}
+.sidebar a{display:block;font-size:13.5px;color:var(--muted);padding:6px 10px;border-radius:8px;border-left:2px solid transparent;transition:background .15s,color .15s}
+.sidebar a:hover{background:var(--surface-2);color:var(--fg)}
+.sidebar a.active{background:var(--accent-soft);color:var(--accent);font-weight:500;border-left-color:var(--accent)}
+.content{flex:1 1 auto;min-width:0;max-width:792px;padding:44px 52px 96px;animation:rise .5s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.content>*:first-child{margin-top:0}
+.content h1{font-size:2.05rem;line-height:1.15;letter-spacing:-.022em;font-weight:680;margin:.2em 0 .55em}
+.content h2{font-size:1.42rem;line-height:1.25;letter-spacing:-.015em;font-weight:650;margin:2.4em 0 .7em;padding-top:1.4em;border-top:1px solid var(--line)}
+.content h3{font-size:1.16rem;line-height:1.3;letter-spacing:-.01em;font-weight:650;margin:1.9em 0 .5em}
+.content h1,.content h2,.content h3{scroll-margin-top:74px}
+.content a{text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 35%,transparent);text-underline-offset:2px;text-decoration-thickness:1px;transition:text-decoration-color .15s}
+.content a:hover{text-decoration-color:var(--accent)}
+.content strong{font-weight:650}
+.content code{font-family:var(--font-mono);font-size:.86em;background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:.1em .36em}
+.content pre{font-family:var(--font-mono);background:var(--bg-elev);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:1.3em 0;overflow:auto;box-shadow:var(--shadow);line-height:1.6}
+.content pre code{background:none;border:0;padding:0;font-size:.85em}
+.content pre::-webkit-scrollbar{height:9px}.content pre::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:9px}
+.content blockquote{margin:1.3em 0;padding:.4em 0 .4em 1.1em;border-left:3px solid var(--accent);color:var(--muted)}
+.content blockquote p{margin:.4em 0}
+.content table{border-collapse:collapse;display:block;overflow:auto;margin:1.3em 0;font-size:.93em}
+.content thead th{font-family:var(--font-mono);font-size:.8em;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);text-align:left;font-weight:500;border-bottom:1px solid var(--line-2);padding:8px 14px}
+.content tbody td{border-bottom:1px solid var(--line);padding:9px 14px;vertical-align:top}
+.content tbody tr:hover{background:var(--surface)}
+.content hr{border:0;border-top:1px solid var(--line);margin:2.4em 0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+@media (max-width:860px){.layout{flex-direction:column;max-width:none}.sidebar{width:100%;flex-basis:auto;height:auto;position:static;border-right:0;border-bottom:1px solid var(--line)}.content{padding:32px 22px 64px;max-width:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.hljs-comment,.hljs-quote{color:var(--hl-comment);font-style:italic}
+.hljs-keyword,.hljs-selector-tag,.hljs-built_in,.hljs-literal{color:var(--hl-kw)}
+.hljs-string,.hljs-attr,.hljs-template-tag,.hljs-addition{color:var(--hl-str)}
+.hljs-number,.hljs-meta{color:var(--hl-num)}
+.hljs-title,.hljs-section,.hljs-function .hljs-title,.hljs-name{color:var(--hl-fn)}
+.hljs-type,.hljs-class .hljs-title{color:var(--hl-type)}
 `.trim()
 
-function renderTemplate(title: string, bodyHtml: string, navHtml: string): string {
+function renderTemplate(
+  title: string,
+  bodyHtml: string,
+  navHtml: string,
+  outputRel: string,
+): string {
+  const home = `${relativePrefix(outputRel)}index.html`
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Agent-native MCP server for driving real Electron apps from AI agents: launch or attach, read the accessibility tree, assert UI state, and capture diagnostics.">
 <title>${escapeHtml(title)} — Electron Stagewright docs</title>
 <style>${CSS}</style>
 </head>
 <body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar">
+<a class="brand" href="${home}"><span class="mark" aria-hidden="true">▸</span> Electron Stagewright <span class="tag">docs</span></a>
+<nav class="topnav" aria-label="Project links">
+<a href="https://github.com/electron-stagewright/electron-stagewright">GitHub</a>
+<a href="https://www.npmjs.com/package/@electron-stagewright/core">npm</a>
+</nav>
+</header>
 <div class="layout">
-<nav class="sidebar">${navHtml}</nav>
-<main class="content">${bodyHtml}</main>
+<nav class="sidebar" aria-label="Documentation">${navHtml}</nav>
+<main class="content" id="content">${bodyHtml}</main>
 </div>
 </body>
 </html>
@@ -376,6 +434,7 @@ export async function buildDocsSite(
       page.title,
       html,
       renderNav(page.outputRel, adrPages, projectPages),
+      page.outputRel,
     )
     outputs.push({ outPath: path.join(outDir, page.outputRel), document })
   }
