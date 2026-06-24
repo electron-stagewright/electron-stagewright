@@ -27,6 +27,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_REPO_ROOT = path.resolve(HERE, '..', '..', '..')
 /** Base URL for `sitemap.xml` — the project's GitHub Pages origin. */
 const SITE_BASE_URL = 'https://electron-stagewright.github.io/electron-stagewright/'
+/** Site-wide meta description — the search snippet and the Open Graph / Twitter card description. */
+const SITE_DESCRIPTION =
+  'Agent-native MCP server for driving real Electron apps from AI agents: launch or attach, read the accessibility tree, assert UI state, and capture diagnostics.'
+/** Social-card image (1200x630) served at the site root; the Open Graph / Twitter card image. */
+const SOCIAL_CARD_URL = `${SITE_BASE_URL}social-card.png`
 /** GitHub blob base for links to tracked repo files that are not rendered into the site. */
 const GITHUB_BLOB_BASE = 'https://github.com/electron-stagewright/electron-stagewright/blob/main/'
 
@@ -337,14 +342,29 @@ function renderTemplate(
   outputRel: string,
 ): string {
   const home = `${relativePrefix(outputRel)}index.html`
+  const canonical = `${SITE_BASE_URL}${outputRel === 'index.html' ? '' : outputRel}`
+  const pageTitle = `${escapeHtml(title)} — Electron Stagewright docs`
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="Agent-native MCP server for driving real Electron apps from AI agents: launch or attach, read the accessibility tree, assert UI state, and capture diagnostics.">
-<title>${escapeHtml(title)} — Electron Stagewright docs</title>
+<meta name="description" content="${SITE_DESCRIPTION}">
+<link rel="canonical" href="${canonical}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Electron Stagewright">
+<meta property="og:title" content="${pageTitle}">
+<meta property="og:description" content="${SITE_DESCRIPTION}">
+<meta property="og:url" content="${canonical}">
+<meta property="og:image" content="${SOCIAL_CARD_URL}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${pageTitle}">
+<meta name="twitter:description" content="${SITE_DESCRIPTION}">
+<meta name="twitter:image" content="${SOCIAL_CARD_URL}">
+<title>${pageTitle}</title>
 <style>${CSS}</style>
 </head>
 <body>
@@ -453,6 +473,11 @@ export async function buildDocsSite(
   // Serve llms.txt verbatim (it is an AI-discovery artifact, not a human page) and a sitemap.
   await copyFile(path.join(repoRoot, 'llms.txt'), path.join(outDir, 'llms.txt'))
   await writeFile(path.join(outDir, 'sitemap.xml'), renderSitemap(pages), 'utf8')
+  // The Open Graph / Twitter card image, served at the root and referenced by every page's meta.
+  await copyFile(
+    path.join(repoRoot, 'docs/assets/social-card.png'),
+    path.join(outDir, 'social-card.png'),
+  )
 
   return { pageCount: pages.length, brokenLinks: allBroken }
 }

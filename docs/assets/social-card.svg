@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <radialGradient id="spot" cx="27%" cy="36%" r="64%">
+      <stop offset="0%" stop-color="#f0b552" stop-opacity="0.15" />
+      <stop offset="55%" stop-color="#f0b552" stop-opacity="0.04" />
+      <stop offset="100%" stop-color="#f0b552" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#141310" />
+  <rect width="1200" height="630" fill="url(#spot)" />
+  <rect width="1200" height="7" fill="#f0b552" />
+
+  <text x="1150" y="606" font-size="380" fill="#f0b552" fill-opacity="0.05" text-anchor="end">&#9656;</text>
+
+  <text x="96" y="292" font-size="62" font-weight="600" letter-spacing="-1">
+    <tspan fill="#f0b552">&#9656;</tspan><tspan fill="#ece8dc"> Electron Stagewright</tspan>
+  </text>
+
+  <text x="98" y="372" font-size="33" fill="#cfcabb" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Drive Electron apps the way Playwright drives browsers.</text>
+
+  <text x="98" y="418" font-size="25" fill="#a09b8d" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Agent-native MCP server &#8212; launch, inspect, assert, capture, replay.</text>
+
+  <rect x="98" y="486" width="300" height="2" fill="#3a3528" />
+
+  <text x="98" y="528" font-size="23">
+    <tspan fill="#8a8576">electron-stagewright.github.io</tspan><tspan fill="#5a564b">   &#183;   </tspan><tspan fill="#f0b552">npm i @electron-stagewright/core</tspan>
+  </text>
+</svg>

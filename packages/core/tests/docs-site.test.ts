@@ -172,5 +172,11 @@ describe('buildDocsSite (full build against the real docs)', () => {
     expect(home).toContain('id="what-each-response-looks-like-the-agent-ux-detail"')
     // No unresolved RELATIVE `.md` href survives (GitHub-blob `.md` URLs start with https and are ok).
     expect(home).not.toMatch(/href="(?!https?:\/\/)[^"]*\.md"/)
+
+    // SEO chrome: a canonical link + an Open Graph card, and the card image is copied to the root.
+    expect(home).toContain('rel="canonical"')
+    expect(home).toContain('property="og:image"')
+    expect(home).toContain('social-card.png')
+    expect((await readFile(path.join(outDir, 'social-card.png'))).byteLength).toBeGreaterThan(0)
   })
 })
