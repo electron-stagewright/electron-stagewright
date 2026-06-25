@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.electron-stagewright/core",
+  "description": "Agent-native MCP server for driving, inspecting, and asserting on real Electron desktop apps.",
+  "repository": {
+    "url": "https://github.com/electron-stagewright/electron-stagewright",
+    "source": "github"
+  },
+  "version": "0.1.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@electron-stagewright/core",
+      "version": "0.1.2",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
