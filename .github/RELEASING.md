@@ -63,6 +63,25 @@ an unpublished core version.
 7. **Verify the install.** From a scratch directory, confirm `npx @electron-stagewright/core` resolves
    and the server starts over stdio.
 
+## Publish to the official MCP Registry
+
+The [MCP Registry](https://registry.modelcontextprotocol.io/) lists `@electron-stagewright/core` under
+the namespace `io.github.electron-stagewright/core`. The registry hosts only metadata, so the npm
+package must already be published. Ownership is proven two ways that must agree: the published
+`packages/core/package.json` carries an `mcpName` field equal to the server name, and the publisher
+authenticates as a member of the `electron-stagewright` GitHub org.
+
+1. Ensure `packages/core/package.json` has `"mcpName": "io.github.electron-stagewright/core"`, and that
+   `server.json` (repo root) and the `mcpName`/npm package are all on the same version.
+2. Publish that version to npm first (the steps above).
+3. Install the publisher CLI (`brew install mcp-publisher`, or a release binary from
+   `modelcontextprotocol/registry`).
+4. From the repo root: `mcp-publisher login github` (GitHub OAuth — must be an org member), then
+   `mcp-publisher publish --dry-run` to validate, then `mcp-publisher publish`.
+
+Bumping core re-runs this (update `server.json` + the `mcpName` package version, republish npm, then
+`mcp-publisher publish`).
+
 ## If something is wrong post-publish
 
 npm publishes are immutable. Do **not** force a fix by republishing the same version — bump a patch
