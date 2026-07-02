@@ -161,7 +161,7 @@ cross-OS parity, and reusable scaffolding. Prioritized:
 A second pass implemented several roadmap items directly (marked ✅ below), all with tests and CI wiring:
 
 - ✅ **Coverage thresholds enforced in CI** (P0 #2). `vitest.config.ts` now carries global floors (statements 85 / branches 77 / functions 84 / lines 87, a couple of points under the current 87/80/87/89), enforced by a new `Coverage thresholds` CI job running `pnpm test:coverage`.
-- ✅ **Benchmark token-economy gate in CI** (P0 #3). `pnpm bench:check` now runs under Xvfb in `e2e-electron.yml`, so a change that erodes the deterministic tool-call/token wins fails CI.
+- ⏳ **Benchmark token-economy gate in CI** (P0 #3) — _attempted, reverted._ Wiring `pnpm bench:check` into the Xvfb e2e job revealed that the bench (which spawns a standalone stdio MCP server subprocess that then launches the bench app) hangs under CI: every scenario's `electron_launch` times out at the 60s MCP-client budget, while the in-process vitest smokes launch Electron fine. Gating the bench needs that launch-reliability issue fixed first (likely sandbox/env propagation through the spawned server) — a focused follow-up, not a mechanical CI add.
 - ✅ **Type-safety discipline locked with lint** (P0 #4). `eslint.config.js` now errors on `no-explicit-any`, `no-non-null-assertion`, and `consistent-type-imports` (the syntactic subset, no type-aware `project` parsing yet — kept fast). The two pre-existing non-null assertions in tests were removed.
 - ✅ **Versioned plugin contract** (P1 #5). `coreVersionRange` now accepts full semver ranges (`^0.1.0`, `>=0.1.2 <0.3.0`, `~1.2`, `1.x`, `a || b`) via a dependency-free matcher (`plugins/semver.ts`, exported as `satisfiesCoreVersion`), and `PLUGIN_API_VERSION` is exported as the independently-versioned plugin-contract line.
 
@@ -177,9 +177,10 @@ Still open (rationale for what was **not** auto-implemented): **release automati
    by the new `Coverage thresholds` CI job. Still worth backfilling the weakest spots: `lifecycle/signature.ts`
    (13% lines) and `plugin-production/src/command.ts` (60%, 20% branches — it shells out to `codesign`/`spctl`,
    exactly where a quoting bug becomes a security bug), then raising the floors.
-3. ✅ **Gate performance regressions in CI.** _(Shipped: `pnpm bench:check` runs under Xvfb in
-   `e2e-electron.yml`.)_ Still worth adding a large-DOM snapshot-latency scenario so the walker hot-path fixes
-   (and future regressions) are visible.
+3. ⏳ **Gate performance regressions in CI.** _(Attempted, reverted: the bench hangs under Xvfb in CI — every
+   scenario's `electron_launch` times out at the 60s MCP-client budget when driven through the spawned-server
+   path, though the in-process smokes launch fine.)_ Fixing the bench-harness launch reliability under CI is
+   the prerequisite; then re-add the gate and a large-DOM snapshot-latency scenario.
 4. ✅ **Lock the type-safety discipline with lint.** _(Shipped: `no-explicit-any` + `no-non-null-assertion` +
    `consistent-type-imports` now error.)_ Full type-aware `recommendedTypeChecked` (with `parserOptions.project`)
    remains a follow-up once its lint-time cost earns its keep.
