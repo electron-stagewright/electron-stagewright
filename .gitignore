@@ -61,3 +61,4 @@ docs/*
 !docs/adr/
 !docs/guides/
 !docs/assets/
+!docs/deep-review-2026-07.md

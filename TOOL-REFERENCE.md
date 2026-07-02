@@ -220,7 +220,7 @@ Launch an Electron app and start a driving session. Provide main (absolute path 
 | `env` | object | no | Environment variables for the spawned process. |
 | `cwd` | string | no | Working directory for the spawned process. |
 | `timeoutMs` | integer | no | Max wait for the first window. |
-| `readyTimeoutMs` | integer | no | Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state. |
+| `readyTimeoutMs` | integer | no | Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state. Capped at 60000 to stay under the dispatch timeout backstop. |
 | `allowMultiple` | boolean | no | Allow launching when a session already exists. Default false (single instance). |
 | `instrumentNative` | boolean | no | Wrap the app main entry with fixed hooks installed before it runs, so startup Tray state is readable/invokable (native_trays / native_tray_invoke) and startup notifications can be captured with beforeArm. Off by default; runs no agent code. Requires main; executablePath-only launches cannot be instrumented. Launch transport only. |
 

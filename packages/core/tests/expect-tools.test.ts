@@ -324,6 +324,19 @@ describe('electron_expect_count (role mode)', () => {
     expect(res).toMatchObject({ matched: true, actual: 2 })
   })
 
+  it('reconciles + stores the walked snapshot so DOM refs stay consistent (H1)', async () => {
+    // The role-mode walk CLEARS and renumbers every data-sw-ref. It must route through
+    // reconcile+retag+store like snapshot/find, or the stored baseline and the DOM tags
+    // diverge and a later click({ ref }) hits the wrong element. Assert the store is
+    // updated by the count call.
+    const { dispatcher, snapshots } = setup({ evaluate: canned(snap(TWO_BUTTONS)) })
+    expect(snapshots.get('sess')).toBeUndefined()
+    await dispatcher.dispatch('electron_expect_count', { role: 'button', equals: 2 })
+    const stored = snapshots.get('sess')
+    expect(stored).toBeDefined()
+    expect(stored?.entries.filter((e) => e.role === 'button')).toHaveLength(2)
+  })
+
   it('fails when the role count does not satisfy the predicate', async () => {
     const { dispatcher } = setup({ evaluate: canned(snap(TWO_BUTTONS)) })
     const res = (await dispatcher.dispatch('electron_expect_count', {

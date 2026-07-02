@@ -201,6 +201,16 @@ describe('eval-tool safety + error classification', () => {
     expect(res.details?.['code_hash']).toBe(fnv1a32(code))
   })
 
+  it('rejects an over-long code payload before the AST preflight (BAD_ARGUMENT)', async () => {
+    const { dispatcher } = setup()
+    // Over the 100k cap: bounded at the schema so a multi-MB payload can never reach the
+    // synchronous acorn parse, which the dispatch timeout backstop could not preempt.
+    const code = `${'x'.repeat(100_001)};1`
+    const res = (await dispatcher.dispatch('electron_eval_main', { code })) as ErrorResponse
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
   it('blocks a structural bypass the substring blocklist misses (process[exit])', async () => {
     const { dispatcher } = setup()
     // The substring blocklist scans for the literal "process.exit"; the computed-access form is not

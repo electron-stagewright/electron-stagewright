@@ -56,6 +56,7 @@ export type {
 } from './types.js'
 
 export { assertCapability } from './capabilities.js'
+export { assertLoopbackAttachTarget, isLoopbackCdpUrl, isLoopbackHost } from './loopback.js'
 
 export { PlaywrightElectronTransport } from './playwright-electron.js'
 export { CDPTransport } from './cdp.js'

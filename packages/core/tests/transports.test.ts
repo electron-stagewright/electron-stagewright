@@ -2408,10 +2408,11 @@ describe('PlaywrightSession native trays (launch-time instrumentation)', () => {
       appPath: '/abs/main.js',
       instrumentNative: true,
     })
-    const registry: Array<{ inst?: unknown; rec: { id: number; hasImage: boolean } }> = [
-      { rec: { id: 0, hasImage: true } },
-    ]
-    registry[0]!.inst = {
+    const entry0: { inst?: unknown; rec: { id: number; hasImage: boolean } } = {
+      rec: { id: 0, hasImage: true },
+    }
+    const registry: Array<{ inst?: unknown; rec: { id: number; hasImage: boolean } }> = [entry0]
+    entry0.inst = {
       getBounds: () => ({ x: 1, y: 2, width: 3, height: 4 }),
       emit: () => {
         registry.splice(0, 1) // mirrors the launch-time hook's destroy() cleanup
@@ -2613,13 +2614,17 @@ describe('PlaywrightSession dialog handling', () => {
     // A throwing getter would otherwise become an unhandled rejection (the listener
     // is fire-and-forget) and crash the process under Node's default policy. vitest
     // surfaces unhandled rejections as failures, so this also guards the `.catch()`.
-    page.emitDialog({ type: 'confirm', message: 'boom', throwOnRead: true })
+    const broken = page.emitDialog({ type: 'confirm', message: 'boom', throwOnRead: true })
     await flush()
     page.emitDialog({ type: 'alert', message: 'ok' })
     await flush()
 
+    // The broken dialog is still DISMISSED even though its getters threw — otherwise the
+    // renderer would stay blocked on the modal forever (Playwright's auto-dismiss is off
+    // once a dialog listener is attached). It is not recorded (no trustworthy fields).
+    expect(broken.dismissed).toBe(true)
+    expect(broken.accepted).toBe(false)
     const { entries } = await session.dialogEvents()
-    // The broken dialog was not recorded (it threw before push); the next one was.
     expect(entries.map((e) => e.type)).toEqual(['alert'])
   })
 })

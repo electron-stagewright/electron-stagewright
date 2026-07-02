@@ -49,6 +49,7 @@ import {
 } from './cdp-connection.js'
 import { copyDialogPolicy } from './dialog-policy.js'
 import type { FetchJson, KillProcess } from './cdp.js'
+import { assertLoopbackAttachTarget } from './loopback.js'
 import type {
   AttachOptions,
   ClockInstallOptions,
@@ -574,6 +575,10 @@ export class InjectorTransport implements ITransport {
    * verified before the session can later use that pid for stop escalation.
    */
   async attach(opts: AttachOptions): Promise<TransportSession> {
+    // Re-assert the loopback invariant at the transport boundary — the tool schema
+    // also enforces it, but a direct API caller must not be able to point the
+    // inspector handshake at an arbitrary host (see transports/loopback.ts).
+    assertLoopbackAttachTarget(TRANSPORT_ID, opts)
     if (opts.cdpUrl !== undefined) {
       const conn = await this.#open(opts.cdpUrl, opts.timeoutMs)
       await this.#verifyConnectedPid(conn, opts.pid)

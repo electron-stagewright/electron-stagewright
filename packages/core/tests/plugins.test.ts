@@ -180,6 +180,31 @@ describe('loadPlugins', () => {
     ).rejects.toMatchObject({ code: 'PLUGIN_VERSION_MISMATCH' })
   })
 
+  it('accepts a semver RANGE that admits the running core (^, comparators, OR)', async () => {
+    // Running core 1.2.3 against a variety of satisfied ranges.
+    for (const range of ['^1.2.0', '>=1.0.0 <2.0.0', '~1.2', '1.x', '0.9.0 || ^1.0.0']) {
+      const result = await loadPlugins([{ ...samplePlugin(), coreVersionRange: range }], {
+        coreVersion: '1.2.3',
+      })
+      expect(result.tools.map((t) => t.name)).toContain('sample_greet')
+      await result.teardownAll()
+    }
+  })
+
+  it('rejects a semver range that excludes the running core', async () => {
+    await expect(
+      loadPlugins([{ ...samplePlugin(), coreVersionRange: '^2.0.0' }], { coreVersion: '1.2.3' }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_VERSION_MISMATCH' })
+  })
+
+  it('rejects an unparseable coreVersionRange as a manifest error, not a compat failure', async () => {
+    await expect(
+      loadPlugins([{ ...samplePlugin(), coreVersionRange: '>=garbage' }], {
+        coreVersion: '1.2.3',
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_MANIFEST_INVALID' })
+  })
+
   it('rejects a duplicate plugin namespace', async () => {
     await expect(
       loadPlugins([samplePlugin(), samplePlugin()], { coreVersion: CORE_VERSION }),
@@ -205,6 +230,26 @@ describe('loadPlugins', () => {
     )
     expect(firstTeardown).toHaveBeenCalledTimes(1)
     expect(lookupErrorCodeDefinition('sample.GREETING_REFUSED')).toBeUndefined()
+  })
+
+  it('does NOT call a plugin teardown hook when its own config validation failed', async () => {
+    // The plugin is recorded before config validation (so its codes get unregistered), but its
+    // setup never ran — so teardown must not run against state it never built.
+    const teardown = vi.fn()
+    const setup = vi.fn()
+    const bad: StagewrightPlugin = {
+      name: 'needsconfig',
+      version: '1.0.0',
+      coreVersionRange: '*',
+      configSchema: z.object({ required: z.string() }),
+      setup,
+      teardown,
+    }
+    await expect(
+      loadPlugins([bad], { coreVersion: CORE_VERSION, configs: { needsconfig: {} } }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_CONFIG_INVALID' })
+    expect(setup).not.toHaveBeenCalled()
+    expect(teardown).not.toHaveBeenCalled()
   })
 })
 

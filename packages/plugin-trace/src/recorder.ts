@@ -120,7 +120,10 @@ function redactValue(value: unknown, keys: ReadonlySet<string>): unknown {
   if (keys.size === 0) return value
   if (Array.isArray(value)) return value.map((item) => redactValue(item, keys))
   if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
+    // Null prototype so a key literally named `__proto__` becomes an own property
+    // instead of hitting the Object.prototype setter (which would silently drop
+    // the field from the written trace). JSON.stringify ignores the prototype.
+    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>
     for (const [key, val] of Object.entries(value)) {
       out[key] = keys.has(key) ? '[redacted]' : redactValue(val, keys)
     }

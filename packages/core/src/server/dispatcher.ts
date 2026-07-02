@@ -557,12 +557,23 @@ export class Dispatcher {
     }
 
     try {
-      const result = await this.#withTimeout(() =>
-        runWithSessionContext(sessionId, () => def.handler(args, ctx)),
-      )
-      this.#warnIfSlow(name, this.#now() - startedAt)
-      return this.#complete(name, args, result, startedAt)
+      // Run both the handler AND the catch's error-mapping inside the session context, so a
+      // THROWN StagewrightError (e.g. sessions.resolve → NOT_RUNNING with an explicit sessionId,
+      // or a thrown transport error) still stamps `_meta.session_id`. Wrapping only the handler
+      // would leave the catch in the outer context, dropping the correlation id on every throw.
+      return await runWithSessionContext(sessionId, async () => {
+        try {
+          const result = await this.#withTimeout(() => def.handler(args, ctx))
+          this.#warnIfSlow(name, this.#now() - startedAt)
+          return this.#complete(name, args, result, startedAt)
+        } catch (err) {
+          this.#warnIfSlow(name, this.#now() - startedAt)
+          return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
+        }
+      })
     } catch (err) {
+      // Belt-and-braces: runWithSessionContext itself should never throw (the inner catch handles
+      // handler throws), but if it did, still return an envelope rather than escaping to the transport.
       this.#warnIfSlow(name, this.#now() - startedAt)
       return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
     }
