@@ -2408,10 +2408,11 @@ describe('PlaywrightSession native trays (launch-time instrumentation)', () => {
       appPath: '/abs/main.js',
       instrumentNative: true,
     })
-    const registry: Array<{ inst?: unknown; rec: { id: number; hasImage: boolean } }> = [
-      { rec: { id: 0, hasImage: true } },
-    ]
-    registry[0]!.inst = {
+    const entry0: { inst?: unknown; rec: { id: number; hasImage: boolean } } = {
+      rec: { id: 0, hasImage: true },
+    }
+    const registry: Array<{ inst?: unknown; rec: { id: number; hasImage: boolean } }> = [entry0]
+    entry0.inst = {
       getBounds: () => ({ x: 1, y: 2, width: 3, height: 4 }),
       emit: () => {
         registry.splice(0, 1) // mirrors the launch-time hook's destroy() cleanup

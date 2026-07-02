@@ -180,6 +180,31 @@ describe('loadPlugins', () => {
     ).rejects.toMatchObject({ code: 'PLUGIN_VERSION_MISMATCH' })
   })
 
+  it('accepts a semver RANGE that admits the running core (^, comparators, OR)', async () => {
+    // Running core 1.2.3 against a variety of satisfied ranges.
+    for (const range of ['^1.2.0', '>=1.0.0 <2.0.0', '~1.2', '1.x', '0.9.0 || ^1.0.0']) {
+      const result = await loadPlugins([{ ...samplePlugin(), coreVersionRange: range }], {
+        coreVersion: '1.2.3',
+      })
+      expect(result.tools.map((t) => t.name)).toContain('sample_greet')
+      await result.teardownAll()
+    }
+  })
+
+  it('rejects a semver range that excludes the running core', async () => {
+    await expect(
+      loadPlugins([{ ...samplePlugin(), coreVersionRange: '^2.0.0' }], { coreVersion: '1.2.3' }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_VERSION_MISMATCH' })
+  })
+
+  it('rejects an unparseable coreVersionRange as a manifest error, not a compat failure', async () => {
+    await expect(
+      loadPlugins([{ ...samplePlugin(), coreVersionRange: '>=garbage' }], {
+        coreVersion: '1.2.3',
+      }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_MANIFEST_INVALID' })
+  })
+
   it('rejects a duplicate plugin namespace', async () => {
     await expect(
       loadPlugins([samplePlugin(), samplePlugin()], { coreVersion: CORE_VERSION }),

@@ -19,6 +19,7 @@ import {
   unregisterPluginErrorCodes,
 } from '../errors/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
+import { satisfies } from './semver.js'
 import type {
   LoadedPlugin,
   LoadPluginsOptions,
@@ -79,14 +80,25 @@ function resolveConfig(plugin: StagewrightPlugin, configs: LoadPluginsOptions['c
 }
 
 /**
- * v1 core-version check: `*` (or absent) accepts any core; otherwise an exact string match
- * is required. Richer semver-range matching is a forthcoming follow-up (kept dependency-free
- * for now). A mismatch throws `PLUGIN_VERSION_MISMATCH`.
+ * Core-version check (ADR-004): `*` (or absent) accepts any core; otherwise the plugin's
+ * `coreVersionRange` is matched against the running core version as a semver range (`^0.1.0`,
+ * `>=0.1.2 <0.3.0`, `~1.2`, exact `1.2.3`, or `a || b`). A mismatch throws `PLUGIN_VERSION_MISMATCH`;
+ * an unparseable range throws `PLUGIN_MANIFEST_INVALID` (a manifest typo, not a compat failure).
  */
 function checkCoreVersion(plugin: StagewrightPlugin, coreVersion: string): void {
   const range = plugin.coreVersionRange
   if (range === undefined || range === '*') return
-  if (range !== coreVersion) {
+  let ok: boolean
+  try {
+    ok = satisfies(coreVersion, range)
+  } catch (cause) {
+    invalid(
+      `Plugin "${plugin.name}" declares an invalid coreVersionRange "${range}": ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    )
+  }
+  if (!ok) {
     throw new StagewrightError(
       'PLUGIN_VERSION_MISMATCH',
       `Plugin "${plugin.name}" requires core ${range} but the running core is ${coreVersion}.`,

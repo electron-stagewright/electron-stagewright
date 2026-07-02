@@ -156,30 +156,39 @@ Internal code quality is already at or above best-in-class MCP-server standard. 
 almost entirely _around_ the code: attested releases, enforced quality gates, a versioned plugin contract,
 cross-OS parity, and reusable scaffolding. Prioritized:
 
+### Follow-up — shipped in this change
+
+A second pass implemented several roadmap items directly (marked ✅ below), all with tests and CI wiring:
+
+- ✅ **Coverage thresholds enforced in CI** (P0 #2). `vitest.config.ts` now carries global floors (statements 85 / branches 77 / functions 84 / lines 87, a couple of points under the current 87/80/87/89), enforced by a new `Coverage thresholds` CI job running `pnpm test:coverage`.
+- ✅ **Benchmark token-economy gate in CI** (P0 #3). `pnpm bench:check` now runs under Xvfb in `e2e-electron.yml`, so a change that erodes the deterministic tool-call/token wins fails CI.
+- ✅ **Type-safety discipline locked with lint** (P0 #4). `eslint.config.js` now errors on `no-explicit-any`, `no-non-null-assertion`, and `consistent-type-imports` (the syntactic subset, no type-aware `project` parsing yet — kept fast). The two pre-existing non-null assertions in tests were removed.
+- ✅ **Versioned plugin contract** (P1 #5). `coreVersionRange` now accepts full semver ranges (`^0.1.0`, `>=0.1.2 <0.3.0`, `~1.2`, `1.x`, `a || b`) via a dependency-free matcher (`plugins/semver.ts`, exported as `satisfiesCoreVersion`), and `PLUGIN_API_VERSION` is exported as the independently-versioned plugin-contract line.
+
+Still open (rationale for what was **not** auto-implemented): **release automation with provenance** (P0 #1) needs repository-secret/OIDC configuration an operator must set up; **plugin tools in the generated catalog** (P1 #7) requires inverting the core→plugin dependency direction (core cannot import the plugin packages, which depend on it) — best done via a per-plugin drift test using the already-exported `renderToolReference`, or a workspace-level generator, both larger than a mechanical change.
+
 ### P0 — trust & quality gates
 
 1. **Release automation with npm provenance.** Add a `release.yml` using Changesets + OIDC trusted
    publishing + `npm publish --provenance`, folding in the MCP-registry publish step. MCP servers are
    executed by agents on user machines — a verifiable supply chain is table stakes, and it removes the
    documented `workspace:*` foot-gun in `RELEASING.md`.
-2. **Enforce coverage thresholds in CI.** Set `coverage.thresholds` in `vitest.config.ts` (~85/78 to match
-   current reality) and run `pnpm test:coverage` in one CI cell. Backfill the weakest spots first:
-   `lifecycle/signature.ts` (13% lines) and `plugin-production/src/command.ts` (60%, 20% branches — it
-   shells out to `codesign`/`spctl`, exactly where a quoting bug becomes a security bug).
-3. **Gate performance regressions in CI.** The `bench` package already measures real BPE tokens, tool-call
-   counts, latency and RSS over the real stdio protocol, with deterministic floors — but `pnpm bench --check`
-   never runs in CI. Add a job; add a large-DOM snapshot-latency scenario so the walker hot-path fixes
+2. ✅ **Enforce coverage thresholds in CI.** _(Shipped.)_ `coverage.thresholds` set in `vitest.config.ts`, run
+   by the new `Coverage thresholds` CI job. Still worth backfilling the weakest spots: `lifecycle/signature.ts`
+   (13% lines) and `plugin-production/src/command.ts` (60%, 20% branches — it shells out to `codesign`/`spctl`,
+   exactly where a quoting bug becomes a security bug), then raising the floors.
+3. ✅ **Gate performance regressions in CI.** _(Shipped: `pnpm bench:check` runs under Xvfb in
+   `e2e-electron.yml`.)_ Still worth adding a large-DOM snapshot-latency scenario so the walker hot-path fixes
    (and future regressions) are visible.
-4. **Lock the type-safety discipline with lint.** The codebase passes at zero `any`/non-null-assertion
-   violations, but `eslint.config.js` only checks `no-unused-vars`. Enable `recommendedTypeChecked` +
-   `no-explicit-any` + `no-non-null-assertion` + `consistent-type-imports` now, while it's free, to prevent
-   silent regression.
+4. ✅ **Lock the type-safety discipline with lint.** _(Shipped: `no-explicit-any` + `no-non-null-assertion` +
+   `consistent-type-imports` now error.)_ Full type-aware `recommendedTypeChecked` (with `parserOptions.project`)
+   remains a follow-up once its lint-time cost earns its keep.
 
 ### P1 — capability & DX parity
 
-5. **Versioned plugin contract.** Ship semver-range `coreVersionRange` (currently only `*`/exact) and export
-   a `PLUGIN_API_VERSION` (or a type-only `@electron-stagewright/plugin-api` package) so third-party plugins
-   have a stable, independently-versioned surface instead of "whatever core exports."
+5. ✅ **Versioned plugin contract.** _(Shipped: semver-range `coreVersionRange` via `plugins/semver.ts` +
+   exported `PLUGIN_API_VERSION`.)_ A type-only `@electron-stagewright/plugin-api` package (so plugins import
+   from a narrow, independently-versioned surface instead of all of core) remains a follow-up.
 6. **`@electron-stagewright/test-kit` package.** Publish `FakeTransport`/`FakeSession`, `FULL_CAPS`,
    `fixtureMain`, and the server-teardown harness currently duplicated across 5 plugin test suites and
    reached via `../../core/tests/helpers/`; also extract the per-plugin boilerplate (`PluginMeta`,

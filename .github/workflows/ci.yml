@@ -53,6 +53,24 @@ jobs:
       - run: pnpm --filter @electron-stagewright/core build
       - run: pnpm test
 
+  coverage:
+    name: Coverage thresholds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Build core first so packages whose tests import @electron-stagewright/core by name can
+      # resolve its dist (same reason as the test job).
+      - run: pnpm --filter @electron-stagewright/core build
+      # Fails when line/branch/statement/function coverage drops below the floors in
+      # vitest.config.ts, so the token-economy and correctness suites can't silently decay.
+      - run: pnpm test:coverage
+
   build:
     name: Build
     runs-on: ubuntu-latest

@@ -107,3 +107,11 @@ jobs:
         run: xvfb-run --auto-servernum pnpm test
         env:
           STAGEWRIGHT_E2E: '1'
+
+      # Enforce the token-economy floors the project sells: bench --check drives the scenarios over
+      # the real MCP protocol against a real Electron app, then compares only the DETERMINISTIC
+      # metrics (exact tool-call counts, estimated-token totals, and the diff-vs-rescan savings) —
+      # latency and memory are environment-dependent and never thresholded. So a change that erodes
+      # the round-trip/token wins fails here. Same continue-on-error posture as the smokes above.
+      - name: Enforce benchmark token-economy thresholds under Xvfb
+        run: xvfb-run --auto-servernum pnpm bench:check
