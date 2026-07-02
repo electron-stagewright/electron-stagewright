@@ -16,6 +16,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { StagewrightError } from '../../errors/registry.js'
+import { assertPathsWithinAppRoot } from '../app-root.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { refField, selectorField, sessionIdField, forceField, timeoutField } from './schema.js'
 import { runTargetedInteraction } from './target.js'
@@ -168,6 +169,9 @@ export const setFilesTool: AnyToolDefinition = defineTool({
   handler: (args, ctx) =>
     runTargetedInteraction(ctx, args, async (session, selector, opts) => {
       validateFilePaths(args.paths)
+      // Same confinement launch enforces: with --app-root set, the host files handed
+      // to the file input must live inside the root.
+      assertPathsWithinAppRoot(ctx.appRoot, args.paths)
       await session.setInputFiles(selector, args.paths, opts)
       return { target: selector, files: args.paths.length }
     }),

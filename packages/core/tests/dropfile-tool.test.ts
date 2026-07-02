@@ -39,7 +39,7 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-function setup(evaluate?: FakeEvaluate) {
+function setup(evaluate?: FakeEvaluate, opts: { appRoot?: string } = {}) {
   const sessions = new SessionManager()
   const snapshots = new SnapshotStore()
   const session = new FakeSession({
@@ -47,7 +47,11 @@ function setup(evaluate?: FakeEvaluate) {
     evaluate: evaluate ?? (async () => ({ ok: true, default_prevented: true })),
   })
   sessions.register(new FakeTransport(), session)
-  const dispatcher = new Dispatcher({ sessions, snapshots })
+  const dispatcher = new Dispatcher({
+    sessions,
+    snapshots,
+    ...(opts.appRoot !== undefined ? { appRoot: opts.appRoot } : {}),
+  })
   dispatcher.register(dropFileTool)
   return { dispatcher, session }
 }
@@ -148,5 +152,34 @@ describe('electron_drop_file', () => {
     })) as ErrorResponse
     expect(res.ok).toBe(false)
     expect(res.code).toBe('BAD_ARGUMENT')
+  })
+
+  it('rejects a path outside --app-root and never reads it', async () => {
+    let evaluated = false
+    // Confine to a sibling dir the fixtures do NOT live in, so textPath escapes it.
+    const { dispatcher } = setup(
+      async () => {
+        evaluated = true
+        return { ok: true, default_prevented: true }
+      },
+      { appRoot: path.join(dir, 'confined') },
+    )
+    const res = (await dispatcher.dispatch('electron_drop_file', {
+      selector: '#zone',
+      paths: [textPath],
+    })) as ErrorResponse
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toMatch(/--app-root/)
+    expect(evaluated).toBe(false)
+  })
+
+  it('allows a path inside --app-root', async () => {
+    const { dispatcher } = setup(undefined, { appRoot: dir })
+    const res = (await dispatcher.dispatch('electron_drop_file', {
+      selector: '#zone',
+      paths: [textPath],
+    })) as SuccessResponse & { files: number }
+    expect(res).toMatchObject({ ok: true, files: 1 })
   })
 })

@@ -206,6 +206,26 @@ describe('loadPlugins', () => {
     expect(firstTeardown).toHaveBeenCalledTimes(1)
     expect(lookupErrorCodeDefinition('sample.GREETING_REFUSED')).toBeUndefined()
   })
+
+  it('does NOT call a plugin teardown hook when its own config validation failed', async () => {
+    // The plugin is recorded before config validation (so its codes get unregistered), but its
+    // setup never ran — so teardown must not run against state it never built.
+    const teardown = vi.fn()
+    const setup = vi.fn()
+    const bad: StagewrightPlugin = {
+      name: 'needsconfig',
+      version: '1.0.0',
+      coreVersionRange: '*',
+      configSchema: z.object({ required: z.string() }),
+      setup,
+      teardown,
+    }
+    await expect(
+      loadPlugins([bad], { coreVersion: CORE_VERSION, configs: { needsconfig: {} } }),
+    ).rejects.toMatchObject({ code: 'PLUGIN_CONFIG_INVALID' })
+    expect(setup).not.toHaveBeenCalled()
+    expect(teardown).not.toHaveBeenCalled()
+  })
 })
 
 describe('createServer({ plugins })', () => {

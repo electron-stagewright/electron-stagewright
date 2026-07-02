@@ -76,7 +76,13 @@ export interface LoadedPlugin {
   readonly tools: readonly AnyToolDefinition[]
   /** Full namespaced codes (e.g. `['trace.BUFFER_FULL']`) registered for this plugin. */
   readonly errorCodes: readonly string[]
-  /** Run the plugin's teardown hook and unregister its codes. Safe to call more than once. */
+  /**
+   * Mark that the plugin's `setup` hook completed. Called by the loader after a successful
+   * `setup`. Teardown only invokes the user `teardown` hook when setup ran, so a plugin whose
+   * config validation (or setup) threw never has `teardown` called against state it never built.
+   */
+  markSetupRan(): void
+  /** Run the plugin's teardown hook (only if setup ran) and unregister its codes. Safe to call more than once. */
   teardown(): Promise<void>
 }
 

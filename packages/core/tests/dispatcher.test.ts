@@ -257,6 +257,24 @@ describe('Dispatcher session correlation (AsyncLocalStorage)', () => {
     const res = await d.dispatch('test_sid', {})
     expect((res as SuccessResponse)._meta.session_id).toBeUndefined()
   })
+
+  it('stamps _meta.session_id on a THROWN error too (correlation survives the catch)', async () => {
+    const d = newDispatcher()
+    d.register(
+      defineTool({
+        name: 'test_throw_with_sid',
+        description: 'x',
+        inputSchema: z.object({ sessionId: z.string().optional() }),
+        operationType: 'query',
+        handler: () => {
+          throw new StagewrightError('NOT_RUNNING', 'no app here')
+        },
+      }),
+    )
+    const res = (await d.dispatch('test_throw_with_sid', { sessionId: 'abc' })) as ErrorResponse
+    expect(res.code).toBe('NOT_RUNNING')
+    expect(res._meta.session_id).toBe('abc')
+  })
 })
 
 describe('Dispatcher operation-timeout backstop (ADR-011)', () => {

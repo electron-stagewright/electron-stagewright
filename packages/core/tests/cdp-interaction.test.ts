@@ -104,6 +104,13 @@ describe('parseKeyChord', () => {
     expect(() => parseKeyChord('NumLock')).toThrowError(/Unsupported key/)
     expect(() => parseKeyChord('Control+')).toThrowError(/has no key/)
   })
+
+  it('parses a literal + key, bare and with a modifier', () => {
+    // '+'.split('+') === ['', ''] and 'Control++'.split('+') === ['Control','','']: the
+    // real key is the trailing '+', which must not be mistaken for "no key".
+    expect(parseKeyChord('+')).toMatchObject({ key: '+', text: '+', modifiers: 0 })
+    expect(parseKeyChord('Control++')).toMatchObject({ key: '+', modifiers: 2 })
+  })
 })
 
 describe('CDP pointer interaction', () => {

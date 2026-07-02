@@ -478,37 +478,57 @@ class PlaywrightSession implements TransportSession {
 
   /** Resolve a native JS dialog per the active policy and record what happened. */
   private async handleDialog(dialog: PWDialog, windowId: string): Promise<void> {
-    // Read the dialog's fields BEFORE responding — accept()/dismiss() can
-    // invalidate the handle.
-    const type = dialog.type()
-    const message = dialog.message()
-    const defaultValue = dialog.defaultValue()
+    // Read the dialog's fields BEFORE responding — accept()/dismiss() can invalidate
+    // the handle. A getter on a malformed/raced handle can itself throw; if it does,
+    // we must STILL dismiss the dialog (below), or the renderer stays blocked on the
+    // modal forever — Playwright disables its own auto-dismiss once a `dialog` listener
+    // is attached. So the read is wrapped, and the response runs in a `finally`.
+    let fields: { type: string; message: string; defaultValue: string } | undefined
+    try {
+      fields = {
+        type: dialog.type(),
+        message: dialog.message(),
+        defaultValue: dialog.defaultValue(),
+      }
+    } catch {
+      // Malformed/raced handle: we have no reliable data to record, but we must not
+      // leave the dialog unresolved — fall through to the dismiss in `finally`.
+      fields = undefined
+    }
+
     const policy = this.dialogPolicy
-    const { action, promptText } = resolveDialogResponse(policy, type)
+    // With no readable type, resolve the response as a safe dismiss.
+    const { action, promptText } = resolveDialogResponse(policy, fields?.type ?? 'beforeunload')
 
     // A one-shot policy reverts to the safe default after a single dialog, so a
-    // lingering `accept` cannot silently confirm a later, unexpected dialog.
-    if (policy.oneShot === true) {
+    // lingering `accept` cannot silently confirm a later, unexpected dialog. Only a
+    // real (readable) dialog consumes the one-shot grant.
+    if (policy.oneShot === true && fields !== undefined) {
       this.dialogPolicy = { action: 'dismiss' }
     }
 
     try {
-      if (action === 'accept') {
+      // A dialog we could not read is always dismissed (never accepted), regardless of policy.
+      if (action === 'accept' && fields !== undefined) {
         await dialog.accept(promptText)
       } else {
         await dialog.dismiss()
       }
     } catch {
       // The dialog may already be handled or the page may have closed mid-flight;
-      // recording the event is still useful for post-mortem, so swallow and fall
-      // through to push it.
+      // recording the event (when we have data) is still useful, so swallow and
+      // fall through.
     }
 
+    // Only record a dialog whose fields we actually read — a malformed handle yields
+    // no trustworthy type/message, so recording a fabricated entry would mislead a
+    // post-mortem. It was still dismissed above, so the renderer is unblocked.
+    if (fields === undefined) return
     this.pushDialog({
-      type,
-      message,
+      type: fields.type,
+      message: fields.message,
       action,
-      ...(defaultValue !== '' ? { defaultValue } : {}),
+      ...(fields.defaultValue !== '' ? { defaultValue: fields.defaultValue } : {}),
       ...(promptText !== undefined ? { promptText } : {}),
       timestamp: Date.now(),
       windowId,

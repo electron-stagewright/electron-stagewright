@@ -116,17 +116,23 @@ function makeLoadedPlugin(
   errorCodes: readonly string[],
 ): LoadedPlugin {
   let toreDown = false
+  let setupRan = false
   return {
     name: plugin.name,
     version: plugin.version,
     tools,
     errorCodes,
+    markSetupRan(): void {
+      setupRan = true
+    },
     async teardown(): Promise<void> {
       if (toreDown) return
       toreDown = true
       // Unregister codes first so a throwing teardown hook can't leave codes registered.
       unregisterPluginErrorCodes(errorCodes)
-      await plugin.teardown?.()
+      // Only invoke the user hook when setup actually ran: a plugin whose config validation
+      // (or setup) threw must not have teardown called against resources it never acquired.
+      if (setupRan) await plugin.teardown?.()
     },
   }
 }
@@ -177,6 +183,7 @@ export async function loadPlugins(
       loaded.push(record)
       const config = resolveConfig(plugin, opts.configs)
       await plugin.setup?.(config)
+      record.markSetupRan()
       allTools.push(...tools)
     }
   } catch (err) {

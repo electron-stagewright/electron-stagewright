@@ -56,21 +56,37 @@ interface CliOptions {
   readonly operationTimeoutMs?: number
 }
 
-/** Read the value following a `--flag <value>` argument, or `undefined` when absent. */
+/**
+ * Read the value following a `--flag <value>` argument, or `undefined` when the flag is absent.
+ * A flag PRESENT with a missing value (end of argv, or the next token is another `--flag`) throws:
+ * `--app-root` and `--screenshot-dir` are security/confinement-relevant, so failing open — parsing
+ * `--app-root --allow-eval` as "no app-root confinement" — would silently disable a control the
+ * operator asked for.
+ */
 function readFlagValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag)
   if (index === -1) return undefined
   const value = argv[index + 1]
-  return value !== undefined && !value.startsWith('--') ? value : undefined
+  if (value === undefined || value.startsWith('--')) {
+    throw new Error(
+      `${flag} expects a value, got ${value === undefined ? 'nothing' : `"${value}"`}`,
+    )
+  }
+  return value
 }
 
-/** Read EVERY value following a repeated `--flag <value>` argument, in order. */
+/** Read EVERY value following a repeated `--flag <value>` argument, in order. Throws on a missing value (see {@link readFlagValue}). */
 function readFlagValues(argv: readonly string[], flag: string): string[] {
   const values: string[] = []
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] !== flag) continue
     const value = argv[i + 1]
-    if (value !== undefined && !value.startsWith('--')) values.push(value)
+    if (value === undefined || value.startsWith('--')) {
+      throw new Error(
+        `${flag} expects a value, got ${value === undefined ? 'nothing' : `"${value}"`}`,
+      )
+    }
+    values.push(value)
   }
   return values
 }
