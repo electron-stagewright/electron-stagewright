@@ -70,6 +70,7 @@ import {
   type InflightRequest,
 } from './cdp-network.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
+import { assertLoopbackAttachTarget } from './loopback.js'
 import {
   bodyCapturePlan,
   bodyContentTypeAllowed,
@@ -215,6 +216,15 @@ function cdpCookieToStorage(c: CdpCookie): StorageCookie {
 
 /** Max network events retained per session; older ones are dropped and counted in the overflow. */
 const NETWORK_CAP = 1000
+
+/**
+ * Max in-flight request records retained while capture is armed. A request whose completion event
+ * (`loadingFinished`/`loadingFailed`) never arrives — target destroyed mid-flight, a hung request,
+ * an SSE/long-poll stream — would otherwise accumulate its headers + inline post-data in `#inflight`
+ * unboundedly until stop/re-arm. Once the cap is reached the OLDEST inflight record is evicted (its
+ * eventual completion simply finds no record and is ignored), bounding memory on a long capture.
+ */
+const INFLIGHT_CAP = 2000
 
 /** Resolve after `ms`, for a stub's simulated slow endpoint (`delayMs`). */
 function delay(ms: number): Promise<void> {
@@ -472,6 +482,14 @@ class CdpSession implements TransportSession {
       return
     }
     this.#inflight.set(key, inflight)
+    // Evict the oldest record(s) if completion events never arrived for prior requests, so a
+    // long-armed capture over a streaming/long-poll app cannot grow the map without bound. Map
+    // iteration is insertion-ordered, so the first key is the oldest.
+    while (this.#inflight.size > INFLIGHT_CAP) {
+      const oldest = this.#inflight.keys().next().value
+      if (oldest === undefined) break
+      this.#inflight.delete(oldest)
+    }
   }
 
   #onNetworkResponse(targetId: string, raw: unknown): void {
@@ -1497,6 +1515,10 @@ export class CDPTransport implements ITransport {
   }
 
   async attach(opts: AttachOptions): Promise<TransportSession> {
+    // Re-assert the loopback invariant at the transport boundary — the tool schema
+    // also enforces it, but a direct API caller must not be able to point the
+    // discovery probe at an arbitrary host (see transports/loopback.ts).
+    assertLoopbackAttachTarget(TRANSPORT_ID, opts)
     let httpBase: string
     let browserWsUrl: string
 

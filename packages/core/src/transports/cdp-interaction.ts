@@ -81,7 +81,14 @@ const NAMED_KEYS: Readonly<
  */
 export function parseKeyChord(chord: string): ParsedKey {
   const parts = chord.split('+')
-  const keyPart = parts.pop() ?? ''
+  // A trailing literal `+` (bare `'+'`, or `'Control++'`) splits to an empty final
+  // segment; the real key is that `+`. Recover it so the CDP transport accepts `+`
+  // like the Playwright transport does, instead of rejecting it as "no key".
+  let keyPart = parts.pop() ?? ''
+  if (keyPart === '' && parts.length > 0 && parts[parts.length - 1] === '') {
+    parts.pop()
+    keyPart = '+'
+  }
   if (keyPart === '') {
     throw new StagewrightError('BAD_ARGUMENT', `Key chord "${chord}" has no key.`, { chord })
   }

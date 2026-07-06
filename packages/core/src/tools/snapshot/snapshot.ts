@@ -20,6 +20,8 @@ import {
   compactDiff,
   diffSnapshots,
   markRecentlyChanged,
+  renderDiffText,
+  renderSnapshotText,
   truncateDiffToBudget,
 } from '../../snapshot/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -51,12 +53,21 @@ const inputSchema = z.object({
     .max(MAX_ENTRIES_LIMIT)
     .optional()
     .describe(`Cap the number of entries returned. Defaults to ${DEFAULT_MAX_ENTRIES}.`),
+  format: z
+    .enum(['json', 'text'])
+    .optional()
+    .describe(
+      "Payload encoding. 'json' (default) returns the structured snapshot/diff objects." +
+        " 'text' returns a compact one-line-per-entry rendering (5-10x fewer tokens): ref, role," +
+        ' quoted name, non-empty value/placeholder, and only NON-default state flags;' +
+        ' ~ prefixes recently-changed entries, [-] marks non-targetable landmarks.',
+    ),
   diffFormat: z
     .enum(['compact', 'full'])
     .optional()
     .describe(
       "Encoding for since:'last' diffs. 'compact' (default) carries only the changed fields per" +
-        " entry; 'full' carries complete prev/curr entries.",
+        " entry; 'full' carries complete prev/curr entries. Ignored when format:'text'.",
     ),
   budgetTokens: z
     .number()
@@ -74,6 +85,8 @@ const DESCRIPTION = [
   'Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name,',
   'state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous',
   'snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap.',
+  'format:"text" returns a compact one-line-per-entry rendering instead of JSON (5-10x fewer',
+  'tokens): `[ref] role "name" value=… flags`, ~ marks recently-changed, [-] marks landmarks.',
   'Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete',
   'prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive',
   'entries first. Each response carries renderer_reloaded so stale refs are detectable (P10).',
@@ -81,7 +94,8 @@ const DESCRIPTION = [
   'Closed shadow roots are opaque unless the app opts in: push each root onto',
   'window.__stagewright_closedShadowRoots at attachShadow time (or implement',
   'window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true.',
-  'Returns: { ok, kind: "full" | "diff", snapshot?, diff?, diff_format?, renderer_reloaded, truncated }.',
+  'Returns: { ok, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?,',
+  'diff_format?, renderer_reloaded, truncated }.',
   'Errors: NOT_RUNNING (no session — call electron_launch first; not retryable),',
   'BAD_ARGUMENT (multiple sessions live — pass sessionId).',
 ].join(' ')
@@ -155,6 +169,25 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       // blow MCP-client token caps on busy dialogs; diffFormat:'full' restores them.
       if (args.since === 'last' && comparable && prev !== undefined) {
         const fullDiff = diffSnapshots(prev, curr)
+        // Text encoding always shapes from the compact diff (the full prev/curr pairs
+        // exist to be machine-applied, which a text consumer is not doing).
+        if (args.format === 'text') {
+          const compacted = compactDiff(fullDiff)
+          const bounded =
+            args.budgetTokens !== undefined
+              ? truncateDiffToBudget(compacted, args.budgetTokens)
+              : { diff: compacted, dropped: 0 }
+          return makeSuccess(
+            {
+              kind: 'diff',
+              format: 'text',
+              diff_text: renderDiffText(bounded.diff),
+              renderer_reloaded: false,
+              truncated: bounded.dropped > 0,
+            },
+            meta,
+          )
+        }
         const format = args.diffFormat ?? 'compact'
         const encoded = format === 'compact' ? compactDiff(fullDiff) : fullDiff
         const bounded =
@@ -174,16 +207,32 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       }
 
       // Full snapshot: mark recently_changed against the previous (when comparable),
-      // then apply the agent's filters to the RETURNED snapshot only.
+      // then apply the agent's filters to the RETURNED snapshot only. The diff feeding
+      // markRecentlyChanged is internal — skip its token estimate (a full-delta stringify)
+      // since only the change identities are consumed.
       const marked =
         comparable && prev !== undefined
-          ? markRecentlyChanged(curr, diffSnapshots(prev, curr))
+          ? markRecentlyChanged(curr, diffSnapshots(prev, curr, { skipTokenEstimate: true }))
           : curr
       const { snapshot, truncated } = applyFilters(
         marked,
         args.interactiveOnly === true,
         maxEntries,
       )
+      // Text encoding: one line per entry, only non-default signal (see render-text.ts).
+      if (args.format === 'text') {
+        return makeSuccess(
+          {
+            kind: 'full',
+            format: 'text',
+            snapshot_text: renderSnapshotText(snapshot),
+            entry_count: snapshot.entries.length,
+            renderer_reloaded: reloaded,
+            truncated,
+          },
+          meta,
+        )
+      }
       return makeSuccess({ kind: 'full', snapshot, renderer_reloaded: reloaded, truncated }, meta)
     },
   })

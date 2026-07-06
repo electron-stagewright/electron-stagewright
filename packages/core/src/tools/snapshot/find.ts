@@ -35,6 +35,15 @@ const inputSchema = z
       .boolean()
       .optional()
       .describe('Restrict to interactive (or non-interactive) elements.'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe(
+        'Cap the matches returned (in document order); count still reports the true total so' +
+          ' a truncation is detectable. Unset returns every match.',
+      ),
   })
   .refine((args) => args.name_contains === undefined || args.name_exact === undefined, {
     message: 'Provide name_contains or name_exact, not both.',
@@ -43,10 +52,11 @@ const inputSchema = z
 
 const DESCRIPTION = [
   'Find elements in the renderer by accessibility role + name + state — no CSS selectors.',
-  'Filters: role (exact), name_contains, name_exact, visible, enabled, interactive. Returns:',
-  '{ ok, matches: [{ ref, role, name, bbox }], count, renderer_reloaded }. A ref may be null',
-  'for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable),',
-  'BAD_ARGUMENT (multiple sessions live — pass sessionId).',
+  'Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps',
+  'the matches returned (count still reports the true total). Returns:',
+  '{ ok, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be',
+  'null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch',
+  'first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).',
 ].join(' ')
 
 /** Dependency seams for {@link makeFindTool} — injected by tests. */
@@ -90,13 +100,24 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
         ...(args.enabled !== undefined ? { enabled: args.enabled } : {}),
         ...(args.interactive !== undefined ? { interactive: args.interactive } : {}),
       }
-      const matches = findEntries(snapshot, query).map((entry) => ({
+      const all = findEntries(snapshot, query)
+      const capped = args.limit !== undefined ? all.slice(0, args.limit) : all
+      const matches = capped.map((entry) => ({
         ref: entry.ref,
         role: entry.role,
         name: entry.name,
         bbox: entry.bbox,
       }))
-      return makeSuccess({ matches, count: matches.length, renderer_reloaded: reloaded }, meta)
+      return makeSuccess(
+        {
+          matches,
+          // `count` is the TRUE total so an agent can tell a capped result from a small one.
+          count: all.length,
+          truncated: all.length - matches.length,
+          renderer_reloaded: reloaded,
+        },
+        meta,
+      )
     },
   })
 }

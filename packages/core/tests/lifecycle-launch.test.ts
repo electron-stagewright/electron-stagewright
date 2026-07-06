@@ -68,6 +68,19 @@ describe('electron_launch', () => {
     expect((res as SuccessResponse)._meta.session_id).toBe('launched')
   })
 
+  it('rejects a readyTimeoutMs above the dispatch backstop cap (BAD_ARGUMENT)', async () => {
+    const { dispatcher, transport } = setup()
+    // Above 60s the renderer-ready wait could outlast the 120s dispatch backstop and turn a
+    // successful launch into a retryable OPERATION_TIMEOUT; the schema caps it instead.
+    const res = (await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      readyTimeoutMs: 120_000,
+    })) as ErrorResponse
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(transport.launchCount).toBe(0)
+  })
+
   it('refuses a runtime-altering env key before spawning (ELECTRON_RUN_AS_NODE)', async () => {
     const { dispatcher, transport } = setup()
     const res = (await dispatcher.dispatch('electron_launch', {

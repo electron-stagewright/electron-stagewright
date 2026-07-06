@@ -15,6 +15,16 @@ import type { ErrorCodeDefinition } from '../errors/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 
 /**
+ * The version of the PLUGIN CONTRACT surface (ADR-004) — the shape of {@link StagewrightPlugin},
+ * the `ToolContext` passed to handlers, the error-envelope helpers, and the loader's namespacing
+ * rules. It is versioned INDEPENDENTLY of the core package version (which churns on 0.x for
+ * unrelated reasons) so a third-party plugin has a stable line to reason about: bump the MINOR
+ * for additive contract changes, the MAJOR for breaking ones. A plugin can log or assert against
+ * it at `setup` time, and `coreVersionRange` remains the enforced compatibility gate.
+ */
+export const PLUGIN_API_VERSION = '1.0.0' as const
+
+/**
  * A first-party plugin. Authored with SHORT tool names and BARE error-code keys; the
  * loader namespaces them — tool `start` under plugin `trace` is registered as
  * `trace_start`, and error code key `BUFFER_FULL` becomes `trace.BUFFER_FULL`.
@@ -28,9 +38,12 @@ export interface StagewrightPlugin {
   /** Plugin package version (informational; surfaced in introspection). */
   readonly version: string
   /**
-   * Optional core-version requirement. v1 supports `*` (any) or an exact match against the
-   * running core version; a mismatch fails the load with `PLUGIN_VERSION_MISMATCH`. Richer
-   * semver-range matching is a forthcoming follow-up.
+   * Optional core-version requirement, matched against the running core version as a semver
+   * range: `*` (any), an exact `1.2.3`, a caret `^0.1.0`, a tilde `~1.2`, comparators
+   * `>=0.1.2 <0.3.0`, or an OR of ranges `^1.0.0 || ^2.0.0`. A version outside the range fails
+   * the load with `PLUGIN_VERSION_MISMATCH`; an unparseable range fails with
+   * `PLUGIN_MANIFEST_INVALID`. Third-party plugins should pin a caret on the {@link
+   * PLUGIN_API_VERSION} they were built against.
    */
   readonly coreVersionRange?: string
   /**
@@ -76,7 +89,13 @@ export interface LoadedPlugin {
   readonly tools: readonly AnyToolDefinition[]
   /** Full namespaced codes (e.g. `['trace.BUFFER_FULL']`) registered for this plugin. */
   readonly errorCodes: readonly string[]
-  /** Run the plugin's teardown hook and unregister its codes. Safe to call more than once. */
+  /**
+   * Mark that the plugin's `setup` hook completed. Called by the loader after a successful
+   * `setup`. Teardown only invokes the user `teardown` hook when setup ran, so a plugin whose
+   * config validation (or setup) threw never has `teardown` called against state it never built.
+   */
+  markSetupRan(): void
+  /** Run the plugin's teardown hook (only if setup ran) and unregister its codes. Safe to call more than once. */
   teardown(): Promise<void>
 }
 

@@ -36,6 +36,28 @@ function pngBuffer(width: number, height: number): Buffer {
   return b
 }
 
+/**
+ * A minimal JPEG whose bytes include a length-less standalone marker (an RST restart marker and
+ * 0xFF padding) BEFORE the SOF0 that carries the dimensions. The old parser treated every `FF xx`
+ * as length-bearing and would misread the two bytes after the marker-less RST as a segment length,
+ * skipping past or misaligning on the SOF. The fixed parser skips standalone markers correctly.
+ */
+function jpegWithRestartMarker(width: number, height: number): Buffer {
+  const sof = Buffer.alloc(11)
+  sof.writeUInt16BE(0xffc0, 0) // SOF0 marker
+  sof.writeUInt16BE(9, 2) // segment length (8 data bytes + 1)
+  sof.writeUInt8(8, 4) // precision
+  sof.writeUInt16BE(height, 5)
+  sof.writeUInt16BE(width, 7)
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]), // SOI
+    Buffer.from([0xff, 0xd0]), // RST0 — length-less; the two bytes after are NOT a length
+    Buffer.from([0x12, 0x34]), // arbitrary data the old parser misread as a length
+    Buffer.from([0xff, 0xff]), // fill padding — advance 1
+    sof,
+  ])
+}
+
 function snap(html: string): Snapshot {
   return walkAccessibilityTree(new JSDOM(html).window.document, {})
 }
@@ -83,6 +105,14 @@ describe('electron_screenshot', () => {
     // Defaults to the active window; fullPage flows through.
     expect(session.screenshotCalls[0]?.target).toEqual({ kind: 'index', index: 0 })
     expect(session.screenshotCalls[0]?.opts).toMatchObject({ format: 'png', fullPage: true })
+  })
+
+  it('reads JPEG dimensions past a length-less standalone marker (L5)', async () => {
+    const { dispatcher } = setup({ screenshotResult: jpegWithRestartMarker(1024, 768) })
+    const res = (await dispatcher.dispatch('electron_screenshot', {
+      format: 'jpeg',
+    })) as SuccessResponse & { width?: number; height?: number }
+    expect(res).toMatchObject({ ok: true, width: 1024, height: 768 })
   })
 
   it('writes to a generated temp path when none is given', async () => {

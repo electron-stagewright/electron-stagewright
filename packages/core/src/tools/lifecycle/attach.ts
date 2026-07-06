@@ -12,21 +12,9 @@
 import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
-import type { AttachOptions, InjectOptions } from '../../transports/index.js'
+import { type AttachOptions, type InjectOptions, isLoopbackCdpUrl } from '../../transports/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { registerWithWindows } from './session-init.js'
-
-function isLoopbackCdpUrl(value: string): boolean {
-  try {
-    const url = new URL(value)
-    return (
-      (url.protocol === 'ws:' || url.protocol === 'wss:') &&
-      (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]')
-    )
-  } catch {
-    return false
-  }
-}
 
 const attachInput = z.object({
   port: z

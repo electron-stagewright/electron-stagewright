@@ -115,10 +115,14 @@ export function classifyTargetError(err: unknown): ErrorCode {
     return 'ELEMENT_NOT_VISIBLE'
   }
   if (
-    /not attached|no element|resolved to 0|waiting for selector|no node found|matches no element|element\(s\) not found/.test(
+    /not attached|no element|resolved to 0|resolved to \d+ elements|strict mode violation|waiting for selector|waiting for locator|no node found|matches no element|element\(s\) not found/.test(
       msg,
     )
   ) {
+    // Includes strict-mode violations ("resolved to N elements") and the modern
+    // "waiting for locator" phrasing: both mean the ref/selector no longer maps to a
+    // single element, so SELECTOR_NO_MATCH (which carries similar_refs) is the
+    // actionable code — the agent should re-snapshot, not blindly retry.
     return 'SELECTOR_NO_MATCH'
   }
   // A bare actionability timeout almost always means the element never became

@@ -117,6 +117,24 @@ describe('Recorder', () => {
     })
   })
 
+  it('preserves an own key literally named __proto__ instead of dropping it', async () => {
+    // A plain assignment `out['__proto__'] = …` hits the Object.prototype setter and would
+    // silently drop the field from the trace; the recorder builds redaction output with a
+    // null prototype so the key round-trips as real evidence. Build the args via
+    // JSON.parse so the parser creates a genuine own `__proto__` property.
+    const file = await tmpFile()
+    const rec = newRecorder(file, { redact: ['token'] })
+    const args = JSON.parse('{"__proto__": {"token": "abc", "keep": 1}, "name": "ok"}') as unknown
+    rec.record(record('demo', 1, { args }))
+    await rec.stop()
+    const { calls } = await readTrace(file)
+    const recorded = calls[0]?.args as Record<string, unknown>
+    expect(Object.prototype.hasOwnProperty.call(recorded, '__proto__')).toBe(true)
+    const descriptor = Object.getOwnPropertyDescriptor(recorded, '__proto__')
+    expect(descriptor?.value).toEqual({ token: '[redacted]', keep: 1 })
+    expect(recorded['name']).toBe('ok')
+  })
+
   it('caps the buffer and reports overflow', async () => {
     const file = await tmpFile()
     const rec = newRecorder(file, { maxRecords: 2 })

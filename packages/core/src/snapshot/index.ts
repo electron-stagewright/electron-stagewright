@@ -51,3 +51,10 @@ export {
 export { reconcileRefs } from './reconcile.js'
 
 export { findEntries } from './find.js'
+
+export {
+  renderSnapshotText,
+  renderDiffText,
+  renderEntryLine,
+  renderStateFlags,
+} from './render-text.js'

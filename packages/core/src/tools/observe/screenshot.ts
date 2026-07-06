@@ -92,6 +92,18 @@ function parseImageSize(
           continue
         }
         const marker = buffer[offset + 1]
+        // 0xFF padding fill bytes: a marker can be preceded by any number of 0xFF; skip one.
+        if (marker === 0xff) {
+          offset += 1
+          continue
+        }
+        // Standalone (length-less) markers: TEM (0x01), RSTn (0xD0–0xD7), SOI (0xD8), EOI (0xD9).
+        // They have NO length field, so the two bytes after them are image/entropy data, not a
+        // segment length — advance past just the marker, never reading a phantom length.
+        if (marker === 0x01 || (marker !== undefined && marker >= 0xd0 && marker <= 0xd9)) {
+          offset += 2
+          continue
+        }
         // SOF markers (0xC0–0xCF) carry dimensions, except DHT(C4)/JPG(C8)/DAC(CC).
         if (
           marker !== undefined &&

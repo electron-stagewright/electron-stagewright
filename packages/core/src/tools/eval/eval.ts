@@ -30,6 +30,14 @@ import { classifyEvalError } from './diagnose.js'
 /** Cap on the serialised eval result (JSON characters); larger results are truncated. */
 const MAX_EVAL_RESULT_CHARS = 10000
 
+/**
+ * Cap on the eval `code` payload (characters). The dispatcher AST-preflights every eval
+ * payload synchronously on the server event loop (acorn parse), which the operation-timeout
+ * backstop cannot preempt — so the size is bounded BEFORE the parse, mirroring the
+ * `MAX_USER_REGEX_LENGTH` cap in regex-safety. Far above any legitimate eval body.
+ */
+const MAX_EVAL_CODE_CHARS = 100_000
+
 function serialisedResult(text: string): Record<string, unknown> {
   return { result: text, result_serialized: true, result_chars: text.length }
 }
@@ -92,6 +100,7 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
       code: z
         .string()
         .min(1)
+        .max(MAX_EVAL_CODE_CHARS)
         .describe(`JavaScript to evaluate in the ${spec.context}. Receives the JSON \`arg\`.`),
       arg: z.unknown().optional().describe('JSON value passed to the code as `arg`.'),
       sessionId: sessionIdField,

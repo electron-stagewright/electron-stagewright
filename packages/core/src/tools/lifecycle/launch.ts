@@ -11,19 +11,29 @@
  */
 
 import { existsSync } from 'node:fs'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute } from 'node:path'
 
 import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import { StagewrightError } from '../../errors/registry.js'
 import type { LaunchOptions, TransportSession } from '../../transports/index.js'
+import { isWithinRoot } from '../app-root.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { diagnoseLaunchError } from './diagnose.js'
 import { registerWithWindows } from './session-init.js'
 
 /** Default budget for the post-launch renderer-ready wait (ms). */
 const DEFAULT_READY_TIMEOUT_MS = 5000
+
+/**
+ * Upper bound on `readyTimeoutMs`. The renderer-ready wait runs INSIDE the launch dispatch, so a
+ * value above the dispatch operation-timeout backstop (default 120s) would turn a successful launch
+ * into a retryable OPERATION_TIMEOUT — the app is up and the session registered, but the agent sees
+ * a timeout, retries, and hits ALREADY_RUNNING. Mirrors the 60s clamp the wait family uses to stay
+ * under the backstop.
+ */
+const MAX_READY_TIMEOUT_MS = 60_000
 
 /**
  * Upper bound on concurrently-live sessions. Each launch spawns a real Electron process tree
@@ -53,12 +63,6 @@ const DENIED_ENV_KEYS: ReadonlySet<string> = new Set([
 function isDeniedEnvKey(key: string): boolean {
   const upper = key.toUpperCase()
   return DENIED_ENV_KEYS.has(upper) || upper.startsWith('LD_') || upper.startsWith('DYLD_')
-}
-
-/** Whether `candidate` resolves inside `root` — blocks `..` escape out of an `--app-root` confinement. */
-function isWithinRoot(root: string, candidate: string): boolean {
-  const rel = relative(root, resolve(candidate))
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
 
 /**
@@ -139,9 +143,10 @@ const inputSchema = z.object({
     .number()
     .int()
     .nonnegative()
+    .max(MAX_READY_TIMEOUT_MS)
     .optional()
     .describe(
-      'Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state.',
+      `Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state. Capped at ${MAX_READY_TIMEOUT_MS} to stay under the dispatch timeout backstop.`,
     ),
   allowMultiple: z
     .boolean()
