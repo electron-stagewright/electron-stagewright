@@ -78,7 +78,9 @@ function fakeMain(): FakeEvaluate {
         const stubbed = Object.prototype.hasOwnProperty.call(state.stubs, channel)
         const handler = handlers[channel]
         if (!stubbed && handler === undefined) return { ok: false, error: 'no handler' }
-        const result = stubbed ? state.stubs[channel] : handler!(...(a.args ?? []))
+        let result: unknown
+        if (stubbed) result = state.stubs[channel]
+        else if (handler !== undefined) result = handler(...(a.args ?? []))
         if (state.installed && state.allow.includes(channel)) {
           state.events.push({ channel, type: 'invoke', args: a.args ?? [], ok: true, ms: 0, ts: 0 })
         }

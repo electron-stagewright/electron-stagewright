@@ -115,12 +115,27 @@ function changedFields(prev: SnapshotEntry, curr: SnapshotEntry): ChangedField[]
   return fields
 }
 
+/** Options for {@link diffSnapshots}. */
+export interface DiffSnapshotsOptions {
+  /**
+   * Skip computing `_meta.estimated_tokens` (a `JSON.stringify` of the entire delta —
+   * potentially hundreds of KB on a busy screen). Pass `true` when the diff is consumed
+   * internally (e.g. only to feed `markRecentlyChanged`) and its token estimate would be
+   * thrown away; the meta then reports `estimated_tokens: 0`.
+   */
+  readonly skipTokenEstimate?: boolean
+}
+
 /**
  * Compute the delta between two snapshots. Returns `added`, `removed`,
  * `changed`, a `ref_map` (current fingerprint → previous ref), and
  * token-economy metadata.
  */
-export function diffSnapshots(prev: Snapshot, curr: Snapshot): SnapshotDiff {
+export function diffSnapshots(
+  prev: Snapshot,
+  curr: Snapshot,
+  opts: DiffSnapshotsOptions = {},
+): SnapshotDiff {
   const prevGroups = groupByFingerprint(prev)
   const currGroups = groupByFingerprint(curr)
 
@@ -176,7 +191,8 @@ export function diffSnapshots(prev: Snapshot, curr: Snapshot): SnapshotDiff {
   removed.sort((a, b) => (prevIndex.get(a) ?? 0) - (prevIndex.get(b) ?? 0))
   changed.sort((a, b) => (currIndex.get(a.curr) ?? 0) - (currIndex.get(b.curr) ?? 0))
 
-  const estimated = estimateTokens({ added, removed, changed })
+  const estimated =
+    opts.skipTokenEstimate === true ? 0 : estimateTokens({ added, removed, changed })
   return {
     added,
     removed,

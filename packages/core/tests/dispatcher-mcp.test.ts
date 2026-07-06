@@ -119,6 +119,24 @@ describe('dispatcher MCP binding', () => {
     expect(envelopeOf(result)).toMatchObject({ ok: true, echo: 'hi' })
   })
 
+  it('omits structuredContent above the size gate (huge payloads ship once, not twice)', async () => {
+    const bigTool = defineTool({
+      name: 'test_big',
+      description: 'Return a huge payload.',
+      inputSchema: z.object({}),
+      operationType: 'query',
+      handler: async (_args, ctx) =>
+        makeSuccess({ blob: 'x'.repeat(60_000) }, { startedAt: ctx.startedAt, now: ctx.now }),
+    })
+    const client = await connectClient([bigTool])
+    const result = (await client.callTool({ name: 'test_big', arguments: {} })) as CallToolResult
+    // Above the 50k-char gate the duplicate structured copy is dropped; the text block
+    // still carries the full envelope, so no data is lost — only the double shipping.
+    expect(result.structuredContent).toBeUndefined()
+    expect(envelopeOf(result)).toMatchObject({ ok: true })
+    expect((envelopeOf(result)['blob'] as string).length).toBe(60_000)
+  })
+
   it('rejects a tools/list cursor with an Invalid params protocol error (not silent re-listing)', async () => {
     const client = await connectClient([echoTool])
     await expect(client.listTools({ cursor: 'not-a-real-cursor' })).rejects.toThrow()

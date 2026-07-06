@@ -191,15 +191,30 @@ function readSessionId(args: unknown): string | undefined {
 }
 
 /**
+ * Above this serialised size (chars), `structuredContent` is omitted from the tool result. The
+ * envelope ships BOTH as a text block and as structured content, so the wire carries the payload
+ * twice; for a snapshot-sized response that doubles stdio traffic and the client's parse cost for
+ * no benefit (a host consuming a huge envelope re-parses the text block just as fast). 50k chars
+ * ≈ 12.5k estimated tokens — far above every routine response, so the dual encoding remains for
+ * the common case and only genuinely huge payloads drop the duplicate.
+ */
+const MAX_STRUCTURED_CONTENT_CHARS = 50_000
+
+/**
  * Serialise a response envelope into the MCP tool-result shape. The envelope is returned BOTH as a
  * JSON text block (for clients that read text, and for backwards compatibility as the spec asks
  * when structured content is present) AND as `structuredContent`, so a 2025-06-18 host can consume
- * the machine-readable envelope (ok/code/retryable/next_actions/_meta) natively without re-parsing.
+ * the machine-readable envelope (ok/code/retryable/next_actions/_meta) natively without re-parsing
+ * — except above {@link MAX_STRUCTURED_CONTENT_CHARS}, where the duplicate copy is dropped to
+ * halve the wire bytes of a huge payload (structuredContent is optional per the spec).
  */
 function toCallToolResult(envelope: ToolResult): CallToolResult {
+  const text = JSON.stringify(envelope)
   return {
-    content: [{ type: 'text', text: JSON.stringify(envelope) }],
-    structuredContent: envelope as Record<string, unknown>,
+    content: [{ type: 'text', text }],
+    ...(text.length <= MAX_STRUCTURED_CONTENT_CHARS
+      ? { structuredContent: envelope as Record<string, unknown> }
+      : {}),
     isError: !envelope.ok,
   }
 }
@@ -557,12 +572,23 @@ export class Dispatcher {
     }
 
     try {
-      const result = await this.#withTimeout(() =>
-        runWithSessionContext(sessionId, () => def.handler(args, ctx)),
-      )
-      this.#warnIfSlow(name, this.#now() - startedAt)
-      return this.#complete(name, args, result, startedAt)
+      // Run both the handler AND the catch's error-mapping inside the session context, so a
+      // THROWN StagewrightError (e.g. sessions.resolve → NOT_RUNNING with an explicit sessionId,
+      // or a thrown transport error) still stamps `_meta.session_id`. Wrapping only the handler
+      // would leave the catch in the outer context, dropping the correlation id on every throw.
+      return await runWithSessionContext(sessionId, async () => {
+        try {
+          const result = await this.#withTimeout(() => def.handler(args, ctx))
+          this.#warnIfSlow(name, this.#now() - startedAt)
+          return this.#complete(name, args, result, startedAt)
+        } catch (err) {
+          this.#warnIfSlow(name, this.#now() - startedAt)
+          return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
+        }
+      })
     } catch (err) {
+      // Belt-and-braces: runWithSessionContext itself should never throw (the inner catch handles
+      // handler throws), but if it did, still return an envelope rather than escaping to the transport.
       this.#warnIfSlow(name, this.#now() - startedAt)
       return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
     }

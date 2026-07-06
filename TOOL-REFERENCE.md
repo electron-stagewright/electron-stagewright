@@ -220,7 +220,7 @@ Launch an Electron app and start a driving session. Provide main (absolute path 
 | `env` | object | no | Environment variables for the spawned process. |
 | `cwd` | string | no | Working directory for the spawned process. |
 | `timeoutMs` | integer | no | Max wait for the first window. |
-| `readyTimeoutMs` | integer | no | Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state. |
+| `readyTimeoutMs` | integer | no | Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state. Capped at 60000 to stay under the dispatch timeout backstop. |
 | `allowMultiple` | boolean | no | Allow launching when a session already exists. Default false (single instance). |
 | `instrumentNative` | boolean | no | Wrap the app main entry with fixed hooks installed before it runs, so startup Tray state is readable/invokable (native_trays / native_tray_invoke) and startup notifications can be captured with beforeArm. Off by default; runs no agent code. Requires main; executablePath-only launches cannot be instrumented. Launch transport only. |
 
@@ -633,7 +633,7 @@ Assert the element identified by ref or selector is visible, polling until it is
 
 **Find elements by role and name**
 
-Find elements in the renderer by accessibility role + name + state — no CSS selectors. Filters: role (exact), name_contains, name_exact, visible, enabled, interactive. Returns: { ok, matches: [{ ref, role, name, bbox }], count, renderer_reloaded }. A ref may be null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Find elements in the renderer by accessibility role + name + state — no CSS selectors. Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps the matches returned (count still reports the true total). Returns: { ok, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `query`
 
@@ -646,6 +646,7 @@ Find elements in the renderer by accessibility role + name + state — no CSS se
 | `visible` | boolean | no | Restrict to visible (or hidden) elements. |
 | `enabled` | boolean | no | Restrict to enabled (or disabled) elements. |
 | `interactive` | boolean | no | Restrict to interactive (or non-interactive) elements. |
+| `limit` | integer | no | Cap the matches returned (in document order); count still reports the true total so a truncation is detectable. Unset returns every match. |
 
 ### `electron_focused_element`
 
@@ -761,7 +762,7 @@ Report the running Electron app environment: runtime versions (electron/node/chr
 
 **Snapshot renderer accessibility tree**
 
-Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name, state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap. Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive entries first. Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref. Closed shadow roots are opaque unless the app opts in: push each root onto window.__stagewright_closedShadowRoots at attachShadow time (or implement window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true. Returns: { ok, kind: "full" | "diff", snapshot?, diff?, diff_format?, renderer_reloaded, truncated }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name, state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap. format:"text" returns a compact one-line-per-entry rendering instead of JSON (5-10x fewer tokens): `[ref] role "name" value=… flags`, ~ marks recently-changed, [-] marks landmarks. Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive entries first. Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref. Closed shadow roots are opaque unless the app opts in: push each root onto window.__stagewright_closedShadowRoots at attachShadow time (or implement window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true. Returns: { ok, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?, diff_format?, renderer_reloaded, truncated }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `query`
 
@@ -771,7 +772,8 @@ Capture the renderer accessibility tree: interactive elements (and landmarks) wi
 | `since` | string | no | Return only the delta since the previous snapshot for this session. |
 | `interactiveOnly` | boolean | no | Return only interactive elements (drops landmarks) to save tokens. |
 | `maxEntries` | integer | no | Cap the number of entries returned. Defaults to 2000. |
-| `diffFormat` | string | no | Encoding for since:'last' diffs. 'compact' (default) carries only the changed fields per entry; 'full' carries complete prev/curr entries. |
+| `format` | string | no | Payload encoding. 'json' (default) returns the structured snapshot/diff objects. 'text' returns a compact one-line-per-entry rendering (5-10x fewer tokens): ref, role, quoted name, non-empty value/placeholder, and only NON-default state flags; ~ prefixes recently-changed entries, [-] marks non-targetable landmarks. |
+| `diffFormat` | string | no | Encoding for since:'last' diffs. 'compact' (default) carries only the changed fields per entry; 'full' carries complete prev/curr entries. Ignored when format:'text'. |
 | `budgetTokens` | integer | no | Server-side token cap for a since:'last' diff payload. Lowest-value entries (non-interactive removed/changed first) are dropped until the estimate fits; _meta.truncated_entries reports how many were omitted. |
 
 ### `electron_wait`

@@ -93,6 +93,20 @@ describe('electron_find', () => {
     expect(res.matches[0]?.name).toBe('Reset')
   })
 
+  it('caps matches with limit while count reports the true total', async () => {
+    const many = Array.from({ length: 10 }, (_, i) => `<button>Item ${i}</button>`).join('')
+    const { dispatcher } = setup(many)
+    const res = (await dispatcher.dispatch('electron_find', {
+      role: 'button',
+      limit: 3,
+    })) as SuccessResponse & FindResult & { truncated: number }
+    expect(res.matches).toHaveLength(3)
+    expect(res.count).toBe(10)
+    expect(res.truncated).toBe(7)
+    // Document order preserved: the cap keeps the FIRST matches.
+    expect(res.matches[0]?.name).toBe('Item 0')
+  })
+
   it('rejects ambiguous name filters', async () => {
     const { dispatcher } = setup('<button>Save</button>')
     const res = (await dispatcher.dispatch('electron_find', {

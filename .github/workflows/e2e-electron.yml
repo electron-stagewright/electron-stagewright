@@ -107,3 +107,9 @@ jobs:
         run: xvfb-run --auto-servernum pnpm test
         env:
           STAGEWRIGHT_E2E: '1'
+      # NOTE: gating `pnpm bench:check` here is a deferred follow-up. The in-process vitest smokes
+      # above launch Electron fine, but the bench spawns a standalone stdio MCP server subprocess
+      # that then launches the bench app — and that path hangs under Xvfb in CI (every scenario's
+      # electron_launch times out at the 60s MCP client budget). Wiring bench into CI needs that
+      # launch reliability sorted first (likely sandbox/env propagation through the spawned server),
+      # which is its own focused change rather than a mechanical CI add.

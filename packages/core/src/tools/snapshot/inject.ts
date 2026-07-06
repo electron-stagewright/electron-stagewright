@@ -13,6 +13,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+import { fnv1a32 } from '../../hash.js'
+
 let cachedBundle: string | undefined
 
 /**
@@ -45,12 +47,34 @@ export function loadInjectedWalker(): string {
 }
 
 /**
+ * Wrap the ~30KB walker bundle so it is parsed and executed by the renderer only
+ * ONCE per document, then reused across every subsequent snapshot / find / read /
+ * probe call. The bundle installs `globalThis.__stagewrightWalk` /
+ * `__stagewrightProbe` unconditionally, so re-shipping and re-running it on every
+ * tool call is pure waste — the globals are already installed. A per-document
+ * version marker keyed to the bundle's content hash re-installs automatically when
+ * a server upgrade ships a different bundle against a still-open renderer, and a
+ * renderer reload clears the marker so the next call re-installs from scratch.
+ *
+ * The wire still carries the full bundle every call (the eval body is stateless),
+ * but the renderer skips the expensive re-parse/re-execute when the marker matches.
+ */
+function wrapBundle(bundle: string, invocation: string): string {
+  const marker = `sw_${fnv1a32(bundle)}`
+  return `if (globalThis.__stagewrightBundle !== ${JSON.stringify(marker)}) {
+${bundle}
+globalThis.__stagewrightBundle = ${JSON.stringify(marker)};
+}
+${invocation}`
+}
+
+/**
  * Build the renderer-eval body that runs the bundled walker. The bundle installs
  * `globalThis.__stagewrightWalk`; the body then calls it with the walk options
  * (`arg`, supplied by the transport's evaluate wrapper) and returns the snapshot.
  */
 export function buildWalkBody(bundle: string): string {
-  return `${bundle}\nreturn globalThis.__stagewrightWalk(arg);`
+  return wrapBundle(bundle, 'return globalThis.__stagewrightWalk(arg);')
 }
 
 /**
@@ -60,7 +84,7 @@ export function buildWalkBody(bundle: string): string {
  * `arg`), reusing the same role / accname / state machinery as the walker.
  */
 export function buildProbeBody(bundle: string): string {
-  return `${bundle}\nreturn globalThis.__stagewrightProbe(arg);`
+  return wrapBundle(bundle, 'return globalThis.__stagewrightProbe(arg);')
 }
 
 /**
@@ -68,21 +92,31 @@ export function buildProbeBody(bundle: string): string {
  * reconciliation. The initial walk tags elements with document-order refs; when
  * reconciliation reuses previous refs, the DOM tags must be swapped to match the
  * refs returned to the agent.
+ *
+ * ONE `querySelectorAll('[data-sw-ref]')` scan builds a ref→element map, then all
+ * writes apply from it — O(n + retags) instead of a full-document `querySelector`
+ * per assignment (O(retags x n), which bites exactly when it matters: a list
+ * prepend or dialog open shifts document order and most refs move at once). The
+ * resolve-then-write split also keeps ref SWAPS correct: all lookups happen
+ * against the pre-retag tags before any write lands.
  */
 export function buildRetagBody(): string {
   return `
 const assignments = Array.isArray(arg) ? arg : [];
+const byRef = new Map();
+for (const element of document.querySelectorAll('[data-sw-ref]')) {
+  byRef.set(element.getAttribute('data-sw-ref'), element);
+}
 const pairs = [];
 for (const assignment of assignments) {
   const from = Number(assignment?.from);
   const to = Number(assignment?.to);
   if (!Number.isInteger(from) || !Number.isInteger(to)) continue;
-  const element = document.querySelector('[data-sw-ref="' + from + '"]');
-  pairs.push({ element, to });
+  const element = byRef.get(String(from));
+  if (element !== undefined) pairs.push({ element, to });
 }
 let updated = 0;
 for (const pair of pairs) {
-  if (pair.element === null) continue;
   pair.element.setAttribute('data-sw-ref', String(pair.to));
   updated += 1;
 }

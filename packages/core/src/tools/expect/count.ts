@@ -25,6 +25,7 @@ import {
 import { assertCapability } from '../../transports/index.js'
 import { sessionIdField } from '../schema.js'
 import { buildWalkBody, loadInjectedWalker } from '../snapshot/inject.js'
+import { reconcileRetagAndStore } from '../snapshot/refs.js'
 import { handleTargetFailure } from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { type WaitRaw, clampWaitTimeout, runWait } from '../wait/poll.js'
@@ -200,7 +201,19 @@ async function pollRoleCount(
     let actual: number
     try {
       const walked = await managed.session.evaluate<Snapshot>('renderer', body, {})
-      actual = findEntries(walked, query).length
+      // The walker CLEARS and renumbers every data-sw-ref in document order. Without
+      // reconciling and re-tagging (as snapshot/find do), the DOM tags would silently
+      // diverge from the stored baseline, so a later click({ ref }) resolved against the
+      // stored snapshot would hit the wrong element. Reconcile + retag + store so the
+      // baseline and the DOM stay consistent, then count against the reconciled view.
+      const { curr } = await reconcileRetagAndStore({
+        session: managed.session,
+        store: ctx.snapshots,
+        sessionId: managed.id,
+        prev: ctx.snapshots.get(managed.id),
+        walked,
+      })
+      actual = findEntries(curr, query).length
     } catch (err) {
       return handleTargetFailure(err, { ctx, session: managed.session, meta })
     }

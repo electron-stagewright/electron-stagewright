@@ -23,6 +23,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { StagewrightError } from '../../errors/registry.js'
+import { assertPathsWithinAppRoot } from '../app-root.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { refField, selectorField, sessionIdField, timeoutField } from './schema.js'
 import { runTargetedInteraction } from './target.js'
@@ -197,6 +198,9 @@ export const dropFileTool: AnyToolDefinition = defineTool({
   handler: (args, ctx) =>
     runTargetedInteraction(ctx, args, async (session, selector, _opts) => {
       validateDropPaths(args.paths)
+      // Same confinement launch enforces: with --app-root set, the host files whose
+      // bytes flow into the app must live inside the root.
+      assertPathsWithinAppRoot(ctx.appRoot, args.paths)
       const files = await Promise.all(
         args.paths.map(async (filePath) => ({
           name: path.basename(filePath),
@@ -208,7 +212,7 @@ export const dropFileTool: AnyToolDefinition = defineTool({
         selector,
         files,
       })
-      if (result.ok !== true) {
+      if (result?.ok !== true) {
         if (result.reason === 'no-match') {
           throw new StagewrightError(
             'SELECTOR_NO_MATCH',

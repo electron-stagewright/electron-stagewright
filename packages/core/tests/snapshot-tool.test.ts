@@ -229,3 +229,69 @@ describe('electron_snapshot diff encoding + budget', () => {
     expect(res.diff._meta.entries_removed).toBeGreaterThan(res.diff.removed.length)
   })
 })
+
+describe('electron_snapshot format:"text" (compact text encoding)', () => {
+  it('returns snapshot_text (one line per entry) instead of the JSON snapshot', async () => {
+    const { dispatcher } = setup([snap('<button>Save</button><input type="text">')])
+    const res = (await dispatcher.dispatch('electron_snapshot', {
+      format: 'text',
+    })) as SuccessResponse & {
+      format: string
+      snapshot_text: string
+      entry_count: number
+      snapshot?: unknown
+    }
+    expect(res).toMatchObject({ ok: true, kind: 'full', format: 'text' })
+    expect(res.snapshot).toBeUndefined()
+    expect(res.entry_count).toBeGreaterThan(0)
+    const lines = res.snapshot_text.split('\n')
+    expect(lines[0]).toMatch(/^page /)
+    expect(res.snapshot_text).toMatch(/\[\d+\] button "Save"/)
+    expect(lines.length).toBe(1 + res.entry_count)
+  })
+
+  it('is dramatically cheaper than the JSON encoding for the same tree', async () => {
+    const many = Array.from(
+      { length: 30 },
+      (_, i) => `<button>Item ${i}</button><input type="text" placeholder="Field ${i}">`,
+    ).join('')
+    const html = `<main>${many}</main>`
+    const jsonRun = setup([snap(html)])
+    const textRun = setup([snap(html)])
+    const jsonRes = (await jsonRun.dispatcher.dispatch('electron_snapshot', {})) as SuccessResponse
+    const textRes = (await textRun.dispatcher.dispatch('electron_snapshot', {
+      format: 'text',
+    })) as SuccessResponse
+    expect(textRes._meta.estimated_tokens * 5).toBeLessThan(jsonRes._meta.estimated_tokens)
+  })
+
+  it('returns diff_text for since:"last" with +/- lines', async () => {
+    const { dispatcher } = setup([
+      snap('<button>One</button>'),
+      snap('<button>One</button><button>Two</button>'),
+    ])
+    await dispatcher.dispatch('electron_snapshot', {})
+    const res = (await dispatcher.dispatch('electron_snapshot', {
+      since: 'last',
+      format: 'text',
+    })) as SuccessResponse & { format: string; diff_text: string; diff?: unknown }
+    expect(res).toMatchObject({ ok: true, kind: 'diff', format: 'text' })
+    expect(res.diff).toBeUndefined()
+    expect(res.diff_text.split('\n')[0]).toBe('diff +1 -0 ~0')
+    expect(res.diff_text).toMatch(/\+ \[\d+\] button "Two"/)
+  })
+
+  it('honours budgetTokens in text mode and flags truncation', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => `<button>Item ${i}</button>`).join('')
+    const { dispatcher } = setup([snap(`<main>${many}</main>`), snap('<main></main>')])
+    await dispatcher.dispatch('electron_snapshot', {})
+    const res = (await dispatcher.dispatch('electron_snapshot', {
+      since: 'last',
+      format: 'text',
+      budgetTokens: 120,
+    })) as SuccessResponse & { truncated: boolean; diff_text: string }
+    expect(res.ok).toBe(true)
+    expect(res.truncated).toBe(true)
+    expect(res.diff_text).toContain('truncated')
+  })
+})
