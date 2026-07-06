@@ -58,8 +58,10 @@ an unpublished core version.
 5. **Publish.** `pnpm -r publish --access public` for a whole-set release, or the same filtered
    command used in the dry-run with `--access public`. The `--access public` flag is also set
    per-package via `publishConfig`, so it is belt-and-suspenders. Enter the npm 2FA OTP when prompted.
-6. **Tag and release.** Tag the release commit (e.g. `git tag core-vX.Y.Z`) and push the tag; cut a
-   GitHub release with the notable changes.
+6. **Tag and release.** Tag the release commit with `vX.Y.Z` matching the core version — a
+   lightweight tag on the release commit (e.g. `git tag v0.2.0`) — and push it; cut a GitHub
+   release with the notable changes. Packages version independently, but the repo-level release
+   tag tracks core (the CLI-bearing package), as `v0.1.0`–`v0.2.0` do.
 7. **Verify the install.** From a scratch directory, confirm `npx @electron-stagewright/core` resolves
    and the server starts over stdio.
 
