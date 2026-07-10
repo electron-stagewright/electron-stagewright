@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Preferences window</title>
+  </head>
+  <body>
+    <h1>Preferences window</h1>
+    <button
+      id="preferences-action"
+      onclick="document.querySelector('#preferences-status').textContent = 'Preferences clicked'"
+    >
+      Preferences action
+    </button>
+    <button id="close-preferences" onclick="window.close()">Close preferences</button>
+    <p id="preferences-status">Waiting</p>
+  </body>
+</html>

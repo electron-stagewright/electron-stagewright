@@ -40,16 +40,16 @@ type ElementClipResult =
   | { readonly kind: 'invalid-selector'; readonly error?: string }
   | { readonly kind: 'not-found' }
 
-/** Build the {@link WindowRef} from the targeting args; defaults to the active (first) window. */
-function toWindowRef(args: {
+/** Build an explicit {@link WindowRef} from targeting args, if the caller provided one. */
+function explicitWindowRef(args: {
   readonly windowId?: string | undefined
   readonly windowTitle?: string | undefined
   readonly windowIndex?: number | undefined
-}): WindowRef {
+}): WindowRef | undefined {
   if (args.windowId !== undefined) return { kind: 'id', id: args.windowId }
   if (args.windowTitle !== undefined) return { kind: 'title', pattern: args.windowTitle }
   if (args.windowIndex !== undefined) return { kind: 'index', index: args.windowIndex }
-  return { kind: 'index', index: 0 }
+  return undefined
 }
 
 /** Resolve an element's bounding box (CSS px) via the renderer probe, or null if absent. */
@@ -243,7 +243,7 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
           args.windowIndex !== undefined)
       ) {
         // The element's bounding box is resolved by a renderer probe that always
-        // runs on the active (first) window, but a window-targeting arg would aim
+        // runs on the active session window, but a window-targeting arg would aim
         // the capture at a different window — clipping the active window's
         // coordinates onto another window's image. Reject the combination rather
         // than silently produce a wrong region. (Capturing an element in a
@@ -292,8 +292,21 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
         ...(clip !== undefined ? { clip } : {}),
       }
 
+      let target = explicitWindowRef(args)
+      if (target === undefined) {
+        const windows = await managed.session.windowsList()
+        const active = windows.find((window) => window.focused) ?? windows[0]
+        if (active === undefined) {
+          return makeError('REF_NOT_FOUND', {
+            ...meta,
+            message: 'No active Electron window is available for a screenshot.',
+          })
+        }
+        target = { kind: 'id', id: active.id }
+      }
+
       // A bad window ref throws REF_NOT_FOUND from the transport; the dispatcher maps it.
-      const buffer = await managed.session.screenshot(toWindowRef(args), opts)
+      const buffer = await managed.session.screenshot(target, opts)
 
       // Output path precedence: explicit file `path` > explicit `dir` (generated name) >
       // the server-configured default dir (--screenshot-dir) > the OS temp dir. Preferring

@@ -56,6 +56,13 @@ const FAKE_SESSION: TransportSession = {
   evaluate: async <T = unknown>() => undefined as T,
   screenshot: async () => Buffer.alloc(0),
   windowsList: async () => [],
+  activateWindow: async () => ({
+    id: 'fake-window',
+    index: 0,
+    title: '',
+    visible: true,
+    focused: true,
+  }),
   consoleLogs: async () => ({ entries: [], overflowed: 0 }),
   setDialogPolicy: async () => undefined,
   dialogEvents: async () => ({ entries: [], overflowed: 0, policy: { action: 'dismiss' } }),
@@ -92,6 +99,7 @@ const FAKE_SESSION: TransportSession = {
   setInputFiles: async () => undefined,
   dragTo: async () => undefined,
   scroll: async () => undefined,
+  detach: async () => undefined,
   dispose: async () => undefined,
 }
 
@@ -2690,6 +2698,57 @@ describe('PlaywrightSession multi-window capture', () => {
 
     const { entries } = await session.consoleLogs()
     expect(entries).toHaveLength(1)
+  })
+
+  it('switches the active interaction target and recovers to a live window after close', async () => {
+    const pageA = createFakePage('A')
+    const pageB = createFakePage('B')
+    const { app, launch } = launchWith([pageA, pageB])
+    const session = await launch()
+    const windows = await session.windowsList()
+    const second = windows[1]
+    if (second === undefined) throw new Error('fixture did not expose second window')
+
+    await expect(session.activateWindow({ kind: 'id', id: second.id })).resolves.toMatchObject({
+      id: second.id,
+      focused: true,
+    })
+    await session.click('#second')
+    expect(pageB.interactions.at(-1)).toMatchObject({ method: 'click', args: ['#second', {}] })
+
+    app.setPages([pageA])
+    await session.click('#recovered')
+    expect(pageA.interactions.at(-1)).toMatchObject({ method: 'click', args: ['#recovered', {}] })
+    await expect(session.windowsList()).resolves.toMatchObject([{ title: 'A', focused: true }])
+  })
+
+  it('serializes a pending switch before a following implicit interaction', async () => {
+    const pageA = createFakePage('A')
+    const pageB = createFakePage('B')
+    const { launch } = launchWith([pageA, pageB])
+    const session = await launch()
+    const second = (await session.windowsList())[1]
+    if (second === undefined) throw new Error('fixture did not expose second window')
+
+    const switching = session.activateWindow({ kind: 'id', id: second.id })
+    const clicking = session.click('#after-switch')
+    await Promise.all([switching, clicking])
+
+    expect(pageB.interactions.at(-1)).toMatchObject({
+      method: 'click',
+      args: ['#after-switch', {}],
+    })
+    expect(pageA.interactions).toHaveLength(0)
+  })
+
+  it('rejects detach for a launch-owned Playwright session without closing the app', async () => {
+    const page = createFakePage('A')
+    const { app, launch } = launchWith([page])
+    const session = await launch()
+
+    await expect(session.detach()).rejects.toMatchObject({ code: 'TRANSPORT_UNSUPPORTED' })
+    expect(app.closeCalls).toBe(0)
+    await expect(session.windowsList()).resolves.toHaveLength(1)
   })
 })
 

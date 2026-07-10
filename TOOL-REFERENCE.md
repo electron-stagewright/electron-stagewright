@@ -86,7 +86,7 @@ Click the element identified by ref (from a snapshot) or selector. Options: butt
 
 **Detach from Electron app**
 
-Disconnect from an app without stopping it. Not yet supported by any transport (detaching from a launched app is indistinguishable from stopping it today). Returns TRANSPORT_UNSUPPORTED; use electron_stop to end the session. Errors: TRANSPORT_UNSUPPORTED (not retryable), NOT_RUNNING (no such session), BAD_ARGUMENT (multiple sessions).
+Disconnect from an attached or injected app without stopping it. A launch-owned session cannot detach because its Playwright connection owns the process; use electron_stop for that case. Returns: { ok, session_id, detached: true }. Errors: TRANSPORT_UNSUPPORTED (launch-owned session; not retryable), NOT_RUNNING (no such session), BAD_ARGUMENT (multiple sessions).
 
 - Operation: `command`
 
@@ -323,7 +323,7 @@ Gracefully stop a session and release it. If the app ignores the close within ti
 
 **Switch active Electron window**
 
-Select the active window by precedence targetId > windowTitle > index > default. Selecting the already-active window is a no-op success; switching to a different window is not yet supported by any transport. Returns: { ok, session_id, active } on success. Errors: REF_NOT_FOUND (no window matched; not retryable), TRANSPORT_UNSUPPORTED (cannot switch to a non-default window yet; not retryable), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
+Select the active window by precedence targetId > windowTitle > index > default. The selection changes Stagewright's renderer target; it does not promise native OS foreground focus. Returns: { ok, session_id, active, active_window_id } on success. Errors: REF_NOT_FOUND (no window matched; not retryable), TRANSPORT_UNSUPPORTED (transport has no renderer window target; not retryable), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
 
 - Operation: `command`
 
@@ -878,7 +878,7 @@ Capture a screenshot to an image file and return its path (the image is written 
 
 **List Electron windows**
 
-List the app windows with their id, index, title, url, and visibility. Pass sessionId to target a specific session. Returns: { ok, session_id, windows, count }. Errors: NOT_RUNNING (no such session; not retryable), BAD_ARGUMENT (multiple sessions — pass sessionId).
+List the app windows with their id, index, title, url, and visibility. Pass sessionId to target a specific session. Returns: { ok, session_id, windows, active_window_id, count }. Errors: NOT_RUNNING (no such session; not retryable), BAD_ARGUMENT (multiple sessions — pass sessionId).
 
 - Operation: `window_info`
 

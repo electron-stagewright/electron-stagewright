@@ -1,12 +1,12 @@
 /**
  * Unit tests for the session-operating lifecycle tools: windows_list,
- * switch_window (default no-op vs unsupported non-default vs REF_NOT_FOUND),
- * detach (honest TRANSPORT_UNSUPPORTED), stop, and force_kill.
+ * switch_window, detach, stop, and force_kill.
  */
 
 import { describe, expect, it } from 'vitest'
 
 import { type ErrorResponse } from '../src/errors/envelope.js'
+import { StagewrightError } from '../src/errors/registry.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import {
@@ -36,22 +36,34 @@ describe('electron_windows_list', () => {
   it('returns the window list with a count', async () => {
     const { dispatcher } = setup()
     const res = await dispatcher.dispatch('electron_windows_list', {})
-    expect(res).toMatchObject({ ok: true, session_id: 'sess', windows: [WIN0, WIN1], count: 2 })
+    expect(res).toMatchObject({
+      ok: true,
+      session_id: 'sess',
+      windows: [WIN0, WIN1],
+      active_window_id: 'w0',
+      count: 2,
+    })
     expect(JSON.parse(JSON.stringify(res))).toEqual(res)
   })
 })
 
 describe('electron_switch_window', () => {
-  it('succeeds as a no-op when selecting the default (active) window', async () => {
-    const { dispatcher } = setup()
+  it('selects the requested active window for following implicit operations', async () => {
+    const { dispatcher, session } = setup()
     const res = await dispatcher.dispatch('electron_switch_window', { index: 0 })
-    expect(res).toMatchObject({ ok: true, active: WIN0 })
+    expect(res).toMatchObject({ ok: true, active: WIN0, active_window_id: 'w0' })
+    expect(session.activateWindowCalls).toEqual([{ kind: 'id', id: 'w0' }])
   })
 
-  it('returns TRANSPORT_UNSUPPORTED when switching to a non-default window', async () => {
-    const { dispatcher } = setup()
+  it('switches from the default window to a non-default target', async () => {
+    const { dispatcher, session } = setup()
     const res = await dispatcher.dispatch('electron_switch_window', { targetId: 'w1' })
-    expect((res as ErrorResponse).code).toBe('TRANSPORT_UNSUPPORTED')
+    expect(res).toMatchObject({
+      ok: true,
+      active: { id: 'w1', focused: true },
+      active_window_id: 'w1',
+    })
+    expect(session.activateWindowCalls).toEqual([{ kind: 'id', id: 'w1' }])
   })
 
   it('applies targetId before windowTitle and index', async () => {
@@ -64,6 +76,17 @@ describe('electron_switch_window', () => {
     expect(res).toMatchObject({ ok: true, active: WIN0 })
   })
 
+  it('uses the currently active window when no selector is supplied', async () => {
+    const { dispatcher, session } = setup([
+      { ...WIN0, focused: false },
+      { ...WIN1, focused: true },
+    ])
+    const res = await dispatcher.dispatch('electron_switch_window', {})
+
+    expect(res).toMatchObject({ ok: true, active_window_id: 'w1' })
+    expect(session.activateWindowCalls).toEqual([{ kind: 'id', id: 'w1' }])
+  })
+
   it('returns REF_NOT_FOUND when no window matches', async () => {
     const { dispatcher } = setup()
     const res = await dispatcher.dispatch('electron_switch_window', { targetId: 'nope' })
@@ -72,10 +95,32 @@ describe('electron_switch_window', () => {
 })
 
 describe('electron_detach', () => {
-  it('returns TRANSPORT_UNSUPPORTED (not yet supported by any transport)', async () => {
-    const { dispatcher } = setup()
+  it('releases the session without stopping the app', async () => {
+    const { dispatcher, sessions, session, transport } = setup()
     const res = await dispatcher.dispatch('electron_detach', {})
+    expect(res).toMatchObject({ ok: true, detached: true, session_id: 'sess' })
+    expect(session.detachCount).toBe(1)
+    expect(transport.stopCount).toBe(0)
+    expect(sessions.size).toBe(0)
+  })
+
+  it('keeps a launch-owned session registered when its transport refuses detach', async () => {
+    const sessions = new SessionManager()
+    const session = new FakeSession({
+      id: 'owned',
+      detachError: new StagewrightError(
+        'TRANSPORT_UNSUPPORTED',
+        'Launch-owned session cannot detach.',
+      ),
+    })
+    const transport = new FakeTransport({ session })
+    sessions.register(transport, session)
+    const dispatcher = new Dispatcher({ sessions })
+    dispatcher.register(detachTool)
+
+    const res = await dispatcher.dispatch('electron_detach', { sessionId: 'owned' })
     expect((res as ErrorResponse).code).toBe('TRANSPORT_UNSUPPORTED')
+    expect(sessions.has('owned')).toBe(true)
   })
 })
 

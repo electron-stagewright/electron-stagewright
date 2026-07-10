@@ -21,7 +21,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { attachTool } from '../src/tools/lifecycle/attach.js'
-import { stopTool } from '../src/tools/lifecycle/index.js'
+import { detachTool, stopTool } from '../src/tools/lifecycle/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
 const FIXTURE_MAIN = path.join(
@@ -67,6 +67,36 @@ async function spawnWithCdp(): Promise<{ readonly cdpUrl: string; readonly proc:
 }
 
 describe('CDP attach smoke (real Electron)', () => {
+  it.skipIf(!RUN_E2E)(
+    'detaches without terminating the attached Electron process',
+    async () => {
+      const { cdpUrl, proc } = await spawnWithCdp()
+      try {
+        const sessions = new SessionManager()
+        const dispatcher = new Dispatcher({
+          sessions,
+          snapshots: new SnapshotStore(),
+          transports: new TransportRegistry(),
+        })
+        dispatcher.registerAll([attachTool, detachTool])
+        const attached = (await dispatcher.dispatch('electron_attach', {
+          cdpUrl,
+        })) as SuccessResponse & { readonly session_id: string }
+        expect(attached.ok).toBe(true)
+
+        await expect(
+          dispatcher.dispatch('electron_detach', { sessionId: attached.session_id }),
+        ).resolves.toMatchObject({ ok: true, detached: true })
+        expect(sessions.size).toBe(0)
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        expect(proc.exitCode).toBeNull()
+      } finally {
+        if (proc.exitCode === null) proc.kill('SIGKILL')
+      }
+    },
+    60_000,
+  )
+
   it.skipIf(!RUN_E2E)(
     'attaches over CDP, lists windows, evaluates, captures console, and stops',
     async () => {

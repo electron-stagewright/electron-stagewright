@@ -377,6 +377,10 @@ class PlaywrightSession implements TransportSession {
   private disposed = false
   private readonly windowIds = new WeakMap<PWPage, string>()
   private nextWindowId = 0
+  /** Session-selected renderer target; undefined means the first live page. */
+  private activeWindowId: string | undefined
+  /** Serializes switches so two agents cannot interleave their target updates. */
+  private windowSwitch = Promise.resolve()
   /** True when this session was launched with `instrumentNative` (the tray hook is in place). */
   private readonly instrumented: boolean
   /** Temp dir holding the launch shim, removed on dispose; undefined when not instrumented. */
@@ -444,7 +448,10 @@ class PlaywrightSession implements TransportSession {
     // to attach is non-fatal — the buffers simply stay empty. When the caller
     // already resolved the first window (launch does), reuse it so we make no
     // extra firstWindow() call.
-    if (initialPage !== undefined) this.attachCaptureTo(initialPage)
+    if (initialPage !== undefined) {
+      this.activeWindowId = this.idForWindow(initialPage)
+      this.attachCaptureTo(initialPage)
+    }
     try {
       for (const page of app.windows()) this.attachCaptureTo(page)
       app.on?.('window', (page) => this.attachCaptureTo(page))
@@ -1397,7 +1404,14 @@ class PlaywrightSession implements TransportSession {
 
   async windowsList(): Promise<readonly WindowDescriptor[]> {
     const app = this.requireRunning()
-    const pages = app.windows()
+    const pages = this.openPages(app)
+    const fallback = pages[0]
+    if (
+      fallback !== undefined &&
+      !pages.some((page) => this.idForWindow(page) === this.activeWindowId)
+    ) {
+      this.activeWindowId = this.idForWindow(fallback)
+    }
     const descriptors: WindowDescriptor[] = []
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i]
@@ -1410,10 +1424,37 @@ class PlaywrightSession implements TransportSession {
         title,
         ...(url ? { url } : {}),
         visible: true,
-        focused: i === 0,
+        focused: this.idForWindow(page) === this.activeWindowId,
       })
     }
     return descriptors
+  }
+
+  async activateWindow(target: WindowRef): Promise<WindowDescriptor> {
+    const run = this.windowSwitch.then(async () => {
+      const app = this.requireRunning()
+      const page = await this.resolveWindow(app, target)
+      const id = this.idForWindow(page)
+      this.activeWindowId = id
+      const windows = await this.windowsList()
+      const active = windows.find((window) => window.id === id)
+      if (active === undefined) {
+        throw new StagewrightError(
+          'REF_NOT_FOUND',
+          'Selected Electron window closed during activation.',
+          {
+            transport: TRANSPORT_ID,
+            ref: target,
+          },
+        )
+      }
+      return active
+    })
+    this.windowSwitch = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
   }
 
   /** Default window-recovery budget (see {@link activePage}). */
@@ -1439,9 +1480,23 @@ class PlaywrightSession implements TransportSession {
    * registered code instead of hanging.
    */
   private async activePage(): Promise<PWPage> {
+    // A call that starts after switch_window must observe that selected target,
+    // not race a title/index lookup and use the previous page. Activation itself
+    // uses resolveActivePage directly to avoid waiting on its own queue entry.
+    await this.windowSwitch
+    return this.resolveActivePage()
+  }
+
+  private async resolveActivePage(): Promise<PWPage> {
     const app = this.requireRunning()
-    const known = this.openPages(app)[0]
-    if (known !== undefined) return known
+    const pages = this.openPages(app)
+    const selected = pages.find((page) => this.idForWindow(page) === this.activeWindowId)
+    if (selected !== undefined) return selected
+    const known = pages[0]
+    if (known !== undefined) {
+      this.activeWindowId = this.idForWindow(known)
+      return known
+    }
     const deadline = Date.now() + this.windowRecoveryBudgetMs
     for (;;) {
       const remaining = deadline - Date.now()
@@ -1451,7 +1506,10 @@ class PlaywrightSession implements TransportSession {
         const page = await app.firstWindow({
           timeout: Math.min(remaining, PlaywrightSession.#WINDOW_RECOVERY_SLICE_MS),
         })
-        if (page.isClosed === undefined || !page.isClosed()) return page
+        if (page.isClosed === undefined || !page.isClosed()) {
+          this.activeWindowId = this.idForWindow(page)
+          return page
+        }
       } catch {
         // Slice elapsed (or firstWindow rejected outright) — re-check the known
         // list below. Pause briefly when the rejection was immediate so a
@@ -1461,7 +1519,10 @@ class PlaywrightSession implements TransportSession {
         }
       }
       const reappeared = this.openPages(app)[0]
-      if (reappeared !== undefined) return reappeared
+      if (reappeared !== undefined) {
+        this.activeWindowId = this.idForWindow(reappeared)
+        return reappeared
+      }
     }
     throw new StagewrightError(
       'REF_NOT_FOUND',
@@ -1622,17 +1683,26 @@ class PlaywrightSession implements TransportSession {
     await page.mouse.wheel(opts.dx ?? 0, opts.dy ?? 0)
   }
 
+  async detach(): Promise<void> {
+    this.requireRunning()
+    throw new StagewrightError(
+      'TRANSPORT_UNSUPPORTED',
+      'This Playwright launch session owns the Electron process and cannot detach without stopping it.',
+      { transport: TRANSPORT_ID, capability: 'detach' },
+    )
+  }
+
   private async resolveWindow(app: PWElectronApp, ref: WindowRef): Promise<PWPage> {
-    let pages = app.windows()
+    let pages = this.openPages(app)
     if (pages.length === 0) {
       // A modal swap / navigation can momentarily empty the known list — give the
       // window-recovery path a chance before concluding none exist.
       try {
-        await this.activePage()
+        await this.resolveActivePage()
       } catch {
         // Fall through to the precise REF_NOT_FOUND below.
       }
-      pages = app.windows()
+      pages = this.openPages(app)
     }
     if (pages.length === 0) {
       throw new StagewrightError('REF_NOT_FOUND', 'No windows are open in the Electron app.', {

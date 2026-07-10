@@ -738,6 +738,14 @@ export interface TransportSession {
   /** Enumerate the current windows. */
   windowsList(): Promise<readonly WindowDescriptor[]>
 
+  /**
+   * Select the renderer window used by subsequent window-implicit operations
+   * (evaluate, interaction, snapshot reads, and scrolling). This changes the
+   * Stagewright target; a transport may additionally request native focus, but
+   * callers must not depend on foreground OS-window activation.
+   */
+  activateWindow(target: WindowRef): Promise<WindowDescriptor>
+
   /** Read the session's rolling console buffer (oldest first) plus the dropped-entry count. */
   consoleLogs(): Promise<ConsoleLogsResult>
 
@@ -942,6 +950,13 @@ export interface TransportSession {
 
   /** Scroll an element into view (`opts.selector`) or the page by a wheel delta (`dx`/`dy`). */
   scroll(opts: ScrollOptions): Promise<void>
+
+  /**
+   * Release this session without requesting application shutdown. Only sessions
+   * attached to an already-running app may support this; launch-owned sessions
+   * reject with TRANSPORT_UNSUPPORTED and remain usable until an explicit stop.
+   */
+  detach(): Promise<void>
 
   readonly ipc: IpcChannel
   readonly console: ConsoleStream

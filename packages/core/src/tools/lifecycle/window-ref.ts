@@ -48,5 +48,5 @@ export function resolveWindow(
   if (selector.index !== undefined) {
     return windows[selector.index]
   }
-  return windows[0]
+  return windows.find((window) => window.focused) ?? windows[0]
 }

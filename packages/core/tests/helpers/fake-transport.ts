@@ -75,6 +75,8 @@ export interface FakeSessionOptions {
   readonly windows?: readonly WindowDescriptor[]
   /** When set, `windowsList` rejects with this error (to exercise post-register cleanup). */
   readonly windowsError?: Error
+  /** When set, `detach` rejects with this error instead of releasing the fake session. */
+  readonly detachError?: Error
   /**
    * When set, every interaction method (click/fill/.../scroll/typeText) rejects
    * with this error before recording — used to exercise `diagnoseInteractionError`
@@ -106,8 +108,10 @@ export class FakeSession implements TransportSession {
 
   disposeCount = 0
   readonly #evaluate: FakeEvaluate
-  readonly #windows: readonly WindowDescriptor[]
+  readonly #windows: WindowDescriptor[]
   readonly #windowsError?: Error
+  readonly #detachError?: Error
+  #activeWindowId: string | undefined
   readonly #interactionError?: Error
   readonly #consoleEntries: readonly ConsoleEntry[]
   readonly #consoleOverflowed: number
@@ -136,8 +140,11 @@ export class FakeSession implements TransportSession {
     this.ipc = { transport: this.transport }
     this.console = { transport: this.transport }
     this.#evaluate = opts.evaluate ?? (async () => undefined)
-    this.#windows = opts.windows ?? []
+    this.#windows = [...(opts.windows ?? [])]
+    this.#activeWindowId =
+      this.#windows.find((window) => window.focused)?.id ?? this.#windows[0]?.id
     if (opts.windowsError !== undefined) this.#windowsError = opts.windowsError
+    if (opts.detachError !== undefined) this.#detachError = opts.detachError
     if (opts.interactionError !== undefined) this.#interactionError = opts.interactionError
     this.#consoleEntries = opts.consoleEntries ?? []
     this.#consoleOverflowed = opts.consoleOverflowed ?? 0
@@ -360,7 +367,35 @@ export class FakeSession implements TransportSession {
 
   async windowsList(): Promise<readonly WindowDescriptor[]> {
     if (this.#windowsError !== undefined) throw this.#windowsError
-    return this.#windows
+    const fallback = this.#windows[0]?.id
+    if (!this.#windows.some((window) => window.id === this.#activeWindowId)) {
+      this.#activeWindowId = fallback
+    }
+    return this.#windows.map((window) => ({
+      ...window,
+      focused: window.id === this.#activeWindowId,
+    }))
+  }
+
+  /** Window selectors the fake was asked to activate, for lifecycle assertions. */
+  readonly activateWindowCalls: WindowRef[] = []
+
+  async activateWindow(target: WindowRef): Promise<WindowDescriptor> {
+    this.activateWindowCalls.push(target)
+    const windows = await this.windowsList()
+    const selected =
+      target.kind === 'id'
+        ? windows.find((window) => window.id === target.id)
+        : target.kind === 'index'
+          ? windows[target.index]
+          : windows.find((window) =>
+              target.pattern instanceof RegExp
+                ? target.pattern.test(window.title)
+                : window.title === target.pattern,
+            )
+    if (selected === undefined) throw new Error(`No fake window matches ${JSON.stringify(target)}`)
+    this.#activeWindowId = selected.id
+    return { ...selected, focused: true }
   }
 
   /** Recorded interaction calls, in order, for assertions in interaction-tool tests. */
@@ -423,6 +458,13 @@ export class FakeSession implements TransportSession {
   async scroll(opts?: ScrollOptions): Promise<void> {
     this.#failIfConfigured()
     this.interactions.push({ method: 'scroll', args: [opts] })
+  }
+
+  detachCount = 0
+
+  async detach(): Promise<void> {
+    if (this.#detachError !== undefined) throw this.#detachError
+    this.detachCount += 1
   }
 
   async dispose(): Promise<void> {

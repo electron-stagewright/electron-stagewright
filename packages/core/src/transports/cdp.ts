@@ -328,6 +328,10 @@ class CdpSession implements TransportSession {
   readonly #pool = new Map<string, CdpConnection>()
   /** In-flight opens so two concurrent calls never double-connect one target. */
   readonly #opening = new Map<string, Promise<CdpConnection>>()
+  /** Selected renderer target; falls back deterministically when it disappears. */
+  #activeTargetId: string | undefined
+  /** Serializes target changes so concurrent switch calls cannot interleave. */
+  #windowSwitch = Promise.resolve()
   #disposed = false
 
   readonly #consoleBuffer: ConsoleEntry[] = []
@@ -774,16 +778,22 @@ class CdpSession implements TransportSession {
     return asPageTargets(listed)
   }
 
-  async #firstTarget(): Promise<CdpTargetInfo> {
+  async #activeTarget(): Promise<CdpTargetInfo> {
+    // Renderer-implicit operations wait for an earlier switch to settle, so a
+    // concurrent title/index lookup cannot send a later read to the old target.
+    await this.#windowSwitch
     const targets = await this.#listTargets()
-    const first = targets[0]
-    if (first === undefined) {
+    const selected = targets.find((target) => target.id === this.#activeTargetId)
+    if (selected !== undefined) return selected
+    const fallback = targets[0]
+    if (fallback === undefined) {
       throw new StagewrightError('REF_NOT_FOUND', 'No page targets are open in the attached app.', {
         transport: TRANSPORT_ID,
         sessionId: this.id,
       })
     }
-    return first
+    this.#activeTargetId = fallback.id
+    return fallback
   }
 
   async #resolveTarget(ref: WindowRef): Promise<CdpTargetInfo> {
@@ -840,9 +850,9 @@ class CdpSession implements TransportSession {
     return evaluateExpression<T>(conn, body, arg)
   }
 
-  /** The pooled connection for the first (active) page target. */
+  /** The pooled connection for the selected active page target. */
   async #pageConnection(): Promise<CdpConnection> {
-    const page = await this.#firstTarget()
+    const page = await this.#activeTarget()
     return this.connectionFor(page)
   }
 
@@ -871,14 +881,48 @@ class CdpSession implements TransportSession {
 
   async windowsList(): Promise<readonly WindowDescriptor[]> {
     const targets = await this.#listTargets()
+    const active = targets.find((target) => target.id === this.#activeTargetId) ?? targets[0]
+    if (active !== undefined) this.#activeTargetId = active.id
     return targets.map((t, i) => ({
       id: t.id,
       index: i,
       title: t.title,
       ...(t.url !== '' ? { url: t.url } : {}),
       visible: true,
-      focused: i === 0,
+      focused: t.id === active?.id,
     }))
+  }
+
+  async activateWindow(target: WindowRef): Promise<WindowDescriptor> {
+    const run = this.#windowSwitch.then(async () => {
+      const selected = await this.#resolveTarget(target)
+      this.#activeTargetId = selected.id
+      const targets = await this.#listTargets()
+      const index = targets.findIndex((candidate) => candidate.id === selected.id)
+      if (index === -1) {
+        throw new StagewrightError(
+          'REF_NOT_FOUND',
+          'Selected CDP target closed during activation.',
+          {
+            transport: TRANSPORT_ID,
+            ref: target,
+          },
+        )
+      }
+      return {
+        id: selected.id,
+        index,
+        title: selected.title,
+        ...(selected.url !== '' ? { url: selected.url } : {}),
+        visible: true,
+        focused: true,
+      }
+    })
+    this.#windowSwitch = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
   }
 
   async consoleLogs(): Promise<ConsoleLogsResult> {
@@ -1108,7 +1152,7 @@ class CdpSession implements TransportSession {
   /** The active page target's URL origin, for the localStorage snapshot; undefined when not derivable. */
   async #activeOrigin(): Promise<string | undefined> {
     try {
-      const target = await this.#firstTarget()
+      const target = await this.#activeTarget()
       return new URL(target.url).origin
     } catch {
       return undefined
@@ -1461,6 +1505,12 @@ class CdpSession implements TransportSession {
     if (this.#disposed) return
     this.#disposed = true
     this.#closeAll()
+  }
+
+  async detach(): Promise<void> {
+    // CDP attach owns sockets, never the Electron process. `dispose` is exactly
+    // the process-preserving detach operation for this session kind.
+    await this.dispose()
   }
 
   async forceKill(): Promise<void> {

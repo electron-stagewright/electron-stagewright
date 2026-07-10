@@ -165,6 +165,33 @@ export class SessionManager {
   }
 
   /**
+   * Release an attached/injected session without asking its app to stop. The
+   * session is removed before awaiting the transport disconnect so concurrent
+   * callers cannot act through a handle that is being detached. If the
+   * disconnect itself fails, the original managed entry is restored unless a
+   * new session claimed the id in the meantime.
+   */
+  async detach(id: SessionId): Promise<void> {
+    const managed = this.#sessions.get(id)
+    if (managed === undefined) {
+      throw new StagewrightError(
+        'NOT_RUNNING',
+        `No session with id "${id}". It may have been stopped.`,
+        {
+          sessionId: id,
+        },
+      )
+    }
+    this.#sessions.delete(id)
+    try {
+      await managed.session.detach()
+    } catch (cause) {
+      if (!this.#sessions.has(id)) this.#sessions.set(id, managed)
+      throw cause
+    }
+  }
+
+  /**
    * Stop every live session. Safe to call multiple times (the second call finds
    * an empty registry and does nothing) and safe under partial failure — every
    * session is attempted even if one rejects, and the registry is cleared

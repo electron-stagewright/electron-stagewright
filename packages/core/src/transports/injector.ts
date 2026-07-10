@@ -84,6 +84,7 @@ import type {
   TrayEventName,
   TrayInvokeResult,
   WindowDescriptor,
+  WindowRef,
 } from './types.js'
 
 const TRANSPORT_ID: TransportId = 'injector'
@@ -313,6 +314,13 @@ class InjectorSession implements TransportSession {
     return Array.isArray(windows) ? windows : []
   }
 
+  activateWindow(_target: WindowRef): Promise<WindowDescriptor> {
+    // The Node inspector session can enumerate BrowserWindows from main, but it
+    // has no renderer target for interaction/evaluation, so selecting one would
+    // be a false-success.
+    return Promise.reject(unsupported('activateWindow', 'supportsRendererEval'))
+  }
+
   screenshot(): Promise<Buffer> {
     return Promise.reject(notImplemented('screenshot'))
   }
@@ -505,6 +513,12 @@ class InjectorSession implements TransportSession {
     if (this.#disposed) return
     this.#disposed = true
     this.#conn.close()
+  }
+
+  async detach(): Promise<void> {
+    // The Inspector session did not launch the process. Closing its socket is
+    // the documented process-preserving detach operation.
+    await this.dispose()
   }
 
   async forceKill(): Promise<void> {

@@ -3,18 +3,16 @@
  * (SIGKILL), and `electron_detach`.
  *
  * stop/force_kill resolve the target session and route through the session
- * manager's idempotent removal. detach — disconnecting from an app without
- * stopping it — needs a transport capability that no current transport provides
- * (the Playwright transport owns the process it launched, so closing the
- * connection closes the app), so it honestly returns `TRANSPORT_UNSUPPORTED`
- * until a transport-level detach lands.
+ * manager's idempotent removal. detach releases an attached/injected transport
+ * session without asking the app to stop; launch-owned sessions remain honest
+ * about not supporting that ownership transfer.
  *
  * @module
  */
 
 import { z } from 'zod'
 
-import { makeError, makeSuccess } from '../../errors/envelope.js'
+import { makeSuccess } from '../../errors/envelope.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 
 const sessionOnly = z.object({
@@ -99,31 +97,32 @@ export const forceKillTool: AnyToolDefinition = defineTool({
 })
 
 /**
- * `electron_detach` — disconnect without stopping. Not yet supported by any
- * transport (a launched app is owned by its session, so disconnecting closes
- * it). Resolves the session to give a precise error, then returns
- * `TRANSPORT_UNSUPPORTED` with a pointer to `electron_stop`.
+ * `electron_detach` — disconnect without stopping. CDP and Injector sessions
+ * release their sockets and leave the app process alive. A launch-owned session
+ * rejects at its transport boundary because its connection owns the app.
  */
 export const detachTool: AnyToolDefinition = defineTool({
   name: 'electron_detach',
   title: 'Detach from Electron app',
   description: [
-    'Disconnect from an app without stopping it. Not yet supported by any transport',
-    '(detaching from a launched app is indistinguishable from stopping it today).',
-    'Returns TRANSPORT_UNSUPPORTED; use electron_stop to end the session.',
-    'Errors: TRANSPORT_UNSUPPORTED (not retryable), NOT_RUNNING (no such session), BAD_ARGUMENT (multiple sessions).',
+    'Disconnect from an attached or injected app without stopping it. A launch-owned session cannot detach',
+    'because its Playwright connection owns the process; use electron_stop for that case.',
+    'Returns: { ok, session_id, detached: true }. Errors: TRANSPORT_UNSUPPORTED (launch-owned session;',
+    'not retryable), NOT_RUNNING (no such session), BAD_ARGUMENT (multiple sessions).',
   ].join(' '),
   inputSchema: sessionOnly,
   operationType: 'command',
   handler: async (args, ctx) => {
     const managed = ctx.sessions.resolve(args.sessionId)
-    return makeError('TRANSPORT_UNSUPPORTED', {
-      message: `Transport "${managed.transport.id}" cannot detach without stopping the app.`,
-      details: { transport: managed.transport.id, capability: 'detach' },
-      next_actions: ['electron_stop()'],
-      startedAt: ctx.startedAt,
-      now: ctx.now,
-      session_id: managed.id,
-    })
+    await ctx.sessions.detach(managed.id)
+    ctx.snapshots.clear(managed.id)
+    return makeSuccess(
+      { session_id: managed.id, detached: true },
+      {
+        startedAt: ctx.startedAt,
+        now: ctx.now,
+        session_id: managed.id,
+      },
+    )
   },
 })
