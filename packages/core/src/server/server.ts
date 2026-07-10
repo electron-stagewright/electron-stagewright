@@ -16,7 +16,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { definePluginsInfoTool, loadPlugins } from '../plugins/index.js'
 import type { StagewrightPlugin } from '../plugins/index.js'
-import { DEFAULT_TOOLS } from '../tools/index.js'
+import {
+  DEFAULT_TOOLS,
+  excludedCoreToolProfileHints,
+  resolveCoreToolProfile,
+  type ToolProfile,
+} from '../tools/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 import { VERSION } from '../version.js'
 import { Dispatcher } from './dispatcher.js'
@@ -50,6 +55,12 @@ export interface CreateServerOptions {
   readonly logLevel?: LogLevel
   /** Tools to register. Defaults to the full core tool surface exported by DEFAULT_TOOLS. */
   readonly tools?: Iterable<AnyToolDefinition>
+  /**
+   * Explicit core-tool profile. Defaults to `full`, preserving the historical default tool surface.
+   * Eval-gated tools and explicitly loaded plugins compose with this profile independently. Cannot be
+   * combined with {@link CreateServerOptions.tools}, whose caller-supplied collection is authoritative.
+   */
+  readonly toolProfile?: ToolProfile
   /**
    * First-party plugins to load (ADR-004). Each is validated, its tools registered under
    * `<plugin>_<tool>` and its error codes under `<plugin>.CODE`, its `setup` run, and its
@@ -110,6 +121,11 @@ export interface StagewrightServer {
  * yielding a half-initialised server.
  */
 export async function createServer(opts: CreateServerOptions = {}): Promise<StagewrightServer> {
+  if (opts.tools !== undefined && opts.toolProfile !== undefined) {
+    throw new Error('createServer options "tools" and "toolProfile" are mutually exclusive.')
+  }
+  const toolProfile = opts.toolProfile ?? 'full'
+  const coreTools = opts.tools ?? resolveCoreToolProfile(DEFAULT_TOOLS, toolProfile)
   const logger = opts.logger ?? new StderrLogger({ level: opts.logLevel ?? 'info' })
   const sessions = new SessionManager()
   const transports = opts.transports ?? new TransportRegistry()
@@ -125,6 +141,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     ...(opts.operationTimeoutMs !== undefined
       ? { operationTimeoutMs: opts.operationTimeoutMs }
+      : {}),
+    ...(opts.tools === undefined
+      ? { excludedToolProfileHints: excludedCoreToolProfileHints(DEFAULT_TOOLS, toolProfile) }
       : {}),
   })
 
@@ -155,7 +174,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
   // minimal. If registration throws after plugins loaded (e.g. a defensive duplicate-name
   // guard), tear the plugins back down before failing.
   try {
-    dispatcher.registerAll(opts.tools ?? DEFAULT_TOOLS)
+    dispatcher.registerAll(coreTools)
     if (pluginResult && pluginResult.loaded.length > 0) {
       dispatcher.register(
         definePluginsInfoTool(

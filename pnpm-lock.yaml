@@ -164,6 +164,27 @@ importers:
       '@electron-stagewright/core':
         specifier: workspace:*
         version: link:../core
+      '@electron-stagewright/plugin-clock':
+        specifier: workspace:*
+        version: link:../plugin-clock
+      '@electron-stagewright/plugin-ipc':
+        specifier: workspace:*
+        version: link:../plugin-ipc
+      '@electron-stagewright/plugin-native-ui':
+        specifier: workspace:*
+        version: link:../plugin-native-ui
+      '@electron-stagewright/plugin-network':
+        specifier: workspace:*
+        version: link:../plugin-network
+      '@electron-stagewright/plugin-production':
+        specifier: workspace:*
+        version: link:../plugin-production
+      '@electron-stagewright/plugin-storage':
+        specifier: workspace:*
+        version: link:../plugin-storage
+      '@electron-stagewright/plugin-trace':
+        specifier: workspace:*
+        version: link:../plugin-trace
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)

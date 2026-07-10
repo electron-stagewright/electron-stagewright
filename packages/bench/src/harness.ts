@@ -24,6 +24,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 import { countRealTokens } from './tokenizer.js'
+import type { ToolProfile } from '@electron-stagewright/core'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 // Resolve the built server entry from the core package via ESM resolution (its "."
@@ -54,6 +55,12 @@ export interface ScenarioMetrics {
    * response text with `gpt-tokenizer` (see `tokenizer.ts` for the proxy caveat).
    */
   measuredTokens: number
+  /** Unicode code points across raw tool-response text blocks. */
+  responseCharacters: number
+  /** Tool calls whose envelope was `ok: false`, including deliberate recovery probes. */
+  failedCalls: number
+  /** Calls explicitly marked by a scenario as an attempt after a prior recovery step. */
+  retries: number
   /** Sum of client-side wall-clock latency (ms) across those calls. */
   latencyMs: number
 }
@@ -73,6 +80,12 @@ export interface Driver {
   readonly client: Client
   readonly sessionId: string
   readonly metrics: ScenarioMetrics
+}
+
+/** Optional metadata for one scenario call. */
+export interface CallOptions {
+  /** Marks this call as an explicit retry after the scenario recovered context or state. */
+  readonly retry?: boolean
 }
 
 /** One benchmark scenario: a named agent task expressed as a sequence of `call`s. */
@@ -107,6 +120,15 @@ export const STAGEWRIGHT_TARGET: ServerTarget = {
   command: 'node',
   args: [CLI_PATH, '--allow-eval'],
   supportsMemory: true,
+}
+
+/** Build a Stagewright target whose core tools are limited by one explicit profile. */
+export function stagewrightProfileTarget(profile: ToolProfile): ServerTarget {
+  return {
+    name: `stagewright-${profile}`,
+    command: 'node',
+    args: [CLI_PATH, '--tool-profile', profile],
+  }
 }
 
 /**
@@ -146,6 +168,11 @@ export interface ComparisonResult extends ScenarioMetrics {
   readonly task: string
   /** Main-process RSS (bytes) when the target supports it, else null. */
   readonly memoryRssBytes: number | null
+  /** The parsed `{ tools }` value the spawned MCP host received before the task, or null on connect failure. */
+  readonly manifest: {
+    readonly characters: number
+    readonly bpe: number
+  } | null
   readonly ok: boolean
   readonly error?: string
 }
@@ -185,6 +212,7 @@ export async function call(
   driver: Driver,
   name: string,
   args: Record<string, unknown> = {},
+  options: CallOptions = {},
 ): Promise<Envelope> {
   const start = performance.now()
   const result = await driver.client.callTool({
@@ -198,6 +226,9 @@ export async function call(
   driver.metrics.latencyMs += elapsed
   driver.metrics.estimatedTokens += env._meta?.estimated_tokens ?? 0
   driver.metrics.measuredTokens += countRealTokens(text)
+  driver.metrics.responseCharacters += Array.from(text).length
+  if (!env.ok) driver.metrics.failedCalls += 1
+  if (options.retry === true) driver.metrics.retries += 1
   return env
 }
 
@@ -233,6 +264,9 @@ export async function runScenario(
     toolCalls: 0,
     estimatedTokens: 0,
     measuredTokens: 0,
+    responseCharacters: 0,
+    failedCalls: 0,
+    retries: 0,
     latencyMs: 0,
   }
   const transport = new StdioClientTransport({
@@ -305,6 +339,9 @@ export async function runAdapter(
     toolCalls: 0,
     estimatedTokens: 0,
     measuredTokens: 0,
+    responseCharacters: 0,
+    failedCalls: 0,
+    retries: 0,
     latencyMs: 0,
   }
   // `connect` (the stdio spawn) is INSIDE the try so a spawn failure becomes an ok:false row, not a
@@ -312,8 +349,15 @@ export async function runAdapter(
   let client: Client | undefined
   let sessionId: string | undefined
   let memoryRssBytes: number | null = null
+  let manifest: ComparisonResult['manifest'] = null
   try {
     client = await connect(adapter.target)
+    const { tools } = await client.listTools()
+    const manifestPayload = JSON.stringify({ tools })
+    manifest = {
+      characters: Array.from(manifestPayload).length,
+      bpe: countRealTokens(manifestPayload),
+    }
     sessionId = await adapter.launch(client)
     await adapter.run({ client, sessionId, metrics })
     if (adapter.sampleMemory !== undefined) {
@@ -324,6 +368,7 @@ export async function runAdapter(
       task: adapter.task.name,
       ...metrics,
       memoryRssBytes,
+      manifest,
       ok: true,
     }
   } catch (err) {
@@ -332,6 +377,7 @@ export async function runAdapter(
       task: adapter.task.name,
       ...metrics,
       memoryRssBytes,
+      manifest,
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     }
@@ -351,9 +397,10 @@ export async function runAdapter(
 export function stagewrightAdapter(
   task: ComparableTask,
   run: (driver: Driver) => Promise<void>,
+  target: ServerTarget = STAGEWRIGHT_TARGET,
 ): TaskAdapter {
   return {
-    target: STAGEWRIGHT_TARGET,
+    target,
     task,
     launch: async (client) => {
       const env = await rawCall(client, 'electron_launch', { main: APP_MAIN })
@@ -364,6 +411,8 @@ export function stagewrightAdapter(
     stop: async (client, sessionId) => {
       await rawCall(client, 'electron_stop', { sessionId }).catch(() => undefined)
     },
-    sampleMemory: (client, sessionId) => sampleMemory(client, sessionId),
+    ...(target.supportsMemory === true
+      ? { sampleMemory: (client: Client, sessionId: string) => sampleMemory(client, sessionId) }
+      : {}),
   }
 }

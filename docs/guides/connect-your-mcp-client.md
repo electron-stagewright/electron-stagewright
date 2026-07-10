@@ -137,6 +137,9 @@ Append flags to `args` (after the package/CLI). The common ones:
   `electron_eval_renderer`), which are **off by default**. Grant the narrowest target with
   `--allow-eval=renderer` or `--allow-eval=main`. Read the [security model](./security-model.md)
   before enabling it.
+- `--tool-profile essential` starts with the focused launch/snapshot/interact/assert core surface.
+  `testing` adds the broader test-driving tools, `debug` adds attach and diagnostics, and `full`
+  remains the compatibility default. This flag does not enable eval or load plugins.
 - `--screenshot-dir <dir>` sets a stable location for captured screenshots.
 - `doctor --json` is a standalone preflight command, not an MCP server flag:
   run it in a terminal to validate Node, Playwright, Electron, display setup,
@@ -189,6 +192,7 @@ The failure modes are almost all about the stdio channel or the spawn command.
 | Server won't start; a version/engine error                             | Node below the version floor                                                                                                 | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                                                                                     |
 | `electron_launch` reports that Playwright or Electron is not installed | The core package was started without an optional launch peer                                                                 | Use the `npx --package @electron-stagewright/core --package playwright --package electron electron-stagewright` form, install all three packages globally, or pass `executablePath` to `electron_launch`. |
 | `electron_eval_main` / `electron_eval_renderer` missing                | Eval tools are gated off by default                                                                                          | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                                                                                |
+| A known core tool is missing                                           | The selected core profile does not include it                                                                                | Restart with the profile named in the tool's recovery hint, or use `--tool-profile full`.                                                                                                                 |
 | The app won't launch from `electron_launch`                            | `main` is not an absolute path, or the app needs attach/inject                                                               | Pass an absolute `main`; see [Launch, attach, or inject](./launch-or-attach.md) for apps that are already running.                                                                                        |
 
 ## Where next

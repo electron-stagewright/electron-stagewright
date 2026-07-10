@@ -36,6 +36,16 @@ export { WAIT_TOOLS } from './wait/index.js'
 export { EVAL_TOOLS } from './eval/index.js'
 export { OBSERVE_TOOLS } from './observe/index.js'
 export { EXPECT_TOOLS } from './expect/index.js'
+export {
+  DEBUG_CORE_TOOL_NAMES,
+  ESSENTIAL_CORE_TOOL_NAMES,
+  excludedCoreToolProfileHints,
+  isToolProfile,
+  resolveCoreToolProfile,
+  TESTING_CORE_TOOL_NAMES,
+  TOOL_PROFILES,
+  type ToolProfile,
+} from './profiles.js'
 
 /**
  * The full set of tools registered with the dispatcher by default — lifecycle

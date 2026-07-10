@@ -84,3 +84,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Manifest budget gate (ADR-021): measures the host-visible tools/list payload for every
+      # committed variant against packages/bench/fixtures/manifest-baseline.json and fails on
+      # unreviewed BPE growth over 3%. In-memory MCP only — no Electron binary, no display — so
+      # it belongs in this job rather than the e2e workflow.
+      - run: pnpm manifest:check

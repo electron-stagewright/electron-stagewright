@@ -24,9 +24,12 @@ const CLIENT_SMOKE = `
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
-const [cliPath, appMain] = process.argv.slice(2)
+const [cliPath, appMain, profile] = process.argv.slice(2)
 const client = new Client({ name: 'package-smoke', version: '1.0.0' })
-const transport = new StdioClientTransport({ command: process.execPath, args: [cliPath] })
+const transport = new StdioClientTransport({
+  command: process.execPath,
+  args: profile === undefined ? [cliPath] : [cliPath, '--tool-profile', profile],
+})
 
 async function call(name, args) {
   const result = await client.callTool({ name, arguments: args })
@@ -41,11 +44,18 @@ let sessionId
 try {
   await client.connect(transport)
   const { tools } = await client.listTools()
-  if (!tools.some((tool) => tool.name === 'electron_doctor')) {
-    throw new Error('published manifest omitted electron_doctor')
+  if (!tools.some((tool) => tool.name === 'electron_launch')) {
+    throw new Error('published manifest omitted electron_launch')
   }
-  const doctor = await call('electron_doctor', {})
-  if (!Array.isArray(doctor.checks)) throw new Error('electron_doctor omitted its check list')
+  if (profile === undefined) {
+    if (!tools.some((tool) => tool.name === 'electron_doctor')) {
+      throw new Error('published full manifest omitted electron_doctor')
+    }
+    const doctor = await call('electron_doctor', {})
+    if (!Array.isArray(doctor.checks)) throw new Error('electron_doctor omitted its check list')
+  } else if (profile === 'essential' && tools.some((tool) => tool.name === 'electron_doctor')) {
+    throw new Error('published essential manifest unexpectedly includes electron_doctor')
+  }
   const launched = await call('electron_launch', { main: appMain })
   sessionId = launched.session_id
   await call('electron_snapshot', { sessionId })
@@ -115,6 +125,15 @@ async function main() {
       maxBuffer: 8 * 1024 * 1024,
       timeout: 90_000,
     })
+    await execFile(
+      process.execPath,
+      [clientPath, cliPath, path.join(scratchDir, 'app.mjs'), 'essential'],
+      {
+        cwd: scratchDir,
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: 90_000,
+      },
+    )
     process.stderr.write(`package smoke passed: ${coreTarball}\n`)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })

@@ -125,6 +125,12 @@ export interface DispatcherOptions {
    * long wait; `0` disables the backstop. Defaults to {@link DEFAULT_OPERATION_TIMEOUT_MS}.
    */
   readonly operationTimeoutMs?: number
+  /**
+   * Known core tools intentionally excluded by the selected profile, mapped to a profile that
+   * contains each one. Eval-gated tools are deliberately excluded: their more specific eval hint
+   * remains authoritative.
+   */
+  readonly excludedToolProfileHints?: ReadonlyMap<string, string>
 }
 
 /**
@@ -151,6 +157,15 @@ export interface ToolManifestEntry {
    */
   readonly evalTarget?: EvalTarget
   /** MCP behaviour hints (readOnlyHint, destructiveHint, …) surfaced in `tools/list`. */
+  readonly annotations: ToolAnnotations
+}
+
+/** The exact public tool entry emitted in the MCP `tools/list` result. */
+export interface McpToolManifestEntry {
+  readonly name: string
+  readonly title?: string
+  readonly description: string
+  readonly inputSchema: { type: 'object' } & Record<string, unknown>
   readonly annotations: ToolAnnotations
 }
 
@@ -245,6 +260,8 @@ export class Dispatcher {
    * agent cannot distinguish from a typo.
    */
   readonly #gatedToolNames = new Map<string, EvalTarget | undefined>()
+  /** Core tools deliberately hidden by the selected profile, with an actionable alternative. */
+  readonly #excludedToolProfileHints: ReadonlyMap<string, string>
 
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
@@ -265,6 +282,7 @@ export class Dispatcher {
     this.#now = opts.now ?? Date.now
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
     this.#operationTimeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
+    this.#excludedToolProfileHints = opts.excludedToolProfileHints ?? new Map()
     if (!Number.isInteger(this.#operationTimeoutMs) || this.#operationTimeoutMs < 0) {
       throw new Error(
         `operationTimeoutMs must be a non-negative integer number of milliseconds, got ${String(
@@ -406,9 +424,9 @@ export class Dispatcher {
     return this.#tools.has(name)
   }
 
-  /** The registered (visible) tool definitions, in registration order. */
+  /** The registered (visible) tool definitions, in canonical name order. */
   list(): readonly AnyToolDefinition[] {
-    return [...this.#tools.values()]
+    return [...this.#tools.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
   /** Machine-readable manifest of all registered tools. */
@@ -421,6 +439,21 @@ export class Dispatcher {
       inputJsonSchema: z.toJSONSchema(def.inputSchema) as Record<string, unknown>,
       ...(def.requiresEvalFlag === true ? { requiresEvalFlag: true } : {}),
       ...(def.evalTarget !== undefined ? { evalTarget: def.evalTarget } : {}),
+      annotations: annotationsFor(def),
+    }))
+  }
+
+  /**
+   * The exact `tools` entries emitted to MCP hosts. Manifest-budget accounting must serialize the
+   * enclosing `{ tools: dispatcher.listMcpTools() }` object rather than the richer internal
+   * {@link ToolManifestEntry} projection, which contains fields unavailable to the host.
+   */
+  listMcpTools(): readonly McpToolManifestEntry[] {
+    return this.list().map((def) => ({
+      name: def.name,
+      ...(def.title !== undefined ? { title: def.title } : {}),
+      description: def.description,
+      inputSchema: z.toJSONSchema(def.inputSchema) as { type: 'object' } & Record<string, unknown>,
       annotations: annotationsFor(def),
     }))
   }
@@ -454,6 +487,17 @@ export class Dispatcher {
         message: `Tool "${name}" is gated: it is only registered when the server is started with ${flag}.`,
         next_actions: [
           `Ask the operator to restart the server with ${flag} to enable this tool, or use a granular non-eval tool instead.`,
+        ],
+        startedAt,
+        now: this.#now,
+      })
+    }
+    const profile = this.#excludedToolProfileHints.get(name)
+    if (profile !== undefined) {
+      return makeError('BAD_ARGUMENT', {
+        message: `Tool "${name}" is excluded by the active core tool profile.`,
+        next_actions: [
+          `Ask the operator to restart the server with --tool-profile ${profile} to enable ${name}.`,
         ],
         startedAt,
         now: this.#now,
@@ -677,18 +721,7 @@ export class Dispatcher {
         throw new McpError(ErrorCode.InvalidParams, 'tools/list is not paginated; omit the cursor.')
       }
       return {
-        tools: [...this.#tools.values()].map((def) => ({
-          name: def.name,
-          ...(def.title !== undefined ? { title: def.title } : {}),
-          description: def.description,
-          // z.toJSONSchema yields `{ type: 'object', … }`; the MCP Tool shape wants that
-          // literal type, so we assert it rather than widen the whole result to unknown.
-          inputSchema: z.toJSONSchema(def.inputSchema) as { type: 'object' } & Record<
-            string,
-            unknown
-          >,
-          annotations: annotationsFor(def),
-        })),
+        tools: this.listMcpTools(),
       }
     })
 

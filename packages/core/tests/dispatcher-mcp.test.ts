@@ -85,6 +85,12 @@ describe('dispatcher MCP binding', () => {
     expect(echo?.inputSchema?.properties).toHaveProperty('value')
   })
 
+  it('serves tools/list in canonical name order regardless of registration order', async () => {
+    const client = await connectClient([echoTool, dangerTool])
+    const { tools } = await client.listTools()
+    expect(tools.map((tool) => tool.name)).toEqual(['test_danger', 'test_echo'])
+  })
+
   it('routes a valid call through the dispatcher success envelope', async () => {
     const client = await connectClient([echoTool])
     const result = (await client.callTool({

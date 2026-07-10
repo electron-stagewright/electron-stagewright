@@ -17,6 +17,9 @@ pnpm build        # builds packages/core/dist/cli.js, which the harness spawns
 pnpm bench        # human table to stderr, JSON report to stdout
 pnpm bench --json report.json   # also write the JSON report to a file
 pnpm bench:check  # same run, but exit non-zero on a deterministic-metric regression
+pnpm manifest:check # verify the host-visible manifest budget baseline
+pnpm manifest:report -- --json output/manifest.json # write manifest measurements
+pnpm bench:profiles -- --json output/profile-benchmark.json # full vs essential tasks
 ```
 
 or scoped: `pnpm --filter @electron-stagewright/bench bench`.
@@ -24,6 +27,26 @@ or scoped: `pnpm --filter @electron-stagewright/bench bench`.
 `pnpm bench > report.json` captures the machine report while the human table stays
 visible (the table is on stderr). You need a desktop session (a display): each scenario
 launches a real Electron window.
+
+## Manifest budgets and core profiles
+
+`pnpm manifest:check` captures the actual `{ tools }` object returned by MCP `tools/list`, not the
+richer internal documentation manifest. It reports Unicode characters, UTF-8 bytes, GPT-class BPE
+tokens, canonical tool ordering, and the ten most expensive tools for full core, every named core
+profile, each first-party plugin, and all first-party plugins together, with and without eval.
+
+The committed baseline permits no unreviewed BPE growth over 3%. Update it only after reviewing the
+change and supplying a reason:
+
+```sh
+pnpm --filter @electron-stagewright/bench manifest:update -- \
+  --reason "Explain the schema or capability change"
+```
+
+`full` remains the compatibility default. `pnpm bench:profiles` drives twelve real Electron tasks
+against `full` and the opt-in `essential` profile, reporting task success, calls, explicit retries,
+manifest BPE, response BPE, and total BPE. A smaller profile is not eligible to become the default
+until it reaches at least 95% of full's task success rate and saves material context.
 
 ## Scenarios
 
@@ -107,6 +130,10 @@ each target's delta versus our server. The shared tasks are expressed only throu
 interactions (type, click, find, assert text), so a competing Electron MCP server can do the same
 task through its own tools. Only the BPE token count is contrasted across servers; the server-side
 `estimated_tokens` heuristic is not comparable between different servers.
+
+Each comparison row also records the parsed `{ tools }` payload that the benchmark host received
+before launching the task. This keeps initial manifest cost visible for Stagewright and competitor
+targets instead of reconstructing a competitor manifest from assumptions.
 
 Out of the box only our own server (`stagewright`) is registered, so `--compare` reports a single
 target. To compare against another server you write one **adapter** — the seam that maps the shared

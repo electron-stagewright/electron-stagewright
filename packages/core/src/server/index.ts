@@ -5,7 +5,12 @@
  * @module
  */
 
-export { Dispatcher, type DispatcherOptions, type ToolManifestEntry } from './dispatcher.js'
+export {
+  Dispatcher,
+  type DispatcherOptions,
+  type McpToolManifestEntry,
+  type ToolManifestEntry,
+} from './dispatcher.js'
 
 export { anyEvalAllowed, normalizeEvalPolicy, type EvalPolicy } from './eval-policy.js'
 

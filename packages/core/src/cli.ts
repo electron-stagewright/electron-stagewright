@@ -37,6 +37,9 @@
  * - `--operation-timeout-ms <n>` — backstop timeout for a single tool dispatch (ADR-011); a
  *   handler that does not settle within it returns a retryable OPERATION_TIMEOUT instead of
  *   hanging the agent on a frozen app. Default 120000; `0` disables it.
+ * - `--tool-profile <profile>` — choose an explicit core tool surface: `essential`, `testing`,
+ *   `debug`, or `full` (the compatibility default). Eval and explicitly loaded plugins compose
+ *   independently.
  *
  * Unknown options and positional arguments fail startup rather than being
  * silently ignored. This keeps a typo from weakening a requested confinement or
@@ -56,6 +59,7 @@ import { importPlugin } from './plugins/index.js'
 import type { EvalPolicy } from './server/eval-policy.js'
 import { createServer } from './server/index.js'
 import { StderrLogger } from './server/logger.js'
+import { isToolProfile, type ToolProfile } from './tools/index.js'
 import { VERSION } from './version.js'
 
 export type CliCommand = 'serve' | 'help' | 'version' | 'doctor'
@@ -64,6 +68,7 @@ export interface CliOptions {
   readonly command: CliCommand
   readonly doctorJson: boolean
   readonly allowEval: EvalPolicy
+  readonly toolProfile: ToolProfile
   readonly screenshotDir?: string
   readonly appRoot?: string
   readonly pluginSpecs: readonly string[]
@@ -153,6 +158,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       command: 'help',
       doctorJson: false,
       allowEval: { main: false, renderer: false },
+      toolProfile: 'full',
       pluginSpecs: [],
       pluginConfigs: {},
     }
@@ -162,6 +168,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       command: 'version',
       doctorJson: false,
       allowEval: { main: false, renderer: false },
+      toolProfile: 'full',
       pluginSpecs: [],
       pluginConfigs: {},
     }
@@ -177,6 +184,8 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
   let screenshotDir: string | undefined
   let appRoot: string | undefined
   let operationTimeoutRaw: string | undefined
+  let toolProfileRaw: string | undefined
+  let toolProfile: ToolProfile = 'full'
   let allowEval: EvalPolicy = { main: false, renderer: false }
   let doctorJson = false
   const pluginSpecs: string[] = []
@@ -211,6 +220,21 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       }
       onlyOnce(operationTimeoutRaw, arg)
       operationTimeoutRaw = requireValue(argv, i, arg)
+      i += 1
+      continue
+    }
+    if (arg === '--tool-profile') {
+      if (command === 'doctor') {
+        throw new Error('--tool-profile is only valid when starting the MCP server')
+      }
+      onlyOnce(toolProfileRaw, arg)
+      toolProfileRaw = requireValue(argv, i, arg)
+      if (!isToolProfile(toolProfileRaw)) {
+        throw new Error(
+          `--tool-profile must be essential, testing, debug, or full, got "${toolProfileRaw}"`,
+        )
+      }
+      toolProfile = toolProfileRaw
       i += 1
       continue
     }
@@ -250,6 +274,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     command,
     doctorJson,
     allowEval,
+    toolProfile,
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
     ...(appRoot !== undefined ? { appRoot } : {}),
     ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
@@ -268,6 +293,7 @@ export function formatCliHelp(): string {
     '  --app-root <path>                 Confine launch and file paths to this root.',
     '  --screenshot-dir <path>           Default screenshot output directory.',
     '  --operation-timeout-ms <n>        Dispatch timeout in milliseconds (0 disables).',
+    '  --tool-profile <profile>          Core tools: essential, testing, debug, or full.',
     '  --plugin <name|path>              Load a plugin; repeatable and comma-separated.',
     '  --plugin-config <name>=<json>     Supply a plugin configuration.',
     '  --help, -h                        Print this help and exit.',
@@ -285,8 +311,15 @@ async function main(): Promise<void> {
     process.stdout.write(`${VERSION}\n`)
     return
   }
-  const { allowEval, screenshotDir, appRoot, pluginSpecs, pluginConfigs, operationTimeoutMs } =
-    options
+  const {
+    allowEval,
+    toolProfile,
+    screenshotDir,
+    appRoot,
+    pluginSpecs,
+    pluginConfigs,
+    operationTimeoutMs,
+  } = options
   if (options.command === 'doctor') {
     const report = await runDoctorChecks({
       ...(appRoot !== undefined ? { appRoot } : {}),
@@ -316,6 +349,7 @@ async function main(): Promise<void> {
 
   const server = await createServer({
     allowEval,
+    toolProfile,
     logger,
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
     ...(appRoot !== undefined ? { appRoot } : {}),
@@ -345,6 +379,7 @@ async function main(): Promise<void> {
   await server.connectStdio()
   logger.info('electron-stagewright MCP server ready (stdio)', {
     allowEval,
+    toolProfile,
     plugins: plugins.length,
   })
 }

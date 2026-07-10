@@ -26,8 +26,12 @@ function row(
     toolCalls,
     estimatedTokens: measuredTokens,
     measuredTokens,
+    responseCharacters: 0,
+    failedCalls: 0,
+    retries: 0,
     latencyMs: 0,
     memoryRssBytes: null,
+    manifest: null,
     ok,
   }
 }
@@ -103,6 +107,7 @@ describe('computeContrast (pure)', () => {
  */
 function fakeClient(responses: Record<string, Envelope>): unknown {
   return {
+    listTools: async () => ({ tools: [] }),
     callTool: async ({ name }: { name: string }) => ({
       content: [
         {

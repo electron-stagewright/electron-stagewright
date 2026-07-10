@@ -34,6 +34,9 @@ node packages/core/dist/cli.js
 Useful CLI flags:
 
 - `--allow-eval` registers `electron_eval_main` and `electron_eval_renderer`.
+- `--tool-profile <essential|testing|debug|full>` selects an explicit core tool surface. `full`
+  is the default, so existing installations keep the complete core catalog; eval and explicitly
+  loaded plugins compose independently.
 - `--screenshot-dir <path>` changes where screenshots are written when a tool
   call does not pass an explicit path.
 - `doctor --json` runs a machine-readable preflight without opening the MCP

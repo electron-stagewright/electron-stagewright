@@ -184,12 +184,12 @@ function printComparison(
   )
   log('─'.repeat(96))
   log(
-    `  ${'task'.padEnd(18)} ${'target'.padEnd(16)} ${'calls'.padStart(5)} ${'real tok'.padStart(8)} ${'latency'.padStart(9)} ${'memory'.padStart(8)}  result`,
+    `  ${'task'.padEnd(18)} ${'target'.padEnd(16)} ${'calls'.padStart(5)} ${'manifest'.padStart(8)} ${'real tok'.padStart(8)} ${'latency'.padStart(9)} ${'memory'.padStart(8)}  result`,
   )
   for (const r of results) {
     const verdict = r.ok ? 'ok' : `FAIL: ${r.error ?? ''}`
     log(
-      `  ${r.task.padEnd(18)} ${r.target.padEnd(16)} ${String(r.toolCalls).padStart(5)} ${String(r.measuredTokens).padStart(8)} ${`${r.latencyMs.toFixed(0)}ms`.padStart(9)} ${mib(r.memoryRssBytes).padStart(8)}  ${verdict}`,
+      `  ${r.task.padEnd(18)} ${r.target.padEnd(16)} ${String(r.toolCalls).padStart(5)} ${String(r.manifest?.bpe ?? 'n/a').padStart(8)} ${String(r.measuredTokens).padStart(8)} ${`${r.latencyMs.toFixed(0)}ms`.padStart(9)} ${mib(r.memoryRssBytes).padStart(8)}  ${verdict}`,
     )
   }
   const withDeltas = contrasts.filter((c) => c.deltas.length > 0)
@@ -202,7 +202,7 @@ function printComparison(
     for (const d of c.deltas) {
       const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`)
       log(
-        `    ${d.target}: ${sign(d.toolCallsVsBaseline)} calls, ${sign(d.measuredTokensVsBaseline)} BPE tokens`,
+        `    ${d.target}: ${sign(d.toolCallsVsBaseline)} calls, ${sign(d.measuredTokensVsBaseline)} response BPE, ${d.manifestBpeVsBaseline === undefined ? 'n/a' : `${sign(d.manifestBpeVsBaseline)} manifest BPE`}`,
       )
     }
   }

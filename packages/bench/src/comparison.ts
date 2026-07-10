@@ -21,6 +21,8 @@ export interface TargetDelta {
   readonly toolCallsVsBaseline: number
   readonly estimatedTokensVsBaseline: number
   readonly measuredTokensVsBaseline: number
+  /** Host-visible `tools/list` BPE delta when both targets supplied a manifest. */
+  readonly manifestBpeVsBaseline?: number
 }
 
 /** The comparison for one shared task: every target's row, plus each non-baseline target's deltas. */
@@ -76,6 +78,9 @@ export function computeContrast(
           toolCallsVsBaseline: row.toolCalls - base.toolCalls,
           estimatedTokensVsBaseline: row.estimatedTokens - base.estimatedTokens,
           measuredTokensVsBaseline: row.measuredTokens - base.measuredTokens,
+          ...(base.manifest !== null && row.manifest !== null
+            ? { manifestBpeVsBaseline: row.manifest.bpe - base.manifest.bpe }
+            : {}),
         })
       }
     }
