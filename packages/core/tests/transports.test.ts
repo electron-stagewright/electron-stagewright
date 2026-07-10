@@ -569,6 +569,21 @@ describe('PlaywrightElectronTransport', () => {
     expect((result as StagewrightError).code).toBe('TRANSPORT_UNSUPPORTED')
   })
 
+  it('reports an actionable remediation when Playwright cannot resolve Electron', async () => {
+    const missingRuntime = new PlaywrightElectronTransport({
+      loadElectron: async () => ({
+        launch: async () => {
+          throw new Error("Cannot find module 'electron'")
+        },
+      }),
+    })
+
+    await expect(missingRuntime.launch({ appPath: '/abs/main.js' })).rejects.toMatchObject({
+      code: 'TRANSPORT_UNSUPPORTED',
+      message: expect.stringContaining('--package electron'),
+    })
+  })
+
   it('maps a main-process appPath to Playwright args instead of executablePath', () => {
     const opts = buildPlaywrightLaunchOptions({
       appPath: '/abs/main.js',

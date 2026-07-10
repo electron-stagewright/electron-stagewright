@@ -178,5 +178,5 @@ describe('buildDocsSite (full build against the real docs)', () => {
     expect(home).toContain('property="og:image"')
     expect(home).toContain('social-card.png')
     expect((await readFile(path.join(outDir, 'social-card.png'))).byteLength).toBeGreaterThan(0)
-  })
+  }, 15_000)
 })

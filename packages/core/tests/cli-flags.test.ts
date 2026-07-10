@@ -43,4 +43,33 @@ describe('parseCliArgs — value-bearing flags fail closed on a missing value', 
     expect(opts.screenshotDir).toBe('/shots')
     expect(opts.pluginSpecs).toEqual(['a'])
   })
+
+  it('rejects unknown flags and positional arguments instead of silently ignoring them', () => {
+    expect(() => parseCliArgs(['--plugn', 'trace'])).toThrow('Unknown option: --plugn')
+    expect(() => parseCliArgs(['doctor', 'unexpected'])).toThrow('Unexpected argument: unexpected')
+  })
+
+  it('rejects an ambiguous repeated singleton flag', () => {
+    expect(() => parseCliArgs(['--app-root', '/one', '--app-root', '/two'])).toThrow(
+      '--app-root may be specified only once',
+    )
+  })
+
+  it('recognises help, version, and doctor JSON modes without starting the MCP server', () => {
+    expect(parseCliArgs(['--help']).command).toBe('help')
+    expect(parseCliArgs(['--version']).command).toBe('version')
+    const doctor = parseCliArgs(['doctor', '--json', '--allow-eval=renderer'])
+    expect(doctor.command).toBe('doctor')
+    expect(doctor.doctorJson).toBe(true)
+    expect(doctor.allowEval).toEqual({ main: false, renderer: true })
+  })
+
+  it('does not silently ignore server-only options in doctor mode', () => {
+    expect(() => parseCliArgs(['doctor', '--plugin', 'trace'])).toThrow(
+      '--plugin is only valid when starting the MCP server',
+    )
+    expect(() => parseCliArgs(['doctor', '--operation-timeout-ms', '5000'])).toThrow(
+      '--operation-timeout-ms is only valid when starting the MCP server',
+    )
+  })
 })

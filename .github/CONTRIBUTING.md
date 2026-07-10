@@ -1,13 +1,10 @@
 # Contributing to Electron Stagewright
 
-This project is pre-alpha. The core server can already launch and drive real
-Electron apps, and first-party plugin packages now cover traces, IPC, network
-capture, and production checks. The first npm release is still ahead.
-
-If you're reading this before the first release ships: thanks for stopping by. The
-most useful contribution right now is **opening a discussion** with use cases or
-pain points from your own Electron testing experience — that input shapes which
-capabilities and docs are prioritized before the first release.
+This project is pre-1.0. The core server can already launch and drive real
+Electron apps, and first-party plugin packages cover traces, IPC, network
+capture, storage, virtual time, native UI, and production checks. Packages are
+published to npm; feedback through GitHub Discussions and Issues still shapes the
+next capabilities and documentation.
 
 ## How we work
 

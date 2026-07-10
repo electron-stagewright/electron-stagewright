@@ -363,6 +363,10 @@ export function buildPlaywrightLaunchOptions(opts: LaunchOptions): PlaywrightLau
   }
 }
 
+function isMissingElectronRuntime(message: string): boolean {
+  return /cannot find (?:module|package) ['"]electron['"]/i.test(message)
+}
+
 class PlaywrightSession implements TransportSession {
   public readonly id: string
   public readonly transport: TransportId = TRANSPORT_ID
@@ -1815,6 +1819,13 @@ export class PlaywrightElectronTransport implements ITransport {
     } catch (cause) {
       await removeShimDir(shimDir)
       const message = cause instanceof Error ? cause.message : String(cause)
+      if (opts.executablePath === undefined && isMissingElectronRuntime(message)) {
+        throw new StagewrightError(
+          'TRANSPORT_UNSUPPORTED',
+          'Electron runtime is not installed for the server process. Install electron beside the server, run npx with --package electron, or pass executablePath to electron_launch.',
+          { transport: TRANSPORT_ID, appPath: opts.appPath ?? '' },
+        )
+      }
       const isTimeout = /timeout/i.test(message)
       throw new StagewrightError(
         isTimeout ? 'LAUNCH_TIMEOUT' : 'INTERNAL_ERROR',

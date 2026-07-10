@@ -242,6 +242,22 @@ describe('publish-readiness — publishable package manifests', () => {
       ]),
     )
   })
+
+  it('declares Playwright and Electron as optional peers for the default launch transport', async () => {
+    const core = (await loadManifests('packages')).find(
+      (manifest) => manifest.relDir === 'packages/core',
+    )
+    expect(core, 'expected packages/core manifest').toBeDefined()
+    const peers = core?.pkg['peerDependencies'] as Record<string, string> | undefined
+    const peerMeta = core?.pkg['peerDependenciesMeta'] as
+      | Record<string, { readonly optional?: unknown }>
+      | undefined
+
+    expect(peers?.['playwright']).toBe('>=1.49.0')
+    expect(peers?.['electron']).toBe('>=12.2.0')
+    expect(peerMeta?.['playwright']?.optional).toBe(true)
+    expect(peerMeta?.['electron']?.optional).toBe(true)
+  })
 })
 
 // --- RELEASING.md "What publishes" drift guard ------------------------------

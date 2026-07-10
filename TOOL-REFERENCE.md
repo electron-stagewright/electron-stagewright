@@ -2,7 +2,7 @@
 
 > Generated from the dispatcher manifest — do not edit by hand. Run `pnpm docs:tools` to regenerate.
 
-The server exposes 53 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
+The server exposes 54 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
 
 ## Contents
 
@@ -10,7 +10,7 @@ The server exposes 53 tools across 7 operation types. Tools marked with a "Requi
 - [Dialog tools](#dialog-tools) (1)
 - [Eval tools](#eval-tools) (2)
 - [Logs tools](#logs-tools) (1)
-- [Query tools](#query-tools) (24)
+- [Query tools](#query-tools) (25)
 - [Screenshot tools](#screenshot-tools) (1)
 - [Window_info tools](#window_info-tools) (1)
 
@@ -488,6 +488,16 @@ Scan the conventional CDP debug ports (9222-9225 by default) for already-running
 | `ports` | integer[] | no | Ports to scan. Defaults to 9222-9225. Max 64. |
 | `host` | string | no | Loopback host to scan. Defaults to 127.0.0.1. |
 | `timeoutMs` | integer | no | Per-port timeout in ms. Defaults to 300. Max 5000. |
+
+### `electron_doctor`
+
+**Diagnose Electron Stagewright environment**
+
+Run non-mutating preflight checks without starting an Electron session: Node version, Playwright, Electron, Linux display, configured app root and screenshot directory, and eval policy. Returns: { ok, doctor_ok, checks }. Inspect failed checks and their hints before electron_launch. Errors: none.
+
+- Operation: `query`
+
+_No parameters._
 
 ### `electron_elements_list`
 

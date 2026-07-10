@@ -6,7 +6,18 @@
  * stdout is reserved for MCP protocol frames, so a stray `console.log` here would
  * corrupt the stream and break the client.
  *
- * Flags:
+ * Invocation:
+ * - `doctor [--json]` — run preflight checks and exit without opening the MCP
+ *   stdio server. Default output is line-oriented; `--json` writes a single
+ *   machine-readable report instead. Either mode exits non-zero when a required
+ *   check fails.
+ * - `--help` / `--version` — print standalone CLI output and exit.
+ *
+ * `doctor`, `--help`, and `--version` run to completion and exit before the MCP
+ * server starts, so they may write normal text to stdout; server mode never
+ * does, reserving stdout for MCP protocol frames.
+ *
+ * Server flags:
  * - `--allow-eval[=<targets>]` — register tools that execute arbitrary JavaScript
  *   (default: off). Bare `--allow-eval` enables both eval targets; `--allow-eval=main`,
  *   `--allow-eval=renderer`, or `--allow-eval=main,renderer` enable only the named
@@ -27,6 +38,10 @@
  *   handler that does not settle within it returns a retryable OPERATION_TIMEOUT instead of
  *   hanging the agent on a frozen app. Default 120000; `0` disables it.
  *
+ * Unknown options and positional arguments fail startup rather than being
+ * silently ignored. This keeps a typo from weakening a requested confinement or
+ * changing the tool set without the operator noticing.
+ *
  * On SIGINT / SIGTERM the server is closed and every live session disposed, so a
  * Ctrl-C never leaves a launched Electron process orphaned.
  *
@@ -36,36 +51,27 @@
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
+import { runDoctorChecks } from './doctor.js'
 import { importPlugin } from './plugins/index.js'
 import type { EvalPolicy } from './server/eval-policy.js'
 import { createServer } from './server/index.js'
 import { StderrLogger } from './server/logger.js'
+import { VERSION } from './version.js'
 
-/** Parsed CLI options. */
-interface CliOptions {
-  /** The eval authorization policy parsed from `--allow-eval[=<targets>]` (ADR-014). */
+export type CliCommand = 'serve' | 'help' | 'version' | 'doctor'
+
+export interface CliOptions {
+  readonly command: CliCommand
+  readonly doctorJson: boolean
   readonly allowEval: EvalPolicy
   readonly screenshotDir?: string
-  /** Optional root directory `electron_launch` paths are confined to (`--app-root`). */
   readonly appRoot?: string
-  /** Plugin specs to load (package names or file paths), in order. */
   readonly pluginSpecs: readonly string[]
-  /** Per-plugin config parsed from `--plugin-config <name>=<json>`, keyed by plugin name. */
   readonly pluginConfigs: Readonly<Record<string, unknown>>
-  /** Dispatch backstop timeout (ms) from `--operation-timeout-ms` (ADR-011); absent → the default. */
   readonly operationTimeoutMs?: number
 }
 
-/**
- * Read the value following a `--flag <value>` argument, or `undefined` when the flag is absent.
- * A flag PRESENT with a missing value (end of argv, or the next token is another `--flag`) throws:
- * `--app-root` and `--screenshot-dir` are security/confinement-relevant, so failing open — parsing
- * `--app-root --allow-eval` as "no app-root confinement" — would silently disable a control the
- * operator asked for.
- */
-function readFlagValue(argv: readonly string[], flag: string): string | undefined {
-  const index = argv.indexOf(flag)
-  if (index === -1) return undefined
+function requireValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index + 1]
   if (value === undefined || value.startsWith('--')) {
     throw new Error(
@@ -75,47 +81,21 @@ function readFlagValue(argv: readonly string[], flag: string): string | undefine
   return value
 }
 
-/** Read EVERY value following a repeated `--flag <value>` argument, in order. Throws on a missing value (see {@link readFlagValue}). */
-function readFlagValues(argv: readonly string[], flag: string): string[] {
-  const values: string[] = []
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] !== flag) continue
-    const value = argv[i + 1]
-    if (value === undefined || value.startsWith('--')) {
-      throw new Error(
-        `${flag} expects a value, got ${value === undefined ? 'nothing' : `"${value}"`}`,
-      )
-    }
-    values.push(value)
+function parsePluginConfig(pair: string): readonly [string, unknown] {
+  const eq = pair.indexOf('=')
+  if (eq <= 0) throw new Error(`--plugin-config expects <name>=<json>, got "${pair}"`)
+  const name = pair.slice(0, eq)
+  try {
+    return [name, JSON.parse(pair.slice(eq + 1))]
+  } catch (cause) {
+    throw new Error(
+      `--plugin-config for "${name}" is not valid JSON: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    )
   }
-  return values
 }
 
-/** Parse `--plugin-config <name>=<json>` pairs into a config record. Throws on bad JSON. */
-function parsePluginConfigs(argv: readonly string[]): Record<string, unknown> {
-  const configs: Record<string, unknown> = {}
-  for (const pair of readFlagValues(argv, '--plugin-config')) {
-    const eq = pair.indexOf('=')
-    if (eq <= 0) {
-      throw new Error(`--plugin-config expects <name>=<json>, got "${pair}"`)
-    }
-    const name = pair.slice(0, eq)
-    try {
-      configs[name] = JSON.parse(pair.slice(eq + 1))
-    } catch (cause) {
-      throw new Error(
-        `--plugin-config for "${name}" is not valid JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
-      )
-    }
-  }
-  return configs
-}
-
-/**
- * Parse the optional `--operation-timeout-ms <n>` flag into a non-negative integer. Throws on a
- * non-numeric, non-integer, or negative value so a typo fails startup loudly rather than silently
- * disabling the dispatch backstop.
- */
 function parseOperationTimeout(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined
   const value = Number(raw)
@@ -127,7 +107,6 @@ function parseOperationTimeout(raw: string | undefined): number | undefined {
   return value
 }
 
-/** Parse a comma-separated `--allow-eval=<targets>` value into a policy; throws on an unknown target. */
 function parseEvalTargets(value: string): EvalPolicy {
   const targets = value
     .split(',')
@@ -152,13 +131,6 @@ function parseEvalTargets(value: string): EvalPolicy {
   return policy
 }
 
-/**
- * Parse `--allow-eval[=<targets>]` into an eval authorization policy (ADR-014). Bare
- * `--allow-eval` enables both targets; `--allow-eval=main` / `=renderer` /
- * `=main,renderer` (or `=all`) enable the named target(s); absent → neither. The last
- * occurrence wins. An unrecognised target value throws so a typo fails startup loudly
- * rather than silently granting or denying the wrong eval surface.
- */
 export function parseAllowEval(argv: readonly string[]): EvalPolicy {
   let policy: EvalPolicy = { main: false, renderer: false }
   for (const arg of argv) {
@@ -171,29 +143,168 @@ export function parseAllowEval(argv: readonly string[]): EvalPolicy {
   return policy
 }
 
-/** Parse the supported flags from argv (excluding `node` and the script path). */
+function onlyOnce(value: string | undefined, flag: string): void {
+  if (value !== undefined) throw new Error(`${flag} may be specified only once`)
+}
+
 export function parseCliArgs(argv: readonly string[]): CliOptions {
-  const screenshotDir = readFlagValue(argv, '--screenshot-dir')
-  const appRoot = readFlagValue(argv, '--app-root')
-  const operationTimeoutMs = parseOperationTimeout(readFlagValue(argv, '--operation-timeout-ms'))
-  // `--plugin` is repeatable and each value may be comma-separated.
-  const pluginSpecs = readFlagValues(argv, '--plugin')
-    .flatMap((value) => value.split(','))
-    .map((spec) => spec.trim())
-    .filter((spec) => spec.length > 0)
+  if (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h')) {
+    return {
+      command: 'help',
+      doctorJson: false,
+      allowEval: { main: false, renderer: false },
+      pluginSpecs: [],
+      pluginConfigs: {},
+    }
+  }
+  if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V')) {
+    return {
+      command: 'version',
+      doctorJson: false,
+      allowEval: { main: false, renderer: false },
+      pluginSpecs: [],
+      pluginConfigs: {},
+    }
+  }
+
+  let command: CliCommand = 'serve'
+  let start = 0
+  if (argv[0] === 'doctor') {
+    command = 'doctor'
+    start = 1
+  }
+
+  let screenshotDir: string | undefined
+  let appRoot: string | undefined
+  let operationTimeoutRaw: string | undefined
+  let allowEval: EvalPolicy = { main: false, renderer: false }
+  let doctorJson = false
+  const pluginSpecs: string[] = []
+  const pluginConfigs: Record<string, unknown> = {}
+
+  for (let i = start; i < argv.length; i += 1) {
+    const arg = argv[i]
+    if (arg === undefined) continue
+    if (arg === '--allow-eval') {
+      allowEval = { main: true, renderer: true }
+      continue
+    }
+    if (arg.startsWith('--allow-eval=')) {
+      allowEval = parseEvalTargets(arg.slice('--allow-eval='.length))
+      continue
+    }
+    if (arg === '--screenshot-dir') {
+      onlyOnce(screenshotDir, arg)
+      screenshotDir = requireValue(argv, i, arg)
+      i += 1
+      continue
+    }
+    if (arg === '--app-root') {
+      onlyOnce(appRoot, arg)
+      appRoot = requireValue(argv, i, arg)
+      i += 1
+      continue
+    }
+    if (arg === '--operation-timeout-ms') {
+      if (command === 'doctor') {
+        throw new Error('--operation-timeout-ms is only valid when starting the MCP server')
+      }
+      onlyOnce(operationTimeoutRaw, arg)
+      operationTimeoutRaw = requireValue(argv, i, arg)
+      i += 1
+      continue
+    }
+    if (arg === '--plugin') {
+      if (command === 'doctor') {
+        throw new Error('--plugin is only valid when starting the MCP server')
+      }
+      const values = requireValue(argv, i, arg)
+        .split(',')
+        .map((spec) => spec.trim())
+        .filter((spec) => spec.length > 0)
+      if (values.length === 0) throw new Error('--plugin expects at least one non-empty spec')
+      pluginSpecs.push(...values)
+      i += 1
+      continue
+    }
+    if (arg === '--plugin-config') {
+      if (command === 'doctor') {
+        throw new Error('--plugin-config is only valid when starting the MCP server')
+      }
+      const [name, config] = parsePluginConfig(requireValue(argv, i, arg))
+      pluginConfigs[name] = config
+      i += 1
+      continue
+    }
+    if (arg === '--json' && command === 'doctor') {
+      doctorJson = true
+      continue
+    }
+    if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`)
+    throw new Error(`Unexpected argument: ${arg}`)
+  }
+
+  const operationTimeoutMs =
+    operationTimeoutRaw === undefined ? undefined : parseOperationTimeout(operationTimeoutRaw)
   return {
-    allowEval: parseAllowEval(argv),
+    command,
+    doctorJson,
+    allowEval,
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
     ...(appRoot !== undefined ? { appRoot } : {}),
     ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
     pluginSpecs,
-    pluginConfigs: parsePluginConfigs(argv),
+    pluginConfigs,
   }
 }
 
+export function formatCliHelp(): string {
+  return [
+    'Usage: electron-stagewright [options]',
+    '       electron-stagewright doctor [--json] [options]',
+    '',
+    'Options:',
+    '  --allow-eval[=main,renderer|all]  Enable eval tools (default: disabled).',
+    '  --app-root <path>                 Confine launch and file paths to this root.',
+    '  --screenshot-dir <path>           Default screenshot output directory.',
+    '  --operation-timeout-ms <n>        Dispatch timeout in milliseconds (0 disables).',
+    '  --plugin <name|path>              Load a plugin; repeatable and comma-separated.',
+    '  --plugin-config <name>=<json>     Supply a plugin configuration.',
+    '  --help, -h                        Print this help and exit.',
+    '  --version, -V                     Print the package version and exit.',
+  ].join('\n')
+}
+
 async function main(): Promise<void> {
+  const options = parseCliArgs(process.argv.slice(2))
+  if (options.command === 'help') {
+    process.stdout.write(`${formatCliHelp()}\n`)
+    return
+  }
+  if (options.command === 'version') {
+    process.stdout.write(`${VERSION}\n`)
+    return
+  }
   const { allowEval, screenshotDir, appRoot, pluginSpecs, pluginConfigs, operationTimeoutMs } =
-    parseCliArgs(process.argv.slice(2))
+    options
+  if (options.command === 'doctor') {
+    const report = await runDoctorChecks({
+      ...(appRoot !== undefined ? { appRoot } : {}),
+      ...(screenshotDir !== undefined ? { screenshotDir } : {}),
+      allowEvalMain: allowEval.main,
+      allowEvalRenderer: allowEval.renderer,
+    })
+    if (options.doctorJson) {
+      process.stdout.write(`${JSON.stringify(report)}\n`)
+    } else {
+      for (const check of report.checks) {
+        const hint = check.hint === undefined ? '' : ` Hint: ${check.hint}`
+        process.stdout.write(`[${check.status}] ${check.id}: ${check.message}${hint}\n`)
+      }
+    }
+    if (!report.ok) process.exitCode = 1
+    return
+  }
   const logger = new StderrLogger({ level: 'info' })
 
   // Resolve plugins before assembling the server. An unresolvable plugin throws (a

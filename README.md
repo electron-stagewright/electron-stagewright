@@ -34,12 +34,12 @@ Microsoft's official Playwright MCP team [explicitly declined](https://github.co
 
 ## Quick start
 
-The default launch transport uses Playwright as an optional peer. For the published package, start
-the server with both packages available:
+The default launch transport uses Playwright and an Electron runtime. For the published package,
+start the server with all three packages available:
 
 ```bash
 claude mcp add electron-stagewright --scope user -- \
-  npx -y --package @electron-stagewright/core --package playwright electron-stagewright
+  npx -y --package @electron-stagewright/core --package playwright --package electron electron-stagewright
 ```
 
 For local development, build the checkout and point your MCP host at the built CLI:
@@ -65,6 +65,8 @@ Project `.mcp.json` shape:
         "@electron-stagewright/core",
         "--package",
         "playwright",
+        "--package",
+        "electron",
         "electron-stagewright"
       ]
     }
@@ -142,6 +144,7 @@ option; diagnostics go to stderr (stdout is reserved for the JSON-RPC protocol c
 | `--app-root <dir>`              | Confine host paths to within `<dir>`: `electron_launch`'s `main`, `executablePath`, and `cwd`, plus the files read by `electron_set_files` / `electron_drop_file`. Default unset (no confinement). Set it to your app/project root so a tool call cannot launch a binary from elsewhere on the host, nor read a file outside the project into the app under test.                                                                                                             |
 | `--screenshot-dir <dir>`        | Default directory `electron_screenshot` writes into when the call gives no explicit path. Default: the OS temp dir.                                                                                                                                                                                                                                                                                                                                                           |
 | `--operation-timeout-ms <n>`    | Per-dispatch backstop timeout (ms); a handler that never settles resolves as a retryable `OPERATION_TIMEOUT` instead of hanging the agent on a frozen app. Default 120000; `0` disables it.                                                                                                                                                                                                                                                                                   |
+| `doctor [--json]`               | Run preflight checks without starting the MCP server: Node, Playwright, Electron, Linux display, configured paths, and eval policy. JSON mode reserves stdout for a machine-readable report and exits non-zero when a required check fails.                                                                                                                                                                                                                                   |
 | `--plugin <name\|path>`         | Load a plugin by package name or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin @electron-stagewright/plugin-trace`.                                                                                                                                                                                                                                                                                                                            |
 | `--plugin-config <name>=<json>` | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name.                                                                                                                                                                                                                                                                                                                                                                                  |
 

@@ -30,7 +30,7 @@ Semver, with pre-1.0 support for the latest minor only (ADR-015). Packages versi
 
 **The `workspace:*` gotcha.** First-party packages depend on the core via `"@electron-stagewright/core":
 "workspace:*"`. On publish, pnpm rewrites `workspace:*` to the **exact core version in the local
-manifest**. For the first release, publish the whole set together. After that, if a plugin changes
+manifest**. When introducing a new shared core version, publish the whole set together. After that, if a plugin changes
 but core does not, confirm the local core version already exists on npm before publishing the plugin.
 If core changes too, publish core first (or in the same recursive publish) so the plugin never pins
 an unpublished core version.
