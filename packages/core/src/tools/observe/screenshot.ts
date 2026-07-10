@@ -17,7 +17,7 @@ import { z } from 'zod'
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import type { ScreenshotOptions, TransportSession, WindowRef } from '../../transports/index.js'
 import { refField, selectorField, sessionIdField } from '../schema.js'
-import { buildProbeBody, loadInjectedWalker } from '../snapshot/inject.js'
+import { loadInjectedWalker, runProbe } from '../snapshot/inject.js'
 import { buildMissError, refFreshnessError, refName, resolveTarget } from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 
@@ -58,12 +58,12 @@ async function elementClip(
   selector: string,
   bundle: string,
 ): Promise<ElementClipResult> {
-  const raw = await session.evaluate<{
+  const raw = await runProbe<{
     found?: boolean
     invalid_selector?: boolean
     error?: string
     bbox?: { x: number; y: number; w: number; h: number }
-  }>('renderer', buildProbeBody(bundle), { mode: 'element', selector })
+  }>(session, bundle, { mode: 'element', selector })
   if (raw?.invalid_selector === true) {
     return {
       kind: 'invalid-selector',

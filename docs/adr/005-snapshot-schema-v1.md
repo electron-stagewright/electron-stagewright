@@ -78,3 +78,23 @@ tool layer; the wire `Snapshot` shape and `schemaVersion: 1` are unchanged.
   array: apps push roots onto `window.__stagewright_closedShadowRoots` at
   `attachShadow` time (merged and deduplicated with the original
   `__stagewright_inspectShadow` callback; detached hosts are skipped).
+
+## Status Update — 2026-07-10: marker-first renderer installation
+
+The original version marker prevented the renderer from executing the walker
+bundle more than once per document, but the server still sent that bundle with
+every snapshot, find, read, probe, and live similar-ref walk. The injection
+protocol now has two paths:
+
+- The normal path sends a compact body that verifies the bundle content marker
+  and the expected `__stagewrightWalk` or `__stagewrightProbe` global, then
+  invokes that global. A miss returns a private `null` sentinel.
+- Only a miss sends the full bundle and installs it before invoking the same
+  global. This covers first use, renderer reload/navigation, a bundle upgrade,
+  a missing global despite a stale marker, and each separately selected window.
+
+The sentinel is consumed inside the server helper and never changes a tool's
+public response. Snapshot schema v1, ref reconciliation, DOM retagging, error
+mapping, and Injector's renderer-evaluation boundary are unchanged. The marker
+is memoized alongside the cached bundle on the server, while its validity is
+always checked against the actual renderer global, not session-local state.

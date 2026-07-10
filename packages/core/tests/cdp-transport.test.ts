@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { CDPTransport, type FetchJson } from '../src/transports/cdp.js'
 import type { ConsoleEntry } from '../src/transports/index.js'
+import { runWalk } from '../src/tools/snapshot/inject.js'
 import { FakeCdpServer, type Json } from './helpers/fake-cdp.js'
 
 const BROWSER_WS = 'ws://127.0.0.1:9222/devtools/browser/b1'
@@ -125,6 +126,38 @@ describe('CDPTransport.attach', () => {
 })
 
 describe('CDP evaluation (pending map + awaitPromise + domain cache)', () => {
+  it('sends the full walker source only for the first marker miss', async () => {
+    const { server, transport } = setup()
+    let evaluations = 0
+    server.respond('Runtime.evaluate', () => {
+      evaluations += 1
+      return {
+        result: { value: evaluations === 1 ? null : { schemaVersion: 1, entries: [], meta: {} } },
+      }
+    })
+    const session = await transport.attach({ port: 9222 })
+    const bundle = `globalThis.__stagewrightWalk = () => ({ schemaVersion: 1, entries: [], meta: {} });\n/*${'x'.repeat(30_000)}*/`
+
+    for (let i = 0; i < 30; i++) {
+      await runWalk(session, bundle, {})
+    }
+
+    const expressions = server
+      .sentTo('page/T1', 'Runtime.evaluate')
+      .map((frame) => String(frame.params?.['expression']))
+    expect(expressions).toHaveLength(31)
+    expect(expressions[0]).not.toContain(bundle)
+    expect(expressions[1]).toContain(bundle)
+    expect(expressions.slice(2).every((expression) => !expression.includes(bundle))).toBe(true)
+
+    const sentBytes = expressions.reduce(
+      (total, expression) => total + Buffer.byteLength(expression),
+      0,
+    )
+    const fullEveryTimeBytes = Buffer.byteLength(expressions[1] ?? '') * 30
+    expect(sentBytes).toBeLessThanOrEqual(fullEveryTimeBytes * 0.2)
+  })
+
   it('switches the active renderer target for following implicit calls', async () => {
     const { server, transport } = setup({
       targets: [

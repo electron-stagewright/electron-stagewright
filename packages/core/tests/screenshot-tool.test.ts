@@ -26,6 +26,20 @@ vi.mock('../src/tools/snapshot/inject.js', () => ({
   buildWalkBody: () => 'WALK',
   buildRetagBody: () => 'RETAG',
   loadInjectedWalker: () => 'BUNDLE',
+  runProbe: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'PROBE', arg),
+  runWalk: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'WALK', arg),
 }))
 
 /** A minimal valid PNG header (signature + IHDR width/height) for dimension parsing. */

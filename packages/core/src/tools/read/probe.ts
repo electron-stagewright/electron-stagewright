@@ -19,7 +19,7 @@
  */
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
-import { assertCapability } from '../../transports/index.js'
+import { assertCapability, type TransportSession } from '../../transports/index.js'
 import {
   buildMissError,
   handleTargetFailure,
@@ -29,10 +29,21 @@ import {
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
 
-/** A renderer-eval body plus the `arg` the transport wrapper passes to it. */
-export interface RendererCall {
-  readonly body: string
-  readonly arg: unknown
+/** A renderer operation plus the argument used for error reporting. */
+export type RendererCall =
+  | {
+      readonly body: string
+      readonly arg: unknown
+    }
+  | {
+      readonly run: (session: TransportSession) => Promise<ReadRaw>
+      readonly arg: unknown
+    }
+
+/** Run either a fixed renderer-eval body or a lazy injected-bundle operation. */
+async function runRendererCall(session: TransportSession, call: RendererCall): Promise<ReadRaw> {
+  if ('run' in call) return call.run(session)
+  return session.evaluate<ReadRaw>('renderer', call.body, call.arg)
 }
 
 /** The `{ found, …data }` shape every read body resolves to. */
@@ -100,8 +111,7 @@ export async function runTargetedRead(
   if (stale !== undefined) return stale
 
   try {
-    const { body, arg } = build(selector)
-    const raw = await managed.session.evaluate<ReadRaw>('renderer', body, arg)
+    const raw = await runRendererCall(managed.session, build(selector))
     if (isInvalidSelector(raw)) {
       return makeError('BAD_ARGUMENT', {
         ...meta,
@@ -143,7 +153,7 @@ export async function runRendererRead(
   const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
   assertCapability(managed.transport, 'supportsRendererEval')
   try {
-    const raw = await managed.session.evaluate<ReadRaw>('renderer', call.body, call.arg)
+    const raw = await runRendererCall(managed.session, call)
     if (isInvalidSelector(raw)) {
       return makeError('BAD_ARGUMENT', {
         ...meta,

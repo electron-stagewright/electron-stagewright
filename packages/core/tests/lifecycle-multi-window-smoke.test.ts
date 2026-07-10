@@ -80,6 +80,27 @@ describe('multi-window lifecycle smoke (real Electron)', () => {
       ).toBe(true)
 
       await expect(
+        dispatcher.dispatch('electron_click', { sessionId, selector: '#reload-preferences' }),
+      ).resolves.toMatchObject({ ok: true })
+      await expect(
+        dispatcher.dispatch('electron_expect_text', {
+          sessionId,
+          selector: '#reload-count',
+          equals: 'Reload 2',
+        }),
+      ).resolves.toMatchObject({ ok: true })
+      const reloadedSnapshot = (await dispatcher.dispatch('electron_snapshot', {
+        sessionId,
+      })) as SuccessResponse & {
+        readonly renderer_reloaded: boolean
+        readonly snapshot: { readonly entries: readonly { name: string }[] }
+      }
+      expect(reloadedSnapshot.renderer_reloaded).toBe(true)
+      expect(
+        reloadedSnapshot.snapshot.entries.some((entry) => entry.name === 'Preferences action'),
+      ).toBe(true)
+
+      await expect(
         dispatcher.dispatch('electron_click', { sessionId, selector: '#preferences-action' }),
       ).resolves.toMatchObject({ ok: true })
       await expect(

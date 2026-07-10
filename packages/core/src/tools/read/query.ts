@@ -10,7 +10,7 @@
 import { z } from 'zod'
 
 import { sessionIdField } from '../schema.js'
-import { buildProbeBody, loadInjectedWalker } from '../snapshot/inject.js'
+import { loadInjectedWalker, runProbe } from '../snapshot/inject.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { type ReadProbeDeps } from './state.js'
 import { type ReadRaw, runRendererRead } from './probe.js'
@@ -38,7 +38,10 @@ export function makeFocusedElementTool(deps: ReadProbeDeps = {}): AnyToolDefinit
       runRendererRead(
         ctx,
         args,
-        { body: buildProbeBody(loadBundle()), arg: { mode: 'focused' } },
+        {
+          arg: { mode: 'focused' },
+          run: (session) => runProbe(session, loadBundle(), { mode: 'focused' }),
+        },
         (raw: ReadRaw) =>
           raw.found === true
             ? {
@@ -83,8 +86,13 @@ export function makeElementsListTool(deps: ReadProbeDeps = {}): AnyToolDefinitio
         ctx,
         args,
         {
-          body: buildProbeBody(loadBundle()),
           arg: { mode: 'list', selector: args.selector, limit: args.limit ?? DEFAULT_LIST_LIMIT },
+          run: (session) =>
+            runProbe(session, loadBundle(), {
+              mode: 'list',
+              selector: args.selector,
+              limit: args.limit ?? DEFAULT_LIST_LIMIT,
+            }),
         },
         (raw: ReadRaw) => ({
           matches: raw['matches'] ?? [],

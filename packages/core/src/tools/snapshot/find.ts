@@ -17,7 +17,7 @@ import {
   findEntries,
 } from '../../snapshot/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
-import { buildWalkBody, loadInjectedWalker } from './inject.js'
+import { loadInjectedWalker, runWalk } from './inject.js'
 import { reconcileRetagAndStore } from './refs.js'
 
 const inputSchema = z
@@ -77,8 +77,7 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
     handler: async (args, ctx) => {
       const managed = ctx.sessions.resolve(args.sessionId)
       const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
-      const body = buildWalkBody(loadBundle())
-      const walked = await managed.session.evaluate<Snapshot>('renderer', body, {})
+      const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})
 
       // Same stabilise-the-walk step as electron_snapshot: reconcile refs against
       // the stored baseline, retag the DOM, and store, so find and snapshot agree

@@ -24,7 +24,7 @@ import { type ErrorResponse, type SimilarRef, makeError } from '../errors/envelo
 import { type ErrorCode, StagewrightError } from '../errors/registry.js'
 import type { Snapshot } from '../snapshot/index.js'
 import type { TransportSession } from '../transports/index.js'
-import { buildWalkBody, loadInjectedWalker } from './snapshot/inject.js'
+import { loadInjectedWalker, runWalk } from './snapshot/inject.js'
 import { reconcileRetagAndStore } from './snapshot/refs.js'
 import type { ToolContext } from './types.js'
 
@@ -193,8 +193,7 @@ async function gatherSimilarRefs(cx: {
 }): Promise<SimilarRef[]> {
   let source = cx.ctx.snapshots.get(cx.sessionId)
   try {
-    const body = buildWalkBody(loadInjectedWalker())
-    const walked = await cx.session.evaluate<Snapshot | undefined>('renderer', body, {})
+    const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {})
     if (walked !== undefined && Array.isArray(walked.entries)) {
       const stabilised = await reconcileRetagAndStore({
         session: cx.session,

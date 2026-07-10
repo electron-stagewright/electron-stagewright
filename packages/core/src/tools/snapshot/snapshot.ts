@@ -25,7 +25,7 @@ import {
   truncateDiffToBudget,
 } from '../../snapshot/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
-import { buildWalkBody, loadInjectedWalker } from './inject.js'
+import { loadInjectedWalker, runWalk } from './inject.js'
 import { reconcileRetagAndStore } from './refs.js'
 
 /** Default cap on entries returned, to keep a huge DOM from blowing the token budget. */
@@ -145,8 +145,7 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
       const maxEntries = args.maxEntries ?? DEFAULT_MAX_ENTRIES
 
-      const body = buildWalkBody(loadBundle())
-      const walked = await managed.session.evaluate<Snapshot>('renderer', body, {})
+      const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})
 
       // Stabilise the walk: reconcile refs against the stored baseline, retag the
       // renderer DOM, stamp the reload flag, and store the FULL unfiltered snapshot
