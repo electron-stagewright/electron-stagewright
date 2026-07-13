@@ -6,38 +6,20 @@
  * The real INSTRUMENT_BODY shim is covered by the gated real-Electron smoke.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-
-import {
-  createServer,
-  NOOP_LOGGER,
-  TransportRegistry,
-  type EvalPolicy,
-  type TransportSession,
-} from '@electron-stagewright/core'
-import { afterEach, describe, expect, it } from 'vitest'
-
+import type { EvalPolicy, StagewrightServer, TransportSession } from '@electron-stagewright/core'
 import {
   FakeSession,
   FakeTransport,
   type FakeEvaluate,
-} from '../../core/tests/helpers/fake-transport.js'
+  TestLifecycle,
+} from '@electron-stagewright/testkit'
+import { afterEach, describe, expect, it } from 'vitest'
+
 import packageJson from '../package.json' with { type: 'json' }
 import ipcPlugin from '../src/index.js'
 
-const created: string[] = []
 type AllowEvalOption = boolean | EvalPolicy
-
-/** electron_launch validates the main path exists on disk, so back it with a real temp file. */
-async function fixtureMain(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'sw-ipc-'))
-  created.push(dir)
-  const main = path.join(dir, 'main.js')
-  await writeFile(main, '// fake main entry\n', 'utf8')
-  return main
-}
+const lifecycle = new TestLifecycle()
 
 /** A JS stand-in for the main-process __swIpc state, driven by the same ops the real shim handles. */
 function fakeMain(): FakeEvaluate {
@@ -92,16 +74,6 @@ function fakeMain(): FakeEvaluate {
   }
 }
 
-function serverWith(opts: { allowEval: AllowEvalOption }) {
-  const transport = new FakeTransport({ session: new FakeSession({ evaluate: fakeMain() }) })
-  return createServer({
-    plugins: [ipcPlugin],
-    allowEval: opts.allowEval,
-    logger: NOOP_LOGGER,
-    transports: new TransportRegistry({ transports: [transport] }),
-  })
-}
-
 /**
  * A transport that hands out a fresh session on each launch (the shared FakeTransport returns the
  * same session every time), so ONE server can drive several concurrent sessions — the multi-session
@@ -121,72 +93,45 @@ class MultiSessionFakeTransport extends FakeTransport {
   }
 }
 
-function serverWithSessions(
-  sessions: readonly FakeSession[],
-  opts: { allowEval: AllowEvalOption } = { allowEval: true },
-) {
-  return createServer({
-    plugins: [ipcPlugin],
-    allowEval: opts.allowEval,
-    logger: NOOP_LOGGER,
-    transports: new TransportRegistry({ transports: [new MultiSessionFakeTransport(sessions)] }),
-  })
-}
-
 async function launch(
-  server: Awaited<ReturnType<typeof createServer>>,
+  server: StagewrightServer,
   opts: { allowMultiple?: boolean } = {},
 ): Promise<string> {
-  const main = await fixtureMain()
   // electron_launch refuses a second concurrent session unless allowMultiple is set — pass it when a
   // test drives more than one app on the same server.
-  const launched = (await server.dispatcher.dispatch('electron_launch', {
-    main,
-    ...(opts.allowMultiple === true ? { allowMultiple: true } : {}),
-  })) as {
-    ok: boolean
-    session_id?: string
-    _meta?: { session_id?: string }
-  }
-  const id = launched.session_id ?? launched._meta?.session_id
-  if (typeof id !== 'string') throw new Error('launch did not return a session id')
-  return id
+  return lifecycle.launch(server, opts)
 }
 
-const servers: Array<Awaited<ReturnType<typeof createServer>>> = []
-afterEach(async () => {
-  await Promise.all(servers.splice(0).map((s) => s.close().catch(() => undefined)))
-  await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
-})
+afterEach(() => lifecycle.cleanup())
 async function open(
   opts: { allowEval: AllowEvalOption } = { allowEval: true },
-): Promise<Awaited<ReturnType<typeof createServer>>> {
-  const server = await serverWith(opts)
-  servers.push(server)
+): Promise<StagewrightServer> {
+  const { server } = await lifecycle.createPluginTestServer(ipcPlugin, {
+    session: new FakeSession({ evaluate: fakeMain() }),
+    allowEval: opts.allowEval,
+  })
   return server
 }
 async function openMulti(
   sessions: readonly FakeSession[],
   opts: { allowEval: AllowEvalOption } = { allowEval: true },
-): Promise<Awaited<ReturnType<typeof createServer>>> {
-  const server = await serverWithSessions(sessions, opts)
-  servers.push(server)
+): Promise<StagewrightServer> {
+  const { server } = await lifecycle.createPluginTestServer(ipcPlugin, {
+    transport: new MultiSessionFakeTransport(sessions),
+    allowEval: opts.allowEval,
+  })
   return server
 }
 /** A single-session server whose ipc plugin is loaded with `ipcConfig` (e.g. `{ invokeAllow }`). */
 async function openWithConfig(
   ipcConfig: Record<string, unknown>,
   opts: { allowEval: AllowEvalOption } = { allowEval: true },
-): Promise<Awaited<ReturnType<typeof createServer>>> {
-  const transport = new FakeTransport({ session: new FakeSession({ evaluate: fakeMain() }) })
-  const server = await createServer({
-    plugins: [ipcPlugin],
+): Promise<StagewrightServer> {
+  const { server } = await lifecycle.createPluginTestServer(ipcPlugin, {
+    session: new FakeSession({ evaluate: fakeMain() }),
     allowEval: opts.allowEval,
-    logger: NOOP_LOGGER,
     pluginConfigs: { ipc: ipcConfig },
-    transports: new TransportRegistry({ transports: [transport] }),
   })
-  servers.push(server)
   return server
 }
 

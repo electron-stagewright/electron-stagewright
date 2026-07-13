@@ -87,6 +87,15 @@ async function main() {
     const packed = JSON.parse(stdout)
     const filename = packed[0]?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not report a tarball filename')
+    const publishedPaths = packed[0]?.files?.map((file) => file.path)
+    if (
+      !Array.isArray(publishedPaths) ||
+      publishedPaths.some((file) => file.includes('testkit') || file.includes('/tests/'))
+    ) {
+      throw new Error(
+        'published core tarball unexpectedly includes private testkit or test sources',
+      )
+    }
     const coreTarball = path.join(packDir, filename)
     const [playwrightVersion, electronVersion] = await Promise.all([
       packageVersion('playwright'),

@@ -7,20 +7,14 @@
  * smoke and the transport-session unit tests.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-
 import {
-  createServer,
-  NOOP_LOGGER,
-  TransportRegistry,
   type EvalPolicy,
+  type StagewrightServer,
   type TransportCapabilities,
 } from '@electron-stagewright/core'
+import { FakeSession, fullCapabilities, TestLifecycle } from '@electron-stagewright/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { FakeSession, FakeTransport } from '../../core/tests/helpers/fake-transport.js'
 import packageJson from '../package.json' with { type: 'json' }
 import storagePlugin from '../src/index.js'
 import {
@@ -30,35 +24,8 @@ import {
 } from '../src/web-storage.js'
 import { INDEXEDDB_BODY, type IdbRequest, type IdbResult } from '../src/indexeddb.js'
 
-const created: string[] = []
-
-/** electron_launch validates the main path exists on disk, so back it with a real temp file. */
-async function fixtureMain(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'sw-storage-'))
-  created.push(dir)
-  const main = path.join(dir, 'main.js')
-  await writeFile(main, '// fake main entry\n', 'utf8')
-  return main
-}
-
-const FULL_CAPS: TransportCapabilities = {
-  canLaunch: true,
-  canAttach: true,
-  canInject: true,
-  canIntercept: true,
-  canControlClock: true,
-  canAccessStorage: true,
-  canAccessNativeUI: true,
-  supportsMainEval: true,
-  supportsRendererEval: true,
-  supportsInteraction: true,
-}
-
-const servers: Array<Awaited<ReturnType<typeof createServer>>> = []
-afterEach(async () => {
-  await Promise.all(servers.splice(0).map((s) => s.close().catch(() => undefined)))
-  await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
-})
+const lifecycle = new TestLifecycle()
+afterEach(() => lifecycle.cleanup())
 
 async function open(
   session: FakeSession,
@@ -68,19 +35,16 @@ async function open(
     redactValues?: boolean
     allowEval?: boolean | EvalPolicy
   } = {},
-): Promise<Awaited<ReturnType<typeof createServer>>> {
-  const transport = new FakeTransport({ session, capabilities: opts.capabilities ?? FULL_CAPS })
+): Promise<StagewrightServer> {
   const storageConfig: { revealValues?: boolean; redactValues?: boolean } = {}
   if (opts.revealValues !== undefined) storageConfig.revealValues = opts.revealValues
   if (opts.redactValues !== undefined) storageConfig.redactValues = opts.redactValues
-  const server = await createServer({
-    plugins: [storagePlugin],
+  const { server } = await lifecycle.createPluginTestServer(storagePlugin, {
+    session,
+    capabilities: opts.capabilities ?? fullCapabilities(),
     ...(Object.keys(storageConfig).length > 0 ? { pluginConfigs: { storage: storageConfig } } : {}),
     ...(opts.allowEval !== undefined ? { allowEval: opts.allowEval } : {}),
-    logger: NOOP_LOGGER,
-    transports: new TransportRegistry({ transports: [transport] }),
   })
-  servers.push(server)
   return server
 }
 
@@ -147,16 +111,8 @@ function webStorageSession(seed?: {
   return { session, evalCalls }
 }
 
-async function launch(server: Awaited<ReturnType<typeof createServer>>): Promise<string> {
-  const main = await fixtureMain()
-  const launched = (await server.dispatcher.dispatch('electron_launch', { main })) as {
-    ok: boolean
-    session_id?: string
-    _meta?: { session_id?: string }
-  }
-  const id = launched.session_id ?? launched._meta?.session_id
-  if (typeof id !== 'string') throw new Error('launch did not return a session id')
-  return id
+async function launch(server: StagewrightServer): Promise<string> {
+  return lifecycle.launch(server)
 }
 
 describe('storage plugin', () => {
@@ -328,7 +284,7 @@ describe('storage plugin', () => {
 
   it('rejects a transport that cannot access storage with storage.UNSUPPORTED', async () => {
     const server = await open(new FakeSession(), {
-      capabilities: { ...FULL_CAPS, canAccessStorage: false },
+      capabilities: fullCapabilities({ canAccessStorage: false }),
     })
     const sessionId = await launch(server)
     for (const [tool, args] of [
@@ -535,7 +491,7 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
     const { session } = webStorageSession()
     const server = await open(session, {
       allowEval: RENDERER_ON,
-      capabilities: { ...FULL_CAPS, supportsRendererEval: false },
+      capabilities: fullCapabilities({ supportsRendererEval: false }),
     })
     const sessionId = await launch(server)
     expect(
@@ -931,7 +887,7 @@ describe('storage plugin — IndexedDB (renderer-eval gated)', () => {
     const { session } = idbSession()
     const server = await open(session, {
       allowEval: RENDERER_ON,
-      capabilities: { ...FULL_CAPS, supportsRendererEval: false },
+      capabilities: fullCapabilities({ supportsRendererEval: false }),
     })
     const sessionId = await launch(server)
     expect(

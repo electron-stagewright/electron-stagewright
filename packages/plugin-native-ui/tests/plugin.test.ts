@@ -6,48 +6,18 @@
  * is covered by the Playwright-session unit test and the gated real-Electron smoke.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-
-import {
-  createServer,
-  NOOP_LOGGER,
-  TransportRegistry,
-  type NativeMenu,
-  type NativeNotification,
-  type NativeTray,
-  type TransportCapabilities,
+import type {
+  NativeMenu,
+  NativeNotification,
+  NativeTray,
+  StagewrightServer,
+  TransportCapabilities,
 } from '@electron-stagewright/core'
+import { FakeSession, fullCapabilities, TestLifecycle } from '@electron-stagewright/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { FakeSession, FakeTransport } from '../../core/tests/helpers/fake-transport.js'
 import packageJson from '../package.json' with { type: 'json' }
 import nativeUiPlugin from '../src/index.js'
-
-const created: string[] = []
-
-/** electron_launch validates the main path exists on disk, so back it with a real temp file. */
-async function fixtureMain(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'sw-native-'))
-  created.push(dir)
-  const main = path.join(dir, 'main.js')
-  await writeFile(main, '// fake main entry\n', 'utf8')
-  return main
-}
-
-const FULL_CAPS: TransportCapabilities = {
-  canLaunch: true,
-  canAttach: true,
-  canInject: true,
-  canIntercept: true,
-  canControlClock: true,
-  canAccessStorage: true,
-  canAccessNativeUI: true,
-  supportsMainEval: true,
-  supportsRendererEval: true,
-  supportsInteraction: true,
-}
 
 /** A representative menu: a top-level View submenu with a checked checkbox + a disabled item + a role. */
 const SAMPLE_MENU: NativeMenu = {
@@ -80,36 +50,22 @@ const SAMPLE_MENU: NativeMenu = {
   ],
 }
 
-const servers: Array<Awaited<ReturnType<typeof createServer>>> = []
-afterEach(async () => {
-  await Promise.all(servers.splice(0).map((s) => s.close().catch(() => undefined)))
-  await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
-})
+const lifecycle = new TestLifecycle()
+afterEach(() => lifecycle.cleanup())
 
 async function open(
   session: FakeSession,
   opts: { capabilities?: TransportCapabilities } = {},
-): Promise<Awaited<ReturnType<typeof createServer>>> {
-  const transport = new FakeTransport({ session, capabilities: opts.capabilities ?? FULL_CAPS })
-  const server = await createServer({
-    plugins: [nativeUiPlugin],
-    logger: NOOP_LOGGER,
-    transports: new TransportRegistry({ transports: [transport] }),
+): Promise<StagewrightServer> {
+  const { server } = await lifecycle.createPluginTestServer(nativeUiPlugin, {
+    session,
+    capabilities: opts.capabilities ?? fullCapabilities(),
   })
-  servers.push(server)
   return server
 }
 
-async function launch(server: Awaited<ReturnType<typeof createServer>>): Promise<string> {
-  const main = await fixtureMain()
-  const launched = (await server.dispatcher.dispatch('electron_launch', { main })) as {
-    ok: boolean
-    session_id?: string
-    _meta?: { session_id?: string }
-  }
-  const id = launched.session_id ?? launched._meta?.session_id
-  if (typeof id !== 'string') throw new Error('launch did not return a session id')
-  return id
+async function launch(server: StagewrightServer): Promise<string> {
+  return lifecycle.launch(server)
 }
 
 describe('native-ui plugin', () => {
@@ -205,7 +161,7 @@ describe('native-ui plugin', () => {
 
   it('rejects a transport that cannot read the native UI with native.UNSUPPORTED', async () => {
     const server = await open(new FakeSession(), {
-      capabilities: { ...FULL_CAPS, canAccessNativeUI: false },
+      capabilities: fullCapabilities({ canAccessNativeUI: false }),
     })
     const sessionId = await launch(server)
     for (const [tool, args] of [

@@ -16,7 +16,8 @@
     "types": ["node"],
     "lib": ["ES2023", "DOM"],
     "paths": {
-      "@electron-stagewright/core": ["./packages/core/src/index.ts"]
+      "@electron-stagewright/core": ["./packages/core/src/index.ts"],
+      "@electron-stagewright/testkit": ["./packages/testkit/src/index.ts"]
     }
   },
   "include": ["packages/*/tests/**/*.ts", "packages/*/src/**/*.ts"],

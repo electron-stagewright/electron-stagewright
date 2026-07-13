@@ -7,90 +7,49 @@
  * `page.on('request'|…)` path is covered by the gated real-Electron smoke.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-
 import {
-  createServer,
-  NOOP_LOGGER,
-  TransportRegistry,
   type NetworkEvent,
+  type StagewrightServer,
   type TransportCapabilities,
   type TransportSession,
 } from '@electron-stagewright/core'
+import {
+  FakeSession,
+  FakeTransport,
+  fullCapabilities,
+  TestLifecycle,
+} from '@electron-stagewright/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { FakeSession, FakeTransport } from '../../core/tests/helpers/fake-transport.js'
 import packageJson from '../package.json' with { type: 'json' }
 import networkPlugin from '../src/index.js'
-
-const created: string[] = []
-
-/** electron_launch validates the main path exists on disk, so back it with a real temp file. */
-async function fixtureMain(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'sw-network-'))
-  created.push(dir)
-  const main = path.join(dir, 'main.js')
-  await writeFile(main, '// fake main entry\n', 'utf8')
-  return main
-}
 
 /** A NetworkEvent with sensible defaults; override the fields a test cares about. */
 function event(partial: Partial<NetworkEvent> & { url: string; method: string }): NetworkEvent {
   return { timestamp: 0, ...partial }
 }
 
-const FULL_CAPS: TransportCapabilities = {
-  canLaunch: true,
-  canAttach: true,
-  canInject: true,
-  canIntercept: true,
-  canControlClock: true,
-  canAccessStorage: true,
-  canAccessNativeUI: true,
-  supportsMainEval: true,
-  supportsRendererEval: true,
-  supportsInteraction: true,
-}
-
-const servers: Array<Awaited<ReturnType<typeof createServer>>> = []
-afterEach(async () => {
-  await Promise.all(servers.splice(0).map((s) => s.close().catch(() => undefined)))
-  await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
-})
+const lifecycle = new TestLifecycle()
+afterEach(() => lifecycle.cleanup())
 
 /** A single-session server over `session`, optionally with `network` plugin config / caps override. */
 async function open(
   session: FakeSession,
   opts: { networkConfig?: Record<string, unknown>; capabilities?: TransportCapabilities } = {},
-): Promise<Awaited<ReturnType<typeof createServer>>> {
-  const transport = new FakeTransport({
+): Promise<StagewrightServer> {
+  const { server } = await lifecycle.createPluginTestServer(networkPlugin, {
     session,
-    capabilities: opts.capabilities ?? FULL_CAPS,
-  })
-  const server = await createServer({
-    plugins: [networkPlugin],
-    logger: NOOP_LOGGER,
-    transports: new TransportRegistry({ transports: [transport] }),
+    capabilities: opts.capabilities ?? fullCapabilities(),
     ...(opts.networkConfig !== undefined ? { pluginConfigs: { network: opts.networkConfig } } : {}),
   })
-  servers.push(server)
   return server
 }
 
 async function launch(
-  server: Awaited<ReturnType<typeof createServer>>,
+  server: StagewrightServer,
   opts: { allowMultiple?: boolean } = {},
 ): Promise<string> {
-  const main = await fixtureMain()
-  const launched = (await server.dispatcher.dispatch('electron_launch', {
-    main,
-    ...(opts.allowMultiple === true ? { allowMultiple: true } : {}),
-  })) as { ok: boolean; session_id?: string; _meta?: { session_id?: string } }
-  const id = launched.session_id ?? launched._meta?.session_id
-  if (typeof id !== 'string') throw new Error('launch did not return a session id')
-  return id
+  return lifecycle.launch(server, opts)
 }
 
 describe('network plugin (in-process, simulated capture)', () => {
@@ -169,7 +128,7 @@ describe('network plugin (in-process, simulated capture)', () => {
 
   it('rejects a transport that cannot capture with network.UNSUPPORTED', async () => {
     const session = new FakeSession()
-    const server = await open(session, { capabilities: { ...FULL_CAPS, canIntercept: false } })
+    const server = await open(session, { capabilities: fullCapabilities({ canIntercept: false }) })
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('network_capture_start', { sessionId, urls: ['/api/'] }),
@@ -337,13 +296,9 @@ describe('network plugin (overflow + multi-session, simulated capture)', () => {
   it('captures two sessions independently and concurrently', async () => {
     const sessA = new FakeSession({ id: 'sess-a' })
     const sessB = new FakeSession({ id: 'sess-b' })
-    const transport = new MultiSessionFakeTransport([sessA, sessB])
-    const server = await createServer({
-      plugins: [networkPlugin],
-      logger: NOOP_LOGGER,
-      transports: new TransportRegistry({ transports: [transport] }),
+    const { server } = await lifecycle.createPluginTestServer(networkPlugin, {
+      transport: new MultiSessionFakeTransport([sessA, sessB]),
     })
-    servers.push(server)
 
     const idA = await launch(server, { allowMultiple: true })
     const idB = await launch(server, { allowMultiple: true })
@@ -466,7 +421,7 @@ describe('network plugin (stubbing, simulated)', () => {
 
   it('rejects stubbing on a transport that cannot intercept', async () => {
     const session = new FakeSession()
-    const server = await open(session, { capabilities: { ...FULL_CAPS, canIntercept: false } })
+    const server = await open(session, { capabilities: fullCapabilities({ canIntercept: false }) })
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('network_stub', { sessionId, urls: ['/api/'], status: 200 }),

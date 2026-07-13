@@ -18,9 +18,9 @@ The publishable packages are every `packages/*` that is **not** `private: true`:
 - `@electron-stagewright/plugin-storage` (cookies, web storage, and IndexedDB)
 - `@electron-stagewright/plugin-trace` (session trace, token budget, and replay)
 
-Everything under `examples/` and `packages/bench` is `private: true` and never publishes. Each
-publishable package sets `publishConfig.access: "public"` (scoped packages default to restricted)
-and an `engines.node` floor matching [ADR-002](../docs/adr/002-runtime-and-language.md).
+Everything under `examples/`, `packages/bench`, and `packages/testkit` is `private: true` and never
+publishes. Each publishable package sets `publishConfig.access: "public"` (scoped packages default to
+restricted) and an `engines.node` floor matching [ADR-002](../docs/adr/002-runtime-and-language.md).
 
 ## Versioning
 

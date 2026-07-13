@@ -1,6 +1,6 @@
 /**
  * Publish-readiness gate. Asserts every PUBLISHABLE workspace package has a manifest npm can
- * publish without surprises, and that INTERNAL packages (examples, bench) stay unpublishable. Runs
+ * publish without surprises, and that INTERNAL packages (examples and private helpers) stay unpublishable. Runs
  * in `pnpm test` as pure manifest inspection (no build needed), so a manifest that drifts out of
  * publish-correctness fails CI before it reaches a release rather than breaking the first
  * `npx @electron-stagewright/core`.
@@ -209,10 +209,10 @@ describe('publish-readiness — publishable package manifests', () => {
     ).toEqual([])
   })
 
-  it('internal packages (examples + bench) are private so a publish never pushes them', async () => {
+  it('internal packages are private so a publish never pushes them', async () => {
     const internal = [
       ...(await loadManifests('examples')),
-      ...(await loadManifests('packages')).filter((m) => m.relDir === 'packages/bench'),
+      ...(await loadManifests('packages')).filter((m) => isPrivate(m.pkg)),
     ]
     expect(internal.length, 'expected internal packages to exist').toBeGreaterThan(0)
 

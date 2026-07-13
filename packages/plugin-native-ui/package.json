@@ -48,6 +48,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron-stagewright/testkit": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "engines": {

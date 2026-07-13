@@ -9,10 +9,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { createServer, defineTool, makeSuccess } from '@electron-stagewright/core'
+import { connectMcpTestClient } from '@electron-stagewright/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
@@ -479,11 +478,9 @@ describe('trace plugin (over the MCP protocol)', () => {
   it('loads via the plugin model and captures a tools/call session', async () => {
     const file = await tmpFile()
     const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: 'trace-test', version: '0.0.0' })
+    const connection = await connectMcpTestClient(server)
+    const { client } = connection
     try {
-      await Promise.all([server.mcp.connect(serverTransport), client.connect(clientTransport)])
-
       const tools = (await client.listTools()).tools.map((t) => t.name)
       expect(tools).toEqual(expect.arrayContaining(['trace_start', 'trace_stop', 'trace_tokens']))
 
@@ -496,7 +493,7 @@ describe('trace plugin (over the MCP protocol)', () => {
       expect(calls).toHaveLength(1)
       expect(calls[0]?.tool).toBe('demo_echo')
     } finally {
-      await client.close().catch(() => undefined)
+      await connection.close()
       await server.close().catch(() => undefined)
     }
   })
