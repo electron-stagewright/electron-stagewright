@@ -32,7 +32,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 // sits next to dist/index.js.
 const CORE_ENTRY = fileURLToPath(import.meta.resolve('@electron-stagewright/core'))
 const CLI_PATH = path.join(path.dirname(CORE_ENTRY), 'cli.js')
-const APP_MAIN = path.join(HERE, '..', 'app', 'main.js')
+/** Absolute entry of the small, deterministic Electron fixture used by every comparison target. */
+export const BENCH_APP_MAIN = path.join(HERE, '..', 'app', 'main.js')
 
 /** The success/error envelope every tool returns, including the `_meta` cost block. */
 export interface Envelope {
@@ -50,11 +51,15 @@ export interface ScenarioMetrics {
   toolCalls: number
   /** Sum of `_meta.estimated_tokens` across those calls (the server's char/4 heuristic). */
   estimatedTokens: number
+  /** REAL BPE tokens in the JSON `{ name, arguments }` payloads the agent sent. */
+  requestTokens: number
   /**
    * Sum of REAL BPE tokens across those calls, counted client-side over each raw
    * response text with `gpt-tokenizer` (see `tokenizer.ts` for the proxy caveat).
    */
   measuredTokens: number
+  /** Unicode code points in the JSON `{ name, arguments }` payloads the agent sent. */
+  requestCharacters: number
   /** Unicode code points across raw tool-response text blocks. */
   responseCharacters: number
   /** Tool calls whose envelope was `ok: false`, including deliberate recovery probes. */
@@ -79,6 +84,8 @@ export interface ScenarioResult extends ScenarioMetrics {
 export interface Driver {
   readonly client: Client
   readonly sessionId: string
+  /** Target-specific session fields injected into every scenario call (empty for sessionless rivals). */
+  readonly sessionArgs: Readonly<Record<string, unknown>>
   readonly metrics: ScenarioMetrics
 }
 
@@ -93,6 +100,24 @@ export interface Scenario {
   readonly name: string
   readonly description: string
   readonly run: (driver: Driver) => Promise<void>
+}
+
+/** Reproducibility identity for a benchmark target. */
+export interface TargetProvenance {
+  /** Whether this target is run from this checkout or from an installed npm package. */
+  readonly source: 'workspace' | 'npm'
+  /** Package name and exact version behind the executable. */
+  readonly package: { readonly name: string; readonly version: string }
+  /** Immutable source revision when the registry published it from a Git commit. */
+  readonly sourceCommit?: string
+  /** Version the target announces during MCP initialization when it differs from its package version. */
+  readonly reportedServerVersion?: string
+  /** Registry location and content hashes for a pinned npm target. */
+  readonly dist?: {
+    readonly tarball: string
+    readonly sha256: string
+    readonly integrity: string
+  }
 }
 
 /**
@@ -112,6 +137,8 @@ export interface ServerTarget {
   readonly env?: Readonly<Record<string, string>>
   /** Whether this server can sample memory (gates the per-target memory column). */
   readonly supportsMemory?: boolean
+  /** Pinned source identity written to a comparison artifact. */
+  readonly provenance: TargetProvenance
 }
 
 /** Our own server as a benchmark target: the built cli.js, started with `--allow-eval` for memory. */
@@ -120,6 +147,21 @@ export const STAGEWRIGHT_TARGET: ServerTarget = {
   command: 'node',
   args: [CLI_PATH, '--allow-eval'],
   supportsMemory: true,
+  provenance: {
+    source: 'workspace',
+    package: { name: '@electron-stagewright/core', version: '0.2.0' },
+  },
+}
+
+/**
+ * Fair cross-server target: no eval capability and no memory instrumentation. A comparison must not
+ * grant Stagewright a tool or process privilege that the competing server cannot use.
+ */
+export const STAGEWRIGHT_COMPARISON_TARGET: ServerTarget = {
+  name: STAGEWRIGHT_TARGET.name,
+  command: STAGEWRIGHT_TARGET.command,
+  args: [CLI_PATH],
+  provenance: STAGEWRIGHT_TARGET.provenance,
 }
 
 /** Build a Stagewright target whose core tools are limited by one explicit profile. */
@@ -128,6 +170,7 @@ export function stagewrightProfileTarget(profile: ToolProfile): ServerTarget {
     name: `stagewright-${profile}`,
     command: 'node',
     args: [CLI_PATH, '--tool-profile', profile],
+    provenance: STAGEWRIGHT_TARGET.provenance,
   }
 }
 
@@ -139,6 +182,11 @@ export function stagewrightProfileTarget(profile: ToolProfile): ServerTarget {
 export interface ComparableTask {
   readonly name: string
   readonly description: string
+  /** Exact visible-text condition every cross-server target must prove after performing the task. */
+  readonly oracle?: {
+    readonly selector: string
+    readonly expectedText: string
+  }
 }
 
 /**
@@ -152,6 +200,11 @@ export interface TaskAdapter {
   readonly task: ComparableTask
   /** Launch the app under this server and return the session id used by later calls. */
   launch(client: Client): Promise<string>
+  /**
+   * Fields added to every task call after launch. Stagewright uses `{ sessionId }`; servers that keep
+   * process state internally return `{}` so their wire payload is not distorted by our harness.
+   */
+  sessionArgs?(sessionId: string): Readonly<Record<string, unknown>>
   /** Run the task's steps via this server's tools, counting them into the driver's metrics. */
   run(driver: Driver): Promise<void>
   /** End the session (best-effort; the runner also closes the client). */
@@ -172,6 +225,8 @@ export interface ComparisonResult extends ScenarioMetrics {
   readonly manifest: {
     readonly characters: number
     readonly bpe: number
+    /** Cold spawn + initialize + `tools/list` wall-clock time, observed locally. */
+    readonly coldStartMs: number
   } | null
   readonly ok: boolean
   readonly error?: string
@@ -193,7 +248,7 @@ function parseEnvelope(name: string, content: unknown): Envelope {
 }
 
 /** A tool call that does NOT touch scenario metrics — used for launch/stop/memory instrumentation. */
-async function rawCall(
+export async function rawCall(
   client: Client,
   name: string,
   args: Record<string, unknown>,
@@ -214,10 +269,12 @@ export async function call(
   args: Record<string, unknown> = {},
   options: CallOptions = {},
 ): Promise<Envelope> {
+  const callArgs = { ...driver.sessionArgs, ...args }
+  const requestText = JSON.stringify({ name, arguments: callArgs })
   const start = performance.now()
   const result = await driver.client.callTool({
     name,
-    arguments: { sessionId: driver.sessionId, ...args },
+    arguments: callArgs,
   })
   const elapsed = performance.now() - start
   const text = firstTextBlock(name, result.content)
@@ -225,7 +282,9 @@ export async function call(
   driver.metrics.toolCalls += 1
   driver.metrics.latencyMs += elapsed
   driver.metrics.estimatedTokens += env._meta?.estimated_tokens ?? 0
+  driver.metrics.requestTokens += countRealTokens(requestText)
   driver.metrics.measuredTokens += countRealTokens(text)
+  driver.metrics.requestCharacters += Array.from(requestText).length
   driver.metrics.responseCharacters += Array.from(text).length
   if (!env.ok) driver.metrics.failedCalls += 1
   if (options.retry === true) driver.metrics.retries += 1
@@ -263,7 +322,9 @@ export async function runScenario(
   const metrics: ScenarioMetrics = {
     toolCalls: 0,
     estimatedTokens: 0,
+    requestTokens: 0,
     measuredTokens: 0,
+    requestCharacters: 0,
     responseCharacters: 0,
     failedCalls: 0,
     retries: 0,
@@ -280,10 +341,10 @@ export async function runScenario(
   let sessionId: string | undefined
   let memoryRssBytes: number | null = null
   try {
-    const launched = await rawCall(client, 'electron_launch', { main: APP_MAIN })
+    const launched = await rawCall(client, 'electron_launch', { main: BENCH_APP_MAIN })
     if (!launched.ok) throw new Error(`launch failed: ${launched.code ?? 'UNKNOWN'}`)
     sessionId = launched['session_id'] as string
-    await scenario.run({ client, sessionId, metrics })
+    await scenario.run({ client, sessionId, sessionArgs: { sessionId }, metrics })
     memoryRssBytes = await sampleMemory(client, sessionId)
     return {
       name: scenario.name,
@@ -338,7 +399,9 @@ export async function runAdapter(
   const metrics: ScenarioMetrics = {
     toolCalls: 0,
     estimatedTokens: 0,
+    requestTokens: 0,
     measuredTokens: 0,
+    requestCharacters: 0,
     responseCharacters: 0,
     failedCalls: 0,
     retries: 0,
@@ -351,15 +414,22 @@ export async function runAdapter(
   let memoryRssBytes: number | null = null
   let manifest: ComparisonResult['manifest'] = null
   try {
+    const coldStart = performance.now()
     client = await connect(adapter.target)
     const { tools } = await client.listTools()
     const manifestPayload = JSON.stringify({ tools })
     manifest = {
       characters: Array.from(manifestPayload).length,
       bpe: countRealTokens(manifestPayload),
+      coldStartMs: performance.now() - coldStart,
     }
     sessionId = await adapter.launch(client)
-    await adapter.run({ client, sessionId, metrics })
+    await adapter.run({
+      client,
+      sessionId,
+      sessionArgs: adapter.sessionArgs?.(sessionId) ?? { sessionId },
+      metrics,
+    })
     if (adapter.sampleMemory !== undefined) {
       memoryRssBytes = await adapter.sampleMemory(client, sessionId)
     }
@@ -403,10 +473,11 @@ export function stagewrightAdapter(
     target,
     task,
     launch: async (client) => {
-      const env = await rawCall(client, 'electron_launch', { main: APP_MAIN })
+      const env = await rawCall(client, 'electron_launch', { main: BENCH_APP_MAIN })
       if (!env.ok) throw new Error(`launch failed: ${env.code ?? 'UNKNOWN'}`)
       return env['session_id'] as string
     },
+    sessionArgs: (sessionId) => ({ sessionId }),
     run,
     stop: async (client, sessionId) => {
       await rawCall(client, 'electron_stop', { sessionId }).catch(() => undefined)

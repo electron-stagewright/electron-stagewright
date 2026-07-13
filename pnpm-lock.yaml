@@ -198,6 +198,9 @@ importers:
         specifier: ^3.4.0
         version: 3.4.0
     devDependencies:
+      electron-driver:
+        specifier: 0.3.1
+        version: 0.3.1(zod@4.4.3)
       tsx:
         specifier: ^4.22.3
         version: 4.22.3
@@ -1185,6 +1188,11 @@ packages:
 
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
+
+  electron-driver@0.3.1:
+    resolution: {integrity: sha512-X37McAhW+b73oiKPpKpnDPJGoB+Pe/+ySQ25KUs4sHN0Y6cId5LLCqRBBgRHF1A3BSI/nMIs8cZW3TrFMgB9tw==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   electron@42.3.0:
     resolution: {integrity: sha512-9ZiLdRXk+WDxW1OgIUz8J2rIQ5TYU9o629gCOjU48Q3dQiOmym7osWsH5Ubs/Jh4uuFLn6m6SBD2rmRXLAPz9g==}
@@ -2867,6 +2875,15 @@ snapshots:
       gopd: 1.2.0
 
   ee-first@1.1.1: {}
+
+  electron-driver@0.3.1(zod@4.4.3):
+    dependencies:
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      playwright: 1.60.0
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - supports-color
+      - zod
 
   electron@42.3.0:
     dependencies:
