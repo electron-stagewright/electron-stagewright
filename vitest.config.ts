@@ -22,6 +22,10 @@ export default defineConfig({
         // Executable doc/site generators (run as scripts, not exercised by the unit suite).
         'packages/core/src/manifest/gen-tool-reference.ts',
         'packages/core/src/snapshot/renderer-entry.ts',
+        // Executable benchmark report drivers are validated through their commands and real
+        // Electron runs; their process-level entrypoints are not unit-test targets.
+        'packages/bench/src/run-manifest.ts',
+        'packages/bench/src/run-profile-bench.ts',
       ],
       // Global floors, set a couple of points under the current numbers (stmts 87 / branch 80 /
       // funcs 87 / lines 89 as of this change) so an honest addition does not trip them but a real

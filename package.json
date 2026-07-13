@@ -20,7 +20,7 @@
   },
   "packageManager": "pnpm@11.3.0",
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "pnpm -r --sort build",
     "start": "node packages/core/dist/cli.js",
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck && pnpm typecheck:tests",
