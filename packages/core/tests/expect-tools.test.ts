@@ -58,6 +58,7 @@ const NO_RENDERER_EVAL_CAPS: TransportCapabilities = {
   supportsMainEval: true,
   supportsRendererEval: false,
   supportsInteraction: true,
+  supportsSurfaceTargeting: true,
 }
 
 function setup(

@@ -1,9 +1,9 @@
 /**
- * `electron_snapshot` — the agent's structured view of the current renderer.
+ * `electron_snapshot` — the agent's structured view of the selected renderer surface.
  *
  * Injects the bundled accessibility walker into the renderer, runs it, and
  * returns either a full snapshot or — with `{ since: 'last' }` — only the delta
- * since the previous snapshot for this session. Implements the agent-native UX
+ * since the previous snapshot for this surface. Implements the agent-native UX
  * principles: `recently_changed` flags (P6), `since:'last'` as a parameter
  * rather than a separate tool (P7), and hot-reload awareness (P10). Interactive
  * elements are tagged `data-sw-ref` during the walk so a `ref` resolves to a
@@ -82,7 +82,7 @@ const inputSchema = z.object({
 })
 
 const DESCRIPTION = [
-  'Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name,',
+  'Capture the selected renderer surface accessibility tree: interactive elements (and landmarks) with role, name,',
   'state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous',
   'snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap.',
   'format:"text" returns a compact one-line-per-entry rendering instead of JSON (5-10x fewer',
@@ -94,7 +94,7 @@ const DESCRIPTION = [
   'Closed shadow roots are opaque unless the app opts in: push each root onto',
   'window.__stagewright_closedShadowRoots at attachShadow time (or implement',
   'window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true.',
-  'Returns: { ok, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?,',
+  'Returns: { ok, surface_id, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?,',
   'diff_format?, renderer_reloaded, truncated }.',
   'Errors: NOT_RUNNING (no session — call electron_launch first; not retryable),',
   'BAD_ARGUMENT (multiple sessions live — pass sessionId).',
@@ -144,6 +144,7 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       const managed = ctx.sessions.resolve(args.sessionId)
       const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
       const maxEntries = args.maxEntries ?? DEFAULT_MAX_ENTRIES
+      const surface = await managed.session.activeSurface()
 
       const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})
 
@@ -152,11 +153,12 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       // as the diff baseline. Filters (interactiveOnly / maxEntries) apply only to
       // what is RETURNED — never to the stored baseline — so a later since:'last'
       // diff stays accurate even if this call (or the previous one) filtered.
-      const prev = ctx.snapshots.get(managed.id)
+      const prev = ctx.snapshots.get(managed.id, surface.id)
       const { curr, comparable, reloaded } = await reconcileRetagAndStore({
         session: managed.session,
         store: ctx.snapshots,
         sessionId: managed.id,
+        surfaceId: surface.id,
         prev,
         walked,
       })
@@ -179,6 +181,7 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
           return makeSuccess(
             {
               kind: 'diff',
+              surface_id: surface.id,
               format: 'text',
               diff_text: renderDiffText(bounded.diff),
               renderer_reloaded: false,
@@ -196,6 +199,7 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
         return makeSuccess(
           {
             kind: 'diff',
+            surface_id: surface.id,
             diff_format: format,
             diff: bounded.diff,
             renderer_reloaded: false,
@@ -223,6 +227,7 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
         return makeSuccess(
           {
             kind: 'full',
+            surface_id: surface.id,
             format: 'text',
             snapshot_text: renderSnapshotText(snapshot),
             entry_count: snapshot.entries.length,
@@ -232,7 +237,10 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
           meta,
         )
       }
-      return makeSuccess({ kind: 'full', snapshot, renderer_reloaded: reloaded, truncated }, meta)
+      return makeSuccess(
+        { kind: 'full', surface_id: surface.id, snapshot, renderer_reloaded: reloaded, truncated },
+        meta,
+      )
     },
   })
 }

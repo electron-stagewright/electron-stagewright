@@ -22,6 +22,7 @@ function caps(partial: Partial<TransportCapabilities>): TransportCapabilities {
     supportsMainEval: false,
     supportsRendererEval: false,
     supportsInteraction: false,
+    supportsSurfaceTargeting: false,
     ...partial,
   }
 }

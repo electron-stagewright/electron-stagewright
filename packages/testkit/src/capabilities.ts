@@ -12,6 +12,7 @@ export const FULL_CAPABILITIES = Object.freeze({
   supportsMainEval: true,
   supportsRendererEval: true,
   supportsInteraction: true,
+  supportsSurfaceTargeting: true,
 } satisfies TransportCapabilities)
 
 /** Return a mutable capability matrix without sharing test state between callers. */

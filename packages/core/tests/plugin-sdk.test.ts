@@ -25,6 +25,7 @@ const CAPABILITIES: TransportCapabilities = {
   supportsMainEval: true,
   supportsRendererEval: true,
   supportsInteraction: true,
+  supportsSurfaceTargeting: true,
 }
 
 describe('plugin SDK config helpers', () => {

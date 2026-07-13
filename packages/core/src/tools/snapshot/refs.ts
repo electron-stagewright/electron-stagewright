@@ -60,10 +60,11 @@ export async function reconcileRetagAndStore(args: {
   readonly session: TransportSession
   readonly store: SnapshotStore
   readonly sessionId: string
+  readonly surfaceId: string
   readonly prev: Snapshot | undefined
   readonly walked: Snapshot
 }): Promise<{ readonly curr: Snapshot; readonly comparable: boolean; readonly reloaded: boolean }> {
-  const { session, store, sessionId, prev, walked } = args
+  const { session, store, sessionId, surfaceId, prev, walked } = args
   const reloaded = prev !== undefined && detectRendererReload(prev, walked)
   const comparable = prev !== undefined && !reloaded
 
@@ -78,6 +79,6 @@ export async function reconcileRetagAndStore(args: {
     await session.evaluate<number>('renderer', buildRetagBody(), retags)
   }
   const curr = withReloadFlag(reconciledSnapshot, reloaded)
-  store.set(sessionId, curr)
+  store.set(sessionId, curr, surfaceId)
   return { curr, comparable, reloaded }
 }

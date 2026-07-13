@@ -78,6 +78,7 @@ import type {
   StopResult,
   StorageCookie,
   StorageSnapshot,
+  SurfaceDescriptor,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -321,6 +322,18 @@ class InjectorSession implements TransportSession {
     return Promise.reject(unsupported('activateWindow', 'supportsRendererEval'))
   }
 
+  surfacesList(): Promise<readonly SurfaceDescriptor[]> {
+    return Promise.reject(unsupported('surfacesList', 'supportsSurfaceTargeting'))
+  }
+
+  activeSurface(): Promise<SurfaceDescriptor> {
+    return Promise.reject(unsupported('activeSurface', 'supportsSurfaceTargeting'))
+  }
+
+  activateSurface(_surfaceId: string): Promise<SurfaceDescriptor> {
+    return Promise.reject(unsupported('activateSurface', 'supportsSurfaceTargeting'))
+  }
+
   screenshot(): Promise<Buffer> {
     return Promise.reject(notImplemented('screenshot'))
   }
@@ -557,6 +570,7 @@ export class InjectorTransport implements ITransport {
     supportsMainEval: true,
     supportsRendererEval: false,
     supportsInteraction: false,
+    supportsSurfaceTargeting: false,
   }
 
   readonly #wsFactory: WebSocketFactory | undefined

@@ -1,5 +1,5 @@
 /**
- * `electron_find` — query the renderer accessibility tree by role / name / state
+ * `electron_find` — query the selected renderer surface accessibility tree by role / name / state
  * instead of CSS selectors (agent-native UX Principle 9). Walks the renderer,
  * filters with the shared `findEntries`, and returns the matching elements'
  * refs, roles, names, and bounding boxes.
@@ -54,7 +54,7 @@ const DESCRIPTION = [
   'Find elements in the renderer by accessibility role + name + state — no CSS selectors.',
   'Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps',
   'the matches returned (count still reports the true total). Returns:',
-  '{ ok, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be',
+  '{ ok, surface_id, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be',
   'null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch',
   'first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).',
 ].join(' ')
@@ -77,16 +77,18 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
     handler: async (args, ctx) => {
       const managed = ctx.sessions.resolve(args.sessionId)
       const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
+      const surface = await managed.session.activeSurface()
       const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})
 
       // Same stabilise-the-walk step as electron_snapshot: reconcile refs against
       // the stored baseline, retag the DOM, and store, so find and snapshot agree
       // on ref numbers and the DOM tags stay consistent.
-      const prev = ctx.snapshots.get(managed.id)
+      const prev = ctx.snapshots.get(managed.id, surface.id)
       const { curr: snapshot, reloaded } = await reconcileRetagAndStore({
         session: managed.session,
         store: ctx.snapshots,
         sessionId: managed.id,
+        surfaceId: surface.id,
         prev,
         walked,
       })
@@ -109,6 +111,7 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
       }))
       return makeSuccess(
         {
+          surface_id: surface.id,
           matches,
           // `count` is the TRUE total so an agent can tell a capped result from a small one.
           count: all.length,

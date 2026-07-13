@@ -17,7 +17,7 @@ import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { type Snapshot, walkAccessibilityTree } from '../src/snapshot/index.js'
-import type { WindowDescriptor } from '../src/transports/index.js'
+import type { SurfaceDescriptor, WindowDescriptor } from '../src/transports/index.js'
 import { OBSERVE_TOOLS } from '../src/tools/observe/index.js'
 import { FakeSession, FakeTransport, type FakeEvaluate } from './helpers/fake-transport.js'
 
@@ -94,6 +94,7 @@ function setup(
     readonly evaluate?: FakeEvaluate
     readonly screenshotResult?: Buffer
     readonly windows?: readonly WindowDescriptor[]
+    readonly surfaces?: readonly SurfaceDescriptor[]
   } = {},
 ) {
   const sessions = new SessionManager()
@@ -102,6 +103,7 @@ function setup(
     ...(opts.evaluate !== undefined ? { evaluate: opts.evaluate } : {}),
     ...(opts.screenshotResult !== undefined ? { screenshotResult: opts.screenshotResult } : {}),
     windows: opts.windows ?? [ACTIVE_WINDOW],
+    ...(opts.surfaces !== undefined ? { surfaces: opts.surfaces } : {}),
   })
   const snapshots = new SnapshotStore()
   sessions.register(new FakeTransport(), session)
@@ -111,6 +113,34 @@ function setup(
 }
 
 describe('electron_screenshot', () => {
+  it('rejects element crops from a selected iframe instead of applying frame-local coordinates to its host window', async () => {
+    const { dispatcher, session } = setup({
+      surfaces: [
+        {
+          id: 'root',
+          kind: 'window',
+          active: true,
+          capabilities: { snapshot: true, interaction: true, rendererEval: true },
+        },
+        {
+          id: 'frame',
+          kind: 'frame',
+          parentId: 'root',
+          active: false,
+          capabilities: { snapshot: true, interaction: true, rendererEval: true },
+        },
+      ],
+    })
+    await session.activateSurface('frame')
+
+    const result = (await dispatcher.dispatch('electron_screenshot', {
+      selector: '#inside-frame',
+    })) as ErrorResponse
+
+    expect(result).toMatchObject({ ok: false, code: 'SURFACE_UNSUPPORTED' })
+    expect(session.screenshotCalls).toEqual([])
+  })
+
   it('captures a window to the given absolute path and reports path/bytes/format/dimensions', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sw-shot-'))
     created.push(dir)

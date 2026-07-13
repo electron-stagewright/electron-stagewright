@@ -179,6 +179,27 @@ export function refName(
 }
 
 /**
+ * Best-effort name hint for a ref on the currently selected renderer surface.
+ *
+ * Failure diagnosis must never hide the original operation error merely because
+ * a renderer closed while we were collecting an optional recovery hint.
+ */
+export async function refNameForActiveSurface(
+  ctx: ToolContext,
+  session: TransportSession,
+  sessionId: string,
+  ref: number | undefined,
+): Promise<string | undefined> {
+  if (ref === undefined) return undefined
+  try {
+    const surface = await session.activeSurface()
+    return refName(ctx.snapshots.get(sessionId, surface.id), ref)
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Source `similar_refs` for a "can't find it" failure. Re-walks the live DOM so
  * the candidates reflect the current screen (a hot-reload makes the stored
  * baseline misleading) and reconciles + retags + stores the result so the refs it
@@ -191,7 +212,8 @@ async function gatherSimilarRefs(cx: {
   readonly sessionId: string
   readonly hint?: string | undefined
 }): Promise<SimilarRef[]> {
-  let source = cx.ctx.snapshots.get(cx.sessionId)
+  const surface = await cx.session.activeSurface()
+  let source = cx.ctx.snapshots.get(cx.sessionId, surface.id)
   try {
     const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {})
     if (walked !== undefined && Array.isArray(walked.entries)) {
@@ -199,6 +221,7 @@ async function gatherSimilarRefs(cx: {
         session: cx.session,
         store: cx.ctx.snapshots,
         sessionId: cx.sessionId,
+        surfaceId: surface.id,
         prev: source,
         walked,
       })
@@ -298,7 +321,8 @@ export async function refFreshnessError(
   ref: number | undefined,
 ): Promise<ErrorResponse | undefined> {
   if (ref === undefined) return undefined
-  const stored = ctx.snapshots.get(meta.session_id)
+  const surface = await session.activeSurface()
+  const stored = ctx.snapshots.get(meta.session_id, surface.id)
   if (stored === undefined || snapshotHasRef(stored, ref)) return undefined
   return buildMissError('REF_NOT_FOUND', {
     ctx,

@@ -195,6 +195,7 @@ async function pollRoleCount(
   const managed = ctx.sessions.resolve(sessionId)
   const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
   assertCapability(managed.transport, 'supportsRendererEval')
+  const surface = await managed.session.activeSurface()
   const bundle = loadBundle()
   const startedAt = Date.now()
   for (;;) {
@@ -210,7 +211,8 @@ async function pollRoleCount(
         session: managed.session,
         store: ctx.snapshots,
         sessionId: managed.id,
-        prev: ctx.snapshots.get(managed.id),
+        surfaceId: surface.id,
+        prev: ctx.snapshots.get(managed.id, surface.id),
         walked,
       })
       actual = findEntries(curr, query).length

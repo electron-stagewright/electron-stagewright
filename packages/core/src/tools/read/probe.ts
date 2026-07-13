@@ -24,7 +24,7 @@ import {
   buildMissError,
   handleTargetFailure,
   refFreshnessError,
-  refName,
+  refNameForActiveSurface,
   resolveTarget,
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
@@ -124,7 +124,7 @@ export async function runTargetedRead(
         session: managed.session,
         meta,
         message: `No element matched ${selector}.`,
-        nameHint: refName(ctx.snapshots.get(managed.id), args.ref),
+        nameHint: await refNameForActiveSurface(ctx, managed.session, managed.id, args.ref),
       })
     }
     return makeSuccess({ session_id: managed.id, ...toPayload(raw) }, meta)
@@ -133,7 +133,7 @@ export async function runTargetedRead(
       ctx,
       session: managed.session,
       meta,
-      nameHint: refName(ctx.snapshots.get(managed.id), args.ref),
+      nameHint: await refNameForActiveSurface(ctx, managed.session, managed.id, args.ref),
     })
   }
 }

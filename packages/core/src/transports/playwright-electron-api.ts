@@ -83,6 +83,32 @@ export interface PWPage {
   readonly clock: PWClock
   /** The page's browser context (the storage seam rides this). */
   context(): PWContext
+  /** The page's main document frame plus all nested child frames. */
+  mainFrame?(): PWFrame
+}
+
+/** The action/evaluation subset Playwright exposes on an iframe. */
+export interface PWFrame {
+  url(): string
+  parentFrame(): PWFrame | null
+  childFrames(): readonly PWFrame[]
+  isDetached(): boolean
+  evaluate<T = unknown>(fn: (payload: EvalPayload) => unknown, arg?: EvalPayload): Promise<T>
+  focus(selector: string, opts?: { timeout?: number }): Promise<void>
+  click(selector: string, opts?: PWClickOptions): Promise<void>
+  fill(selector: string, value: string, opts?: PWActionOptions): Promise<void>
+  hover(selector: string, opts?: PWActionOptions): Promise<void>
+  press(selector: string, key: string, opts?: PWActionOptions): Promise<void>
+  type(selector: string, text: string, opts?: PWActionOptions): Promise<void>
+  selectOption(
+    selector: string,
+    values: readonly string[],
+    opts?: PWActionOptions,
+  ): Promise<readonly string[]>
+  check(selector: string, opts?: PWActionOptions): Promise<void>
+  uncheck(selector: string, opts?: PWActionOptions): Promise<void>
+  setInputFiles(selector: string, files: readonly string[], opts?: PWActionOptions): Promise<void>
+  dragAndDrop(source: string, target: string, opts?: PWActionOptions): Promise<void>
 }
 
 /** One cookie as Playwright's BrowserContext represents it. `expires` is epoch seconds. */
@@ -113,6 +139,14 @@ export interface PWContext {
   addCookies(cookies: readonly PWCookie[]): Promise<void>
   clearCookies(options?: { name?: string; domain?: string; path?: string }): Promise<void>
   storageState(): Promise<PWStorageState>
+  /** Open a short-lived CDP session scoped to one page. */
+  newCDPSession?(page: PWPage): Promise<PWCdpSession>
+}
+
+/** Minimal Chromium DevTools session used only to identify a Playwright page's target id. */
+export interface PWCdpSession {
+  send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>
+  detach(): Promise<void>
 }
 
 /**

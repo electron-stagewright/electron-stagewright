@@ -9,6 +9,7 @@
  */
 
 import { matchesNetworkFilter } from '../../core/src/transports/network-filter.js'
+import { StagewrightError } from '../../core/src/errors/registry.js'
 import type {
   ClickOptions,
   ClockInstallOptions,
@@ -39,6 +40,7 @@ import type {
   StopResult,
   StorageCookie,
   StorageSnapshot,
+  SurfaceDescriptor,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -62,6 +64,7 @@ export interface FakeSessionOptions {
   readonly transport?: TransportId
   readonly evaluate?: FakeEvaluate
   readonly windows?: readonly WindowDescriptor[]
+  readonly surfaces?: readonly SurfaceDescriptor[]
   /** When set, `windowsList` rejects with this error (to exercise post-register cleanup). */
   readonly windowsError?: Error
   /** When set, `detach` rejects with this error instead of releasing the fake session. */
@@ -98,9 +101,11 @@ export class FakeSession implements TransportSession {
   disposeCount = 0
   readonly #evaluate: FakeEvaluate
   readonly #windows: WindowDescriptor[]
+  readonly #surfaces: SurfaceDescriptor[]
   readonly #windowsError?: Error
   readonly #detachError?: Error
   #activeWindowId: string | undefined
+  #activeSurfaceId: string | undefined
   readonly #interactionError?: Error
   readonly #consoleEntries: readonly ConsoleEntry[]
   readonly #consoleOverflowed: number
@@ -132,6 +137,18 @@ export class FakeSession implements TransportSession {
     this.#windows = [...(opts.windows ?? [])]
     this.#activeWindowId =
       this.#windows.find((window) => window.focused)?.id ?? this.#windows[0]?.id
+    this.#surfaces = [
+      ...(opts.surfaces ?? [
+        {
+          id: '__default__',
+          kind: 'window',
+          active: true,
+          capabilities: { snapshot: true, interaction: true, rendererEval: true },
+        },
+      ]),
+    ]
+    this.#activeSurfaceId =
+      this.#surfaces.find((surface) => surface.active)?.id ?? this.#surfaces[0]?.id
     if (opts.windowsError !== undefined) this.#windowsError = opts.windowsError
     if (opts.detachError !== undefined) this.#detachError = opts.detachError
     if (opts.interactionError !== undefined) this.#interactionError = opts.interactionError
@@ -384,7 +401,50 @@ export class FakeSession implements TransportSession {
             )
     if (selected === undefined) throw new Error(`No fake window matches ${JSON.stringify(target)}`)
     this.#activeWindowId = selected.id
+    const root = this.#surfaces.find((surface) => surface.kind === 'window')
+    if (root !== undefined) this.#activeSurfaceId = root.id
     return { ...selected, focused: true }
+  }
+
+  async surfacesList(): Promise<readonly SurfaceDescriptor[]> {
+    return this.#surfaces.map((surface) => ({
+      ...surface,
+      active: surface.id === this.#activeSurfaceId,
+    }))
+  }
+
+  async activeSurface(): Promise<SurfaceDescriptor> {
+    const surface = this.#surfaces.find((candidate) => candidate.id === this.#activeSurfaceId)
+    if (surface === undefined) throw new Error('No fake surface is active')
+    return { ...surface, active: true }
+  }
+
+  /** Surface ids the fake was asked to activate, for lifecycle assertions. */
+  readonly activateSurfaceCalls: string[] = []
+
+  async activateSurface(surfaceId: string): Promise<SurfaceDescriptor> {
+    this.activateSurfaceCalls.push(surfaceId)
+    const surface = this.#surfaces.find((candidate) => candidate.id === surfaceId)
+    if (surface === undefined) {
+      throw new StagewrightError('SURFACE_NOT_FOUND', `No fake surface matches ${surfaceId}`, {
+        surfaceId,
+      })
+    }
+    if (
+      !surface.capabilities.snapshot ||
+      !surface.capabilities.interaction ||
+      !surface.capabilities.rendererEval
+    ) {
+      throw new StagewrightError(
+        'SURFACE_UNSUPPORTED',
+        `Fake surface ${surfaceId} is not driveable`,
+        {
+          surfaceId,
+        },
+      )
+    }
+    this.#activeSurfaceId = surfaceId
+    return { ...surface, active: true }
   }
 
   /** Recorded interaction calls, in order, for assertions in interaction-tool tests. */

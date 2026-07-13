@@ -18,7 +18,12 @@ import { makeError, makeSuccess } from '../../errors/envelope.js'
 import type { ScreenshotOptions, TransportSession, WindowRef } from '../../transports/index.js'
 import { refField, selectorField, sessionIdField } from '../schema.js'
 import { loadInjectedWalker, runProbe } from '../snapshot/inject.js'
-import { buildMissError, refFreshnessError, refName, resolveTarget } from '../target.js'
+import {
+  buildMissError,
+  refFreshnessError,
+  refNameForActiveSurface,
+  resolveTarget,
+} from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 
 /** Dependency seam — injected by tests so the probe bundle is not read from disk. */
@@ -135,7 +140,8 @@ const DESCRIPTION = [
   'else the OS temp dir — pass dir or set --screenshot-dir for a stable, retrievable artifact location.',
   'Returns: { ok, session_id, path, bytes, format, width?, height? } (path is the absolute file written).',
   'Errors: ABSOLUTE_PATH_REQUIRED (relative path), REF_NOT_FOUND (no such window),',
-  'SELECTOR_NO_MATCH (element not found), NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).',
+  'SELECTOR_NO_MATCH (element not found), SURFACE_UNSUPPORTED (iframe element crops are not window-relative),',
+  'NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).',
 ].join(' ')
 
 /** Build the `electron_screenshot` tool. */
@@ -261,6 +267,17 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
       let clip: ClipRect | undefined
       if (elementTargeted) {
         const selector = resolveTarget({ ref: args.ref, selector: args.selector })
+        const surface = await managed.session.activeSurface()
+        if (surface.kind === 'frame') {
+          // A frame bbox is relative to the frame viewport, while the existing screenshot transport
+          // deliberately captures a WindowRef. Applying those coordinates to the host image would
+          // silently write the wrong crop, so keep screenshot addressing window-scoped for now.
+          return makeError('SURFACE_UNSUPPORTED', {
+            ...meta,
+            message:
+              'Element screenshots are not available for an iframe surface; select its root window or capture the window without ref/selector.',
+          })
+        }
         const stale = await refFreshnessError(ctx, managed.session, meta, args.ref)
         if (stale !== undefined) return stale
 
@@ -277,7 +294,7 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
             session: managed.session,
             meta,
             message: `No element matched ${selector}.`,
-            nameHint: refName(ctx.snapshots.get(managed.id), args.ref),
+            nameHint: await refNameForActiveSurface(ctx, managed.session, managed.id, args.ref),
           })
         }
         clip = resolved.clip

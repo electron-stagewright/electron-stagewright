@@ -11,7 +11,12 @@
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import type { ErrorCode } from '../../errors/registry.js'
 import { assertCapability } from '../../transports/index.js'
-import { buildMissError, handleTargetFailure, refFreshnessError, refName } from '../target.js'
+import {
+  buildMissError,
+  handleTargetFailure,
+  refFreshnessError,
+  refNameForActiveSurface,
+} from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
 
 /** Default wait budget when the caller omits `timeoutMs`. */
@@ -100,7 +105,7 @@ export async function runWait(
         session: managed.session,
         meta,
         message: 'No element matched the wait target.',
-        nameHint: refName(ctx.snapshots.get(managed.id), args.ref),
+        nameHint: await refNameForActiveSurface(ctx, managed.session, managed.id, args.ref),
       })
     }
     if (raw?.satisfied === true) {
@@ -118,7 +123,7 @@ export async function runWait(
       ctx,
       session: managed.session,
       meta,
-      nameHint: refName(ctx.snapshots.get(managed.id), args.ref),
+      nameHint: await refNameForActiveSurface(ctx, managed.session, managed.id, args.ref),
     })
   }
 }

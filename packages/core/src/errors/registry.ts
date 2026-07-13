@@ -72,6 +72,21 @@ export const ERROR_CODES = {
     retryable: false,
     hint: 'Call snapshot first.',
   },
+  SURFACE_NOT_FOUND: {
+    http: 404,
+    retryable: false,
+    hint: 'Call electron_surfaces_list and select one of the returned surface ids.',
+  },
+  SURFACE_CLOSED: {
+    http: 409,
+    retryable: false,
+    hint: 'The selected renderer closed or detached; call electron_surfaces_list and select a live surface.',
+  },
+  SURFACE_UNSUPPORTED: {
+    http: 501,
+    retryable: false,
+    hint: 'The selected surface cannot perform that renderer operation through this transport.',
+  },
   SELECTOR_NO_MATCH: {
     http: 404,
     retryable: false,

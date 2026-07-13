@@ -120,6 +120,7 @@ import type {
   StopResult,
   StorageCookie,
   StorageSnapshot,
+  SurfaceDescriptor,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -925,6 +926,18 @@ class CdpSession implements TransportSession {
     return run
   }
 
+  surfacesList(): Promise<readonly SurfaceDescriptor[]> {
+    return Promise.reject(unsupported('surfacesList', 'supportsSurfaceTargeting'))
+  }
+
+  activeSurface(): Promise<SurfaceDescriptor> {
+    return Promise.reject(unsupported('activeSurface', 'supportsSurfaceTargeting'))
+  }
+
+  activateSurface(_surfaceId: string): Promise<SurfaceDescriptor> {
+    return Promise.reject(unsupported('activateSurface', 'supportsSurfaceTargeting'))
+  }
+
   async consoleLogs(): Promise<ConsoleLogsResult> {
     this.#requireRunning()
     return { entries: [...this.#consoleBuffer], overflowed: this.#consoleOverflow }
@@ -1547,6 +1560,7 @@ export class CDPTransport implements ITransport {
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,
+    supportsSurfaceTargeting: false,
   }
 
   readonly #deps: CdpSessionDeps

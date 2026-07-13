@@ -2,17 +2,17 @@
 
 > Generated from the dispatcher manifest — do not edit by hand. Run `pnpm docs:tools` to regenerate.
 
-The server exposes 54 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
+The server exposes 56 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
 
 ## Contents
 
-- [Command tools](#command-tools) (23)
+- [Command tools](#command-tools) (24)
 - [Dialog tools](#dialog-tools) (1)
 - [Eval tools](#eval-tools) (2)
 - [Logs tools](#logs-tools) (1)
 - [Query tools](#query-tools) (25)
 - [Screenshot tools](#screenshot-tools) (1)
-- [Window_info tools](#window_info-tools) (1)
+- [Window_info tools](#window_info-tools) (2)
 
 ## Command tools
 
@@ -318,6 +318,19 @@ Gracefully stop a session and release it. If the app ignores the close within ti
 | --- | --- | --- | --- |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 | `timeoutMs` | integer | no | Graceful-close budget in ms before escalating to SIGKILL. Defaults to 10000. |
+
+### `electron_switch_surface`
+
+**Switch active renderer surface**
+
+Select a live renderer surface by the opaque id returned by electron_surfaces_list. Following snapshot, find, renderer reads/eval, waits, expectations, and interactions target that surface; a ref from a different surface is rejected rather than reused. Returns: { ok, session_id, active, active_surface_id }. Errors: SURFACE_NOT_FOUND (the id was never observed in this session), SURFACE_CLOSED (it detached or closed), SURFACE_UNSUPPORTED (the live surface cannot be driven), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT.
+
+- Operation: `command`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `surfaceId` | string | yes | Opaque id returned by electron_surfaces_list. |
+| `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ### `electron_switch_window`
 
@@ -643,7 +656,7 @@ Assert the element identified by ref or selector is visible, polling until it is
 
 **Find elements by role and name**
 
-Find elements in the renderer by accessibility role + name + state — no CSS selectors. Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps the matches returned (count still reports the true total). Returns: { ok, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Find elements in the renderer by accessibility role + name + state — no CSS selectors. Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps the matches returned (count still reports the true total). Returns: { ok, surface_id, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `query`
 
@@ -772,7 +785,7 @@ Report the running Electron app environment: runtime versions (electron/node/chr
 
 **Snapshot renderer accessibility tree**
 
-Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name, state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap. format:"text" returns a compact one-line-per-entry rendering instead of JSON (5-10x fewer tokens): `[ref] role "name" value=… flags`, ~ marks recently-changed, [-] marks landmarks. Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive entries first. Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref. Closed shadow roots are opaque unless the app opts in: push each root onto window.__stagewright_closedShadowRoots at attachShadow time (or implement window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true. Returns: { ok, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?, diff_format?, renderer_reloaded, truncated }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Capture the selected renderer surface accessibility tree: interactive elements (and landmarks) with role, name, state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap. format:"text" returns a compact one-line-per-entry rendering instead of JSON (5-10x fewer tokens): `[ref] role "name" value=… flags`, ~ marks recently-changed, [-] marks landmarks. Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive entries first. Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref. Closed shadow roots are opaque unless the app opts in: push each root onto window.__stagewright_closedShadowRoots at attachShadow time (or implement window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true. Returns: { ok, surface_id, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?, diff_format?, renderer_reloaded, truncated }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `query`
 
@@ -853,7 +866,7 @@ Wait until the element identified by ref or selector matches the given state fla
 
 **Capture a screenshot**
 
-Capture a screenshot to an image file and return its path (the image is written on the server host; the bytes are NOT returned inline). With ref/selector, captures just that element; otherwise the targeted window (windowId > windowTitle > windowIndex, default the active window) with optional fullPage or clip. Options: format (png|jpeg), quality (jpeg), path (absolute file) or dir (absolute directory, generated filename). With neither, writes to the server --screenshot-dir if configured, else the OS temp dir — pass dir or set --screenshot-dir for a stable, retrievable artifact location. Returns: { ok, session_id, path, bytes, format, width?, height? } (path is the absolute file written). Errors: ABSOLUTE_PATH_REQUIRED (relative path), REF_NOT_FOUND (no such window), SELECTOR_NO_MATCH (element not found), NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).
+Capture a screenshot to an image file and return its path (the image is written on the server host; the bytes are NOT returned inline). With ref/selector, captures just that element; otherwise the targeted window (windowId > windowTitle > windowIndex, default the active window) with optional fullPage or clip. Options: format (png|jpeg), quality (jpeg), path (absolute file) or dir (absolute directory, generated filename). With neither, writes to the server --screenshot-dir if configured, else the OS temp dir — pass dir or set --screenshot-dir for a stable, retrievable artifact location. Returns: { ok, session_id, path, bytes, format, width?, height? } (path is the absolute file written). Errors: ABSOLUTE_PATH_REQUIRED (relative path), REF_NOT_FOUND (no such window), SELECTOR_NO_MATCH (element not found), SURFACE_UNSUPPORTED (iframe element crops are not window-relative), NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).
 
 - Operation: `screenshot`
 
@@ -873,6 +886,18 @@ Capture a screenshot to an image file and return its path (the image is written 
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ## Window_info tools
+
+### `electron_surfaces_list`
+
+**List Electron renderer surfaces**
+
+List the session renderer surfaces in parent-first order: BrowserWindow roots, WebContentsViews, webview guests, and iframe children. Each opaque id is stable only while its surface stays live; select it with electron_switch_surface before snapshot/find/renderer interactions. Returns: { ok, session_id, surfaces, active_surface_id, count }. Existing window tools remain compatible for window-only flows. Errors: TRANSPORT_UNSUPPORTED (surface targeting is unavailable on this transport; not retryable), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
+
+- Operation: `window_info`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ### `electron_windows_list`
 

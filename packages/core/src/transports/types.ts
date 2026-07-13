@@ -53,6 +53,8 @@ export interface TransportCapabilities {
    * declares this `false` rejects those methods with `NOT_IMPLEMENTED`.
    */
   readonly supportsInteraction: boolean
+  /** The transport can enumerate and explicitly select renderer surfaces (pages and frames). */
+  readonly supportsSurfaceTargeting: boolean
 }
 
 /**
@@ -76,6 +78,32 @@ export interface WindowDescriptor {
   readonly url?: string
   readonly visible: boolean
   readonly focused: boolean
+}
+
+/** Renderer primitive exposed by Electron and addressed independently by an agent. */
+export type SurfaceKind = 'window' | 'webcontents_view' | 'webview' | 'frame' | 'other'
+
+/** Operations the active transport can perform against one renderer surface. */
+export interface SurfaceCapabilities {
+  readonly snapshot: boolean
+  readonly interaction: boolean
+  readonly rendererEval: boolean
+}
+
+/**
+ * A renderer target in the session-local surface hierarchy. IDs are opaque and
+ * stable for the lifetime of the live page or frame; callers must never derive
+ * them from a URL, title, index, or Electron process id.
+ */
+export interface SurfaceDescriptor {
+  readonly id: string
+  readonly kind: SurfaceKind
+  readonly parentId?: string
+  readonly title?: string
+  readonly url?: string
+  readonly active: boolean
+  readonly capabilities: SurfaceCapabilities
+  readonly originRelation?: 'same-origin' | 'cross-origin' | 'opaque'
 }
 
 /** Options accepted by `ITransport.launch`. */
@@ -745,6 +773,15 @@ export interface TransportSession {
    * callers must not depend on foreground OS-window activation.
    */
   activateWindow(target: WindowRef): Promise<WindowDescriptor>
+
+  /** Enumerate renderer surfaces in parent-first order for explicit selection. */
+  surfacesList(): Promise<readonly SurfaceDescriptor[]>
+
+  /** Read the current implicit renderer target. */
+  activeSurface(): Promise<SurfaceDescriptor>
+
+  /** Select one live renderer surface by its opaque session-local identifier. */
+  activateSurface(surfaceId: string): Promise<SurfaceDescriptor>
 
   /** Read the session's rolling console buffer (oldest first) plus the dropped-entry count. */
   consoleLogs(): Promise<ConsoleLogsResult>
