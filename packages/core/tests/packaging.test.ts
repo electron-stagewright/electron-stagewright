@@ -70,6 +70,7 @@ async function fileExists(p: string): Promise<boolean> {
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 const NODE_ENGINE = '>=24.0.0'
 const REQUIRED_FILE_ENTRIES = ['README.md', 'LICENSE'] as const
+const REPOSITORY_URL = 'git+https://github.com/electron-stagewright/electron-stagewright.git'
 
 /** Collect the publish-correctness violations for one manifest (empty array = publish-ready). */
 async function manifestViolations({ dir, relDir, pkg }: PackageManifest): Promise<string[]> {
@@ -91,7 +92,13 @@ async function manifestViolations({ dir, relDir, pkg }: PackageManifest): Promis
   }
   if (pkg['type'] !== 'module') fail(`type must be "module" (got ${String(pkg['type'])})`)
 
-  const repository = pkg['repository'] as { directory?: unknown } | undefined
+  const repository = pkg['repository'] as
+    { type?: unknown; url?: unknown; directory?: unknown } | undefined
+  if (repository?.type !== 'git')
+    fail(`repository.type must be "git" (got ${String(repository?.type)})`)
+  if (repository?.url !== REPOSITORY_URL) {
+    fail(`repository.url must be "${REPOSITORY_URL}" (got ${String(repository?.url)})`)
+  }
   if (repository?.directory !== relDir) {
     fail(`repository.directory must be "${relDir}" (got ${String(repository?.directory)})`)
   }
@@ -181,7 +188,7 @@ describe('publish-readiness — publishable package manifests', () => {
     license: 'MIT',
     description: 'Example publishable package',
     type: 'module',
-    repository: { directory: 'packages/core' },
+    repository: { type: 'git', url: REPOSITORY_URL, directory: 'packages/core' },
     engines: { node: NODE_ENGINE },
     publishConfig: { access: 'public' },
     main: './dist/index.js',
@@ -239,6 +246,23 @@ describe('publish-readiness — publishable package manifests', () => {
         'packages/core: files must include "README.md"',
         'packages/core: files must include "LICENSE"',
       ]),
+    )
+  })
+
+  it('rejects a publishable package whose repository cannot match the trusted publisher', async () => {
+    const violations = await manifestViolations(
+      manifestFor({
+        ...validPublishablePkg,
+        repository: {
+          type: 'git',
+          url: 'git+https://github.com/example/other.git',
+          directory: 'packages/core',
+        },
+      }),
+    )
+
+    expect(violations).toContain(
+      `packages/core: repository.url must be "${REPOSITORY_URL}" (got git+https://github.com/example/other.git)`,
     )
   })
 

@@ -37,6 +37,8 @@
     "manifest:report": "pnpm --filter @electron-stagewright/bench manifest:report",
     "bench:profiles": "pnpm --filter @electron-stagewright/bench bench:profiles",
     "package:smoke": "node scripts/package-smoke.mjs",
+    "release:dry-run": "node scripts/release-publish.mjs --packages all",
+    "release:validate": "node scripts/release-publish.mjs --packages all --include-published",
     "docs:tools": "tsx packages/core/src/manifest/gen-tool-reference.ts TOOL-REFERENCE.md",
     "docs:site": "tsx packages/core/scripts/build-docs-site.ts",
     "verify": "pnpm build && pnpm lint && pnpm typecheck && pnpm test && pnpm format:check",

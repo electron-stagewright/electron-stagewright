@@ -38,35 +38,81 @@ but core does not, confirm the local core version already exists on npm before p
 If core changes too, publish core first (or in the same recursive publish) so the plugin never pins
 an unpublished core version.
 
+## Trusted publishing setup
+
+Publishing is performed only by `.github/workflows/release.yml` on a GitHub-hosted runner. Its
+`npm-publish` environment must be protected with the maintainers who may
+approve a release. The job has `id-token: write` and uses npm 11.5.1; it deliberately receives no
+long-lived publishing credential. pnpm creates workspace-correct tarballs, then npm publishes those
+tarballs through its OIDC trusted-publisher exchange. npm automatically attaches provenance for this
+public repository and public packages.
+
+Before a package is published from Actions, a maintainer with npm access must configure the same
+trusted publisher for that existing public package. In npm package settings, select GitHub Actions
+and enter exactly:
+
+- Organization: `electron-stagewright`
+- Repository: `electron-stagewright`
+- Workflow filename: `release.yml`
+- Environment: `npm-publish`
+- Allowed action: `npm publish`
+
+The equivalent authenticated npm command (for a package that already exists in npm) is:
+
+```bash
+for package in $(node -e "for (const p of require('fs').readdirSync('packages')) { const m=require('./packages/'+p+'/package.json'); if (!m.private) console.log(m.name) }"); do
+  npm trust github "$package" --file release.yml --repo electron-stagewright/electron-stagewright \
+    --env npm-publish --allow-publish --yes
+done
+```
+
+Each npm package accepts one trusted publisher at a time, and the values above are case-sensitive.
+Validate one protected OIDC release before restricting token-based publishing in npm and revoking
+obsolete write credentials. Do not configure an npm publish token as a GitHub secret.
+
+### First publication bootstrap
+
+npm can add a trusted publisher only after the package already exists in the registry. For a new
+package, publish its first version manually from a maintainer machine using interactive npm login and
+2FA — never by adding a write credential to Actions. Then run the trusted-publisher command above for
+that package. At the time of this guide, the initial bootstrap is still needed for
+`@electron-stagewright/demo`, `@electron-stagewright/plugin-a11y`, and
+`@electron-stagewright/plugin-visual`; their core dependency version already exists on npm.
+
+After each bootstrap, start the **Publish packages** workflow with `publish` false to validate the
+protected path. The next version change must be released through OIDC, with a maintainer approving
+the environment; only after that first successful OIDC publish should token-based publishing be
+restricted or revoked.
+
 ## Prerequisites
 
-- npm account with publish rights on the `@electron-stagewright` scope, with 2FA enabled.
-- `corepack enable` so the pinned pnpm version is used.
-- A clean, up-to-date `main` checkout.
+- npm account with publish rights on the `@electron-stagewright` scope, with 2FA enabled, used only
+  to configure trusted publishers and administer package settings.
+- `corepack enable` so the pinned pnpm version is used for local package validation.
+- A clean, up-to-date `main` checkout and a GitHub release/tag for an actual publish.
 
 ## Checklist
 
-1. **Green main.** `pnpm install && pnpm verify` — lint, typecheck, test (including the packaging
-   gate), build, and format check must all pass.
-2. **Set versions.** Bump the `version` of each package being released (and confirm the local core
+1. **Set versions.** Bump the `version` of each package being released (and confirm the local core
    version is already published, or is being published now, per the `workspace:*` note above). Update
    each package's notable changes if a changelog is kept.
-3. **Build fresh.** `pnpm build` — the published tarball ships only `dist/` (plus `README.md` and
-   `LICENSE`), so the build must be current.
-4. **Dry-run.** `pnpm -r publish --dry-run` for a whole-set release, or put each selector before
-   `publish` for a filtered release (for example,
-   `pnpm -r --filter @electron-stagewright/plugin-ipc publish --dry-run`). Inspect the reported
-   tarball contents: each package includes its `dist/`, `README.md`, and `LICENSE`, and excludes
-   `src/` and tests.
-5. **Publish.** `pnpm -r publish --access public` for a whole-set release, or the same filtered
-   command used in the dry-run with `--access public`. The `--access public` flag is also set
-   per-package via `publishConfig`, so it is belt-and-suspenders. Enter the npm 2FA OTP when prompted.
-6. **Tag and release.** Tag the release commit with `vX.Y.Z` matching the core version — a
+2. **Validate locally.** `pnpm install && pnpm verify && pnpm release:validate` — this rebuilds the
+   package tarballs and asks npm to validate them without publishing. The release workflow repeats
+   `pnpm verify`, the isolated Electron package smoke, and a dry-run for only versions not yet on npm.
+3. **Tag and release.** Tag the release commit with `vX.Y.Z` matching the core version — a
    lightweight tag on the release commit (e.g. `git tag v0.2.0`) — and push it; cut a GitHub
-   release with the notable changes. Packages version independently, but the repo-level release
-   tag tracks core (the CLI-bearing package), as `v0.1.0`–`v0.2.0` do.
-7. **Verify the install.** From a scratch directory, confirm `npx @electron-stagewright/core` resolves
-   and the server starts over stdio.
+   release with the notable changes. Publishing the release invokes the protected OIDC workflow;
+   approve the environment only after reviewing its green validation steps. Packages version
+   independently, so the workflow skips versions already present in npm and publishes remaining
+   packages in dependency order.
+4. **Verify the result.** Download the workflow's `npm-release-summary` artifact. It records each
+   package as already published, dry-run validated, published with its npm integrity, or failed.
+   Confirm the npm package page shows provenance, then from a scratch directory verify that
+   `npx @electron-stagewright/core` resolves and starts over stdio.
+
+For a scoped rehearsal from the Actions UI, run **Publish packages** manually with `publish` left
+false. For an intentional manual publish, select the packages, set `publish` true, and approve the
+same protected `npm-publish` environment.
 
 ## Publish to the official MCP Registry
 
@@ -90,8 +136,12 @@ Bumping core re-runs this (update `server.json` + the `mcpName` package version,
 ## If something is wrong post-publish
 
 npm publishes are immutable. Do **not** force a fix by republishing the same version — bump a patch
-and publish again. Use `npm deprecate` to steer users off a broken version; reserve `npm unpublish`
-for the 72-hour window and genuine mistakes only.
+and create a new GitHub release when source changes are required. The release summary artifact
+identifies any package that completed before a later package failed; leave those versions intact.
+If the failed package never reached npm and the failure was only external configuration, correct it
+and rerun the existing workflow. If the package contents need repair, bump its version and publish
+only that new version through the workflow. Use `npm deprecate` to steer users off a broken version;
+reserve `npm unpublish` for the 72-hour window and genuine mistakes only.
 
 See also [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and
 [GOVERNANCE.md](./GOVERNANCE.md) for who can cut a release.
