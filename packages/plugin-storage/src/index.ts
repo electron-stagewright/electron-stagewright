@@ -50,6 +50,11 @@ import {
   type ToolResult,
   type TransportSession,
 } from '@electron-stagewright/core'
+import {
+  createPluginConfigState,
+  requireTransportCapability,
+  sessionIdField,
+} from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
 import {
@@ -88,7 +93,7 @@ const DEFAULT_CONFIG: StorageConfig = { revealValues: false, redactValues: false
 
 /** Build a fresh storage plugin whose configuration belongs to one server instance. */
 export function createStoragePlugin(): StagewrightPlugin {
-  let config: StorageConfig = DEFAULT_CONFIG
+  const config = createPluginConfigState(DEFAULT_CONFIG)
 
   /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
   interface PluginMeta {
@@ -98,7 +103,7 @@ export function createStoragePlugin(): StagewrightPlugin {
 
   /** Replace a cookie's value with `[redacted]` unless `revealValues` is on (the secret-surface bound). */
   function redactCookie(cookie: StorageCookie): StorageCookie {
-    return config.revealValues ? cookie : { ...cookie, value: '[redacted]' }
+    return config.current.revealValues ? cookie : { ...cookie, value: '[redacted]' }
   }
 
   /** Redact every cookie's value (for the read paths) before the agent sees it. */
@@ -116,13 +121,19 @@ export function createStoragePlugin(): StagewrightPlugin {
     meta: PluginMeta,
   ): { session: TransportSession; sessionId: string } | { error: ToolResult } {
     const managed = ctx.sessions.resolve(sessionId)
-    if (!managed.transport.capabilities.canAccessStorage) {
-      return {
-        error: makePluginError('storage.UNSUPPORTED', {
+    const capability = requireTransportCapability(
+      managed.transport.capabilities,
+      'canAccessStorage',
+      () =>
+        makePluginError('storage.UNSUPPORTED', {
           ...meta,
           message:
             'This session’s transport cannot access storage; use the default Playwright launch transport or a CDP attach session.',
         }),
+    )
+    if (!capability.supported) {
+      return {
+        error: capability.fallback,
       }
     }
     return { session: managed.session, sessionId: managed.id }
@@ -140,9 +151,7 @@ export function createStoragePlugin(): StagewrightPlugin {
     }
   }
 
-  const sessionField = {
-    sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-  }
+  const sessionField = sessionIdField
 
   const cookiesTool: AnyToolDefinition = defineTool({
     name: 'cookies',
@@ -309,13 +318,19 @@ export function createStoragePlugin(): StagewrightPlugin {
       }
     }
     const managed = ctx.sessions.resolve(sessionId)
-    if (!managed.transport.capabilities.supportsRendererEval) {
-      return {
-        error: makePluginError('storage.UNSUPPORTED', {
+    const capability = requireTransportCapability(
+      managed.transport.capabilities,
+      'supportsRendererEval',
+      () =>
+        makePluginError('storage.UNSUPPORTED', {
           ...meta,
           message:
             'This session’s transport cannot evaluate in the renderer; use the default Playwright launch transport or a CDP attach session.',
         }),
+    )
+    if (!capability.supported) {
+      return {
+        error: capability.fallback,
       }
     }
     return { session: managed.session, sessionId: managed.id }
@@ -761,7 +776,7 @@ export function createStoragePlugin(): StagewrightPlugin {
 
   /** Replace a record's value with `[redacted]` when the `redactValues` config is on (the opt-in secret bound). */
   function redactRecord<T extends { value: unknown }>(record: T): T {
-    return config.redactValues ? { ...record, value: '[redacted]' } : record
+    return config.current.redactValues ? { ...record, value: '[redacted]' } : record
   }
 
   /** A JSON key (string / number / composite array) the agent can name a record by. */
@@ -1124,10 +1139,10 @@ export function createStoragePlugin(): StagewrightPlugin {
       ...indexedDbTools,
     ],
     setup: (raw) => {
-      config = raw as StorageConfig
+      config.set(raw as StorageConfig)
     },
     teardown: async () => {
-      config = DEFAULT_CONFIG
+      config.reset()
     },
   }
 }

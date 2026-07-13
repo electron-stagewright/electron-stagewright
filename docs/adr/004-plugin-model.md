@@ -165,6 +165,19 @@ is server-scoped rather than session-scoped so it can include `electron_stop` an
 `trace_stop`; it remains active until explicitly stopped or server teardown. Teardown unregisters every
 listener, then clears the instance state as an idempotent final backstop.
 
+## Status update (plugin SDK subpath, 2026-07-12)
+
+`@electron-stagewright/core/plugin-sdk` is the public, intentionally narrow authoring surface for
+patterns proven across the first-party plugins: immutable parsed configuration and per-instance config
+state, per-session lifecycle cleanup, a parameterized transport-capability guard, and the optional
+`sessionId` schema fragment. It does not define generic plugin errors: plugins retain their own codes,
+messages, and remediation hints because a shared capability shape does not imply a shared operator action.
+
+The plugin contract remains exported from `@electron-stagewright/core`; the SDK is an additive subpath,
+not a separate package or a replacement for `StagewrightPlugin`. Both surfaces follow the core package's
+semantic-versioning policy: additions are minor-compatible, while a removal or incompatible signature
+change requires a core major release. Plugins must import this documented subpath, never `core/dist/*`.
+
 ## Related decisions
 
 - **ADR-006** (Error code registry) — anticipated `registerPluginCodes` and `<plugin>.CODE`;

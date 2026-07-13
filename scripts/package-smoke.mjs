@@ -20,6 +20,26 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => app.quit())
 `
 const APP_HTML = `<!doctype html><title>Package smoke</title><button id="greet">Greet</button><p id="status">Waiting</p><script>document.querySelector('#greet').onclick=()=>document.querySelector('#status').textContent='Ready'</script>`
+const PLUGIN_SDK_SMOKE = `
+import {
+  createPluginConfigState,
+  requireTransportCapability,
+  sessionIdField,
+} from '@electron-stagewright/core/plugin-sdk'
+
+const state = createPluginConfigState({ tags: ['default'] })
+state.set({ tags: ['configured'] })
+if (!Object.isFrozen(state.current) || state.current.tags[0] !== 'configured') {
+  throw new Error('published plugin SDK did not expose immutable config state')
+}
+const capability = requireTransportCapability({ canIntercept: false }, 'canIntercept', () => 'fallback')
+if (capability.supported || capability.fallback !== 'fallback') {
+  throw new Error('published plugin SDK did not expose the capability guard')
+}
+if (!sessionIdField.sessionId.safeParse('session-1').success) {
+  throw new Error('published plugin SDK did not expose the session schema fragment')
+}
+`
 const CLIENT_SMOKE = `
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -120,7 +140,15 @@ async function main() {
       writeFile(path.join(scratchDir, 'index.html'), APP_HTML),
     ])
     const clientPath = path.join(scratchDir, 'client-smoke.mjs')
-    await writeFile(clientPath, CLIENT_SMOKE)
+    const pluginSdkPath = path.join(scratchDir, 'plugin-sdk-smoke.mjs')
+    await Promise.all([
+      writeFile(clientPath, CLIENT_SMOKE),
+      writeFile(pluginSdkPath, PLUGIN_SDK_SMOKE),
+    ])
+    await execFile(process.execPath, [pluginSdkPath], {
+      cwd: scratchDir,
+      maxBuffer: 8 * 1024 * 1024,
+    })
     const cliPath = path.join(
       scratchDir,
       'node_modules',

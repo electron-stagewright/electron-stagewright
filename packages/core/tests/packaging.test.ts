@@ -258,6 +258,20 @@ describe('publish-readiness — publishable package manifests', () => {
     expect(peerMeta?.['playwright']?.optional).toBe(true)
     expect(peerMeta?.['electron']?.optional).toBe(true)
   })
+
+  it('publishes the stable plugin-sdk subpath from the core tarball', async () => {
+    const core = (await loadManifests('packages')).find(
+      (manifest) => manifest.relDir === 'packages/core',
+    )
+    const exportsObject = core?.pkg['exports'] as
+      | Record<string, { readonly types?: unknown; readonly import?: unknown }>
+      | undefined
+
+    expect(exportsObject?.['./plugin-sdk']).toEqual({
+      types: './dist/plugin-sdk/index.d.ts',
+      import: './dist/plugin-sdk/index.js',
+    })
+  })
 })
 
 // --- RELEASING.md "What publishes" drift guard ------------------------------

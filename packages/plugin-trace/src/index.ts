@@ -33,6 +33,7 @@ import {
   type StagewrightPlugin,
   type ToolResult,
 } from '@electron-stagewright/core'
+import { createPluginConfigState } from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
 import {
@@ -115,7 +116,7 @@ const DEFAULT_CONFIG: TraceConfig = {
 
 /** Build a fresh trace plugin whose recording and configuration belong to one server instance. */
 export function createTracePlugin(): StagewrightPlugin {
-  let config: TraceConfig = DEFAULT_CONFIG
+  const config = createPluginConfigState(DEFAULT_CONFIG)
   let active: ActiveRecording | undefined
 
   /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
@@ -216,14 +217,14 @@ export function createTracePlugin(): StagewrightPlugin {
           message: `Already recording to ${active.recorder.path}; call trace_stop first.`,
         })
       }
-      const baseDir = args.dir ?? config.dir ?? tmpdir()
+      const baseDir = args.dir ?? config.current.dir ?? tmpdir()
       const outPath = path.resolve(args.path ?? path.join(baseDir, `trace-${randomUUID()}.jsonl`))
-      const budget = args.budgetTokens ?? config.budgetTokens
-      const warnThreshold = args.warnThreshold ?? config.warnThreshold
+      const budget = args.budgetTokens ?? config.current.budgetTokens
+      const warnThreshold = args.warnThreshold ?? config.current.warnThreshold
       const recorder = new Recorder({
         path: outPath,
-        maxRecords: config.maxRecords,
-        redact: config.redact,
+        maxRecords: config.current.maxRecords,
+        redact: config.current.redact,
         coreVersion: VERSION,
         startedAt: ctx.now(),
         ...(budget !== undefined ? { budget, warnThreshold } : {}),
@@ -236,7 +237,7 @@ export function createTracePlugin(): StagewrightPlugin {
       })
       // Enforcement (opt-in): once over budget, veto further non-trace dispatches. Skipping trace_*
       // is essential — otherwise an over-budget agent could never call trace_stop to recover.
-      const enforce = (args.enforce ?? config.enforceBudget) && budget !== undefined
+      const enforce = (args.enforce ?? config.current.enforceBudget) && budget !== undefined
       const unguard = enforce
         ? ctx.addDispatchGuard((call) => {
             if (call.tool.startsWith(`${TRACE_NAMESPACE}_`)) return null
@@ -582,7 +583,7 @@ export function createTracePlugin(): StagewrightPlugin {
     },
     tools: [startTool, stopTool, tokensTool, statusTool, budgetTool, replayTool, viewTool],
     setup: (raw) => {
-      config = raw as TraceConfig
+      config.set(raw as TraceConfig)
     },
     teardown: async () => {
       if (active !== undefined) {
@@ -593,7 +594,7 @@ export function createTracePlugin(): StagewrightPlugin {
         await current.recorder.stop().catch(() => undefined)
       }
       // Reset config so a later load in the same process never inherits a prior run's config.
-      config = DEFAULT_CONFIG
+      config.reset()
     },
   }
 }

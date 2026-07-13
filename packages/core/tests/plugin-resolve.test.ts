@@ -159,6 +159,30 @@ describe('plugin config', () => {
     await result.teardownAll()
   })
 
+  it('passes setup an immutable config isolated from the caller input', async () => {
+    let received: { readonly nested: { readonly enabled: boolean } } | undefined
+    const plugin: StagewrightPlugin = {
+      name: 'immutable',
+      version: '1.0.0',
+      coreVersionRange: '*',
+      configSchema: z.object({ nested: z.object({ enabled: z.boolean() }) }),
+      setup: (config) => {
+        received = config as { readonly nested: { readonly enabled: boolean } }
+      },
+    }
+    const raw = { nested: { enabled: true } }
+    const result = await loadPlugins([plugin], {
+      coreVersion: '0.0.0',
+      configs: { immutable: raw },
+    })
+    raw.nested.enabled = false
+
+    expect(received).toEqual({ nested: { enabled: true } })
+    expect(Object.isFrozen(received)).toBe(true)
+    expect(Object.isFrozen(received?.nested)).toBe(true)
+    await result.teardownAll()
+  })
+
   it('rejects config that fails the schema (PLUGIN_CONFIG_INVALID)', async () => {
     await expect(
       loadPlugins([configurablePlugin({})], {

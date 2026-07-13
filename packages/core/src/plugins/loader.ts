@@ -18,6 +18,7 @@ import {
   StagewrightError,
   unregisterPluginErrorCodes,
 } from '../errors/index.js'
+import { parsePluginConfig, PluginConfigValidationError } from '../plugin-sdk/config.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 import { satisfies } from './semver.js'
 import type {
@@ -85,15 +86,21 @@ function instantiatePlugin(plugin: StagewrightPlugin): StagewrightPlugin {
 function resolveConfig(plugin: StagewrightPlugin, configs: LoadPluginsOptions['configs']): unknown {
   if (plugin.configSchema === undefined) return undefined
   const raw = configs?.[plugin.name] ?? {}
-  const result = plugin.configSchema.safeParse(raw)
-  if (!result.success) {
+  try {
+    return parsePluginConfig(plugin.configSchema, raw)
+  } catch (cause) {
+    const message =
+      cause instanceof PluginConfigValidationError
+        ? cause.message
+        : cause instanceof Error
+          ? cause.message
+          : String(cause)
     throw new StagewrightError(
       'PLUGIN_CONFIG_INVALID',
-      `Plugin "${plugin.name}" config is invalid: ${result.error.message}`,
+      `Plugin "${plugin.name}" config is invalid: ${message}`,
       { plugin: plugin.name },
     )
   }
-  return result.data
 }
 
 /**

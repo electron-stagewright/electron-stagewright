@@ -31,6 +31,12 @@ import {
   type ToolResult,
   type TransportSession,
 } from '@electron-stagewright/core'
+import {
+  createPluginConfigState,
+  createSessionCleanup,
+  requireTransportCapability,
+  sessionIdField,
+} from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
 import { INSTRUMENT_BODY, filterEvents, redactEvents, type IpcEvent } from './instrument.js'
@@ -83,9 +89,15 @@ interface SessionCapture {
 // config or capture flags. The main-process `__swIpc` state remains per app process; this map only
 // tracks which sessions this server instance instrumented.
 export function createIpcPlugin(): StagewrightPlugin {
-  let config: IpcConfig = DEFAULT_CONFIG
+  const config = createPluginConfigState(DEFAULT_CONFIG)
   const captures = new Map<string, SessionCapture>()
-  let unsubscribeSessionEnd: (() => void) | undefined
+  const sessionCleanup = createSessionCleanup(
+    (sessionId) => captures.delete(sessionId),
+    () => {
+      captures.clear()
+      config.reset()
+    },
+  )
 
   /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
   interface PluginMeta {
@@ -116,12 +128,18 @@ export function createIpcPlugin(): StagewrightPlugin {
     // envelope, so an unknown/absent session needs no handling here. `transport` carries the
     // capability flag; `session` carries `evaluate`.
     const managed = ctx.sessions.resolve(sessionId)
-    if (!managed.transport.capabilities.supportsMainEval) {
-      return {
-        error: makePluginError('ipc.MAIN_EVAL_UNSUPPORTED', {
+    const capability = requireTransportCapability(
+      managed.transport.capabilities,
+      'supportsMainEval',
+      () =>
+        makePluginError('ipc.MAIN_EVAL_UNSUPPORTED', {
           ...meta,
           message: 'This session’s transport cannot evaluate in the main process; IPC needs that.',
         }),
+    )
+    if (!capability.supported) {
+      return {
+        error: capability.fallback,
       }
     }
     return { session: managed.session, sessionId: managed.id }
@@ -184,7 +202,7 @@ export function createIpcPlugin(): StagewrightPlugin {
         .describe(
           'Also capture main->renderer webContents.send/sendToFrame pushes (needs an open window at start).',
         ),
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+      ...sessionIdField,
     }),
     operationType: 'command',
     handler: async (args, ctx) => {
@@ -205,7 +223,7 @@ export function createIpcPlugin(): StagewrightPlugin {
         allow: args.channels,
         captureSend: args.captureSend === true,
         captureSendToRenderer: args.captureSendToRenderer === true,
-        maxEvents: config.maxEvents,
+        maxEvents: config.current.maxEvents,
       })
       captures.set(guard.sessionId, { channels: args.channels })
       return makeSuccess({ capturing: true, channels: args.channels }, meta)
@@ -224,7 +242,7 @@ export function createIpcPlugin(): StagewrightPlugin {
     ].join(' '),
     inputSchema: z.object({
       channel: z.string().optional().describe('Only return events on this channel.'),
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+      ...sessionIdField,
     }),
     operationType: 'query',
     handler: async (args, ctx) => {
@@ -237,7 +255,7 @@ export function createIpcPlugin(): StagewrightPlugin {
       const read = await guard.session.evaluate<{ events: IpcEvent[] }>('main', INSTRUMENT_BODY, {
         op: 'read',
       })
-      const events = redactEvents(filterEvents(read.events, args.channel), config.redact)
+      const events = redactEvents(filterEvents(read.events, args.channel), config.current.redact)
       return makeSuccess({ count: events.length, events }, meta)
     },
   })
@@ -252,7 +270,7 @@ export function createIpcPlugin(): StagewrightPlugin {
       'NOT_RUNNING.',
     ].join(' '),
     inputSchema: z.object({
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+      ...sessionIdField,
     }),
     operationType: 'command',
     handler: async (args, ctx) => {
@@ -295,7 +313,7 @@ export function createIpcPlugin(): StagewrightPlugin {
         .positive()
         .optional()
         .describe('Reject if the handler runs longer.'),
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+      ...sessionIdField,
     }),
     operationType: 'command',
     handler: async (args, ctx) => {
@@ -304,11 +322,14 @@ export function createIpcPlugin(): StagewrightPlugin {
       if ('error' in guard) return guard.error
       // Optional invoke allowlist (defense-in-depth): when invokeAllow is configured, refuse a channel
       // outside it before the main-process round-trip. Undefined = unrestricted; [] = block all.
-      if (config.invokeAllow !== undefined && !config.invokeAllow.includes(args.channel)) {
+      if (
+        config.current.invokeAllow !== undefined &&
+        !config.current.invokeAllow.includes(args.channel)
+      ) {
         return makePluginError('ipc.CHANNEL_NOT_ALLOWED', {
           ...meta,
           message: `Channel "${args.channel}" is not in the ipc_invoke allowlist.`,
-          details: { channel: args.channel, allowed: config.invokeAllow },
+          details: { channel: args.channel, allowed: config.current.invokeAllow },
         })
       }
       const result = await guard.session.evaluate<{
@@ -345,7 +366,7 @@ export function createIpcPlugin(): StagewrightPlugin {
     inputSchema: z.object({
       channel: z.string().min(1).describe('The captured channel to stub.'),
       response: z.unknown().describe('The value the stubbed handler resolves to.'),
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+      ...sessionIdField,
     }),
     operationType: 'command',
     handler: async (args, ctx) => {
@@ -416,19 +437,14 @@ export function createIpcPlugin(): StagewrightPlugin {
     },
     tools: [captureStartTool, capturedTool, captureStopTool, invokeTool, stubTool],
     setup: (raw, context) => {
-      config = raw as IpcConfig
-      unsubscribeSessionEnd = context?.onSessionEnd(({ sessionId }) => {
-        captures.delete(sessionId)
-      })
+      config.set(raw as IpcConfig)
+      sessionCleanup.setup(context)
     },
     teardown: async () => {
-      unsubscribeSessionEnd?.()
-      unsubscribeSessionEnd = undefined
       // Forget every session's capture flag. The main-process __swIpc state lives in each app process,
       // which the server stops as part of close — so there is no separate handler to restore here (and
       // no session handle at teardown to evaluate against). ipc_capture_stop is the in-session restore.
-      captures.clear()
-      config = DEFAULT_CONFIG
+      sessionCleanup.teardown()
     },
   }
 }

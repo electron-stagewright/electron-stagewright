@@ -38,6 +38,11 @@ import {
   type ToolResult,
   type TransportSession,
 } from '@electron-stagewright/core'
+import {
+  createSessionCleanup,
+  requireTransportCapability,
+  sessionIdField,
+} from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
 /** Plugin namespace — must match {@link nativeUiPlugin.name}; the loader prefixes its tools with it. */
@@ -61,13 +66,19 @@ function requireNativeUI(
   meta: PluginMeta,
 ): { session: TransportSession; sessionId: string } | { error: ToolResult } {
   const managed = ctx.sessions.resolve(sessionId)
-  if (!managed.transport.capabilities.canAccessNativeUI) {
-    return {
-      error: makePluginError('native.UNSUPPORTED', {
+  const capability = requireTransportCapability(
+    managed.transport.capabilities,
+    'canAccessNativeUI',
+    () =>
+      makePluginError('native.UNSUPPORTED', {
         ...meta,
         message:
           'This session’s transport cannot access the native UI; use the default Playwright launch transport.',
       }),
+  )
+  if (!capability.supported) {
+    return {
+      error: capability.fallback,
     }
   }
   return { session: managed.session, sessionId: managed.id }
@@ -76,7 +87,10 @@ function requireNativeUI(
 /** Build a fresh native-UI plugin whose notification state belongs to one server instance. */
 export function createNativeUiPlugin(): StagewrightPlugin {
   const notificationCaptures = new Map<string, NotificationCaptureFilter>()
-  let unsubscribeSessionEnd: (() => void) | undefined
+  const sessionCleanup = createSessionCleanup(
+    (sessionId) => notificationCaptures.delete(sessionId),
+    () => notificationCaptures.clear(),
+  )
 
   /** A path segment matches an item by its visible label OR its built-in role (so role-only items resolve). */
   function itemMatches(item: NativeMenuItem, segment: string): boolean {
@@ -96,9 +110,7 @@ export function createNativeUiPlugin(): StagewrightPlugin {
     return match
   }
 
-  const sessionField = {
-    sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-  }
+  const sessionField = sessionIdField
 
   /** A non-empty label/role path from the top of the menu down to the target item (shared by find + invoke). */
   const pathSchema = z
@@ -381,16 +393,12 @@ export function createNativeUiPlugin(): StagewrightPlugin {
       trayInvokeTool,
     ],
     setup: (_config, context) => {
-      unsubscribeSessionEnd = context?.onSessionEnd(({ sessionId }) => {
-        notificationCaptures.delete(sessionId)
-      })
+      sessionCleanup.setup(context)
     },
     teardown: async () => {
-      unsubscribeSessionEnd?.()
-      unsubscribeSessionEnd = undefined
       // Forget every session's capture flag. The hook + buffer live in the transport session's main
       // process, which the server stops before plugin teardown.
-      notificationCaptures.clear()
+      sessionCleanup.teardown()
     },
   }
 }

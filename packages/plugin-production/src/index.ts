@@ -32,6 +32,7 @@ import {
   type AnyToolDefinition,
   type StagewrightPlugin,
 } from '@electron-stagewright/core'
+import { createPluginConfigState } from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
 import { CHECK_IDS, runChecks, type CheckStatus } from './checks.js'
@@ -61,7 +62,7 @@ const DEFAULT_CONFIG: ProductionConfig = { commandTimeoutMs: 10_000 }
 
 // The factory owns this parsed configuration, so each server receives an independent value.
 export function createProductionPlugin(): StagewrightPlugin {
-  let config: ProductionConfig = DEFAULT_CONFIG
+  const config = createPluginConfigState(DEFAULT_CONFIG)
 
   const validateTool: AnyToolDefinition = defineTool({
     name: 'validate',
@@ -128,7 +129,7 @@ export function createProductionPlugin(): StagewrightPlugin {
         })
       }
 
-      const run = makeRunCommand(config.commandTimeoutMs)
+      const run = makeRunCommand(config.current.commandTimeoutMs)
       const checks = await runChecks(appPath, run, args.checks ?? CHECK_IDS)
       const tally = (status: CheckStatus): number =>
         checks.filter((check) => check.status === status).length
@@ -165,11 +166,11 @@ export function createProductionPlugin(): StagewrightPlugin {
     },
     tools: [validateTool],
     setup: (raw) => {
-      config = raw as ProductionConfig
+      config.set(raw as ProductionConfig)
     },
     teardown: async () => {
       // Reset config so a later load in the same process never inherits a prior run's config.
-      config = DEFAULT_CONFIG
+      config.reset()
     },
   }
 }

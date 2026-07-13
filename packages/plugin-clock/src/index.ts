@@ -30,6 +30,11 @@ import {
   type ToolResult,
   type TransportSession,
 } from '@electron-stagewright/core'
+import {
+  createSessionCleanup,
+  requireTransportCapability,
+  sessionIdField,
+} from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
 /** Plugin namespace — must match {@link clockPlugin.name}; the loader prefixes its tools with it. */
@@ -72,7 +77,10 @@ interface ClockState {
 /** Build a fresh clock plugin whose session state belongs to one server instance. */
 export function createClockPlugin(): StagewrightPlugin {
   const clocks = new Map<string, ClockState>()
-  let unsubscribeSessionEnd: (() => void) | undefined
+  const sessionCleanup = createSessionCleanup(
+    (sessionId) => clocks.delete(sessionId),
+    () => clocks.clear(),
+  )
 
   /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
   interface PluginMeta {
@@ -93,13 +101,19 @@ export function createClockPlugin(): StagewrightPlugin {
     // resolve throws a core StagewrightError (NOT_RUNNING / BAD_ARGUMENT) the dispatcher maps to an
     // envelope, so an unknown/absent/ambiguous session needs no handling here.
     const managed = ctx.sessions.resolve(sessionId)
-    if (!managed.transport.capabilities.canControlClock) {
-      return {
-        error: makePluginError('clock.UNSUPPORTED', {
+    const capability = requireTransportCapability(
+      managed.transport.capabilities,
+      'canControlClock',
+      () =>
+        makePluginError('clock.UNSUPPORTED', {
           ...meta,
           message:
             'This session’s transport cannot control the clock; use the default Playwright launch transport.',
         }),
+    )
+    if (!capability.supported) {
+      return {
+        error: capability.fallback,
       }
     }
     return { session: managed.session, sessionId: managed.id }
@@ -126,9 +140,7 @@ export function createClockPlugin(): StagewrightPlugin {
     return guard
   }
 
-  const sessionField = {
-    sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-  }
+  const sessionField = sessionIdField
 
   const installTool: AnyToolDefinition = defineTool({
     name: 'install',
@@ -336,16 +348,12 @@ export function createClockPlugin(): StagewrightPlugin {
       statusTool,
     ],
     setup: (_config, context) => {
-      unsubscribeSessionEnd = context?.onSessionEnd(({ sessionId }) => {
-        clocks.delete(sessionId)
-      })
+      sessionCleanup.setup(context)
     },
     teardown: async () => {
-      unsubscribeSessionEnd?.()
-      unsubscribeSessionEnd = undefined
       // Forget every session's clock state. The fake clock lives in the transport session, which the
       // server stops before plugin teardown.
-      clocks.clear()
+      sessionCleanup.teardown()
     },
   }
 }

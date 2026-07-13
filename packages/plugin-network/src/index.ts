@@ -34,6 +34,12 @@ import {
   type ToolResult,
   type TransportSession,
 } from '@electron-stagewright/core'
+import {
+  createPluginConfigState,
+  createSessionCleanup,
+  requireTransportCapability,
+  sessionIdField,
+} from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
 /** Plugin namespace — must match {@link networkPlugin.name}; the loader prefixes its tools with it. */
@@ -164,9 +170,15 @@ export function redactEvents(
 
 /** Build a fresh network plugin whose configuration and capture state belong to one server instance. */
 export function createNetworkPlugin(): StagewrightPlugin {
-  let config: NetworkConfig = DEFAULT_CONFIG
+  const config = createPluginConfigState(DEFAULT_CONFIG)
   const captures = new Map<string, SessionCapture>()
-  let unsubscribeSessionEnd: (() => void) | undefined
+  const sessionCleanup = createSessionCleanup(
+    (sessionId) => captures.delete(sessionId),
+    () => {
+      captures.clear()
+      config.reset()
+    },
+  )
 
   /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
   interface PluginMeta {
@@ -176,8 +188,8 @@ export function createNetworkPlugin(): StagewrightPlugin {
 
   /** The set of header names (lower-cased) to redact, given the active config. */
   function redactNameSet(): ReadonlySet<string> {
-    const names = config.redactHeaders.map((name) => name.toLowerCase())
-    if (config.redactSecureDefaults) names.push(...SECURE_DEFAULT_REDACT)
+    const names = config.current.redactHeaders.map((name) => name.toLowerCase())
+    if (config.current.redactSecureDefaults) names.push(...SECURE_DEFAULT_REDACT)
     return new Set(names)
   }
 
@@ -195,13 +207,19 @@ export function createNetworkPlugin(): StagewrightPlugin {
     // resolve throws a core StagewrightError (NOT_RUNNING / BAD_ARGUMENT) the dispatcher maps to an
     // envelope, so an unknown/absent/ambiguous session needs no handling here.
     const managed = ctx.sessions.resolve(sessionId)
-    if (!managed.transport.capabilities.canIntercept) {
-      return {
-        error: makePluginError('network.UNSUPPORTED', {
+    const capability = requireTransportCapability(
+      managed.transport.capabilities,
+      'canIntercept',
+      () =>
+        makePluginError('network.UNSUPPORTED', {
           ...meta,
           message:
             'This session’s transport cannot intercept network traffic; use a Playwright launch session or a CDP attach session.',
         }),
+    )
+    if (!capability.supported) {
+      return {
+        error: capability.fallback,
       }
     }
     return { session: managed.session, sessionId: managed.id }
@@ -284,7 +302,7 @@ export function createNetworkPlugin(): StagewrightPlugin {
             'Override the content-type substrings eligible for body capture (default ' +
               'json/text/xml/form/javascript); a body is captured only when its content-type contains one.',
           ),
-        sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+        ...sessionIdField,
       })
       // The body knobs are inert without captureBodies, so passing them alone is a silent no-op of a
       // privacy-relevant control — reject it (fail loud per the agent-native UX principles) rather than
@@ -345,7 +363,7 @@ export function createNetworkPlugin(): StagewrightPlugin {
     ].join(' '),
     inputSchema: z.object({
       clear: z.boolean().optional().describe('Flush the captured buffer after reading it.'),
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+      ...sessionIdField,
     }),
     operationType: 'query',
     handler: async (args, ctx) => {
@@ -361,7 +379,7 @@ export function createNetworkPlugin(): StagewrightPlugin {
         )
       }
       const read = await guard.session.networkEvents(args.clear === true ? { clear: true } : {})
-      const events = redactEvents(read.events, redactNameSet(), config.redactBodies)
+      const events = redactEvents(read.events, redactNameSet(), config.current.redactBodies)
       return makeSuccess({ count: events.length, events, overflowed: read.overflowed }, meta)
     },
   })
@@ -374,9 +392,7 @@ export function createNetworkPlugin(): StagewrightPlugin {
       'how many were retained when it stopped). Errors: network.NOT_CAPTURING (nothing to stop),',
       'network.UNSUPPORTED, NOT_RUNNING.',
     ].join(' '),
-    inputSchema: z.object({
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-    }),
+    inputSchema: z.object({ ...sessionIdField }),
     operationType: 'command',
     handler: async (args, ctx) => {
       const meta = { startedAt: ctx.startedAt, now: ctx.now }
@@ -453,7 +469,7 @@ export function createNetworkPlugin(): StagewrightPlugin {
           .nonnegative()
           .optional()
           .describe('Delay before fulfilling/aborting, in ms, to simulate a slow endpoint.'),
-        sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+        ...sessionIdField,
       })
       .refine(
         (v) =>
@@ -511,7 +527,7 @@ export function createNetworkPlugin(): StagewrightPlugin {
         .describe(
           'Clear only stubs whose urls allowlist includes this exact entry; omit to clear all.',
         ),
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+      ...sessionIdField,
     }),
     operationType: 'command',
     handler: async (args, ctx) => {
@@ -552,18 +568,13 @@ export function createNetworkPlugin(): StagewrightPlugin {
     },
     tools: [captureStartTool, capturedTool, captureStopTool, stubTool, unstubTool],
     setup: (raw, context) => {
-      config = raw as NetworkConfig
-      unsubscribeSessionEnd = context?.onSessionEnd(({ sessionId }) => {
-        captures.delete(sessionId)
-      })
+      config.set(raw as NetworkConfig)
+      sessionCleanup.setup(context)
     },
     teardown: async () => {
-      unsubscribeSessionEnd?.()
-      unsubscribeSessionEnd = undefined
       // Forget every session's capture flag. The per-session ring buffer lives in the transport session,
       // and network stubs live on the same session; the server stops sessions before plugin teardown.
-      captures.clear()
-      config = DEFAULT_CONFIG
+      sessionCleanup.teardown()
     },
   }
 }
