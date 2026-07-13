@@ -59,118 +59,136 @@ type ProductionConfig = z.infer<typeof configSchema>
 /** Defaults used until `setup` runs (mirror the schema defaults). */
 const DEFAULT_CONFIG: ProductionConfig = { commandTimeoutMs: 10_000 }
 
-// Module-level config, set by `setup` (one plugin instance per process, as with the other
-// first-party plugins).
-let config: ProductionConfig = DEFAULT_CONFIG
+// The factory owns this parsed configuration, so each server receives an independent value.
+export function createProductionPlugin(): StagewrightPlugin {
+  let config: ProductionConfig = DEFAULT_CONFIG
 
-const validateTool: AnyToolDefinition = defineTool({
-  name: 'validate',
-  title: 'Validate a packaged macOS app',
-  description: [
-    'Validate a packaged macOS .app for production readiness and return structured results. Runs,',
-    'by default, eight checks — bundle-structure (a well-formed Contents/Info.plist + Contents/MacOS',
-    'executable), info-plist (Info.plist declares CFBundleIdentifier / CFBundleShortVersionString /',
-    'CFBundleExecutable, via plutil), protocol-schemes (CFBundleURLTypes deep-link declarations are',
-    'well-formed, unique, and shadow no system scheme), updater-feed (the packaged electron-updater',
-    'app-update.yml declares a provider with its required fields and https URLs; absent = unknown,',
-    'runtime feeds are not statically visible), crash-reporter (the crashpad handler ships intact and',
-    'executable inside Electron Framework.framework), code-signing (codesign --verify --deep',
-    '--strict), notarization (a notarization ticket stapled to the bundle, via xcrun stapler',
-    'validate), and gatekeeper (spctl --assess) — or the subset named in checks. Each result is pass',
-    '(verified good), fail (verified bad, with next_actions), or unknown (could not verify — a macOS',
-    'tool is absent, e.g. on a non-macOS host).',
-    'Returns: { ok, app_path, passed, summary: { pass, fail, unknown }, checks }, where passed is',
-    'true when no check failed (unknown checks do not fail it but are reported). Errors:',
-    'ABSOLUTE_PATH_REQUIRED (relative appPath), production.APP_NOT_FOUND (no file/dir at appPath),',
-    'production.NOT_A_BUNDLE (appPath is not a directory). Needs no app session and no --allow-eval;',
-    'it inspects the build artifact on disk.',
-  ].join(' '),
-  inputSchema: z.object({
-    appPath: z
-      .string()
-      .min(1)
-      .describe('Absolute path to the packaged macOS .app bundle to validate.'),
-    checks: z
-      .array(z.enum(CHECK_IDS))
-      .min(1)
-      .optional()
-      .describe(
-        'Subset of checks to run by id; omit to run all (bundle-structure, info-plist, protocol-schemes, updater-feed, crash-reporter, code-signing, notarization, gatekeeper).',
-      ),
-  }),
-  operationType: 'query',
-  handler: async (args, ctx) => {
-    const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    if (!path.isAbsolute(args.appPath)) {
-      return makeError('ABSOLUTE_PATH_REQUIRED', {
-        ...meta,
-        message: 'appPath must be an absolute path to a packaged .app bundle.',
-        details: { app_path: args.appPath },
-      })
-    }
-    const appPath = path.resolve(args.appPath)
+  const validateTool: AnyToolDefinition = defineTool({
+    name: 'validate',
+    title: 'Validate a packaged macOS app',
+    description: [
+      'Validate a packaged macOS .app for production readiness and return structured results. Runs,',
+      'by default, eight checks — bundle-structure (a well-formed Contents/Info.plist + Contents/MacOS',
+      'executable), info-plist (Info.plist declares CFBundleIdentifier / CFBundleShortVersionString /',
+      'CFBundleExecutable, via plutil), protocol-schemes (CFBundleURLTypes deep-link declarations are',
+      'well-formed, unique, and shadow no system scheme), updater-feed (the packaged electron-updater',
+      'app-update.yml declares a provider with its required fields and https URLs; absent = unknown,',
+      'runtime feeds are not statically visible), crash-reporter (the crashpad handler ships intact and',
+      'executable inside Electron Framework.framework), code-signing (codesign --verify --deep',
+      '--strict), notarization (a notarization ticket stapled to the bundle, via xcrun stapler',
+      'validate), and gatekeeper (spctl --assess) — or the subset named in checks. Each result is pass',
+      '(verified good), fail (verified bad, with next_actions), or unknown (could not verify — a macOS',
+      'tool is absent, e.g. on a non-macOS host).',
+      'Returns: { ok, app_path, passed, summary: { pass, fail, unknown }, checks }, where passed is',
+      'true when no check failed (unknown checks do not fail it but are reported). Errors:',
+      'ABSOLUTE_PATH_REQUIRED (relative appPath), production.APP_NOT_FOUND (no file/dir at appPath),',
+      'production.NOT_A_BUNDLE (appPath is not a directory). Needs no app session and no --allow-eval;',
+      'it inspects the build artifact on disk.',
+    ].join(' '),
+    inputSchema: z.object({
+      appPath: z
+        .string()
+        .min(1)
+        .describe('Absolute path to the packaged macOS .app bundle to validate.'),
+      checks: z
+        .array(z.enum(CHECK_IDS))
+        .min(1)
+        .optional()
+        .describe(
+          'Subset of checks to run by id; omit to run all (bundle-structure, info-plist, protocol-schemes, updater-feed, crash-reporter, code-signing, notarization, gatekeeper).',
+        ),
+    }),
+    operationType: 'query',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      if (!path.isAbsolute(args.appPath)) {
+        return makeError('ABSOLUTE_PATH_REQUIRED', {
+          ...meta,
+          message: 'appPath must be an absolute path to a packaged .app bundle.',
+          details: { app_path: args.appPath },
+        })
+      }
+      const appPath = path.resolve(args.appPath)
 
-    let info
-    try {
-      info = await stat(appPath)
-    } catch {
-      return makePluginError('production.APP_NOT_FOUND', {
-        ...meta,
-        message: `No file or directory at ${appPath}; pass the path to the packaged .app.`,
-        details: { app_path: appPath },
-      })
-    }
-    if (!info.isDirectory()) {
-      return makePluginError('production.NOT_A_BUNDLE', {
-        ...meta,
-        message: `${appPath} is not a directory; a macOS .app is a bundle directory.`,
-        details: { app_path: appPath },
-      })
-    }
+      let info
+      try {
+        info = await stat(appPath)
+      } catch {
+        return makePluginError('production.APP_NOT_FOUND', {
+          ...meta,
+          message: `No file or directory at ${appPath}; pass the path to the packaged .app.`,
+          details: { app_path: appPath },
+        })
+      }
+      if (!info.isDirectory()) {
+        return makePluginError('production.NOT_A_BUNDLE', {
+          ...meta,
+          message: `${appPath} is not a directory; a macOS .app is a bundle directory.`,
+          details: { app_path: appPath },
+        })
+      }
 
-    const run = makeRunCommand(config.commandTimeoutMs)
-    const checks = await runChecks(appPath, run, args.checks ?? CHECK_IDS)
-    const tally = (status: CheckStatus): number =>
-      checks.filter((check) => check.status === status).length
-    const summary = { pass: tally('pass'), fail: tally('fail'), unknown: tally('unknown') }
-    // passed = nothing FAILED. unknown checks (missing evidence) do not flip it, but the summary
-    // discloses them so a green result with skipped checks is never mistaken for full verification.
-    const passed = summary.fail === 0
+      const run = makeRunCommand(config.commandTimeoutMs)
+      const checks = await runChecks(appPath, run, args.checks ?? CHECK_IDS)
+      const tally = (status: CheckStatus): number =>
+        checks.filter((check) => check.status === status).length
+      const summary = { pass: tally('pass'), fail: tally('fail'), unknown: tally('unknown') }
+      // passed = nothing FAILED. unknown checks (missing evidence) do not flip it, but the summary
+      // discloses them so a green result with skipped checks is never mistaken for full verification.
+      const passed = summary.fail === 0
 
-    return makeSuccess({ app_path: appPath, passed, summary, checks }, meta)
-  },
-})
+      return makeSuccess({ app_path: appPath, passed, summary, checks }, meta)
+    },
+  })
 
-/**
- * The production validation plugin. Load with `--plugin @electron-stagewright/plugin-production` or
- * `createServer({ plugins: [productionPlugin] })`. Configure via `pluginConfigs.production`
- * (`{ commandTimeoutMs? }`).
- */
+  /**
+   * The production validation plugin. Load with `--plugin @electron-stagewright/plugin-production` or
+   * `createServer({ plugins: [productionPlugin] })`. Configure via `pluginConfigs.production`
+   * (`{ commandTimeoutMs? }`).
+   */
+  return {
+    name: PRODUCTION_NAMESPACE,
+    version: PRODUCTION_PLUGIN_VERSION,
+    coreVersionRange: '*',
+    configSchema,
+    errorCodes: {
+      APP_NOT_FOUND: {
+        http: 404,
+        retryable: false,
+        hint: 'No file or directory at the given appPath; pass the absolute path to the packaged .app.',
+      },
+      NOT_A_BUNDLE: {
+        http: 400,
+        retryable: false,
+        hint: 'A macOS .app is a bundle directory; appPath pointed at a non-directory.',
+      },
+    },
+    tools: [validateTool],
+    setup: (raw) => {
+      config = raw as ProductionConfig
+    },
+    teardown: async () => {
+      // Reset config so a later load in the same process never inherits a prior run's config.
+      config = DEFAULT_CONFIG
+    },
+  }
+}
+
+/** API 1.1 descriptor; the loader creates a fresh plugin instance for every server. */
 export const productionPlugin: StagewrightPlugin = {
   name: PRODUCTION_NAMESPACE,
   version: PRODUCTION_PLUGIN_VERSION,
   coreVersionRange: '*',
-  configSchema,
-  errorCodes: {
-    APP_NOT_FOUND: {
-      http: 404,
-      retryable: false,
-      hint: 'No file or directory at the given appPath; pass the absolute path to the packaged .app.',
-    },
-    NOT_A_BUNDLE: {
-      http: 400,
-      retryable: false,
-      hint: 'A macOS .app is a bundle directory; appPath pointed at a non-directory.',
-    },
+  get tools() {
+    return createProductionPlugin().tools ?? []
   },
-  tools: [validateTool],
-  setup: (raw) => {
-    config = raw as ProductionConfig
+  get errorCodes() {
+    return createProductionPlugin().errorCodes ?? {}
   },
-  teardown: async () => {
-    // Reset config so a later load in the same process never inherits a prior run's config.
-    config = DEFAULT_CONFIG
+  get configSchema() {
+    return configSchema
   },
+  createInstance: createProductionPlugin,
 }
 
 export default productionPlugin

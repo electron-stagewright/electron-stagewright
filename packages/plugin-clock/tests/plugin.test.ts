@@ -224,4 +224,57 @@ describe('clock plugin', () => {
       time: 2000,
     })
   })
+
+  it('isolates same-id clocks across servers and clears state when a session stops', async () => {
+    const id = 'shared-clock-session'
+    const first = await open(new FakeSession({ id }))
+    const second = await open(new FakeSession({ id }))
+    await launch(first)
+    await launch(second)
+
+    await first.dispatcher.dispatch('clock_install', { sessionId: id, time: 1000 })
+    expect(await first.dispatcher.dispatch('clock_status', { sessionId: id })).toMatchObject({
+      ok: true,
+      installed: true,
+    })
+    expect(await second.dispatcher.dispatch('clock_status', { sessionId: id })).toMatchObject({
+      ok: true,
+      installed: false,
+    })
+
+    expect(await first.dispatcher.dispatch('electron_stop', { sessionId: id })).toMatchObject({
+      ok: true,
+      stopped: true,
+    })
+    const restarted = new FakeSession({ id })
+    first.sessions.register(new FakeTransport({ session: restarted }), restarted)
+    expect(await first.dispatcher.dispatch('clock_status', { sessionId: id })).toMatchObject({
+      ok: true,
+      installed: false,
+    })
+  })
+
+  it('leaves no clock state behind after one hundred force-kill cycles', async () => {
+    const id = 'clock-cycle-session'
+    const server = await open(new FakeSession({ id }))
+    await launch(server)
+
+    for (let cycle = 0; cycle < 100; cycle += 1) {
+      expect(await server.dispatcher.dispatch('clock_status', { sessionId: id })).toMatchObject({
+        ok: true,
+        installed: false,
+      })
+      await server.dispatcher.dispatch('clock_install', { sessionId: id })
+      expect(
+        await server.dispatcher.dispatch('electron_force_kill', { sessionId: id }),
+      ).toMatchObject({
+        ok: true,
+        killed: true,
+      })
+      if (cycle < 99) {
+        const replacement = new FakeSession({ id })
+        server.sessions.register(new FakeTransport({ session: replacement }), replacement)
+      }
+    }
+  })
 })

@@ -59,6 +59,23 @@ function validateManifest(plugin: StagewrightPlugin): void {
   }
 }
 
+/** Materialize a fresh per-server plugin instance when an API 1.1 factory is available. */
+function instantiatePlugin(plugin: StagewrightPlugin): StagewrightPlugin {
+  const instance = plugin.createInstance?.() ?? plugin
+  if (instance === plugin && plugin.createInstance !== undefined) {
+    invalid(`Plugin "${plugin.name}" createInstance must return a fresh plugin instance.`)
+  }
+  if (instance.createInstance !== undefined) {
+    invalid(`Plugin "${plugin.name}" createInstance must return a concrete plugin instance.`)
+  }
+  if (instance.name !== plugin.name) {
+    invalid(
+      `Plugin "${plugin.name}" createInstance must preserve the plugin namespace (received "${instance.name}").`,
+    )
+  }
+  return instance
+}
+
 /**
  * Resolve and validate a plugin's config. Returns the parsed config when the plugin
  * declares a `configSchema` (defaulting the raw value to `{}` so schema defaults apply),
@@ -174,7 +191,8 @@ export async function loadPlugins(
   }
 
   try {
-    for (const plugin of plugins) {
+    for (const suppliedPlugin of plugins) {
+      const plugin = instantiatePlugin(suppliedPlugin)
       validateManifest(plugin)
       if (seenNamespaces.has(plugin.name)) {
         invalid(`Duplicate plugin namespace "${plugin.name}".`)
@@ -194,7 +212,7 @@ export async function loadPlugins(
       // plugin's tools.
       loaded.push(record)
       const config = resolveConfig(plugin, opts.configs)
-      await plugin.setup?.(config)
+      await plugin.setup?.(config, opts.context)
       record.markSetupRan()
       allTools.push(...tools)
     }

@@ -153,6 +153,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     ? await loadPlugins(opts.plugins, {
         coreVersion: SERVER_VERSION,
         ...(opts.pluginConfigs !== undefined ? { configs: opts.pluginConfigs } : {}),
+        context: {
+          onSessionEnd: (listener) => sessions.onSessionEnd(listener),
+        },
       })
     : undefined
 

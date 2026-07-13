@@ -14,6 +14,33 @@ import type { z } from 'zod'
 import type { ErrorCodeDefinition } from '../errors/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 
+/** Why a live session was released from its owning server. */
+export type PluginSessionEndReason = 'stop' | 'force_kill' | 'detach' | 'server_close'
+
+/**
+ * A session release observed by a plugin. The event is emitted after the session is
+ * removed from the server registry, so a listener can safely discard state keyed by
+ * {@link sessionId}; {@link remainingSessionIds} describes the sessions still live on
+ * that server after the release.
+ */
+export interface PluginSessionEndEvent {
+  readonly sessionId: string
+  readonly reason: PluginSessionEndReason
+  readonly remainingSessionIds: readonly string[]
+}
+
+/**
+ * Server-owned lifecycle hooks available to a plugin during setup. This deliberately
+ * exposes only stable identities and cleanup notification, not mutable server internals.
+ */
+export interface PluginServerContext {
+  /**
+   * Register cleanup for a released session. Listener failures are isolated from the
+   * lifecycle operation; return an idempotent unsubscribe for plugin teardown.
+   */
+  onSessionEnd(listener: (event: PluginSessionEndEvent) => void | Promise<void>): () => void
+}
+
 /**
  * The version of the PLUGIN CONTRACT surface (ADR-004) — the shape of {@link StagewrightPlugin},
  * the `ToolContext` passed to handlers, the error-envelope helpers, and the loader's namespacing
@@ -22,7 +49,7 @@ import type { AnyToolDefinition } from '../tools/types.js'
  * for additive contract changes, the MAJOR for breaking ones. A plugin can log or assert against
  * it at `setup` time, and `coreVersionRange` remains the enforced compatibility gate.
  */
-export const PLUGIN_API_VERSION = '1.0.0' as const
+export const PLUGIN_API_VERSION = '1.1.0' as const
 
 /**
  * A first-party plugin. Authored with SHORT tool names and BARE error-code keys; the
@@ -69,10 +96,17 @@ export interface StagewrightPlugin {
    */
   readonly configSchema?: z.ZodTypeAny
   /**
+   * Optional per-server factory introduced in plugin API 1.1. When present, the
+   * loader calls it once for every server before validation and setup, so closures,
+   * maps, and parsed configuration cannot leak between co-resident servers. API 1.0
+   * plugins omit this property and continue to load as their supplied object.
+   */
+  readonly createInstance?: () => StagewrightPlugin
+  /**
    * Optional async setup, run once at load (after tools + codes are registered). Receives
    * the validated config when `configSchema` is set, otherwise `undefined`.
    */
-  readonly setup?: (config: unknown) => void | Promise<void>
+  readonly setup?: (config: unknown, context?: PluginServerContext) => void | Promise<void>
   /** Optional async teardown, run once at server close. Made idempotent by the loader. */
   readonly teardown?: () => void | Promise<void>
 }
@@ -109,6 +143,8 @@ export interface LoadPluginsOptions {
    * in `setup`. Plugins without a schema ignore config.
    */
   readonly configs?: Readonly<Record<string, unknown>>
+  /** Server lifecycle context supplied to API 1.1 plugins during setup. */
+  readonly context?: PluginServerContext
 }
 
 /** Public metadata for one loaded plugin, surfaced by the plugins-introspection tool. */

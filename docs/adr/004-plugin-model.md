@@ -148,6 +148,23 @@ this records what was added on top of it:
 - **Example**: `examples/plugin-sample` is a plain-ESM plugin (one tool, one error code, a config
   schema, lifecycle hooks) plus a real-MCP scenario that loads it through the CLI `--plugin` flag.
 
+## Status update (per-server state and session cleanup, 2026-07-12)
+
+The plugin contract is now at API `1.1.0`. A plugin may expose `createInstance()`, which the loader
+calls once for each server before manifest validation and setup. First-party plugins use this factory
+path, so parsed config, capture registries, clocks, and active trace state live in per-server closures
+instead of process-shared module state. Existing API 1.0 plugin objects remain valid: the factory is
+optional and the loader uses the supplied object when it is absent.
+
+`setup(config, context?)` gains an optional, additive server context. Its `onSessionEnd` callback
+receives the released session id, reason (`stop`, `force_kill`, `detach`, or `server_close`), and the
+remaining live ids. The server invokes listeners after removing the session; listener failures are
+contained so a cleanup problem cannot turn a completed lifecycle operation into an MCP failure.
+First-party capture and clock plugins use the callback to discard per-session entries. Trace recording
+is server-scoped rather than session-scoped so it can include `electron_stop` and the later
+`trace_stop`; it remains active until explicitly stopped or server teardown. Teardown unregisters every
+listener, then clears the instance state as an idempotent final backstop.
+
 ## Related decisions
 
 - **ADR-006** (Error code registry) — anticipated `registerPluginCodes` and `<plugin>.CODE`;

@@ -108,28 +108,6 @@ interface SessionCapture {
   readonly bodyContentTypes?: readonly string[]
 }
 
-// Module-level state. `captures` holds one entry per capturing session, keyed by the transport's
-// globally-unique session id, so concurrent app sessions capture independently — starting or stopping
-// one never disturbs another. The map/config are module-level, so co-resident servers in the SAME
-// process share plugin lifecycle/config (an accepted limitation, as with the IPC and trace plugins);
-// fully independent lifecycles run in separate Node processes. The actual per-session ring buffer
-// lives in the transport session; this map only tracks which sessions the plugin armed.
-let config: NetworkConfig = DEFAULT_CONFIG
-const captures = new Map<string, SessionCapture>()
-
-/** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
-interface PluginMeta {
-  readonly startedAt: number
-  readonly now: () => number
-}
-
-/** The set of header names (lower-cased) to redact, given the active config. */
-function redactNameSet(): ReadonlySet<string> {
-  const names = config.redactHeaders.map((name) => name.toLowerCase())
-  if (config.redactSecureDefaults) names.push(...SECURE_DEFAULT_REDACT)
-  return new Set(names)
-}
-
 /** Replace the values of redacted headers with `[redacted]`, leaving the rest intact. */
 function redactHeaderMap(
   headers: Record<string, string>,
@@ -184,378 +162,427 @@ export function redactEvents(
   })
 }
 
-/**
- * Resolve the session + assert its transport can intercept network traffic (the `canIntercept`
- * capability both capture and stubbing need). Returns the session, or the plugin-error envelope to
- * return instead. Unlike the IPC plugin, there is no eval gate — this is protocol-level interception,
- * not arbitrary JS.
- */
-function requireIntercept(
-  ctx: ToolContext,
-  sessionId: string | undefined,
-  meta: PluginMeta,
-): { session: TransportSession; sessionId: string } | { error: ToolResult } {
-  // resolve throws a core StagewrightError (NOT_RUNNING / BAD_ARGUMENT) the dispatcher maps to an
-  // envelope, so an unknown/absent/ambiguous session needs no handling here.
-  const managed = ctx.sessions.resolve(sessionId)
-  if (!managed.transport.capabilities.canIntercept) {
-    return {
-      error: makePluginError('network.UNSUPPORTED', {
-        ...meta,
-        message:
-          'This session’s transport cannot intercept network traffic; use a Playwright launch session or a CDP attach session.',
-      }),
-    }
+/** Build a fresh network plugin whose configuration and capture state belong to one server instance. */
+export function createNetworkPlugin(): StagewrightPlugin {
+  let config: NetworkConfig = DEFAULT_CONFIG
+  const captures = new Map<string, SessionCapture>()
+  let unsubscribeSessionEnd: (() => void) | undefined
+
+  /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
+  interface PluginMeta {
+    readonly startedAt: number
+    readonly now: () => number
   }
-  return { session: managed.session, sessionId: managed.id }
-}
 
-/**
- * The ids of THIS server's sessions that currently have a capture, surfaced in error details so the
- * agent can retarget. Scoped to the caller's session manager: the `captures` registry is
- * process-global, so a co-resident second server's captures must not leak into this server's payloads.
- */
-function capturingIds(sessions: ToolContext['sessions']): string[] {
-  return [...captures.keys()].filter((id) => sessions.has(id))
-}
+  /** The set of header names (lower-cased) to redact, given the active config. */
+  function redactNameSet(): ReadonlySet<string> {
+    const names = config.redactHeaders.map((name) => name.toLowerCase())
+    if (config.redactSecureDefaults) names.push(...SECURE_DEFAULT_REDACT)
+    return new Set(names)
+  }
 
-/**
- * The NOT_CAPTURING envelope for a request whose resolved session has no active capture. `details.capturing`
- * lists this server's capturing sessions so the agent can retarget; `hint` tails the message.
- */
-function notCapturing(
-  sessionId: string,
-  sessions: ToolContext['sessions'],
-  meta: PluginMeta,
-  hint: string,
-): ToolResult {
-  return makePluginError('network.NOT_CAPTURING', {
-    ...meta,
-    message: `No active network capture on session ${sessionId}; ${hint}`,
-    details: { sessionId, capturing: capturingIds(sessions) },
-  })
-}
+  /**
+   * Resolve the session + assert its transport can intercept network traffic (the `canIntercept`
+   * capability both capture and stubbing need). Returns the session, or the plugin-error envelope to
+   * return instead. Unlike the IPC plugin, there is no eval gate — this is protocol-level interception,
+   * not arbitrary JS.
+   */
+  function requireIntercept(
+    ctx: ToolContext,
+    sessionId: string | undefined,
+    meta: PluginMeta,
+  ): { session: TransportSession; sessionId: string } | { error: ToolResult } {
+    // resolve throws a core StagewrightError (NOT_RUNNING / BAD_ARGUMENT) the dispatcher maps to an
+    // envelope, so an unknown/absent/ambiguous session needs no handling here.
+    const managed = ctx.sessions.resolve(sessionId)
+    if (!managed.transport.capabilities.canIntercept) {
+      return {
+        error: makePluginError('network.UNSUPPORTED', {
+          ...meta,
+          message:
+            'This session’s transport cannot intercept network traffic; use a Playwright launch session or a CDP attach session.',
+        }),
+      }
+    }
+    return { session: managed.session, sessionId: managed.id }
+  }
 
-const captureStartTool: AnyToolDefinition = defineTool({
-  name: 'capture_start',
-  title: 'Start capturing network requests',
-  description: [
-    'Begin recording the renderer requests whose URL contains any entry in `urls` (an explicit',
-    'allowlist — only matching requests are captured; there is no capture-everything). Optionally',
-    'restrict to `methods` (e.g. ["GET","POST"], case-insensitive). Captures metadata + headers only by',
-    'default; set `captureBodies` (true, or "size" for byte-length only) to also capture request/response',
-    'bodies (text-ish content types only, capped by `maxBodyBytes`). Returns: { ok, capturing, urls,',
-    'methods? }. Errors: network.UNSUPPORTED (transport cannot capture), network.ALREADY_CAPTURING (call',
-    'network_capture_stop first), NOT_RUNNING (no session), BAD_ARGUMENT (empty urls, or a body knob',
-    'without captureBodies).',
-  ].join(' '),
-  inputSchema: z
-    .object({
-      urls: z
-        .array(z.string().min(1))
-        .min(1)
-        .describe('Allowlist of URL substrings to capture (required, at least one).'),
-      methods: z
-        .array(z.string().min(1))
-        .optional()
-        .describe(
-          'Optional HTTP-method allowlist (case-insensitive); omit to capture every method.',
-        ),
-      captureBodies: z
-        .union([z.boolean(), z.literal('size')])
-        .optional()
-        .describe(
-          'Capture request/response bodies (default off — headers/metadata only). true records the ' +
-            'decoded body text (capped by maxBodyBytes); "size" records only the byte length, not the ' +
-            'content. Bodies are captured only for text-ish content types (see bodyContentTypes).',
-        ),
-      maxBodyBytes: z
-        .number()
-        .int()
-        .positive()
-        .max(MAX_BODY_BYTES_CEILING)
-        .optional()
-        .describe(
-          'Max body BYTES exposed per request when captureBodies is on (default 65536, hard cap ' +
-            '1048576). A larger body is truncated; its true byte length is still reported.',
-        ),
-      bodyContentTypes: z
-        .array(z.string().min(1))
-        .min(1)
-        .optional()
-        .describe(
-          'Override the content-type substrings eligible for body capture (default ' +
-            'json/text/xml/form/javascript); a body is captured only when its content-type contains one.',
-        ),
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+  /**
+   * The ids of THIS server's sessions that currently have a capture, surfaced in error details so the
+   * agent can retarget. Scoped to the caller's session manager: the `captures` registry is
+   * process-global, so a co-resident second server's captures must not leak into this server's payloads.
+   */
+  function capturingIds(sessions: ToolContext['sessions']): string[] {
+    return [...captures.keys()].filter((id) => sessions.has(id))
+  }
+
+  /**
+   * The NOT_CAPTURING envelope for a request whose resolved session has no active capture. `details.capturing`
+   * lists this server's capturing sessions so the agent can retarget; `hint` tails the message.
+   */
+  function notCapturing(
+    sessionId: string,
+    sessions: ToolContext['sessions'],
+    meta: PluginMeta,
+    hint: string,
+  ): ToolResult {
+    return makePluginError('network.NOT_CAPTURING', {
+      ...meta,
+      message: `No active network capture on session ${sessionId}; ${hint}`,
+      details: { sessionId, capturing: capturingIds(sessions) },
     })
-    // The body knobs are inert without captureBodies, so passing them alone is a silent no-op of a
-    // privacy-relevant control — reject it (fail loud per the agent-native UX principles) rather than
-    // capture nothing. The refine runs at dispatch (-> BAD_ARGUMENT); it is dropped from the generated
-    // JSON-Schema manifest, like the stub tool's abort/fulfill refine.
-    .refine(
-      (v) =>
-        v.captureBodies !== undefined ||
-        (v.maxBodyBytes === undefined && v.bodyContentTypes === undefined),
-      {
-        message: 'maxBodyBytes and bodyContentTypes only apply when captureBodies is set.',
-      },
-    ),
-  operationType: 'command',
-  handler: async (args, ctx) => {
-    const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    // Resolve the session first (this also enforces the capability gate), so ALREADY_CAPTURING is
-    // judged per the resolved session rather than against a single global flag.
-    const guard = requireIntercept(ctx, args.sessionId, meta)
-    if ('error' in guard) return guard.error
-    if (captures.has(guard.sessionId)) {
-      return makePluginError('network.ALREADY_CAPTURING', {
-        ...meta,
-        message: `Already capturing on session ${guard.sessionId}; call network_capture_stop first.`,
-        details: { sessionId: guard.sessionId, capturing: capturingIds(ctx.sessions) },
+  }
+
+  const captureStartTool: AnyToolDefinition = defineTool({
+    name: 'capture_start',
+    title: 'Start capturing network requests',
+    description: [
+      'Begin recording the renderer requests whose URL contains any entry in `urls` (an explicit',
+      'allowlist — only matching requests are captured; there is no capture-everything). Optionally',
+      'restrict to `methods` (e.g. ["GET","POST"], case-insensitive). Captures metadata + headers only by',
+      'default; set `captureBodies` (true, or "size" for byte-length only) to also capture request/response',
+      'bodies (text-ish content types only, capped by `maxBodyBytes`). Returns: { ok, capturing, urls,',
+      'methods? }. Errors: network.UNSUPPORTED (transport cannot capture), network.ALREADY_CAPTURING (call',
+      'network_capture_stop first), NOT_RUNNING (no session), BAD_ARGUMENT (empty urls, or a body knob',
+      'without captureBodies).',
+    ].join(' '),
+    inputSchema: z
+      .object({
+        urls: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe('Allowlist of URL substrings to capture (required, at least one).'),
+        methods: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            'Optional HTTP-method allowlist (case-insensitive); omit to capture every method.',
+          ),
+        captureBodies: z
+          .union([z.boolean(), z.literal('size')])
+          .optional()
+          .describe(
+            'Capture request/response bodies (default off — headers/metadata only). true records the ' +
+              'decoded body text (capped by maxBodyBytes); "size" records only the byte length, not the ' +
+              'content. Bodies are captured only for text-ish content types (see bodyContentTypes).',
+          ),
+        maxBodyBytes: z
+          .number()
+          .int()
+          .positive()
+          .max(MAX_BODY_BYTES_CEILING)
+          .optional()
+          .describe(
+            'Max body BYTES exposed per request when captureBodies is on (default 65536, hard cap ' +
+              '1048576). A larger body is truncated; its true byte length is still reported.',
+          ),
+        bodyContentTypes: z
+          .array(z.string().min(1))
+          .min(1)
+          .optional()
+          .describe(
+            'Override the content-type substrings eligible for body capture (default ' +
+              'json/text/xml/form/javascript); a body is captured only when its content-type contains one.',
+          ),
+        sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
       })
-    }
-    const filter = {
-      urls: args.urls,
-      ...(args.methods !== undefined ? { methods: args.methods } : {}),
-      ...(args.captureBodies !== undefined ? { captureBodies: args.captureBodies } : {}),
-      ...(args.maxBodyBytes !== undefined ? { maxBodyBytes: args.maxBodyBytes } : {}),
-      ...(args.bodyContentTypes !== undefined ? { bodyContentTypes: args.bodyContentTypes } : {}),
-    }
-    await guard.session.startNetworkCapture(filter)
-    captures.set(guard.sessionId, filter)
-    return makeSuccess(
-      {
-        capturing: true,
-        urls: filter.urls,
-        ...(filter.methods !== undefined ? { methods: filter.methods } : {}),
-      },
-      meta,
-    )
-  },
-})
-
-const capturedTool: AnyToolDefinition = defineTool({
-  name: 'captured',
-  title: 'Read captured network requests',
-  description: [
-    'Return the network events captured since network_capture_start. Each event is { method, url,',
-    'resourceType?, status?, ok?, requestHeaders?, responseHeaders?, failure?, durationMs?, timestamp,',
-    'windowId? }, plus requestBody?/responseBody? (+ *BodyBytes?/*BodyTruncated?) when captureBodies was',
-    'set; configured redact headers are stripped (and bodies when redactBodies is on). Pass clear:true to',
-    'flush the buffer after reading. Returns: { ok, count, events, overflowed }. Errors:',
-    'network.NOT_CAPTURING (call network_capture_start first), network.UNSUPPORTED, NOT_RUNNING.',
-  ].join(' '),
-  inputSchema: z.object({
-    clear: z.boolean().optional().describe('Flush the captured buffer after reading it.'),
-    sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-  }),
-  operationType: 'query',
-  handler: async (args, ctx) => {
-    const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    const guard = requireIntercept(ctx, args.sessionId, meta)
-    if ('error' in guard) return guard.error
-    if (!captures.has(guard.sessionId)) {
-      return notCapturing(guard.sessionId, ctx.sessions, meta, 'call network_capture_start first.')
-    }
-    const read = await guard.session.networkEvents(args.clear === true ? { clear: true } : {})
-    const events = redactEvents(read.events, redactNameSet(), config.redactBodies)
-    return makeSuccess({ count: events.length, events, overflowed: read.overflowed }, meta)
-  },
-})
-
-const captureStopTool: AnyToolDefinition = defineTool({
-  name: 'capture_stop',
-  title: 'Stop capturing network requests',
-  description: [
-    'Stop the active network capture and clear its buffer. Returns: { ok, stopped, events } (events =',
-    'how many were retained when it stopped). Errors: network.NOT_CAPTURING (nothing to stop),',
-    'network.UNSUPPORTED, NOT_RUNNING.',
-  ].join(' '),
-  inputSchema: z.object({
-    sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-  }),
-  operationType: 'command',
-  handler: async (args, ctx) => {
-    const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    const guard = requireIntercept(ctx, args.sessionId, meta)
-    if ('error' in guard) return guard.error
-    if (!captures.has(guard.sessionId)) {
-      return notCapturing(guard.sessionId, ctx.sessions, meta, 'nothing to stop.')
-    }
-    // Read the retained count before stopping (stop clears the buffer).
-    const read = await guard.session.networkEvents()
-    await guard.session.stopNetworkCapture()
-    captures.delete(guard.sessionId)
-    return makeSuccess({ stopped: true, events: read.events.length }, meta)
-  },
-})
-
-const stubTool: AnyToolDefinition = defineTool({
-  name: 'stub',
-  title: 'Stub or abort matching network requests',
-  description: [
-    'Intercept the renderer requests whose URL contains any entry in `urls` and FULFILL them with a',
-    'canned response (status 100-599, headers/contentType/body, default 200) or ABORT them with a',
-    'Playwright-compatible reason (a simulated network failure) — so the app can be driven through',
-    'states a live backend will not reliably produce.',
-    '`abort` is mutually exclusive with the fulfill fields. `times` expires the stub after N uses;',
-    '`delayMs` simulates a slow endpoint. Multiple stubs may be active (first match wins); a stubbed',
-    'request is still captured. Returns: { ok, stubbed, abort? }. Errors: network.UNSUPPORTED',
-    '(transport cannot intercept), NOT_RUNNING, BAD_ARGUMENT (empty urls, or abort+fulfill together).',
-  ].join(' '),
-  inputSchema: z
-    .object({
-      urls: z
-        .array(z.string().min(1))
-        .min(1)
-        .describe('Allowlist of URL substrings to stub (required, at least one).'),
-      methods: z
-        .array(z.string().min(1))
-        .optional()
-        .describe('Optional HTTP-method allowlist (case-insensitive); omit to stub every method.'),
-      status: z
-        .number()
-        .int()
-        .min(100)
-        .max(599)
-        .optional()
-        .describe('Fulfill: HTTP status code (100-599, default 200).'),
-      headers: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe('Fulfill: response headers as a name->value map.'),
-      contentType: z.string().optional().describe('Fulfill: Content-Type shortcut.'),
-      body: z.string().optional().describe('Fulfill: response body as a string.'),
-      abort: z
-        .enum(NETWORK_ABORT_REASONS)
-        .optional()
-        .describe(
-          'Abort the request with this Playwright-compatible reason (e.g. "failed"). Mutually ' +
-            'exclusive with the fulfill fields (status/headers/contentType/body) — pass one kind ' +
-            'or the other, not both.',
-        ),
-      times: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe(
-          'Apply at most this many times, then the stub expires and the request goes live.',
-        ),
-      delayMs: z
-        .number()
-        .int()
-        .nonnegative()
-        .optional()
-        .describe('Delay before fulfilling/aborting, in ms, to simulate a slow endpoint.'),
-      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-    })
-    .refine(
-      (v) =>
-        v.abort === undefined ||
-        (v.status === undefined &&
-          v.headers === undefined &&
-          v.contentType === undefined &&
-          v.body === undefined),
-      {
-        message:
-          'abort cannot be combined with a fulfill response (status/headers/contentType/body).',
-      },
-    ),
-  operationType: 'command',
-  handler: async (args, ctx) => {
-    const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    const guard = requireIntercept(ctx, args.sessionId, meta)
-    if ('error' in guard) return guard.error
-    const stub: NetworkStub = {
-      urls: args.urls,
-      ...(args.methods !== undefined ? { methods: args.methods } : {}),
-      ...(args.times !== undefined ? { times: args.times } : {}),
-      ...(args.delayMs !== undefined ? { delayMs: args.delayMs } : {}),
-      ...(args.abort !== undefined
-        ? { abort: args.abort }
-        : {
-            fulfill: {
-              ...(args.status !== undefined ? { status: args.status } : {}),
-              ...(args.headers !== undefined ? { headers: args.headers } : {}),
-              ...(args.contentType !== undefined ? { contentType: args.contentType } : {}),
-              ...(args.body !== undefined ? { body: args.body } : {}),
-            },
-          }),
-    }
-    await guard.session.stubNetwork(stub)
-    return makeSuccess(
-      { stubbed: args.urls, ...(args.abort !== undefined ? { abort: args.abort } : {}) },
-      meta,
-    )
-  },
-})
-
-const unstubTool: AnyToolDefinition = defineTool({
-  name: 'unstub',
-  title: 'Remove network stubs',
-  description: [
-    'Remove network stubs and restore live traffic: every stub, or only those whose allowlist includes',
-    '`url` (exact match) when given. Idempotent. Returns: { ok, unstubbed }. Errors:',
-    'network.UNSUPPORTED, NOT_RUNNING.',
-  ].join(' '),
-  inputSchema: z.object({
-    url: z
-      .string()
-      .optional()
-      .describe(
-        'Clear only stubs whose urls allowlist includes this exact entry; omit to clear all.',
+      // The body knobs are inert without captureBodies, so passing them alone is a silent no-op of a
+      // privacy-relevant control — reject it (fail loud per the agent-native UX principles) rather than
+      // capture nothing. The refine runs at dispatch (-> BAD_ARGUMENT); it is dropped from the generated
+      // JSON-Schema manifest, like the stub tool's abort/fulfill refine.
+      .refine(
+        (v) =>
+          v.captureBodies !== undefined ||
+          (v.maxBodyBytes === undefined && v.bodyContentTypes === undefined),
+        {
+          message: 'maxBodyBytes and bodyContentTypes only apply when captureBodies is set.',
+        },
       ),
-    sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
-  }),
-  operationType: 'command',
-  handler: async (args, ctx) => {
-    const meta = { startedAt: ctx.startedAt, now: ctx.now }
-    const guard = requireIntercept(ctx, args.sessionId, meta)
-    if ('error' in guard) return guard.error
-    await guard.session.clearNetworkStubs(args.url)
-    return makeSuccess({ unstubbed: args.url ?? 'all' }, meta)
-  },
-})
+    operationType: 'command',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      // Resolve the session first (this also enforces the capability gate), so ALREADY_CAPTURING is
+      // judged per the resolved session rather than against a single global flag.
+      const guard = requireIntercept(ctx, args.sessionId, meta)
+      if ('error' in guard) return guard.error
+      if (captures.has(guard.sessionId)) {
+        return makePluginError('network.ALREADY_CAPTURING', {
+          ...meta,
+          message: `Already capturing on session ${guard.sessionId}; call network_capture_stop first.`,
+          details: { sessionId: guard.sessionId, capturing: capturingIds(ctx.sessions) },
+        })
+      }
+      const filter = {
+        urls: args.urls,
+        ...(args.methods !== undefined ? { methods: args.methods } : {}),
+        ...(args.captureBodies !== undefined ? { captureBodies: args.captureBodies } : {}),
+        ...(args.maxBodyBytes !== undefined ? { maxBodyBytes: args.maxBodyBytes } : {}),
+        ...(args.bodyContentTypes !== undefined ? { bodyContentTypes: args.bodyContentTypes } : {}),
+      }
+      await guard.session.startNetworkCapture(filter)
+      captures.set(guard.sessionId, filter)
+      return makeSuccess(
+        {
+          capturing: true,
+          urls: filter.urls,
+          ...(filter.methods !== undefined ? { methods: filter.methods } : {}),
+        },
+        meta,
+      )
+    },
+  })
 
-/**
- * The network plugin. Load with `--plugin @electron-stagewright/plugin-network` (NO eval flag — it
- * does not run app JS) or `createServer({ plugins: [networkPlugin] })`. Configure via
- * `pluginConfigs.network` (`{ redactHeaders?, redactSecureDefaults?, redactBodies? }`).
- */
+  const capturedTool: AnyToolDefinition = defineTool({
+    name: 'captured',
+    title: 'Read captured network requests',
+    description: [
+      'Return the network events captured since network_capture_start. Each event is { method, url,',
+      'resourceType?, status?, ok?, requestHeaders?, responseHeaders?, failure?, durationMs?, timestamp,',
+      'windowId? }, plus requestBody?/responseBody? (+ *BodyBytes?/*BodyTruncated?) when captureBodies was',
+      'set; configured redact headers are stripped (and bodies when redactBodies is on). Pass clear:true to',
+      'flush the buffer after reading. Returns: { ok, count, events, overflowed }. Errors:',
+      'network.NOT_CAPTURING (call network_capture_start first), network.UNSUPPORTED, NOT_RUNNING.',
+    ].join(' '),
+    inputSchema: z.object({
+      clear: z.boolean().optional().describe('Flush the captured buffer after reading it.'),
+      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+    }),
+    operationType: 'query',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const guard = requireIntercept(ctx, args.sessionId, meta)
+      if ('error' in guard) return guard.error
+      if (!captures.has(guard.sessionId)) {
+        return notCapturing(
+          guard.sessionId,
+          ctx.sessions,
+          meta,
+          'call network_capture_start first.',
+        )
+      }
+      const read = await guard.session.networkEvents(args.clear === true ? { clear: true } : {})
+      const events = redactEvents(read.events, redactNameSet(), config.redactBodies)
+      return makeSuccess({ count: events.length, events, overflowed: read.overflowed }, meta)
+    },
+  })
+
+  const captureStopTool: AnyToolDefinition = defineTool({
+    name: 'capture_stop',
+    title: 'Stop capturing network requests',
+    description: [
+      'Stop the active network capture and clear its buffer. Returns: { ok, stopped, events } (events =',
+      'how many were retained when it stopped). Errors: network.NOT_CAPTURING (nothing to stop),',
+      'network.UNSUPPORTED, NOT_RUNNING.',
+    ].join(' '),
+    inputSchema: z.object({
+      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+    }),
+    operationType: 'command',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const guard = requireIntercept(ctx, args.sessionId, meta)
+      if ('error' in guard) return guard.error
+      if (!captures.has(guard.sessionId)) {
+        return notCapturing(guard.sessionId, ctx.sessions, meta, 'nothing to stop.')
+      }
+      // Read the retained count before stopping (stop clears the buffer).
+      const read = await guard.session.networkEvents()
+      await guard.session.stopNetworkCapture()
+      captures.delete(guard.sessionId)
+      return makeSuccess({ stopped: true, events: read.events.length }, meta)
+    },
+  })
+
+  const stubTool: AnyToolDefinition = defineTool({
+    name: 'stub',
+    title: 'Stub or abort matching network requests',
+    description: [
+      'Intercept the renderer requests whose URL contains any entry in `urls` and FULFILL them with a',
+      'canned response (status 100-599, headers/contentType/body, default 200) or ABORT them with a',
+      'Playwright-compatible reason (a simulated network failure) — so the app can be driven through',
+      'states a live backend will not reliably produce.',
+      '`abort` is mutually exclusive with the fulfill fields. `times` expires the stub after N uses;',
+      '`delayMs` simulates a slow endpoint. Multiple stubs may be active (first match wins); a stubbed',
+      'request is still captured. Returns: { ok, stubbed, abort? }. Errors: network.UNSUPPORTED',
+      '(transport cannot intercept), NOT_RUNNING, BAD_ARGUMENT (empty urls, or abort+fulfill together).',
+    ].join(' '),
+    inputSchema: z
+      .object({
+        urls: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe('Allowlist of URL substrings to stub (required, at least one).'),
+        methods: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            'Optional HTTP-method allowlist (case-insensitive); omit to stub every method.',
+          ),
+        status: z
+          .number()
+          .int()
+          .min(100)
+          .max(599)
+          .optional()
+          .describe('Fulfill: HTTP status code (100-599, default 200).'),
+        headers: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe('Fulfill: response headers as a name->value map.'),
+        contentType: z.string().optional().describe('Fulfill: Content-Type shortcut.'),
+        body: z.string().optional().describe('Fulfill: response body as a string.'),
+        abort: z
+          .enum(NETWORK_ABORT_REASONS)
+          .optional()
+          .describe(
+            'Abort the request with this Playwright-compatible reason (e.g. "failed"). Mutually ' +
+              'exclusive with the fulfill fields (status/headers/contentType/body) — pass one kind ' +
+              'or the other, not both.',
+          ),
+        times: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Apply at most this many times, then the stub expires and the request goes live.',
+          ),
+        delayMs: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('Delay before fulfilling/aborting, in ms, to simulate a slow endpoint.'),
+        sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+      })
+      .refine(
+        (v) =>
+          v.abort === undefined ||
+          (v.status === undefined &&
+            v.headers === undefined &&
+            v.contentType === undefined &&
+            v.body === undefined),
+        {
+          message:
+            'abort cannot be combined with a fulfill response (status/headers/contentType/body).',
+        },
+      ),
+    operationType: 'command',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const guard = requireIntercept(ctx, args.sessionId, meta)
+      if ('error' in guard) return guard.error
+      const stub: NetworkStub = {
+        urls: args.urls,
+        ...(args.methods !== undefined ? { methods: args.methods } : {}),
+        ...(args.times !== undefined ? { times: args.times } : {}),
+        ...(args.delayMs !== undefined ? { delayMs: args.delayMs } : {}),
+        ...(args.abort !== undefined
+          ? { abort: args.abort }
+          : {
+              fulfill: {
+                ...(args.status !== undefined ? { status: args.status } : {}),
+                ...(args.headers !== undefined ? { headers: args.headers } : {}),
+                ...(args.contentType !== undefined ? { contentType: args.contentType } : {}),
+                ...(args.body !== undefined ? { body: args.body } : {}),
+              },
+            }),
+      }
+      await guard.session.stubNetwork(stub)
+      return makeSuccess(
+        { stubbed: args.urls, ...(args.abort !== undefined ? { abort: args.abort } : {}) },
+        meta,
+      )
+    },
+  })
+
+  const unstubTool: AnyToolDefinition = defineTool({
+    name: 'unstub',
+    title: 'Remove network stubs',
+    description: [
+      'Remove network stubs and restore live traffic: every stub, or only those whose allowlist includes',
+      '`url` (exact match) when given. Idempotent. Returns: { ok, unstubbed }. Errors:',
+      'network.UNSUPPORTED, NOT_RUNNING.',
+    ].join(' '),
+    inputSchema: z.object({
+      url: z
+        .string()
+        .optional()
+        .describe(
+          'Clear only stubs whose urls allowlist includes this exact entry; omit to clear all.',
+        ),
+      sessionId: z.string().optional().describe('Target session; defaults to the only session.'),
+    }),
+    operationType: 'command',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const guard = requireIntercept(ctx, args.sessionId, meta)
+      if ('error' in guard) return guard.error
+      await guard.session.clearNetworkStubs(args.url)
+      return makeSuccess({ unstubbed: args.url ?? 'all' }, meta)
+    },
+  })
+
+  /**
+   * The network plugin. Load with `--plugin @electron-stagewright/plugin-network` (NO eval flag — it
+   * does not run app JS) or `createServer({ plugins: [networkPlugin] })`. Configure via
+   * `pluginConfigs.network` (`{ redactHeaders?, redactSecureDefaults?, redactBodies? }`).
+   */
+  return {
+    name: NETWORK_NAMESPACE,
+    version: NETWORK_PLUGIN_VERSION,
+    coreVersionRange: '*',
+    configSchema,
+    errorCodes: {
+      UNSUPPORTED: {
+        http: 409,
+        retryable: false,
+        hint: 'This transport cannot intercept network traffic; use a Playwright launch session or a CDP attach session.',
+      },
+      ALREADY_CAPTURING: {
+        http: 409,
+        retryable: false,
+        hint: 'A network capture is already active on this session; call network_capture_stop first.',
+      },
+      NOT_CAPTURING: {
+        http: 409,
+        retryable: false,
+        hint: 'No active network capture on this session; call network_capture_start first.',
+      },
+    },
+    tools: [captureStartTool, capturedTool, captureStopTool, stubTool, unstubTool],
+    setup: (raw, context) => {
+      config = raw as NetworkConfig
+      unsubscribeSessionEnd = context?.onSessionEnd(({ sessionId }) => {
+        captures.delete(sessionId)
+      })
+    },
+    teardown: async () => {
+      unsubscribeSessionEnd?.()
+      unsubscribeSessionEnd = undefined
+      // Forget every session's capture flag. The per-session ring buffer lives in the transport session,
+      // and network stubs live on the same session; the server stops sessions before plugin teardown.
+      captures.clear()
+      config = DEFAULT_CONFIG
+    },
+  }
+}
+
+/** API 1.1 descriptor; the loader creates a fresh plugin instance for every server. */
 export const networkPlugin: StagewrightPlugin = {
   name: NETWORK_NAMESPACE,
   version: NETWORK_PLUGIN_VERSION,
   coreVersionRange: '*',
-  configSchema,
-  errorCodes: {
-    UNSUPPORTED: {
-      http: 409,
-      retryable: false,
-      hint: 'This transport cannot intercept network traffic; use a Playwright launch session or a CDP attach session.',
-    },
-    ALREADY_CAPTURING: {
-      http: 409,
-      retryable: false,
-      hint: 'A network capture is already active on this session; call network_capture_stop first.',
-    },
-    NOT_CAPTURING: {
-      http: 409,
-      retryable: false,
-      hint: 'No active network capture on this session; call network_capture_start first.',
-    },
+  get tools() {
+    return createNetworkPlugin().tools ?? []
   },
-  tools: [captureStartTool, capturedTool, captureStopTool, stubTool, unstubTool],
-  setup: (raw) => {
-    config = raw as NetworkConfig
+  get errorCodes() {
+    return createNetworkPlugin().errorCodes ?? {}
   },
-  teardown: async () => {
-    // Forget every session's capture flag. The per-session ring buffer lives in the transport session,
-    // and network stubs live on the same session; the server stops sessions before plugin teardown.
-    captures.clear()
-    config = DEFAULT_CONFIG
+  get configSchema() {
+    return configSchema
   },
+  createInstance: createNetworkPlugin,
 }
 
 export default networkPlugin

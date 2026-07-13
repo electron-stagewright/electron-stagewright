@@ -14,7 +14,13 @@ export {
 
 export { anyEvalAllowed, normalizeEvalPolicy, type EvalPolicy } from './eval-policy.js'
 
-export { SessionManager, type ManagedSession } from './session-manager.js'
+export {
+  SessionManager,
+  type ManagedSession,
+  type SessionEndEvent,
+  type SessionEndListener,
+  type SessionEndReason,
+} from './session-manager.js'
 
 export { TransportRegistry, type TransportRegistryOptions } from './transport-registry.js'
 
