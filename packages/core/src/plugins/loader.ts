@@ -20,6 +20,7 @@ import {
 } from '../errors/index.js'
 import { parsePluginConfig, PluginConfigValidationError } from '../plugin-sdk/config.js'
 import type { AnyToolDefinition } from '../tools/types.js'
+import { TRANSPORT_CAPABILITY_NAMES } from '../transports/types.js'
 import { satisfies } from './semver.js'
 import type {
   LoadedPlugin,
@@ -36,18 +37,7 @@ const TOOL_SHORT_NAME = /^[a-z][a-z0-9_]*$/
 /** Namespaces reserved for the core; a plugin may not claim them. */
 const RESERVED_NAMESPACES = new Set(['electron'])
 const EVAL_TARGETS = new Set(['main', 'renderer'])
-const TRANSPORT_CAPABILITIES = new Set([
-  'canLaunch',
-  'canAttach',
-  'canInject',
-  'canIntercept',
-  'canControlClock',
-  'canAccessStorage',
-  'canAccessNativeUI',
-  'supportsMainEval',
-  'supportsRendererEval',
-  'supportsInteraction',
-])
+const TRANSPORT_CAPABILITIES = new Set<string>(TRANSPORT_CAPABILITY_NAMES)
 const UNSAFE_CONFIG_FIELDS = new Set(['__proto__', 'constructor', 'prototype'])
 
 /** Internal construction handle: config is parsed only after the record is queued for rollback. */

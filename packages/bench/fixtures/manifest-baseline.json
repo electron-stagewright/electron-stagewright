@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "reason": "Add renderer surface discovery and explicit selection tools",
+  "reason": "Add surface-scoped accessibility audit plugin",
   "variants": {
     "core-safe": {
       "toolCount": 54,
-      "characters": 78797,
-      "utf8Bytes": 78893,
-      "bpe": 18053,
+      "characters": 78865,
+      "utf8Bytes": 78961,
+      "bpe": 18066,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -84,9 +84,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -128,9 +128,9 @@
     },
     "core-eval": {
       "toolCount": 56,
-      "characters": 81555,
-      "utf8Bytes": 81651,
-      "bpe": 18685,
+      "characters": 81623,
+      "utf8Bytes": 81719,
+      "bpe": 18698,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -210,9 +210,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -684,9 +684,9 @@
     },
     "debug-safe": {
       "toolCount": 46,
-      "characters": 64976,
-      "utf8Bytes": 65058,
-      "bpe": 14854,
+      "characters": 65044,
+      "utf8Bytes": 65126,
+      "bpe": 14867,
       "toolNames": [
         "electron_attach",
         "electron_check",
@@ -756,9 +756,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -800,9 +800,9 @@
     },
     "debug-eval": {
       "toolCount": 48,
-      "characters": 67734,
-      "utf8Bytes": 67816,
-      "bpe": 15486,
+      "characters": 67802,
+      "utf8Bytes": 67884,
+      "bpe": 15499,
       "toolNames": [
         "electron_attach",
         "electron_check",
@@ -874,9 +874,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -916,11 +916,265 @@
         }
       ]
     },
+    "plugin-a11y-safe": {
+      "toolCount": 56,
+      "characters": 82212,
+      "utf8Bytes": 82308,
+      "bpe": 18816,
+      "toolNames": [
+        "a11y_audit",
+        "electron_assert_pattern",
+        "electron_attach",
+        "electron_check",
+        "electron_clear_input",
+        "electron_click",
+        "electron_console_logs",
+        "electron_detach",
+        "electron_dialog_handler",
+        "electron_discover_running",
+        "electron_doctor",
+        "electron_drag",
+        "electron_drop_file",
+        "electron_elements_list",
+        "electron_exists",
+        "electron_expect_count",
+        "electron_expect_state",
+        "electron_expect_text",
+        "electron_expect_url",
+        "electron_expect_value",
+        "electron_expect_visible",
+        "electron_find",
+        "electron_focused_element",
+        "electron_force_kill",
+        "electron_get_attribute",
+        "electron_get_bbox",
+        "electron_get_computed_style",
+        "electron_get_state",
+        "electron_get_text",
+        "electron_get_value",
+        "electron_hover",
+        "electron_info",
+        "electron_inject",
+        "electron_key",
+        "electron_keyboard_type",
+        "electron_launch",
+        "electron_plugins",
+        "electron_press_sequence",
+        "electron_screenshot",
+        "electron_scroll",
+        "electron_scroll_into_view",
+        "electron_select_option",
+        "electron_set_files",
+        "electron_snapshot",
+        "electron_stop",
+        "electron_surfaces_list",
+        "electron_switch_surface",
+        "electron_switch_window",
+        "electron_type",
+        "electron_type_into_editor",
+        "electron_uncheck",
+        "electron_wait",
+        "electron_wait_for_event",
+        "electron_wait_for_selector",
+        "electron_wait_for_state",
+        "electron_windows_list"
+      ],
+      "topTools": [
+        {
+          "name": "electron_dialog_handler",
+          "characters": 3074,
+          "utf8Bytes": 3078,
+          "bpe": 702
+        },
+        {
+          "name": "electron_launch",
+          "characters": 3154,
+          "utf8Bytes": 3158,
+          "bpe": 665
+        },
+        {
+          "name": "electron_snapshot",
+          "characters": 3046,
+          "utf8Bytes": 3052,
+          "bpe": 664
+        },
+        {
+          "name": "electron_screenshot",
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
+        },
+        {
+          "name": "a11y_audit",
+          "characters": 2542,
+          "utf8Bytes": 2542,
+          "bpe": 579
+        },
+        {
+          "name": "electron_expect_count",
+          "characters": 2204,
+          "utf8Bytes": 2206,
+          "bpe": 497
+        },
+        {
+          "name": "electron_assert_pattern",
+          "characters": 2175,
+          "utf8Bytes": 2179,
+          "bpe": 495
+        },
+        {
+          "name": "electron_expect_value",
+          "characters": 2114,
+          "utf8Bytes": 2116,
+          "bpe": 486
+        },
+        {
+          "name": "electron_expect_text",
+          "characters": 2106,
+          "utf8Bytes": 2108,
+          "bpe": 485
+        },
+        {
+          "name": "electron_type_into_editor",
+          "characters": 2134,
+          "utf8Bytes": 2138,
+          "bpe": 480
+        }
+      ]
+    },
+    "plugin-a11y-eval": {
+      "toolCount": 58,
+      "characters": 84970,
+      "utf8Bytes": 85066,
+      "bpe": 19448,
+      "toolNames": [
+        "a11y_audit",
+        "electron_assert_pattern",
+        "electron_attach",
+        "electron_check",
+        "electron_clear_input",
+        "electron_click",
+        "electron_console_logs",
+        "electron_detach",
+        "electron_dialog_handler",
+        "electron_discover_running",
+        "electron_doctor",
+        "electron_drag",
+        "electron_drop_file",
+        "electron_elements_list",
+        "electron_eval_main",
+        "electron_eval_renderer",
+        "electron_exists",
+        "electron_expect_count",
+        "electron_expect_state",
+        "electron_expect_text",
+        "electron_expect_url",
+        "electron_expect_value",
+        "electron_expect_visible",
+        "electron_find",
+        "electron_focused_element",
+        "electron_force_kill",
+        "electron_get_attribute",
+        "electron_get_bbox",
+        "electron_get_computed_style",
+        "electron_get_state",
+        "electron_get_text",
+        "electron_get_value",
+        "electron_hover",
+        "electron_info",
+        "electron_inject",
+        "electron_key",
+        "electron_keyboard_type",
+        "electron_launch",
+        "electron_plugins",
+        "electron_press_sequence",
+        "electron_screenshot",
+        "electron_scroll",
+        "electron_scroll_into_view",
+        "electron_select_option",
+        "electron_set_files",
+        "electron_snapshot",
+        "electron_stop",
+        "electron_surfaces_list",
+        "electron_switch_surface",
+        "electron_switch_window",
+        "electron_type",
+        "electron_type_into_editor",
+        "electron_uncheck",
+        "electron_wait",
+        "electron_wait_for_event",
+        "electron_wait_for_selector",
+        "electron_wait_for_state",
+        "electron_windows_list"
+      ],
+      "topTools": [
+        {
+          "name": "electron_dialog_handler",
+          "characters": 3074,
+          "utf8Bytes": 3078,
+          "bpe": 702
+        },
+        {
+          "name": "electron_launch",
+          "characters": 3154,
+          "utf8Bytes": 3158,
+          "bpe": 665
+        },
+        {
+          "name": "electron_snapshot",
+          "characters": 3046,
+          "utf8Bytes": 3052,
+          "bpe": 664
+        },
+        {
+          "name": "electron_screenshot",
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
+        },
+        {
+          "name": "a11y_audit",
+          "characters": 2542,
+          "utf8Bytes": 2542,
+          "bpe": 579
+        },
+        {
+          "name": "electron_expect_count",
+          "characters": 2204,
+          "utf8Bytes": 2206,
+          "bpe": 497
+        },
+        {
+          "name": "electron_assert_pattern",
+          "characters": 2175,
+          "utf8Bytes": 2179,
+          "bpe": 495
+        },
+        {
+          "name": "electron_expect_value",
+          "characters": 2114,
+          "utf8Bytes": 2116,
+          "bpe": 486
+        },
+        {
+          "name": "electron_expect_text",
+          "characters": 2106,
+          "utf8Bytes": 2108,
+          "bpe": 485
+        },
+        {
+          "name": "electron_type_into_editor",
+          "characters": 2134,
+          "utf8Bytes": 2138,
+          "bpe": 480
+        }
+      ]
+    },
     "plugin-clock-safe": {
       "toolCount": 63,
-      "characters": 85621,
-      "utf8Bytes": 85723,
-      "bpe": 19654,
+      "characters": 85689,
+      "utf8Bytes": 85791,
+      "bpe": 19667,
       "toolNames": [
         "clock_advance",
         "clock_install",
@@ -1007,9 +1261,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -1051,9 +1305,9 @@
     },
     "plugin-clock-eval": {
       "toolCount": 65,
-      "characters": 88379,
-      "utf8Bytes": 88481,
-      "bpe": 20286,
+      "characters": 88447,
+      "utf8Bytes": 88549,
+      "bpe": 20299,
       "toolNames": [
         "clock_advance",
         "clock_install",
@@ -1142,9 +1396,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -1186,9 +1440,9 @@
     },
     "plugin-ipc-safe": {
       "toolCount": 60,
-      "characters": 84723,
-      "utf8Bytes": 84827,
-      "bpe": 19379,
+      "characters": 84791,
+      "utf8Bytes": 84895,
+      "bpe": 19392,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1272,9 +1526,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -1316,9 +1570,9 @@
     },
     "plugin-ipc-eval": {
       "toolCount": 62,
-      "characters": 87481,
-      "utf8Bytes": 87585,
-      "bpe": 20011,
+      "characters": 87549,
+      "utf8Bytes": 87653,
+      "bpe": 20024,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1404,9 +1658,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -1448,9 +1702,9 @@
     },
     "plugin-native-safe": {
       "toolCount": 63,
-      "characters": 87537,
-      "utf8Bytes": 87657,
-      "bpe": 19986,
+      "characters": 87605,
+      "utf8Bytes": 87725,
+      "bpe": 19999,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1537,9 +1791,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -1581,9 +1835,9 @@
     },
     "plugin-native-eval": {
       "toolCount": 65,
-      "characters": 90295,
-      "utf8Bytes": 90415,
-      "bpe": 20618,
+      "characters": 90363,
+      "utf8Bytes": 90483,
+      "bpe": 20631,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1672,9 +1926,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -1716,9 +1970,9 @@
     },
     "plugin-network-safe": {
       "toolCount": 60,
-      "characters": 86889,
-      "utf8Bytes": 86993,
-      "bpe": 19856,
+      "characters": 86957,
+      "utf8Bytes": 87061,
+      "bpe": 19869,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1802,9 +2056,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "network_stub",
@@ -1846,9 +2100,9 @@
     },
     "plugin-network-eval": {
       "toolCount": 62,
-      "characters": 89647,
-      "utf8Bytes": 89751,
-      "bpe": 20488,
+      "characters": 89715,
+      "utf8Bytes": 89819,
+      "bpe": 20501,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1934,9 +2188,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "network_stub",
@@ -1978,9 +2232,9 @@
     },
     "plugin-production-safe": {
       "toolCount": 56,
-      "characters": 81887,
-      "utf8Bytes": 81989,
-      "bpe": 18756,
+      "characters": 81955,
+      "utf8Bytes": 82057,
+      "bpe": 18769,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2060,9 +2314,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "production_validate",
@@ -2104,9 +2358,9 @@
     },
     "plugin-production-eval": {
       "toolCount": 58,
-      "characters": 84645,
-      "utf8Bytes": 84747,
-      "bpe": 19388,
+      "characters": 84713,
+      "utf8Bytes": 84815,
+      "bpe": 19401,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2188,9 +2442,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "production_validate",
@@ -2232,9 +2486,9 @@
     },
     "plugin-storage-safe": {
       "toolCount": 59,
-      "characters": 83127,
-      "utf8Bytes": 83239,
-      "bpe": 19031,
+      "characters": 83195,
+      "utf8Bytes": 83307,
+      "bpe": 19044,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2317,9 +2571,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -2361,9 +2615,9 @@
     },
     "plugin-storage-eval": {
       "toolCount": 78,
-      "characters": 102084,
-      "utf8Bytes": 102210,
-      "bpe": 23382,
+      "characters": 102152,
+      "utf8Bytes": 102278,
+      "bpe": 23395,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2465,9 +2719,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -2509,9 +2763,9 @@
     },
     "plugin-trace-safe": {
       "toolCount": 63,
-      "characters": 88472,
-      "utf8Bytes": 88580,
-      "bpe": 20195,
+      "characters": 88540,
+      "utf8Bytes": 88648,
+      "bpe": 20208,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2598,9 +2852,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -2642,9 +2896,9 @@
     },
     "plugin-trace-eval": {
       "toolCount": 65,
-      "characters": 91230,
-      "utf8Bytes": 91338,
-      "bpe": 20827,
+      "characters": 91298,
+      "utf8Bytes": 91406,
+      "bpe": 20840,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2733,9 +2987,9 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -2776,11 +3030,12 @@
       ]
     },
     "all-safe": {
-      "toolCount": 94,
-      "characters": 120650,
-      "utf8Bytes": 120826,
-      "bpe": 27513,
+      "toolCount": 95,
+      "characters": 123261,
+      "utf8Bytes": 123437,
+      "bpe": 28105,
       "toolNames": [
+        "a11y_audit",
         "clock_advance",
         "clock_install",
         "clock_pause",
@@ -2897,15 +3152,21 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "network_stub",
           "characters": 2672,
           "utf8Bytes": 2676,
           "bpe": 606
+        },
+        {
+          "name": "a11y_audit",
+          "characters": 2542,
+          "utf8Bytes": 2542,
+          "bpe": 579
         },
         {
           "name": "production_validate",
@@ -2930,21 +3191,16 @@
           "characters": 2175,
           "utf8Bytes": 2179,
           "bpe": 495
-        },
-        {
-          "name": "electron_expect_value",
-          "characters": 2114,
-          "utf8Bytes": 2116,
-          "bpe": 486
         }
       ]
     },
     "all-eval": {
-      "toolCount": 113,
-      "characters": 139607,
-      "utf8Bytes": 139797,
-      "bpe": 31864,
+      "toolCount": 114,
+      "characters": 142218,
+      "utf8Bytes": 142408,
+      "bpe": 32456,
       "toolNames": [
+        "a11y_audit",
         "clock_advance",
         "clock_install",
         "clock_pause",
@@ -3080,15 +3336,21 @@
         },
         {
           "name": "electron_screenshot",
-          "characters": 2841,
-          "utf8Bytes": 2843,
-          "bpe": 636
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "network_stub",
           "characters": 2672,
           "utf8Bytes": 2676,
           "bpe": 606
+        },
+        {
+          "name": "a11y_audit",
+          "characters": 2542,
+          "utf8Bytes": 2542,
+          "bpe": 579
         },
         {
           "name": "production_validate",
@@ -3113,12 +3375,6 @@
           "characters": 2175,
           "utf8Bytes": 2179,
           "bpe": 495
-        },
-        {
-          "name": "electron_expect_value",
-          "characters": 2114,
-          "utf8Bytes": 2116,
-          "bpe": 486
         }
       ]
     }

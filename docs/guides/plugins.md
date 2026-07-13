@@ -1,8 +1,8 @@
 # Load, configure, and diagnose plugins
 
-Use a plugin when the core Electron-driving workflow needs traces and replay, IPC, network
-interception, virtual time, storage, native UI, or packaged-app validation. This how-to shows how
-to load one, grant its narrowest gate, and inspect what the server enabled.
+Use a plugin when the core Electron-driving workflow needs accessibility audits, traces and replay,
+IPC, network interception, virtual time, storage, native UI, or packaged-app validation. This
+how-to shows how to load one, grant its narrowest gate, and inspect what the server enabled.
 
 The core never discovers plugins automatically. Installing a package is not enough: explicitly name
 every plugin with `--plugin` (or pass it to `createServer`).
@@ -139,6 +139,7 @@ electron-stagewright --plugin @electron-stagewright/plugin-storage --allow-eval=
 
 | Plugin                                    | Primary gate or scope                                                                                                                    |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `@electron-stagewright/plugin-a11y`       | `supportsRendererEval` + `supportsSurfaceTargeting`; fixed engine, no `--allow-eval`; audit one selected surface at a time.              |
 | `@electron-stagewright/plugin-trace`      | No eval; records, promotes, and replays sessions.                                                                                        |
 | `@electron-stagewright/plugin-production` | No running session; validates a packaged macOS `.app`.                                                                                   |
 | `@electron-stagewright/plugin-ipc`        | `--allow-eval=main` and `supportsMainEval`.                                                                                              |

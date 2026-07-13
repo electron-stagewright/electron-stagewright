@@ -1,8 +1,9 @@
 # Contributing to Electron Stagewright
 
 This project is pre-1.0. The core server can already launch and drive real
-Electron apps, and first-party plugin packages cover traces, IPC, network
-capture, storage, virtual time, native UI, and production checks. Packages are
+Electron apps, and first-party plugin packages cover accessibility audits,
+traces, IPC, network capture, storage, virtual time, native UI, and production
+checks. Packages are
 published to npm; feedback through GitHub Discussions and Issues still shapes the
 next capabilities and documentation.
 

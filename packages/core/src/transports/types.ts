@@ -58,6 +58,30 @@ export interface TransportCapabilities {
 }
 
 /**
+ * Runtime names for the transport-capability contract. The mapped-object form
+ * makes an added interface capability a compile-time error until it is exposed
+ * to plugin introspection validation as well.
+ */
+const TRANSPORT_CAPABILITY_REGISTRY = {
+  canLaunch: true,
+  canAttach: true,
+  canInject: true,
+  canIntercept: true,
+  canControlClock: true,
+  canAccessStorage: true,
+  canAccessNativeUI: true,
+  supportsMainEval: true,
+  supportsRendererEval: true,
+  supportsInteraction: true,
+  supportsSurfaceTargeting: true,
+} as const satisfies Record<keyof TransportCapabilities, true>
+
+/** Runtime capability names accepted by declarative plugin requirements. */
+export const TRANSPORT_CAPABILITY_NAMES = Object.freeze(
+  Object.keys(TRANSPORT_CAPABILITY_REGISTRY) as (keyof TransportCapabilities)[],
+)
+
+/**
  * Discriminated reference to a window. Each kind resolves differently:
  *
  * - `'index'`: position in the Electron app's BrowserWindow list (0-based).

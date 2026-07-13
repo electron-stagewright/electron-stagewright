@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createServer } from '../src/server/server.js'
 import { NOOP_LOGGER } from '../src/server/logger.js'
+import a11yPlugin from '../../plugin-a11y/src/index.js'
 import clockPlugin from '../../plugin-clock/src/index.js'
 import ipcPlugin from '../../plugin-ipc/src/index.js'
 import nativeUiPlugin from '../../plugin-native-ui/src/index.js'
@@ -37,6 +38,7 @@ const GUIDES_DIR = path.join(REPO_ROOT, 'docs', 'guides')
 const ADR_DIR = path.join(REPO_ROOT, 'docs', 'adr')
 const GITHUB_DIR = path.join(REPO_ROOT, '.github')
 const FIRST_PARTY_PLUGINS = [
+  a11yPlugin,
   tracePlugin,
   productionPlugin,
   ipcPlugin,
@@ -102,7 +104,7 @@ async function loadLinkCheckedDocs(): Promise<MarkdownDoc[]> {
  * `electron_expect_*`) survives the match and is validated as a prefix.
  */
 const TOOL_MENTION =
-  /\b(?:electron|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
+  /\b(?:electron|a11y|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
 
 /** The full set of real tool names: the live core manifest plus every first-party plugin. */
 async function collectKnownToolNames(): Promise<ReadonlySet<string>> {

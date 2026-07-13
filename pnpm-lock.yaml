@@ -164,6 +164,9 @@ importers:
       '@electron-stagewright/core':
         specifier: workspace:*
         version: link:../core
+      '@electron-stagewright/plugin-a11y':
+        specifier: workspace:*
+        version: link:../plugin-a11y
       '@electron-stagewright/plugin-clock':
         specifier: workspace:*
         version: link:../plugin-clock
@@ -238,6 +241,25 @@ importers:
       electron:
         specifier: '>=12.2.0'
         version: 42.3.0
+
+  packages/plugin-a11y:
+    dependencies:
+      '@electron-stagewright/core':
+        specifier: workspace:*
+        version: link:../core
+      axe-core:
+        specifier: ^4.12.1
+        version: 4.12.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@electron-stagewright/testkit':
+        specifier: workspace:*
+        version: link:../testkit
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.3)
 
   packages/plugin-clock:
     dependencies:
@@ -1022,6 +1044,10 @@ packages:
 
   ast-v8-to-istanbul@1.0.3:
     resolution: {integrity: sha512-jCMQ6ZylLPudp0CDfBmQBZUsrh1/8psbmu9ibeVWKuHWD0YrH9YABwlKu5kVEFoT0GCQQW9Z/SxfuEbbkGQCRg==}
+
+  axe-core@4.12.1:
+    resolution: {integrity: sha512-s7iGf5GaVMxEG0ENN9x+xTr7GFZCb1ZP/1uATUpCEK2X78nDB3RwbtFCo9pGAf9ru+VwoQ464DkaLEeRM08wJA==}
+    engines: {node: '>=4'}
 
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
@@ -2699,6 +2725,8 @@ snapshots:
       '@jridgewell/trace-mapping': 0.3.31
       estree-walker: 3.0.3
       js-tokens: 10.0.0
+
+  axe-core@4.12.1: {}
 
   balanced-match@4.0.4: {}
 

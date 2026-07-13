@@ -274,7 +274,7 @@ function introspectedPlugin(): StagewrightPlugin {
     introspection: {
       requirements: {
         evalTargets: ['main'],
-        transportCapabilities: ['supportsMainEval'],
+        transportCapabilities: ['supportsMainEval', 'supportsSurfaceTargeting'],
       },
       config: { safeFields: ['publicLabel'] },
     },
@@ -348,7 +348,7 @@ describe('electron_plugins introspection tool', () => {
         errorCodes: ['safe.BLOCKED'],
         requirements: {
           evalTargets: ['main'],
-          transportCapabilities: ['supportsMainEval'],
+          transportCapabilities: ['supportsMainEval', 'supportsSurfaceTargeting'],
         },
         effectiveConfig: { publicLabel: 'visible' },
       },

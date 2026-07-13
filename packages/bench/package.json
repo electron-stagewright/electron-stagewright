@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@electron-stagewright/core": "workspace:*",
+    "@electron-stagewright/plugin-a11y": "workspace:*",
     "@electron-stagewright/plugin-clock": "workspace:*",
     "@electron-stagewright/plugin-ipc": "workspace:*",
     "@electron-stagewright/plugin-native-ui": "workspace:*",
