@@ -66,9 +66,9 @@ Useful server flags (append to `args`): `--screenshot-dir <dir>` for a stable sc
 target with `--allow-eval=renderer` or `--allow-eval=main`), `--plugin <name>` to load a plugin. The
 full list is in the [tool reference](../../TOOL-REFERENCE.md).
 
-Before registering a published installation, run `electron-stagewright doctor --json` in a terminal
-to check its Node, Playwright, Electron, display, path, and eval-policy prerequisites. The doctor is
-a standalone command; do not append it to an MCP host's server arguments.
+The built checkout also provides `node packages/core/dist/cli.js doctor --json` for a standalone
+preflight of Node, Playwright, Electron, display, paths, and eval policy. Do not append it to an MCP
+host's server arguments. The pinned public core 0.2.0 package does not include this command yet.
 
 That `node …/dist/cli.js` form points at this cloned checkout, which is what runs the bundled
 example. To wire the **published** package into your client and drive **your own** app instead — with

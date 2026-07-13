@@ -14,10 +14,10 @@ Install the core, its launch peers, and the plugin together. For example, load t
 
 ```sh
 npx -y \
-  --package @electron-stagewright/core \
-  --package @electron-stagewright/plugin-trace \
-  --package playwright \
-  --package electron \
+  --package @electron-stagewright/core@0.2.0 \
+  --package @electron-stagewright/plugin-trace@0.1.1 \
+  --package playwright@1.61.1 \
+  --package electron@42.3.0 \
   electron-stagewright --plugin @electron-stagewright/plugin-trace
 ```
 
@@ -27,13 +27,13 @@ For an MCP client, preserve the same package and flag order in its `args`:
 [
   "-y",
   "--package",
-  "@electron-stagewright/core",
+  "@electron-stagewright/core@0.2.0",
   "--package",
-  "@electron-stagewright/plugin-trace",
+  "@electron-stagewright/plugin-trace@0.1.1",
   "--package",
-  "playwright",
+  "playwright@1.61.1",
   "--package",
-  "electron",
+  "electron@42.3.0",
   "electron-stagewright",
   "--plugin",
   "@electron-stagewright/plugin-trace"
