@@ -50,7 +50,9 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && pnpm build:renderer",
+    "build": "pnpm build:resources && tsc -p tsconfig.json && pnpm build:renderer",
+    "build:resources": "node scripts/build-agent-resources.mjs",
+    "check:resources": "node scripts/build-agent-resources.mjs --check",
     "build:renderer": "node scripts/build-renderer-bundle.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"

@@ -267,6 +267,21 @@ the agent recovers in one turn.
 - These principles do **not** apply to the eval surface (`eval_main`, `eval_renderer`) — those are escape hatches by design. Their security profile is governed by ADR-006 and the forthcoming threat-model ADR, not by this ADR.
 - These principles are revisitable but only via amendment (a new ADR or a Status Update block here). Casual deviations in PRs are blocked at review.
 
+## Status update (optional in-band documentation, 2026-07-13)
+
+The server now registers four read-only MCP resources: `stagewright://docs/quickstart`,
+`stagewright://docs/concepts`, `stagewright://docs/security`, and
+`stagewright://manifest/profile`. The three guidance resources are generated at build time from
+marked sections in the tracked public guides, so the published tarball needs no repository checkout
+or operator filesystem read to serve them. The profile resource is generated per server from the
+actual visible tool set after profile selection, eval gating, and optional plugin registration.
+
+Resources are optional host context, not a prerequisite for the agent workflow: MCP leaves
+discovery, rendering, and model injection to each client. Server instructions, `tools/list`, tool
+descriptions, and response envelopes remain authoritative when a host neither lists nor reads a
+resource. The resources disclose no session data, logs, prompt text, plugin configuration, or
+operator-local files, and the server does not mutate their set after startup.
+
 ## References
 
 - Customer-discovery research — empirical citation of m13v measurements (LLM tool selection 20% → 3%) and the laststance v1→v2 split.

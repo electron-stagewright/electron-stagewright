@@ -64,6 +64,17 @@ let sessionId
 try {
   await client.connect(transport)
   const { tools } = await client.listTools()
+  const { resources } = await client.listResources()
+  const quickstart = resources.find((resource) => resource.uri === 'stagewright://docs/quickstart')
+  const profileResource = resources.find((resource) => resource.uri === 'stagewright://manifest/profile')
+  if (quickstart === undefined || profileResource === undefined) {
+    throw new Error('published server omitted its static MCP resources')
+  }
+  const quickstartRead = await client.readResource({ uri: quickstart.uri })
+  const quickstartText = quickstartRead.contents.find((content) => 'text' in content)?.text
+  if (typeof quickstartText !== 'string' || !quickstartText.includes('Agent quick reference')) {
+    throw new Error('published quickstart resource did not return generated guidance')
+  }
   if (!tools.some((tool) => tool.name === 'electron_launch')) {
     throw new Error('published manifest omitted electron_launch')
   }

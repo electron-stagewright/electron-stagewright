@@ -7,6 +7,26 @@ first. The posture summarised here is recorded as a decision in
 [ADR-014](../adr/014-security-posture-and-threat-model.md); to report a
 vulnerability see [SECURITY.md](../../.github/SECURITY.md).
 
+<!-- stagewright-resource:begin -->
+
+## Agent quick reference: safe operation
+
+- Treat the server as a privileged local tool. Only a trusted local MCP host should invoke it.
+- Keep the stdio transport local; do not place it behind a network endpoint without a separate
+  security design.
+- Leave eval disabled unless necessary. Grant only `--allow-eval=renderer` or
+  `--allow-eval=main` for the target that needs it.
+- Treat tool input, screenshots, console output, traces, and capture results as potentially
+  sensitive. Configure plugin redaction before capture.
+- Set `--app-root` when an agent can select application paths, and write artifacts to an
+  operator-controlled directory.
+- Load only trusted first-party or reviewed plugins. Plugins are in-process code, not sandboxed.
+
+Resource reads expose only bundled public guidance. They never read the operator's filesystem,
+session data, logs, or plugin configuration.
+
+<!-- stagewright-resource:end -->
+
 ## The one-line model
 
 The server is a **privileged local tool**, not a sandbox. It runs with your OS

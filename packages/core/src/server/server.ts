@@ -16,6 +16,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { definePluginsInfoTool, loadPlugins } from '../plugins/index.js'
 import type { LoadedPluginInfo, StagewrightPlugin } from '../plugins/index.js'
+import { registerAgentResources } from '../resources/index.js'
 import {
   DEFAULT_TOOLS,
   excludedCoreToolProfileHints,
@@ -127,7 +128,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     throw new Error('createServer options "tools" and "toolProfile" are mutually exclusive.')
   }
   const toolProfile = opts.toolProfile ?? 'full'
-  const coreTools = opts.tools ?? resolveCoreToolProfile(DEFAULT_TOOLS, toolProfile)
+  const coreTools = [...(opts.tools ?? resolveCoreToolProfile(DEFAULT_TOOLS, toolProfile))]
   const logger = opts.logger ?? new StderrLogger({ level: opts.logLevel ?? 'info' })
   const sessions = new SessionManager()
   const transports = opts.transports ?? new TransportRegistry()
@@ -238,6 +239,11 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     },
   )
   dispatcher.bindToMcpServer(mcp)
+  registerAgentResources(mcp, {
+    activeProfile: opts.tools === undefined ? toolProfile : 'custom',
+    visibleCoreToolCount: coreTools.filter((tool) => dispatcher.has(tool.name)).length,
+    visibleToolCount: dispatcher.list().length,
+  })
 
   return {
     mcp,
