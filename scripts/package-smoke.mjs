@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -10,6 +10,25 @@ const execFile = promisify(execFileCallback)
 const ROOT = process.cwd()
 const CORE_DIR = path.join(ROOT, 'packages', 'core')
 const requireFromCore = createRequire(pathToFileURL(path.join(CORE_DIR, 'package.json')))
+
+/** Resolve the already-verified workspace Electron runtime for isolated packed-client launches. */
+async function workspaceElectronRuntime() {
+  const electronDir = path.dirname(requireFromCore.resolve('electron/package.json'))
+  const relativeExecutable = (await readFile(path.join(electronDir, 'path.txt'), 'utf8')).trim()
+  const distPath = path.join(electronDir, 'dist')
+  if (relativeExecutable === '')
+    throw new Error('workspace electron package did not resolve an executable')
+  await access(path.join(distPath, relativeExecutable))
+  return { distPath, relativeExecutable }
+}
+
+/** Point the scratch package's Electron resolver at the verified platform-matched workspace runtime. */
+async function configureScratchElectronRuntime(scratchDir, relativeExecutable) {
+  const requireFromScratch = createRequire(pathToFileURL(path.join(scratchDir, 'package.json')))
+  const scratchElectronDir = path.dirname(requireFromScratch.resolve('electron/package.json'))
+  await writeFile(path.join(scratchElectronDir, 'path.txt'), relativeExecutable)
+}
+
 const APP_MAIN = `
 import { BrowserWindow, app } from 'electron'
 
@@ -44,11 +63,17 @@ const CLIENT_SMOKE = `
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
-const [cliPath, appMain, profile] = process.argv.slice(2)
+const [cliPath, appMain, electronDistPath, profile] = process.argv.slice(2)
 const client = new Client({ name: 'package-smoke', version: '1.0.0' })
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: profile === undefined ? [cliPath] : [cliPath, '--tool-profile', profile],
+  env: {
+    ELECTRON_OVERRIDE_DIST_PATH: electronDistPath,
+    ...(process.env.ELECTRON_DISABLE_SANDBOX === undefined
+      ? {}
+      : { ELECTRON_DISABLE_SANDBOX: process.env.ELECTRON_DISABLE_SANDBOX }),
+  },
 })
 
 async function call(name, args) {
@@ -56,7 +81,7 @@ async function call(name, args) {
   const text = result.content.find((block) => block.type === 'text')?.text
   if (typeof text !== 'string') throw new Error(name + ': no text result')
   const envelope = JSON.parse(text)
-  if (!envelope.ok) throw new Error(name + ': ' + (envelope.code ?? envelope.error ?? 'failed'))
+  if (!envelope.ok) throw new Error(name + ': ' + JSON.stringify(envelope))
   return envelope
 }
 
@@ -101,11 +126,17 @@ const A11Y_CLIENT_SMOKE = `
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
-const [cliPath, appMain] = process.argv.slice(2)
+const [cliPath, appMain, electronDistPath] = process.argv.slice(2)
 const client = new Client({ name: 'a11y-package-smoke', version: '1.0.0' })
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [cliPath, '--plugin', '@electron-stagewright/plugin-a11y'],
+  env: {
+    ELECTRON_OVERRIDE_DIST_PATH: electronDistPath,
+    ...(process.env.ELECTRON_DISABLE_SANDBOX === undefined
+      ? {}
+      : { ELECTRON_DISABLE_SANDBOX: process.env.ELECTRON_DISABLE_SANDBOX }),
+  },
 })
 
 async function call(name, args) {
@@ -148,7 +179,7 @@ import { access, mkdir } from 'node:fs/promises'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
-const [cliPath, appMain, baselineDir, artifactsDir] = process.argv.slice(2)
+const [cliPath, appMain, electronDistPath, baselineDir, artifactsDir] = process.argv.slice(2)
 const client = new Client({ name: 'visual-package-smoke', version: '1.0.0' })
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -159,6 +190,12 @@ const transport = new StdioClientTransport({
     '--plugin-config',
     'visual=' + JSON.stringify({ baselineDir, artifactsDir, fontFingerprint: 'package-smoke-fonts-v1' }),
   ],
+  env: {
+    ELECTRON_OVERRIDE_DIST_PATH: electronDistPath,
+    ...(process.env.ELECTRON_DISABLE_SANDBOX === undefined
+      ? {}
+      : { ELECTRON_DISABLE_SANDBOX: process.env.ELECTRON_DISABLE_SANDBOX }),
+  },
 })
 
 async function call(name, args) {
@@ -210,9 +247,18 @@ const DEMO_CLIENT_SMOKE = `
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
-const [cliPath] = process.argv.slice(2)
+const [cliPath, electronDistPath] = process.argv.slice(2)
 const client = new Client({ name: 'demo-package-smoke', version: '1.0.0' })
-const transport = new StdioClientTransport({ command: process.execPath, args: [cliPath, '--demo'] })
+const transport = new StdioClientTransport({
+  command: process.execPath,
+  args: [cliPath, '--demo'],
+  env: {
+    ELECTRON_OVERRIDE_DIST_PATH: electronDistPath,
+    ...(process.env.ELECTRON_DISABLE_SANDBOX === undefined
+      ? {}
+      : { ELECTRON_DISABLE_SANDBOX: process.env.ELECTRON_DISABLE_SANDBOX }),
+  },
+})
 
 async function call(name, args) {
   const result = await client.callTool({ name, arguments: args })
@@ -364,6 +410,7 @@ async function main() {
       packageVersion('playwright'),
       packageVersion('electron'),
     ])
+    const electronRuntime = await workspaceElectronRuntime()
 
     await execFile(
       'npm',
@@ -382,6 +429,7 @@ async function main() {
       ],
       { cwd: scratchDir, maxBuffer: 8 * 1024 * 1024 },
     )
+    await configureScratchElectronRuntime(scratchDir, electronRuntime.relativeExecutable)
     await Promise.all([
       writeFile(path.join(scratchDir, 'app.mjs'), APP_MAIN),
       writeFile(path.join(scratchDir, 'index.html'), APP_HTML),
@@ -486,46 +534,71 @@ async function main() {
     if (demoContents.some(({ content }) => content.includes('packages/'))) {
       throw new Error('published demo unexpectedly imports a monorepo path')
     }
-    await execFile(process.execPath, [clientPath, cliPath, path.join(scratchDir, 'app.mjs')], {
-      cwd: scratchDir,
-      maxBuffer: 8 * 1024 * 1024,
-      timeout: 90_000,
-    })
     await execFile(
       process.execPath,
-      [clientPath, cliPath, path.join(scratchDir, 'app.mjs'), 'essential'],
+      [clientPath, cliPath, path.join(scratchDir, 'app.mjs'), electronRuntime.distPath],
       {
         cwd: scratchDir,
         maxBuffer: 8 * 1024 * 1024,
         timeout: 90_000,
       },
     )
-    await execFile(process.execPath, [demoClientPath, cliPath], {
-      cwd: scratchDir,
-      maxBuffer: 8 * 1024 * 1024,
-      timeout: 90_000,
-    })
-    await execFile(process.execPath, [a11yClientPath, cliPath, path.join(scratchDir, 'app.mjs')], {
+    await execFile(
+      process.execPath,
+      [
+        clientPath,
+        cliPath,
+        path.join(scratchDir, 'app.mjs'),
+        electronRuntime.distPath,
+        'essential',
+      ],
+      {
+        cwd: scratchDir,
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: 90_000,
+      },
+    )
+    await execFile(process.execPath, [demoClientPath, cliPath, electronRuntime.distPath], {
       cwd: scratchDir,
       maxBuffer: 8 * 1024 * 1024,
       timeout: 90_000,
     })
     await execFile(
       process.execPath,
+      [a11yClientPath, cliPath, path.join(scratchDir, 'app.mjs'), electronRuntime.distPath],
+      {
+        cwd: scratchDir,
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: 90_000,
+      },
+    )
+    await execFile(
+      process.execPath,
       [
         visualClientPath,
         cliPath,
         path.join(scratchDir, 'app.mjs'),
+        electronRuntime.distPath,
         path.join(scratchDir, 'visual-baselines'),
         path.join(scratchDir, 'visual-artifacts'),
       ],
-      { cwd: scratchDir, maxBuffer: 8 * 1024 * 1024, timeout: 90_000 },
+      {
+        cwd: scratchDir,
+        env: { ...process.env, ELECTRON_OVERRIDE_DIST_PATH: electronRuntime.distPath },
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: 90_000,
+      },
     )
     const replayBin = path.join(scratchDir, 'node_modules', '.bin', 'electron-stagewright-replay')
     const { stdout: replayOutput } = await execFile(
       replayBin,
       [path.join(scratchDir, 'replay.json'), '--json'],
-      { cwd: scratchDir, maxBuffer: 8 * 1024 * 1024, timeout: 90_000 },
+      {
+        cwd: scratchDir,
+        env: { ...process.env, ELECTRON_OVERRIDE_DIST_PATH: electronRuntime.distPath },
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: 90_000,
+      },
     )
     const replayReport = JSON.parse(replayOutput)
     if (
