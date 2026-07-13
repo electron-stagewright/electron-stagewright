@@ -59,21 +59,27 @@ if (!sessionIdField.sessionId.safeParse('session-1').success) {
   throw new Error('published plugin SDK did not expose the session schema fragment')
 }
 `
+const MCP_RUNTIME_ENV_HELPER = `
+function runtimeEnv(electronDistPath) {
+  const env = { ELECTRON_OVERRIDE_DIST_PATH: electronDistPath }
+  for (const name of ['DISPLAY', 'XAUTHORITY', 'ELECTRON_DISABLE_SANDBOX']) {
+    const value = process.env[name]
+    if (value !== undefined) env[name] = value
+  }
+  return env
+}
+`
 const CLIENT_SMOKE = `
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const [cliPath, appMain, electronDistPath, profile] = process.argv.slice(2)
+${MCP_RUNTIME_ENV_HELPER}
 const client = new Client({ name: 'package-smoke', version: '1.0.0' })
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: profile === undefined ? [cliPath] : [cliPath, '--tool-profile', profile],
-  env: {
-    ELECTRON_OVERRIDE_DIST_PATH: electronDistPath,
-    ...(process.env.ELECTRON_DISABLE_SANDBOX === undefined
-      ? {}
-      : { ELECTRON_DISABLE_SANDBOX: process.env.ELECTRON_DISABLE_SANDBOX }),
-  },
+  env: runtimeEnv(electronDistPath),
 })
 
 async function call(name, args) {
@@ -127,16 +133,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const [cliPath, appMain, electronDistPath] = process.argv.slice(2)
+${MCP_RUNTIME_ENV_HELPER}
 const client = new Client({ name: 'a11y-package-smoke', version: '1.0.0' })
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [cliPath, '--plugin', '@electron-stagewright/plugin-a11y'],
-  env: {
-    ELECTRON_OVERRIDE_DIST_PATH: electronDistPath,
-    ...(process.env.ELECTRON_DISABLE_SANDBOX === undefined
-      ? {}
-      : { ELECTRON_DISABLE_SANDBOX: process.env.ELECTRON_DISABLE_SANDBOX }),
-  },
+  env: runtimeEnv(electronDistPath),
 })
 
 async function call(name, args) {
@@ -180,6 +182,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const [cliPath, appMain, electronDistPath, baselineDir, artifactsDir] = process.argv.slice(2)
+${MCP_RUNTIME_ENV_HELPER}
 const client = new Client({ name: 'visual-package-smoke', version: '1.0.0' })
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -190,12 +193,7 @@ const transport = new StdioClientTransport({
     '--plugin-config',
     'visual=' + JSON.stringify({ baselineDir, artifactsDir, fontFingerprint: 'package-smoke-fonts-v1' }),
   ],
-  env: {
-    ELECTRON_OVERRIDE_DIST_PATH: electronDistPath,
-    ...(process.env.ELECTRON_DISABLE_SANDBOX === undefined
-      ? {}
-      : { ELECTRON_DISABLE_SANDBOX: process.env.ELECTRON_DISABLE_SANDBOX }),
-  },
+  env: runtimeEnv(electronDistPath),
 })
 
 async function call(name, args) {
@@ -248,16 +246,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const [cliPath, electronDistPath] = process.argv.slice(2)
+${MCP_RUNTIME_ENV_HELPER}
 const client = new Client({ name: 'demo-package-smoke', version: '1.0.0' })
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [cliPath, '--demo'],
-  env: {
-    ELECTRON_OVERRIDE_DIST_PATH: electronDistPath,
-    ...(process.env.ELECTRON_DISABLE_SANDBOX === undefined
-      ? {}
-      : { ELECTRON_DISABLE_SANDBOX: process.env.ELECTRON_DISABLE_SANDBOX }),
-  },
+  env: runtimeEnv(electronDistPath),
 })
 
 async function call(name, args) {
