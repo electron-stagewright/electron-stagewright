@@ -19,6 +19,7 @@ import networkPlugin from '@electron-stagewright/plugin-network'
 import productionPlugin from '@electron-stagewright/plugin-production'
 import storagePlugin from '@electron-stagewright/plugin-storage'
 import tracePlugin from '@electron-stagewright/plugin-trace'
+import visualPlugin from '@electron-stagewright/plugin-visual'
 
 import { countRealTokens } from './tokenizer.js'
 
@@ -32,6 +33,7 @@ export const FIRST_PARTY_PLUGINS: readonly StagewrightPlugin[] = [
   productionPlugin,
   storagePlugin,
   tracePlugin,
+  visualPlugin,
 ]
 
 /** A minimal structural view of an MCP tool result sufficient for serialization and ranking. */

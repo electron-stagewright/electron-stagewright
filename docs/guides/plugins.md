@@ -1,7 +1,7 @@
 # Load, configure, and diagnose plugins
 
-Use a plugin when the core Electron-driving workflow needs accessibility audits, traces and replay,
-IPC, network interception, virtual time, storage, native UI, or packaged-app validation. This
+Use a plugin when the core Electron-driving workflow needs accessibility audits, visual baselines,
+traces and replay, IPC, network interception, virtual time, storage, native UI, or packaged-app validation. This
 how-to shows how to load one, grant its narrowest gate, and inspect what the server enabled.
 
 The core never discovers plugins automatically. Installing a package is not enough: explicitly name
@@ -62,12 +62,27 @@ electron-stagewright \
   --plugin-config network='{"redactHeaders":["x-api-key"],"redactBodies":true}'
 ```
 
+Visual baselines use two operator-owned absolute roots. Keep accepted baselines under version
+control and send diagnostic captures elsewhere:
+
+```sh
+electron-stagewright \
+  --plugin @electron-stagewright/plugin-visual \
+  --plugin-config visual='{"baselineDir":"/abs/project/visual-baselines","artifactsDir":"/abs/project/visual-artifacts","fontFingerprint":"linux-ci-fonts-v1"}'
+```
+
 The programmatic equivalent is `pluginConfigs`:
 
 ```js
 const server = await createServer({
-  plugins: [tracePlugin],
-  pluginConfigs: { trace: { maxRecords: 500, redact: ['password', 'token'] } },
+  plugins: [visualPlugin],
+  pluginConfigs: {
+    visual: {
+      baselineDir: '/abs/project/visual-baselines',
+      artifactsDir: '/abs/project/visual-artifacts',
+      fontFingerprint: 'linux-ci-fonts-v1',
+    },
+  },
 })
 ```
 
@@ -137,16 +152,17 @@ electron-stagewright --plugin @electron-stagewright/plugin-ipc --allow-eval=main
 electron-stagewright --plugin @electron-stagewright/plugin-storage --allow-eval=renderer
 ```
 
-| Plugin                                    | Primary gate or scope                                                                                                                    |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `@electron-stagewright/plugin-a11y`       | `supportsRendererEval` + `supportsSurfaceTargeting`; fixed engine, no `--allow-eval`; audit one selected surface at a time.              |
-| `@electron-stagewright/plugin-trace`      | No eval; records, promotes, and replays sessions.                                                                                        |
-| `@electron-stagewright/plugin-production` | No running session; validates a packaged macOS `.app`.                                                                                   |
-| `@electron-stagewright/plugin-ipc`        | `--allow-eval=main` and `supportsMainEval`.                                                                                              |
-| `@electron-stagewright/plugin-network`    | `canIntercept`; no eval.                                                                                                                 |
-| `@electron-stagewright/plugin-clock`      | `canControlClock`; no eval.                                                                                                              |
-| `@electron-stagewright/plugin-storage`    | Cookies/snapshots need `canAccessStorage`; per-key Web Storage and IndexedDB additionally need renderer eval and `supportsRendererEval`. |
-| `@electron-stagewright/plugin-native-ui`  | `canAccessNativeUI`; no eval.                                                                                                            |
+| Plugin                                    | Primary gate or scope                                                                                                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@electron-stagewright/plugin-a11y`       | `supportsRendererEval` + `supportsSurfaceTargeting`; fixed engine, no `--allow-eval`; audit one selected surface at a time.                                        |
+| `@electron-stagewright/plugin-visual`     | `supportsRendererEval` + `supportsSurfaceTargeting`; fixed BrowserWindow capture preparation, no `--allow-eval`; configure baseline and artifact roots before use. |
+| `@electron-stagewright/plugin-trace`      | No eval; records, promotes, and replays sessions.                                                                                                                  |
+| `@electron-stagewright/plugin-production` | No running session; validates a packaged macOS `.app`.                                                                                                             |
+| `@electron-stagewright/plugin-ipc`        | `--allow-eval=main` and `supportsMainEval`.                                                                                                                        |
+| `@electron-stagewright/plugin-network`    | `canIntercept`; no eval.                                                                                                                                           |
+| `@electron-stagewright/plugin-clock`      | `canControlClock`; no eval.                                                                                                                                        |
+| `@electron-stagewright/plugin-storage`    | Cookies/snapshots need `canAccessStorage`; per-key Web Storage and IndexedDB additionally need renderer eval and `supportsRendererEval`.                           |
+| `@electron-stagewright/plugin-native-ui`  | `canAccessNativeUI`; no eval.                                                                                                                                      |
 
 Read the [security model](./security-model.md) before enabling eval or a plugin that reads sensitive
 app state. See [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) for full namespaced tool schemas.

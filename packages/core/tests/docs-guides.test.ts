@@ -31,6 +31,7 @@ import networkPlugin from '../../plugin-network/src/index.js'
 import productionPlugin from '../../plugin-production/src/index.js'
 import storagePlugin from '../../plugin-storage/src/index.js'
 import tracePlugin from '../../plugin-trace/src/index.js'
+import visualPlugin from '../../plugin-visual/src/index.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..')
@@ -46,6 +47,7 @@ const FIRST_PARTY_PLUGINS = [
   clockPlugin,
   storagePlugin,
   nativeUiPlugin,
+  visualPlugin,
 ] as const
 
 /** One markdown document loaded for scanning. */
@@ -104,7 +106,7 @@ async function loadLinkCheckedDocs(): Promise<MarkdownDoc[]> {
  * `electron_expect_*`) survives the match and is validated as a prefix.
  */
 const TOOL_MENTION =
-  /\b(?:electron|a11y|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
+  /\b(?:electron|a11y|visual|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
 
 /** The full set of real tool names: the live core manifest plus every first-party plugin. */
 async function collectKnownToolNames(): Promise<ReadonlySet<string>> {

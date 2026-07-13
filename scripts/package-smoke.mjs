@@ -132,6 +132,69 @@ try {
   await client.close().catch(() => undefined)
 }
 `
+const VISUAL_CLIENT_SMOKE = `
+import { access, mkdir } from 'node:fs/promises'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+
+const [cliPath, appMain, baselineDir, artifactsDir] = process.argv.slice(2)
+const client = new Client({ name: 'visual-package-smoke', version: '1.0.0' })
+const transport = new StdioClientTransport({
+  command: process.execPath,
+  args: [
+    cliPath,
+    '--plugin',
+    '@electron-stagewright/plugin-visual',
+    '--plugin-config',
+    'visual=' + JSON.stringify({ baselineDir, artifactsDir, fontFingerprint: 'package-smoke-fonts-v1' }),
+  ],
+})
+
+async function call(name, args) {
+  const result = await client.callTool({ name, arguments: args })
+  const text = result.content.find((block) => block.type === 'text')?.text
+  if (typeof text !== 'string') throw new Error(name + ': no text result')
+  return JSON.parse(text)
+}
+
+let sessionId
+try {
+  await mkdir(baselineDir, { recursive: true })
+  await mkdir(artifactsDir, { recursive: true })
+  await client.connect(transport)
+  const { tools } = await client.listTools()
+  for (const name of ['visual_capture', 'visual_expect', 'visual_update_baseline']) {
+    if (!tools.some((tool) => tool.name === name)) throw new Error('published visual manifest omitted ' + name)
+  }
+  const launched = await call('electron_launch', { main: appMain })
+  if (!launched.ok || typeof launched.session_id !== 'string') {
+    throw new Error('electron_launch failed for visual package smoke')
+  }
+  sessionId = launched.session_id
+  const missing = await call('visual_expect', { sessionId, name: 'package-smoke' })
+  if (missing.ok || missing.code !== 'visual.BASELINE_NOT_FOUND') {
+    throw new Error('published visual plugin did not reject a missing baseline: ' + JSON.stringify(missing))
+  }
+  const updated = await call('visual_update_baseline', { sessionId, name: 'package-smoke', confirm: true })
+  if (!updated.ok || updated.baseline?.replaced !== true) {
+    throw new Error('published visual plugin did not create an explicit baseline: ' + JSON.stringify(updated))
+  }
+  const matched = await call('visual_expect', { sessionId, name: 'package-smoke' })
+  if (!matched.ok || matched.matched !== true) {
+    throw new Error('published visual plugin did not match its baseline: ' + JSON.stringify(matched))
+  }
+  const clicked = await call('electron_click', { sessionId, selector: '#greet' })
+  if (!clicked.ok) throw new Error('published visual package fixture click failed')
+  const mismatch = await call('visual_expect', { sessionId, name: 'package-smoke' })
+  if (mismatch.ok || mismatch.code !== 'visual.MISMATCH') {
+    throw new Error('published visual plugin did not return a mismatch: ' + JSON.stringify(mismatch))
+  }
+  await Promise.all([access(mismatch.details?.actual_path), access(mismatch.details?.diff_path)])
+} finally {
+  if (sessionId !== undefined) await call('electron_stop', { sessionId }).catch(() => undefined)
+  await client.close().catch(() => undefined)
+}
+`
 const DEMO_CLIENT_SMOKE = `
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -222,6 +285,19 @@ async function packA11yPlugin(packDir) {
   return path.join(packDir, filename)
 }
 
+async function packVisualPlugin(packDir) {
+  await execFile(
+    'pnpm',
+    ['--filter', '@electron-stagewright/plugin-visual', 'pack', '--pack-destination', packDir],
+    { cwd: ROOT, maxBuffer: 8 * 1024 * 1024 },
+  )
+  const filename = (await readdir(packDir)).find(
+    (entry) => entry.startsWith('electron-stagewright-plugin-visual-') && entry.endsWith('.tgz'),
+  )
+  if (filename === undefined) throw new Error('pnpm pack did not produce the visual plugin tarball')
+  return path.join(packDir, filename)
+}
+
 async function packDemo(packDir) {
   await execFile(
     'pnpm',
@@ -239,6 +315,7 @@ async function main() {
   const tempRoot = await mkdtemp(path.join(tmpdir(), 'stagewright-package-smoke-'))
   const packDir = path.join(tempRoot, 'pack')
   const a11yPackDir = path.join(tempRoot, 'a11y-pack')
+  const visualPackDir = path.join(tempRoot, 'visual-pack')
   const tracePackDir = path.join(tempRoot, 'trace-pack')
   const demoPackDir = path.join(tempRoot, 'demo-pack')
   const scratchDir = path.join(tempRoot, 'scratch')
@@ -246,6 +323,7 @@ async function main() {
     await Promise.all([
       mkdir(packDir),
       mkdir(a11yPackDir),
+      mkdir(visualPackDir),
       mkdir(tracePackDir),
       mkdir(demoPackDir),
       mkdir(scratchDir),
@@ -268,6 +346,7 @@ async function main() {
     }
     const coreTarball = path.join(packDir, filename)
     const a11yTarball = await packA11yPlugin(a11yPackDir)
+    const visualTarball = await packVisualPlugin(visualPackDir)
     const traceTarball = await packTracePlugin(tracePackDir)
     const demoTarball = await packDemo(demoPackDir)
     const [playwrightVersion, electronVersion] = await Promise.all([
@@ -284,6 +363,7 @@ async function main() {
         '--prefer-offline',
         coreTarball,
         a11yTarball,
+        visualTarball,
         traceTarball,
         demoTarball,
         `playwright@${playwrightVersion}`,
@@ -298,11 +378,13 @@ async function main() {
     const clientPath = path.join(scratchDir, 'client-smoke.mjs')
     const demoClientPath = path.join(scratchDir, 'demo-client-smoke.mjs')
     const a11yClientPath = path.join(scratchDir, 'a11y-client-smoke.mjs')
+    const visualClientPath = path.join(scratchDir, 'visual-client-smoke.mjs')
     const pluginSdkPath = path.join(scratchDir, 'plugin-sdk-smoke.mjs')
     await Promise.all([
       writeFile(clientPath, CLIENT_SMOKE),
       writeFile(demoClientPath, DEMO_CLIENT_SMOKE),
       writeFile(a11yClientPath, A11Y_CLIENT_SMOKE),
+      writeFile(visualClientPath, VISUAL_CLIENT_SMOKE),
       writeFile(pluginSdkPath, PLUGIN_SDK_SMOKE),
       writeFile(
         path.join(scratchDir, 'replay.json'),
@@ -364,9 +446,19 @@ async function main() {
     )
     const demoRoot = path.join(scratchDir, 'node_modules', '@electron-stagewright', 'demo')
     const a11yRoot = path.join(scratchDir, 'node_modules', '@electron-stagewright', 'plugin-a11y')
+    const visualRoot = path.join(
+      scratchDir,
+      'node_modules',
+      '@electron-stagewright',
+      'plugin-visual',
+    )
     const a11yNotice = await readFile(path.join(a11yRoot, 'THIRD-PARTY-NOTICES.md'), 'utf8')
     if (!a11yNotice.includes('MPL-2.0')) {
       throw new Error('published a11y plugin omitted its axe-core MPL notice')
+    }
+    const visualNotice = await readFile(path.join(visualRoot, 'THIRD-PARTY-NOTICES.md'), 'utf8')
+    if (!visualNotice.includes('pixelmatch') || !visualNotice.includes('pngjs')) {
+      throw new Error('published visual plugin omitted its image dependency notices')
     }
     const demoRuntimeFiles = [
       'dist/manifest.js',
@@ -407,6 +499,17 @@ async function main() {
       maxBuffer: 8 * 1024 * 1024,
       timeout: 90_000,
     })
+    await execFile(
+      process.execPath,
+      [
+        visualClientPath,
+        cliPath,
+        path.join(scratchDir, 'app.mjs'),
+        path.join(scratchDir, 'visual-baselines'),
+        path.join(scratchDir, 'visual-artifacts'),
+      ],
+      { cwd: scratchDir, maxBuffer: 8 * 1024 * 1024, timeout: 90_000 },
+    )
     const replayBin = path.join(scratchDir, 'node_modules', '.bin', 'electron-stagewright-replay')
     const { stdout: replayOutput } = await execFile(
       replayBin,

@@ -24,6 +24,7 @@
     "@electron-stagewright/plugin-production": "workspace:*",
     "@electron-stagewright/plugin-storage": "workspace:*",
     "@electron-stagewright/plugin-trace": "workspace:*",
+    "@electron-stagewright/plugin-visual": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "gpt-tokenizer": "^3.4.0"
   },
