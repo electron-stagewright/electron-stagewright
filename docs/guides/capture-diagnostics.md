@@ -81,6 +81,29 @@ trace_view { "path": "/abs/traces/<artifact>.jsonl" }
   remapped automatically) and judges each step on its stable outcome — the regression-check
   companion: record once, replay after the change.
 
+## Run a promoted spec in CI
+
+Install `@electron-stagewright/plugin-trace` with the core runtime, then invoke the package's
+headless runner against the reviewed JSON artifact. `--json` writes a single bounded report to
+stdout and separates meaningful outcomes: checkpoint mismatch (`1`), malformed spec (`2`), app
+launch failure (`3`), infrastructure (`4`), and invalid CLI usage (`64`).
+
+```yaml
+- name: Replay Electron regression
+  run: xvfb-run --auto-servernum electron-stagewright-replay tests/regressions/greeting.replay.json --json > replay-report.json
+
+- name: Upload replay report
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: replay-report
+    path: replay-report.json
+```
+
+Add `--plugin`, `--plugin-config`, `--allow-eval`, or the same confinement/timeout options as the
+MCP server when the spec needs them. `--include` and `--exclude` narrow a run while retaining the
+session creator required by a selected later call.
+
 The token accounting exists because the trace's first consumer is an agent operating under a
 context budget: it shows which tools cost the most before the budget bites.
 

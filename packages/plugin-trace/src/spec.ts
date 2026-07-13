@@ -234,6 +234,7 @@ export async function replaySpec(
   const spec = parseReplaySpec(input)
   const include = options.include === undefined ? undefined : new Set(options.include)
   const exclude = options.exclude === undefined ? undefined : new Set(options.exclude)
+  const executableSteps = selectStepsWithSessionProducers(spec.steps, include, exclude)
   const sessions = new Map<string, string>()
   const outcomes: ReplaySpecOutcome[] = []
   let matched = 0
@@ -243,7 +244,7 @@ export async function replaySpec(
   for (let index = 0; index < spec.steps.length; index += 1) {
     const step = spec.steps[index]
     if (step === undefined) continue
-    if ((include !== undefined && !include.has(step.tool)) || exclude?.has(step.tool) === true) {
+    if (!executableSteps.has(index)) {
       skipped += 1
       continue
     }
@@ -259,6 +260,47 @@ export async function replaySpec(
     else mismatched += 1
   }
   return { passed: mismatched === 0, matched, mismatched, skipped, steps: outcomes }
+}
+
+/** Keep captured session creators when a replay filter chooses one of their dependent steps. */
+function selectStepsWithSessionProducers(
+  steps: readonly ReplayStep[],
+  include: ReadonlySet<string> | undefined,
+  exclude: ReadonlySet<string> | undefined,
+): ReadonlySet<number> {
+  const producerIndexes = new Map<string, number>()
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index]
+    if (step?.captureSession !== undefined && !producerIndexes.has(step.captureSession)) {
+      producerIndexes.set(step.captureSession, index)
+    }
+  }
+
+  const selected = new Set<number>()
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index]
+    if (step === undefined) continue
+    if ((include === undefined || include.has(step.tool)) && exclude?.has(step.tool) !== true) {
+      selected.add(index)
+    }
+  }
+
+  let addedProducer = true
+  while (addedProducer) {
+    addedProducer = false
+    for (const index of selected) {
+      const step = steps[index]
+      if (step === undefined) continue
+      for (const session of sessionReferences(step.args, producerIndexes)) {
+        const producer = producerIndexes.get(session)
+        if (producer !== undefined && !selected.has(producer)) {
+          selected.add(producer)
+          addedProducer = true
+        }
+      }
+    }
+  }
+  return selected
 }
 
 function evaluateStep(

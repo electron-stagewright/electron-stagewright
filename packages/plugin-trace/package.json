@@ -25,6 +25,9 @@
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "electron-stagewright-replay": "./dist/cli.js"
+  },
   "files": [
     "dist/",
     "README.md",

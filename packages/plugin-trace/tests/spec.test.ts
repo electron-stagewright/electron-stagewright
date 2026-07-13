@@ -194,4 +194,31 @@ describe('replaySpec', () => {
     expect(report.passed).toBe(true)
     expect(seen[1]).toEqual({ tool: 'electron_snapshot', args: { sessionId: 'new-1' } })
   })
+
+  it('retains captured session creators when replay filters select a later step', async () => {
+    const spec = promoteTrace([
+      call(
+        'electron_launch',
+        { main: '/app/main.js' },
+        { ok: true, _meta: { session_id: 'old-1' } },
+      ),
+      call('electron_snapshot', { sessionId: 'old-1' }, { ok: true }),
+    ])
+    const seen: unknown[] = []
+    const report = await replaySpec(
+      spec,
+      {
+        dispatch: async (tool, args) => {
+          seen.push({ tool, args })
+          return result({ _meta: { session_id: 'new-1' } })
+        },
+      },
+      { include: ['electron_snapshot'], exclude: ['electron_launch'] },
+    )
+    expect(report).toMatchObject({ passed: true, matched: 2, skipped: 0 })
+    expect(seen).toEqual([
+      { tool: 'electron_launch', args: { main: '/app/main.js' } },
+      { tool: 'electron_snapshot', args: { sessionId: 'new-1' } },
+    ])
+  })
 })

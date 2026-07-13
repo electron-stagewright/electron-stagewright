@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -94,12 +94,26 @@ async function packageVersion(name) {
   return pkg.version
 }
 
+async function packTracePlugin(packDir) {
+  await execFile(
+    'pnpm',
+    ['--filter', '@electron-stagewright/plugin-trace', 'pack', '--pack-destination', packDir],
+    { cwd: ROOT, maxBuffer: 8 * 1024 * 1024 },
+  )
+  const filename = (await readdir(packDir)).find(
+    (entry) => entry.startsWith('electron-stagewright-plugin-trace-') && entry.endsWith('.tgz'),
+  )
+  if (filename === undefined) throw new Error('pnpm pack did not produce the trace plugin tarball')
+  return path.join(packDir, filename)
+}
+
 async function main() {
   const tempRoot = await mkdtemp(path.join(tmpdir(), 'stagewright-package-smoke-'))
   const packDir = path.join(tempRoot, 'pack')
+  const tracePackDir = path.join(tempRoot, 'trace-pack')
   const scratchDir = path.join(tempRoot, 'scratch')
   try {
-    await Promise.all([mkdir(packDir), mkdir(scratchDir)])
+    await Promise.all([mkdir(packDir), mkdir(tracePackDir), mkdir(scratchDir)])
     const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', packDir], {
       cwd: CORE_DIR,
       maxBuffer: 1024 * 1024,
@@ -117,6 +131,7 @@ async function main() {
       )
     }
     const coreTarball = path.join(packDir, filename)
+    const traceTarball = await packTracePlugin(tracePackDir)
     const [playwrightVersion, electronVersion] = await Promise.all([
       packageVersion('playwright'),
       packageVersion('electron'),
@@ -130,6 +145,7 @@ async function main() {
         '--no-fund',
         '--prefer-offline',
         coreTarball,
+        traceTarball,
         `playwright@${playwrightVersion}`,
         `electron@${electronVersion}`,
       ],
@@ -144,6 +160,51 @@ async function main() {
     await Promise.all([
       writeFile(clientPath, CLIENT_SMOKE),
       writeFile(pluginSdkPath, PLUGIN_SDK_SMOKE),
+      writeFile(
+        path.join(scratchDir, 'replay.json'),
+        `${JSON.stringify(
+          {
+            format: 'stagewright-replay',
+            version: 1,
+            normalizers: ['session_id', 'timestamps', 'absolute_paths'],
+            redactions: [],
+            steps: [
+              {
+                tool: 'electron_launch',
+                args: { main: path.join(scratchDir, 'app.mjs') },
+                captureSession: '$stagewright.session.1',
+                expect: { ok: true },
+              },
+              {
+                tool: 'electron_snapshot',
+                args: { sessionId: '$stagewright.session.1' },
+                expect: { ok: true },
+              },
+              {
+                tool: 'electron_click',
+                args: { sessionId: '$stagewright.session.1', selector: '#greet' },
+                expect: { ok: true },
+              },
+              {
+                tool: 'electron_expect_text',
+                args: {
+                  sessionId: '$stagewright.session.1',
+                  selector: '#status',
+                  equals: 'Ready',
+                },
+                expect: { ok: true },
+              },
+              {
+                tool: 'electron_stop',
+                args: { sessionId: '$stagewright.session.1' },
+                expect: { ok: true },
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      ),
     ])
     await execFile(process.execPath, [pluginSdkPath], {
       cwd: scratchDir,
@@ -171,6 +232,20 @@ async function main() {
         timeout: 90_000,
       },
     )
+    const replayBin = path.join(scratchDir, 'node_modules', '.bin', 'electron-stagewright-replay')
+    const { stdout: replayOutput } = await execFile(
+      replayBin,
+      [path.join(scratchDir, 'replay.json'), '--json'],
+      { cwd: scratchDir, maxBuffer: 8 * 1024 * 1024, timeout: 90_000 },
+    )
+    const replayReport = JSON.parse(replayOutput)
+    if (
+      replayReport?.format !== 'stagewright-replay-report' ||
+      replayReport?.passed !== true ||
+      replayReport?.exit_code !== 0
+    ) {
+      throw new Error(`published replay bin failed: ${replayOutput}`)
+    }
     process.stderr.write(`package smoke passed: ${coreTarball}\n`)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })

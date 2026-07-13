@@ -130,6 +130,38 @@ copy arbitrary result payloads from the diagnostic trace. Reviewers can add a re
 where a behavior matters: `exact`, `subset`, `regex`, or `ignore`, with optional numeric tolerance
 for exact/subset comparisons. Unsafe nested-quantifier regexes are refused by the runner.
 
+## Headless replay
+
+The package also ships `electron-stagewright-replay`, a standalone CI runner for a committed
+specification. It starts a fresh core server, runs the declared `electron_launch` step and later
+steps through the normal dispatcher, then always closes the server:
+
+```sh
+electron-stagewright-replay tests/regressions/greeting.replay.json --json
+```
+
+`--json` writes exactly one `stagewright-replay-report` object to stdout; diagnostics stay on
+stderr. Its exit codes distinguish a checkpoint mismatch (`1`), malformed spec (`2`), failed app
+launch (`3`), infrastructure failure (`4`), and invalid CLI usage (`64`). It accepts
+`--include` / `--exclude`, `--plugin` / `--plugin-config`, `--allow-eval`, `--app-root`,
+`--operation-timeout-ms`, and `--tool-profile` where a spec needs the same core configuration as
+an MCP run. Filtered execution retains the session creator required by a selected later step.
+
+On Linux CI, run Electron under Xvfb and preserve the JSON report even when its non-zero exit code
+correctly fails the job:
+
+```yaml
+- name: Replay Electron regression
+  run: xvfb-run --auto-servernum electron-stagewright-replay tests/regressions/greeting.replay.json --json > replay-report.json
+
+- name: Upload replay report
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: replay-report
+    path: replay-report.json
+```
+
 ## Offline viewer
 
 `trace_view` renders a written artifact to a **single self-contained HTML file** — inline CSS and

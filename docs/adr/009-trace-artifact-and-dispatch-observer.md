@@ -230,3 +230,14 @@ specification for review and eventual automation:
 
 New references: `packages/plugin-trace/src/spec.ts` (schema, promotion, oracle engine) and the
 `trace_promote` tool in `packages/plugin-trace/src/index.ts`.
+
+## Status Update (2026-07-13) — headless replay runner
+
+`@electron-stagewright/plugin-trace` now publishes an `electron-stagewright-replay` executable for
+CI. It reads one promoted spec, starts a fresh core server with the requested plugin/eval/profile
+configuration, runs the existing dispatcher path, and emits either a compact human report or one
+machine-readable JSON object. Exit codes distinguish checkpoint mismatch, malformed spec, failed
+app launch, infrastructure, and CLI usage. Filters preserve the session creator of a selected
+dependent step, so narrowing a run never leaves a stale placeholder. The package smoke packs the
+plugin, installs it outside the monorepo beside core, and proves the published bin against a real
+Electron app.
