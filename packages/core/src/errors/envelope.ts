@@ -126,8 +126,10 @@ export function getSessionId(): string | undefined {
 
 /** Options accepted by {@link makeError}. */
 export interface MakeErrorOptions {
-  /** Override the default registry hint message. */
+  /** Override the human-readable error message without changing the recovery hint. */
   readonly message?: string
+  /** Override the default registry recovery hint for this concrete failure state. */
+  readonly hint?: string
   /** Tool-specific structured details. Must be JSON-serialisable. */
   readonly details?: Record<string, unknown>
   /** Concrete tool calls the agent might try next. */
@@ -171,6 +173,7 @@ function buildErrorEnvelope(
   }
 
   const message = opts.message ?? def.hint
+  const hint = opts.hint ?? def.hint
   const sessionId = opts.session_id ?? getSessionId()
 
   // Build the response body so we can measure its own estimated_tokens. We compute
@@ -180,7 +183,7 @@ function buildErrorEnvelope(
     ok: false,
     error: message,
     code,
-    hint: def.hint,
+    hint,
     retryable: def.retryable,
     http: def.http,
   }
@@ -197,7 +200,7 @@ function buildErrorEnvelope(
     ok: false as const,
     error: message,
     code,
-    hint: def.hint,
+    hint,
     retryable: def.retryable,
     http: def.http,
     _meta: meta,

@@ -2,7 +2,7 @@
 
 > Generated from the dispatcher manifest — do not edit by hand. Run `pnpm docs:tools` to regenerate.
 
-The server exposes 56 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
+The server exposes 57 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
 
 ## Contents
 
@@ -10,7 +10,7 @@ The server exposes 56 tools across 7 operation types. Tools marked with a "Requi
 - [Dialog tools](#dialog-tools) (1)
 - [Eval tools](#eval-tools) (2)
 - [Logs tools](#logs-tools) (1)
-- [Query tools](#query-tools) (25)
+- [Query tools](#query-tools) (26)
 - [Screenshot tools](#screenshot-tools) (1)
 - [Window_info tools](#window_info-tools) (2)
 
@@ -798,6 +798,16 @@ Capture the selected renderer surface accessibility tree: interactive elements (
 | `format` | string | no | Payload encoding. 'json' (default) returns the structured snapshot/diff objects. 'text' returns a compact one-line-per-entry rendering (5-10x fewer tokens): ref, role, quoted name, non-empty value/placeholder, and only NON-default state flags; ~ prefixes recently-changed entries, [-] marks non-targetable landmarks. |
 | `diffFormat` | string | no | Encoding for since:'last' diffs. 'compact' (default) carries only the changed fields per entry; 'full' carries complete prev/curr entries. Ignored when format:'text'. |
 | `budgetTokens` | integer | no | Server-side token cap for a since:'last' diff payload. Lowest-value entries (non-interactive removed/changed first) are dropped until the estimate fits; _meta.truncated_entries reports how many were omitted. |
+
+### `electron_status`
+
+**Electron Stagewright status**
+
+Return compact orientation for this server: version, uptime, active-session count, and each live session's transport, renderer readiness, selected surface, last stable error code, and non-default dialog policy. It never returns window arrays, logs, stack traces, dialog entries, prompt text, or plugin payloads. Use electron_windows_list, electron_surfaces_list, or the relevant plugin tool for detailed state. Returns: { ok, server: { version, uptime_ms }, active_sessions, sessions }. Errors: none.
+
+- Operation: `query`
+
+_No parameters._
 
 ### `electron_wait`
 

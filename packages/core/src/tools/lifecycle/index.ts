@@ -13,10 +13,12 @@ import { doctorTool } from './doctor.js'
 import { infoTool } from './info.js'
 import { launchTool } from './launch.js'
 import { detachTool, forceKillTool, stopTool } from './session-control.js'
+import { statusTool } from './status.js'
 import { switchWindowTool, windowsListTool } from './windows.js'
 import { surfacesListTool, switchSurfaceTool } from './surfaces.js'
 
 export { infoTool, makeInfoTool, type InfoToolDeps } from './info.js'
+export { statusTool } from './status.js'
 export { doctorTool } from './doctor.js'
 export { launchTool, makeLaunchTool, type LaunchToolDeps } from './launch.js'
 export { stopTool, forceKillTool, detachTool } from './session-control.js'
@@ -53,6 +55,7 @@ export const LIFECYCLE_TOOLS: readonly AnyToolDefinition[] = [
   launchTool,
   attachTool,
   injectTool,
+  statusTool,
   infoTool,
   windowsListTool,
   switchWindowTool,

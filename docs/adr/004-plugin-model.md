@@ -198,6 +198,16 @@ actual `enabled` or `disabled` state; an eval-policy-hidden tool names the
 namespaced error codes, declared requirements, and safe effective config. It remains absent when no
 plugin is loaded, preserving the lean-core invariant.
 
+## Status update (read-only server orientation, 2026-07-13)
+
+The plugin contract is now at API `1.3.0`. `ToolContext.status` is a deliberately read-only
+orientation capability: it reports server uptime and the last stable error for a still-live session.
+It exists so the core status tool can use the same handler contract as every other tool without
+exposing the status tracker's mutation methods. It does not disclose logs, stacks, dialog content,
+window arrays, or plugin-owned state, and it is not a plugin-status contributor API. Plugins that
+need to surface their own operational state must continue to do so through their explicit tools or
+a future dedicated, capability-limited contributor contract.
+
 ## Related decisions
 
 - **ADR-006** (Error code registry) — anticipated `registerPluginCodes` and `<plugin>.CODE`;

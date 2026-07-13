@@ -211,9 +211,10 @@ async function gatherSimilarRefs(cx: {
   readonly session: TransportSession
   readonly sessionId: string
   readonly hint?: string | undefined
-}): Promise<SimilarRef[]> {
+}): Promise<{ readonly similar: SimilarRef[]; readonly hadSnapshot: boolean }> {
   const surface = await cx.session.activeSurface()
   let source = cx.ctx.snapshots.get(cx.sessionId, surface.id)
+  const hadSnapshot = source !== undefined
   try {
     const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {})
     if (walked !== undefined && Array.isArray(walked.entries)) {
@@ -231,7 +232,21 @@ async function gatherSimilarRefs(cx: {
     // Live re-walk failed (bundle missing in a pre-build test run, or a dead
     // renderer) — fall through to the stored snapshot.
   }
-  return source !== undefined ? computeSimilarRefs(source, cx.hint) : []
+  return {
+    similar: source !== undefined ? computeSimilarRefs(source, cx.hint) : [],
+    hadSnapshot,
+  }
+}
+
+/** Recovery text must describe the observed state, not speculate about a different failure mode. */
+function missHint(code: 'SELECTOR_NO_MATCH' | 'REF_NOT_FOUND', hadSnapshot: boolean): string {
+  if (!hadSnapshot) {
+    return 'No snapshot is available for this renderer. Call electron_snapshot() before retrying so refs and candidates are current.'
+  }
+  if (code === 'REF_NOT_FOUND') {
+    return 'This ref is stale because it is absent from the latest snapshot. Call electron_snapshot() to refresh refs, then retry with a returned ref.'
+  }
+  return 'The selector did not match the current DOM. It is not a stale-ref diagnosis; inspect a fresh snapshot or refine the selector.'
 }
 
 /** Trim a transport error message to a single bounded line. */
@@ -258,7 +273,7 @@ export async function buildMissError(
     readonly nameHint?: string | undefined
   },
 ): Promise<ErrorResponse> {
-  const similar = await gatherSimilarRefs({
+  const { similar, hadSnapshot } = await gatherSimilarRefs({
     ctx: cx.ctx,
     session: cx.session,
     sessionId: cx.meta.session_id,
@@ -267,6 +282,7 @@ export async function buildMissError(
   return makeError(code, {
     ...cx.meta,
     message: cx.message,
+    hint: missHint(code, hadSnapshot),
     ...(similar.length > 0 ? { similar_refs: similar } : {}),
     next_actions: ['electron_snapshot()', 'electron_find({ role: "button" })'],
   })

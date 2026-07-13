@@ -26,6 +26,8 @@ export { TransportRegistry, type TransportRegistryOptions } from './transport-re
 
 export { SnapshotStore } from './snapshot-store.js'
 
+export { ServerStatus, type LastSessionError, type ServerStatusReader } from './status.js'
+
 export {
   StderrLogger,
   NOOP_LOGGER,

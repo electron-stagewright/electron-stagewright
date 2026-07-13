@@ -62,6 +62,7 @@ import { anyEvalAllowed, type EvalPolicy, normalizeEvalPolicy } from './eval-pol
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
+import { ServerStatus } from './status.js'
 import { TransportRegistry } from './transport-registry.js'
 
 /**
@@ -101,6 +102,8 @@ export interface DispatcherOptions {
   readonly transports?: TransportRegistry
   /** Per-session snapshot store threaded into every tool context. Defaults to a fresh store. */
   readonly snapshots?: SnapshotStore
+  /** Compact state used by `electron_status`. Defaults to a fresh server-local tracker. */
+  readonly status?: ServerStatus
   /** Logger for slow-op warnings and diagnostics. Defaults to a no-op logger. */
   readonly logger?: Logger
   /**
@@ -241,6 +244,7 @@ export class Dispatcher {
   readonly #sessions: SessionManager
   readonly #transports: TransportRegistry
   readonly #snapshots: SnapshotStore
+  readonly #status: ServerStatus
   readonly #logger: Logger
   /** The per-target eval authorization policy (ADR-014); normalised from the option. */
   readonly #evalPolicy: EvalPolicy
@@ -285,6 +289,10 @@ export class Dispatcher {
     if (opts.appRoot !== undefined) this.#appRoot = path.resolve(opts.appRoot)
     if (opts.launchDefaultMain !== undefined) this.#launchDefaultMain = opts.launchDefaultMain
     this.#now = opts.now ?? Date.now
+    this.#status = opts.status ?? new ServerStatus({ now: this.#now })
+    this.#sessions.onSessionEnd((event) => {
+      this.#status.clearSession(event.sessionId)
+    })
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
     this.#operationTimeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
     this.#excludedToolProfileHints = opts.excludedToolProfileHints ?? new Map()
@@ -607,6 +615,7 @@ export class Dispatcher {
       sessions: this.#sessions,
       transports: this.#transports,
       snapshots: this.#snapshots,
+      status: this.#status,
       logger: this.#logger,
       allowEval: this.#evalPolicy.main,
       allowEvalRenderer: this.#evalPolicy.renderer,
@@ -687,8 +696,10 @@ export class Dispatcher {
    * exactly once. A throwing observer is caught and logged; it never affects the agent result.
    */
   #complete(tool: string, args: unknown, result: ToolResult, startedAt: number): ToolResult {
+    const finishedAt = this.#now()
+    this.#status.record(result, finishedAt, (sessionId) => this.#sessions.has(sessionId))
     if (this.#observers.size > 0) {
-      const record: DispatchRecord = { tool, args, result, startedAt, finishedAt: this.#now() }
+      const record: DispatchRecord = { tool, args, result, startedAt, finishedAt }
       for (const observer of this.#observers) {
         try {
           observer(record)

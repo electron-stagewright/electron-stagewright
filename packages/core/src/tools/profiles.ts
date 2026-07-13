@@ -18,6 +18,7 @@ export type ToolProfile = (typeof TOOL_PROFILES)[number]
 /** The primary launch → observe → interact → assert workflow, measured below the 12K BPE target. */
 export const ESSENTIAL_CORE_TOOL_NAMES = [
   'electron_launch',
+  'electron_status',
   'electron_info',
   'electron_stop',
   'electron_snapshot',
