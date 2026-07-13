@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   BENCH_APP_MAIN,
+  benchmarkChildEnvironment,
   call,
   rawCall,
   stagewrightAdapter,
@@ -34,6 +35,7 @@ export const ELECTRON_DRIVER_TARGET: ServerTarget = {
   name: 'electron-driver',
   command: process.execPath,
   args: [ELECTRON_DRIVER_ENTRY],
+  env: benchmarkChildEnvironment(),
   provenance: {
     source: 'npm',
     package: { name: 'electron-driver', version: '0.3.1' },

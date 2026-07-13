@@ -35,6 +35,148 @@ const CLI_PATH = path.join(path.dirname(CORE_ENTRY), 'cli.js')
 /** Absolute entry of the small, deterministic Electron fixture used by every comparison target. */
 export const BENCH_APP_MAIN = path.join(HERE, '..', 'app', 'main.js')
 
+/**
+ * The MCP SDK deliberately starts stdio children with a small safe environment rather than inheriting
+ * all of the host process. Electron needs these display/sandbox values when the harness runs under
+ * Linux/Xvfb, so forward only this explicit allowlist. The JSON report records names, never values.
+ */
+export const BENCHMARK_CHILD_ENVIRONMENT_VARIABLES = [
+  'ELECTRON_DISABLE_SANDBOX',
+  'DISPLAY',
+  'WAYLAND_DISPLAY',
+  'XDG_RUNTIME_DIR',
+  'XAUTHORITY',
+  'DBUS_SESSION_BUS_ADDRESS',
+] as const
+
+/** Keep only the Electron display values a stdio MCP child needs; never forward arbitrary host secrets. */
+export function benchmarkChildEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const selected: Record<string, string> = {}
+  for (const name of BENCHMARK_CHILD_ENVIRONMENT_VARIABLES) {
+    const value = environment[name]
+    // Match the MCP SDK's defense against exported shell functions and omit empty values that provide
+    // no usable display configuration.
+    if (value !== undefined && value.length > 0 && !value.startsWith('()')) selected[name] = value
+  }
+  return selected
+}
+
+/** Environment knob used by diagnostics to bound every externally observable benchmark phase. */
+export const BENCHMARK_PHASE_TIMEOUT_ENV = 'STAGEWRIGHT_BENCH_PHASE_TIMEOUT_MS'
+
+/** A local default leaves room for a cold Electron start while preventing an indefinitely stuck run. */
+export const DEFAULT_BENCHMARK_PHASE_TIMEOUT_MS = 60_000
+
+/** Parse the phase timeout once per scenario and reject unsafe CI configuration instead of silently hanging. */
+export function resolveBenchmarkPhaseTimeout(environment: NodeJS.ProcessEnv = process.env): number {
+  const raw = environment[BENCHMARK_PHASE_TIMEOUT_ENV]
+  if (raw === undefined || raw.length === 0) return DEFAULT_BENCHMARK_PHASE_TIMEOUT_MS
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${BENCHMARK_PHASE_TIMEOUT_ENV} must be a positive integer in milliseconds`)
+  }
+  const timeoutMs = Number(raw)
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error(`${BENCHMARK_PHASE_TIMEOUT_ENV} must be a positive integer in milliseconds`)
+  }
+  return timeoutMs
+}
+
+/** Named portions of a real run, retained in the JSON artifact to localize a CI failure. */
+export type BenchmarkPhase = 'connect' | 'launch' | 'scenario' | 'memory' | 'stop'
+
+/** One bounded phase's outcome. Error values are diagnostic text, never child environment values. */
+export interface BenchmarkPhaseDiagnostic {
+  readonly phase: BenchmarkPhase
+  readonly outcome: 'ok' | 'error' | 'timeout'
+  readonly elapsedMs: number
+  readonly timeoutMs?: number
+  readonly error?: string
+}
+
+/** Per-scenario execution evidence that turns a failed CI run into an actionable artifact. */
+export interface BenchmarkDiagnostics {
+  readonly phaseTimeoutMs: number
+  /** Names only, so the artifact proves the child setup without exposing runtime values. */
+  readonly childEnvironment: readonly string[]
+  readonly phases: ReadonlyArray<BenchmarkPhaseDiagnostic>
+}
+
+/** Mutable recorder used only while a benchmark run is in flight. */
+export interface BenchmarkDiagnosticsRecorder extends BenchmarkDiagnostics {
+  readonly phases: BenchmarkPhaseDiagnostic[]
+}
+
+/** Create a phase recorder whose completed result is exposed as read-only diagnostics. */
+export function createBenchmarkDiagnostics(
+  phaseTimeoutMs: number,
+  environment: Readonly<Record<string, string>> | undefined,
+): BenchmarkDiagnosticsRecorder {
+  return {
+    phaseTimeoutMs,
+    childEnvironment: Object.keys(environment ?? {}).sort(),
+    phases: [],
+  }
+}
+
+class BenchmarkPhaseTimeoutError extends Error {
+  readonly phase: BenchmarkPhase
+  readonly timeoutMs: number
+
+  constructor(phase: BenchmarkPhase, timeoutMs: number) {
+    super(`${phase} timed out after ${timeoutMs}ms`)
+    this.name = 'BenchmarkPhaseTimeoutError'
+    this.phase = phase
+    this.timeoutMs = timeoutMs
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** Measure and bound one observable phase without changing the task-level benchmark metrics. */
+export async function measureBenchmarkPhase<T>(
+  diagnostics: BenchmarkDiagnosticsRecorder,
+  phase: BenchmarkPhase,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const result = await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new BenchmarkPhaseTimeoutError(phase, diagnostics.phaseTimeoutMs)),
+          diagnostics.phaseTimeoutMs,
+        )
+      }),
+    ])
+    diagnostics.phases.push({
+      phase,
+      outcome: 'ok',
+      elapsedMs: performance.now() - startedAt,
+    })
+    return result
+  } catch (error) {
+    const timeout = error instanceof BenchmarkPhaseTimeoutError
+    diagnostics.phases.push({
+      phase,
+      outcome: timeout ? 'timeout' : 'error',
+      elapsedMs: performance.now() - startedAt,
+      ...(timeout ? { timeoutMs: diagnostics.phaseTimeoutMs } : {}),
+      error: errorMessage(error),
+    })
+    throw error
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+const STAGEWRIGHT_CHILD_ENVIRONMENT = benchmarkChildEnvironment()
+
 /** The success/error envelope every tool returns, including the `_meta` cost block. */
 export interface Envelope {
   readonly ok: boolean
@@ -76,6 +218,8 @@ export interface ScenarioResult extends ScenarioMetrics {
   readonly description: string
   /** Main-process RSS (bytes) sampled after the scenario, or null if unavailable. */
   readonly memoryRssBytes: number | null
+  /** Phase-by-phase execution evidence when this result came from the real harness. */
+  readonly diagnostics?: BenchmarkDiagnostics
   readonly ok: boolean
   readonly error?: string
 }
@@ -133,7 +277,7 @@ export interface ServerTarget {
   readonly command: string
   /** Arguments to the executable (the server entry + its flags). */
   readonly args: readonly string[]
-  /** Extra environment variables for the spawned server, merged over the inherited env. */
+  /** Extra values explicitly forwarded to the MCP SDK's otherwise restricted child environment. */
   readonly env?: Readonly<Record<string, string>>
   /** Whether this server can sample memory (gates the per-target memory column). */
   readonly supportsMemory?: boolean
@@ -146,6 +290,7 @@ export const STAGEWRIGHT_TARGET: ServerTarget = {
   name: 'stagewright',
   command: 'node',
   args: [CLI_PATH, '--allow-eval'],
+  env: STAGEWRIGHT_CHILD_ENVIRONMENT,
   supportsMemory: true,
   provenance: {
     source: 'workspace',
@@ -161,6 +306,7 @@ export const STAGEWRIGHT_COMPARISON_TARGET: ServerTarget = {
   name: STAGEWRIGHT_TARGET.name,
   command: STAGEWRIGHT_TARGET.command,
   args: [CLI_PATH],
+  env: STAGEWRIGHT_CHILD_ENVIRONMENT,
   provenance: STAGEWRIGHT_TARGET.provenance,
 }
 
@@ -170,6 +316,7 @@ export function stagewrightProfileTarget(profile: ToolProfile): ServerTarget {
     name: `stagewright-${profile}`,
     command: 'node',
     args: [CLI_PATH, '--tool-profile', profile],
+    env: STAGEWRIGHT_CHILD_ENVIRONMENT,
     provenance: STAGEWRIGHT_TARGET.provenance,
   }
 }
@@ -330,27 +477,41 @@ export async function runScenario(
     retries: 0,
     latencyMs: 0,
   }
+  const diagnostics = createBenchmarkDiagnostics(resolveBenchmarkPhaseTimeout(), target.env)
   const transport = new StdioClientTransport({
     command: target.command,
     args: [...target.args],
     ...(target.env !== undefined ? { env: target.env } : {}),
   })
   const client = new Client({ name: `bench-${scenario.name}`, version: '0.0.0' })
-  await client.connect(transport)
 
-  let sessionId: string | undefined
+  let activeSessionId: string | undefined
   let memoryRssBytes: number | null = null
   try {
-    const launched = await rawCall(client, 'electron_launch', { main: BENCH_APP_MAIN })
-    if (!launched.ok) throw new Error(`launch failed: ${launched.code ?? 'UNKNOWN'}`)
-    sessionId = launched['session_id'] as string
-    await scenario.run({ client, sessionId, sessionArgs: { sessionId }, metrics })
-    memoryRssBytes = await sampleMemory(client, sessionId)
+    await measureBenchmarkPhase(diagnostics, 'connect', () => client.connect(transport))
+    const launched = await measureBenchmarkPhase(diagnostics, 'launch', async () => {
+      const envelope = await rawCall(client, 'electron_launch', { main: BENCH_APP_MAIN })
+      if (!envelope.ok) throw new Error(`launch failed: ${envelope.code ?? 'UNKNOWN'}`)
+      return envelope
+    })
+    const launchedSessionId = launched['session_id']
+    if (typeof launchedSessionId !== 'string' || launchedSessionId.length === 0) {
+      throw new Error('launch succeeded without a session_id')
+    }
+    const sessionId = launchedSessionId
+    activeSessionId = sessionId
+    await measureBenchmarkPhase(diagnostics, 'scenario', () =>
+      scenario.run({ client, sessionId, sessionArgs: { sessionId }, metrics }),
+    )
+    memoryRssBytes = await measureBenchmarkPhase(diagnostics, 'memory', () =>
+      sampleMemory(client, sessionId),
+    )
     return {
       name: scenario.name,
       description: scenario.description,
       ...metrics,
       memoryRssBytes,
+      diagnostics,
       ok: true,
     }
   } catch (err) {
@@ -359,15 +520,22 @@ export async function runScenario(
       description: scenario.description,
       ...metrics,
       memoryRssBytes,
+      diagnostics,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     }
   } finally {
+    const sessionId = activeSessionId
     if (sessionId !== undefined) {
-      await rawCall(client, 'electron_stop', { sessionId }).catch(() => undefined)
+      await measureBenchmarkPhase(diagnostics, 'stop', () =>
+        rawCall(client, 'electron_stop', { sessionId }),
+      ).catch(() => undefined)
     }
     // Guarded so a teardown error can't mask the real failure that reached finally.
     await client.close().catch(() => undefined)
+    // `client.close()` normally delegates here, but closing explicitly also terminates a server that
+    // timed out during initialization before the client considered itself connected.
+    await transport.close().catch(() => undefined)
   }
 }
 

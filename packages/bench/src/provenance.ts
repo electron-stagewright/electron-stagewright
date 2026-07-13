@@ -44,6 +44,8 @@ export interface ComparisonProvenance {
     readonly name: string
     readonly command: string
     readonly args: readonly string[]
+    /** Names of explicit child-environment values; values stay out of the artifact. */
+    readonly childEnvironment: readonly string[]
     /** SHA-256 of the executable entry passed to Node, when it is a local file. */
     readonly entrySha256: string | null
     readonly provenance: ServerTarget['provenance']
@@ -117,6 +119,7 @@ export async function collectComparisonProvenance(
         name: target.name,
         command: target.command,
         args: target.args,
+        childEnvironment: Object.keys(target.env ?? {}).sort(),
         entrySha256: await entryHash(target),
         provenance: target.provenance,
       })),

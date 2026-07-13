@@ -17,6 +17,7 @@ pnpm build        # builds packages/core/dist/cli.js, which the harness spawns
 pnpm bench        # human table to stderr, JSON report to stdout
 pnpm bench --json report.json   # also write the JSON report to a file
 pnpm bench:check  # same run, but exit non-zero on a deterministic-metric regression
+STAGEWRIGHT_BENCH_PHASE_TIMEOUT_MS=45000 pnpm bench --json output/benchmark.json
 pnpm manifest:check # verify the host-visible manifest budget baseline
 pnpm manifest:report -- --json output/manifest.json # write manifest measurements
 pnpm bench:profiles -- --json output/profile-benchmark.json # full vs essential tasks
@@ -114,7 +115,10 @@ pnpm bench:check   # exits 1 if a tool-call count drifts or a saving collapses b
 Savings are floors, not exact targets — a better run never trips, and the token floor sits a
 margin below the observed baseline so normal jitter does not false-trip while a real collapse
 does. `checkThresholds` is a pure function, so it also runs as a fast unit test in `pnpm test`
-(no Electron) — that test is the CI-side guard; `--check` is the real-run guard.
+(no Electron). A separate Linux/Xvfb diagnostic job runs the first-party harness without `--check`,
+records a bounded connect/launch/scenario/memory/stop timeline for every scenario, and uploads the
+JSON report without blocking a pull request. `--check` remains the real-run guard for a reviewed
+local or release validation after the diagnostic evidence has proved stable.
 
 When the bench app or a response shape legitimately changes, re-baseline with
 `pnpm bench --update-thresholds`: it prints a fresh spec derived from the current run (to stderr,
@@ -141,7 +145,8 @@ per task and target:
 - median, nearest-rank p95, min, and max for every retained numeric measure;
 - every raw warmup and retained row (including failures), plus fixture/harness SHA-256s, checkout
   commit/dirty state, host environment, executable command and entry SHA-256, pinned package
-  provenance, and a target's self-reported server version when it differs from its package version.
+  provenance, explicit child-environment names (never values), and a target's self-reported server
+  version when it differs from its package version.
 
 Use a short run only as a local smoke:
 
@@ -157,14 +162,16 @@ pinned adapter with its provenance and shared oracle instead.
 
 ## Scope and limitations
 
-- **Local only.** Like the other real-Electron smokes in this repo, the benchmark runs on
-  demand on a machine with a display; it is not wired into CI.
+- **First-party CI diagnostics are non-blocking.** A Linux/Xvfb job runs `pnpm bench` with a bounded
+  phase timeout and uploads its JSON report. It does not run `--check` or a competitor command, so
+  observed startup failures remain evidence to fix rather than a pull-request veto.
 - **Competitive results are local evidence, not release copy.** The repository ships a pinned
   `electron-driver@0.3.1` adapter and test coverage for the protocol, but no numeric claim or checked-in
   benchmark result. Run it on demand, inspect the JSON artifact, and reproduce it before communicating
   a conclusion.
 - **Regression thresholds enforce the deterministic metrics only** (tool-call counts +
   contrast savings) — see above. Latency and memory are never asserted. Enforcement against a
-  real run is local/on-demand (`pnpm bench:check`); the pure checker runs in CI via `pnpm test`.
+  real run is deliberate (`pnpm bench:check`); the diagnostic CI run reports those thresholds without
+  enforcing them, and the pure checker runs in CI via `pnpm test`.
 - The estimated-token figure uses core's char/4 heuristic, not a model tokenizer; treat
   it as a comparable proxy across scenarios, not an absolute token cost.

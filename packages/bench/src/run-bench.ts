@@ -45,10 +45,10 @@ import {
 } from './thresholds.js'
 
 /** Schema version of the scenario JSON report; bump when the shape changes (for regression tooling). */
-const REPORT_SCHEMA_VERSION = 3
+const REPORT_SCHEMA_VERSION = 4
 
 /** Schema version of the `--compare` JSON report (its own shape, versioned independently). */
-const COMPARISON_SCHEMA_VERSION = 2
+const COMPARISON_SCHEMA_VERSION = 3
 
 /** The machine-readable report written to stdout / the --json file. */
 interface BenchReport {
