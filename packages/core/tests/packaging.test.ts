@@ -119,8 +119,7 @@ async function manifestViolations({ dir, relDir, pkg }: PackageManifest): Promis
   }
 
   const exportsObject = pkg['exports'] as
-    | { '.'?: { types?: unknown; import?: unknown } }
-    | undefined
+    { '.'?: { types?: unknown; import?: unknown } } | undefined
   const exportsRoot = exportsObject?.['.']
   if (typeof exportsRoot?.types !== 'string' || !exportsRoot.types.startsWith('./dist/')) {
     fail(`exports["."].types must point under ./dist/ (got ${String(exportsRoot?.types)})`)
@@ -250,8 +249,7 @@ describe('publish-readiness — publishable package manifests', () => {
     expect(core, 'expected packages/core manifest').toBeDefined()
     const peers = core?.pkg['peerDependencies'] as Record<string, string> | undefined
     const peerMeta = core?.pkg['peerDependenciesMeta'] as
-      | Record<string, { readonly optional?: unknown }>
-      | undefined
+      Record<string, { readonly optional?: unknown }> | undefined
 
     expect(peers?.['playwright']).toBe('>=1.49.0')
     expect(peers?.['electron']).toBe('>=12.2.0')
@@ -264,8 +262,7 @@ describe('publish-readiness — publishable package manifests', () => {
       (manifest) => manifest.relDir === 'packages/core',
     )
     const exportsObject = core?.pkg['exports'] as
-      | Record<string, { readonly types?: unknown; readonly import?: unknown }>
-      | undefined
+      Record<string, { readonly types?: unknown; readonly import?: unknown }> | undefined
 
     expect(exportsObject?.['./plugin-sdk']).toEqual({
       types: './dist/plugin-sdk/index.d.ts',

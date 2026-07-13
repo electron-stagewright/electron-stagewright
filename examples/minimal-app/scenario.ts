@@ -84,8 +84,7 @@ async function main(): Promise<void> {
     //    reuses (the entries live under the `snapshot` envelope field).
     const snap = await call(client, 'electron_snapshot', { sessionId })
     const tree = snap['snapshot'] as
-      | { entries?: ReadonlyArray<{ role?: string; name?: string }> }
-      | undefined
+      { entries?: ReadonlyArray<{ role?: string; name?: string }> } | undefined
     const entries = tree?.entries ?? []
     log(`Snapshot: ${entries.length} elements (roles: ${entries.map((e) => e.role).join(', ')}).`)
 

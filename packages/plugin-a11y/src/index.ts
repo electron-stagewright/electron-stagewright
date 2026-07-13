@@ -112,8 +112,7 @@ type AuditFailure =
   | { readonly kind: 'engine_error'; readonly message: string }
 
 type EngineInstallResult =
-  | { readonly kind: 'installed' }
-  | { readonly kind: 'engine_error'; readonly message: string }
+  { readonly kind: 'installed' } | { readonly kind: 'engine_error'; readonly message: string }
 
 type EngineInstallFailure = Extract<EngineInstallResult, { readonly kind: 'engine_error' }>
 

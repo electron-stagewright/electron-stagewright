@@ -1247,8 +1247,7 @@ class PlaywrightSession implements TransportSession {
           }
         }
         const state = g[key] as
-          | { needle?: unknown; active?: boolean; nextSeq?: number; armedSeq?: number }
-          | undefined
+          { needle?: unknown; active?: boolean; nextSeq?: number; armedSeq?: number } | undefined
         if (state !== undefined) {
           state.needle = typeof arg?.titleContains === 'string' ? arg.titleContains : undefined
           state.active = true
@@ -1265,8 +1264,7 @@ class PlaywrightSession implements TransportSession {
       (_electron, payload) => {
         const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
         const state = (globalThis as unknown as Record<string, unknown>)[key] as
-          | { buffer?: unknown; needle?: unknown; armedSeq?: unknown }
-          | undefined
+          { buffer?: unknown; needle?: unknown; armedSeq?: unknown } | undefined
         const buffer = state?.buffer
         if (!Array.isArray(buffer)) return []
         // The hook records UNFILTERED; apply `titleContains` here so pre-arm (t=0) and post-arm records
@@ -1312,8 +1310,7 @@ class PlaywrightSession implements TransportSession {
         const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
         const g = globalThis as unknown as Record<string, unknown>
         const state = g[key] as
-          | { origShow?: unknown; patchedShow?: unknown; active?: boolean }
-          | undefined
+          { origShow?: unknown; patchedShow?: unknown; active?: boolean } | undefined
         if (state === undefined) return
         state.active = false
         // Restore the original show only when it is still OUR patch (never clobber a later app patch

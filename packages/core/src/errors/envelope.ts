@@ -80,8 +80,7 @@ export type SuccessResponse<T extends object = Record<string, never>> = T & {
 
 /** Discriminated union returned from every tool dispatch. */
 export type ToolResponse<T extends object = Record<string, never>> =
-  | ErrorResponse
-  | SuccessResponse<T>
+  ErrorResponse | SuccessResponse<T>
 
 /**
  * Char/4 token estimate. The heuristic is within ~10-20% on English prose for

@@ -268,10 +268,7 @@ interface DroppableItem {
 /** Whether a diff payload item refers to an interactive entry (any encoding). */
 function isInteractiveDiffItem(
   item:
-    | SnapshotEntry
-    | SnapshotEntryChange
-    | SnapshotEntryChangeCompact
-    | SnapshotEntryRemovedCompact,
+    SnapshotEntry | SnapshotEntryChange | SnapshotEntryChangeCompact | SnapshotEntryRemovedCompact,
 ): boolean {
   if ('interactive' in item) return item.interactive
   if ('curr' in item && typeof item.curr === 'object' && 'interactive' in item.curr) {

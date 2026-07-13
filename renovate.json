@@ -1,0 +1,77 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard", ":automergeDisabled"],
+  "timezone": "America/Bogota",
+  "schedule": ["before 5am on monday"],
+  "prConcurrentLimit": 3,
+  "packageRules": [
+    {
+      "description": "Review every major upgrade independently",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true,
+      "labels": ["dependencies", "major-update"]
+    },
+    {
+      "description": "Keep runtime type definitions on the supported Node major",
+      "matchPackageNames": ["@types/node"],
+      "allowedVersions": "/^24\\./"
+    },
+    {
+      "description": "Review Electron majors as standalone compatibility work",
+      "matchPackageNames": ["electron"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "Electron major",
+      "groupSlug": "electron-major",
+      "labels": ["dependencies", "major-update", "electron"]
+    },
+    {
+      "description": "Review Playwright majors as standalone browser-driver work",
+      "matchPackageNames": ["playwright"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "Playwright major",
+      "groupSlug": "playwright-major",
+      "labels": ["dependencies", "major-update", "playwright"]
+    },
+    {
+      "description": "Review TypeScript majors independently",
+      "matchPackageNames": ["typescript"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "TypeScript major",
+      "groupSlug": "typescript-major",
+      "labels": ["dependencies", "major-update", "typescript"]
+    },
+    {
+      "description": "Keep Angular and zone.js majors in one dedicated review",
+      "matchPackageNames": ["@angular/**", "zone.js"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "Angular platform major",
+      "groupSlug": "angular-platform-major",
+      "labels": ["dependencies", "major-update", "angular"]
+    },
+    {
+      "description": "Keep React majors in one dedicated review",
+      "matchPackageNames": ["react", "react-dom"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "React platform major",
+      "groupSlug": "react-platform-major",
+      "labels": ["dependencies", "major-update", "react"]
+    },
+    {
+      "description": "Keep Vue majors in one dedicated review",
+      "matchPackageNames": ["vue", "@vue/compiler-sfc"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "Vue platform major",
+      "groupSlug": "vue-platform-major",
+      "labels": ["dependencies", "major-update", "vue"]
+    },
+    {
+      "description": "Batch safe npm maintenance for one human review",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "matchJsonata": ["isBreaking != true"],
+      "groupName": "non-major npm dependencies",
+      "groupSlug": "npm-non-major",
+      "labels": ["dependencies", "maintenance"]
+    }
+  ]
+}

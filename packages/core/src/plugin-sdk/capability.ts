@@ -4,8 +4,7 @@ import type { TransportCapabilities } from '../transports/types.js'
 
 /** A capability check result that preserves the plugin's own unsupported response. */
 export type TransportCapabilityCheck<T> =
-  | { readonly supported: true }
-  | { readonly supported: false; readonly fallback: T }
+  { readonly supported: true } | { readonly supported: false; readonly fallback: T }
 
 /**
  * Check one transport capability without prescribing an error code, hint, or envelope.

@@ -7,13 +7,7 @@ import { constants } from 'node:fs'
 
 export interface DoctorCheck {
   readonly id:
-    | 'node'
-    | 'playwright'
-    | 'electron'
-    | 'display'
-    | 'app_root'
-    | 'screenshot_dir'
-    | 'eval_policy'
+    'node' | 'playwright' | 'electron' | 'display' | 'app_root' | 'screenshot_dir' | 'eval_policy'
   readonly status: 'pass' | 'fail' | 'skip'
   readonly message: string
   readonly hint?: string

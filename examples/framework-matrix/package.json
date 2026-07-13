@@ -19,14 +19,14 @@
     "@angular/compiler": "^19.0.0",
     "@angular/core": "^19.0.0",
     "@angular/platform-browser": "^19.0.0",
-    "@vue/compiler-sfc": "^3.5.0",
-    "esbuild": "^0.28.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "@vue/compiler-sfc": "^3.5.39",
+    "esbuild": "^0.28.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "rxjs": "^7.8.0",
     "tslib": "^2.8.0",
-    "tsx": "^4.22.3",
-    "vue": "^3.5.0",
+    "tsx": "^4.23.0",
+    "vue": "^3.5.39",
     "zone.js": "^0.15.0"
   }
 }
