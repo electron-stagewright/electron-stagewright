@@ -39,7 +39,7 @@ current project, keep the server local to that project and pin the release-teste
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.2.0 --package playwright@1.61.1 \
+  npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \
   --package electron@42.3.0 electron-stagewright
 ```
 
@@ -48,9 +48,9 @@ of unrelated workspaces. To share a reviewed configuration with a team, use `--s
 which writes the same `mcpServers` shape to `.mcp.json`. See the
 [Claude Code MCP scopes](https://code.claude.com/docs/en/mcp) for the host-specific behavior.
 
-To verify a host before pointing it at your app, clone this repository and use the
-[checkout demo guide](docs/guides/demo.md). Its package is release-tested but is not yet publicly
-available on npm, so a published `npx` setup must not reference it.
+To verify a host before pointing it at your app, add the pinned
+`@electron-stagewright/demo@0.1.0` package and use the [demo guide](docs/guides/demo.md). The demo
+is opt-in, so a normal core installation neither loads nor depends on it.
 
 For local development, build the checkout and point your MCP host at the built CLI:
 
@@ -72,7 +72,7 @@ Shared project `.mcp.json` shape:
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.2.0",
+        "@electron-stagewright/core@0.3.0",
         "--package",
         "playwright@1.61.1",
         "--package",
@@ -159,8 +159,8 @@ option; diagnostics go to stderr (stdout is reserved for the JSON-RPC protocol c
 | `--screenshot-dir <dir>`        | Default directory `electron_screenshot` writes into when the call gives no explicit path. Default: the OS temp dir.                                                                                                                                                                                                                                                                                                                                                           |
 | `--operation-timeout-ms <n>`    | Per-dispatch backstop timeout (ms); a handler that never settles resolves as a retryable `OPERATION_TIMEOUT` instead of hanging the agent on a frozen app. Default 120000; `0` disables it.                                                                                                                                                                                                                                                                                   |
 | `--tool-profile <profile>`      | Select the core tool surface: `essential` (the focused launch/snapshot/interact/assert path), `testing` (broader test-driving tools), `debug` (attach/inspect/diagnostics), or `full`. Default: `full`, preserving the complete core catalog. Eval authorization and explicitly loaded plugins compose independently.                                                                                                                                                         |
-| `--demo`                        | Resolve a locally available `@electron-stagewright/demo` package and use its Electron entry when `electron_launch` omits `main` and `executablePath`. It is opt-in and never becomes a normal core dependency. The demo is currently available from a built checkout, not public npm. Cannot be combined with `--app-root`.                                                                                                                                                   |
-| `doctor [--json]`               | Run preflight checks without starting the MCP server: Node, Playwright, Electron, Linux display, configured paths, and eval policy. JSON mode reserves stdout for a machine-readable report and exits non-zero when a required check fails. This command is available from a built checkout; the pinned public core 0.2.0 package does not include it yet.                                                                                                                    |
+| `--demo`                        | Resolve an installed `@electron-stagewright/demo` package and use its Electron entry when `electron_launch` omits `main` and `executablePath`. It is opt-in and never becomes a normal core dependency. Install the pinned demo beside core when configuring a published `npx` or global setup. Cannot be combined with `--app-root`.                                                                                                                                         |
+| `doctor [--json]`               | Run preflight checks without starting the MCP server: Node, Playwright, Electron, Linux display, configured paths, and eval policy. JSON mode reserves stdout for a machine-readable report and exits non-zero when a required check fails. Run it as `electron-stagewright doctor --json`, never as an MCP server argument.                                                                                                                                                  |
 | `--plugin <name\|path>`         | Load a plugin by package name or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin @electron-stagewright/plugin-trace`. After loading one, call `electron_plugins` to inspect enabled or disabled tools and their gate requirements.                                                                                                                                                                                                               |
 | `--plugin-config <name>=<json>` | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name; invalid input reports its Zod field path and correction input. `electron_plugins` returns only fields the plugin explicitly marks safe.                                                                                                                                                                                                                                          |
 

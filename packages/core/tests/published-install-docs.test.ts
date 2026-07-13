@@ -18,6 +18,9 @@ const CORE_PACKAGE = JSON.parse(
 const TRACE_PACKAGE = JSON.parse(
   await readFile(path.join(REPO_ROOT, 'packages', 'plugin-trace', 'package.json'), 'utf8'),
 ) as { readonly name: string; readonly version: string }
+const DEMO_PACKAGE = JSON.parse(
+  await readFile(path.join(REPO_ROOT, 'packages', 'demo', 'package.json'), 'utf8'),
+) as { readonly name: string; readonly version: string }
 
 function exactDevVersion(name: string): string {
   const range = CORE_PACKAGE.devDependencies[name]
@@ -54,10 +57,10 @@ describe('published-install documentation', () => {
       }
       expect(doc).not.toContain('--scope user')
     }
-    expect([...docs, gettingStarted].join('\n')).not.toContain('electron-stagewright doctor --json')
+    expect([...docs, gettingStarted].join('\n')).toContain('electron-stagewright doctor --json')
   })
 
-  it('pins the published trace example and does not advertise an unpublished demo install', async () => {
+  it('pins the published trace and demo examples', async () => {
     const [pluginsGuide, demoGuide] = await Promise.all([
       readRepoFile('docs', 'guides', 'plugins.md'),
       readRepoFile('docs', 'guides', 'demo.md'),
@@ -69,9 +72,12 @@ describe('published-install documentation', () => {
     ]) {
       expect(pluginsGuide).toContain(packageSpecifier)
     }
-    expect(demoGuide).toMatch(/not yet published to\s+npm/)
-    expect(demoGuide).not.toMatch(
-      /(?:--package\s+|"--package",\s*")@electron-stagewright\/demo|npm install -g @electron-stagewright\/demo/,
-    )
+    for (const packageSpecifier of [
+      ...PINNED_LAUNCH_PACKAGES,
+      `${DEMO_PACKAGE.name}@${DEMO_PACKAGE.version}`,
+    ]) {
+      expect(demoGuide).toContain(packageSpecifier)
+    }
+    expect(demoGuide).not.toMatch(/not yet published to\s+npm/)
   })
 })

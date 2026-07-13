@@ -35,7 +35,7 @@ first:
     "args": [
       "-y",
       "--package",
-      "@electron-stagewright/core@0.2.0",
+      "@electron-stagewright/core@0.3.0",
       "--package",
       "playwright@1.61.1",
       "--package",
@@ -51,7 +51,7 @@ first:
 - **Global install (explicit, fastest spawn).** Install once, then call the bin directly.
 
   ```sh
-  npm install -g @electron-stagewright/core@0.2.0 playwright@1.61.1 electron@42.3.0
+  npm install -g @electron-stagewright/core@0.3.0 playwright@1.61.1 electron@42.3.0
   ```
 
   ```json
@@ -88,7 +88,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.2.0",
+        "@electron-stagewright/core@0.3.0",
         "--package",
         "playwright@1.61.1",
         "--package",
@@ -113,7 +113,7 @@ reload:
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.2.0",
+        "@electron-stagewright/core@0.3.0",
         "--package",
         "playwright@1.61.1",
         "--package",
@@ -143,13 +143,12 @@ Append flags to `args` (after the package/CLI). The common ones:
   `testing` adds the broader test-driving tools, `debug` adds attach and diagnostics, and `full`
   remains the compatibility default. This flag does not enable eval or load plugins.
 - `--screenshot-dir <dir>` sets a stable location for captured screenshots.
-- `--demo` supplies a local Electron entry when an agent calls `electron_launch {}`. The demo
-  package is not yet public on npm, so use a built checkout for this verification flow; it cannot
-  be combined with `--app-root`. See [Try the demo from a checkout](./demo.md) for the exact host
-  configuration.
-- A built checkout provides `node packages/core/dist/cli.js doctor --json`, a standalone preflight
-  for Node, Playwright, Electron, display setup, configured paths, and eval policy. Do not append it
-  to MCP server arguments. The pinned public core 0.2.0 package does not include this command yet.
+- `--demo` supplies an installed demo Electron entry when an agent calls `electron_launch {}`. Add
+  `@electron-stagewright/demo@0.1.0` beside core, Playwright, and Electron in an `npx` setup, or
+  install it globally with them. It cannot be combined with `--app-root`. See
+  [Try the demo](./demo.md) for the exact host configuration.
+- `electron-stagewright doctor --json` runs a standalone preflight for Node, Playwright, Electron,
+  display setup, configured paths, and eval policy. Do not append it to MCP server arguments.
 - `--plugin <name>` loads an installed plugin (trace, network, storage, clock, and others). With
   `npx`, add that plugin package as another `--package` before the `electron-stagewright` bin; with
   a global install, install the plugin package globally too. Then call `electron_plugins` to see
@@ -163,7 +162,7 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
   "args": [
     "-y",
     "--package",
-    "@electron-stagewright/core@0.2.0",
+    "@electron-stagewright/core@0.3.0",
     "--package",
     "playwright@1.61.1",
     "--package",

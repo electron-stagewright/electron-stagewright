@@ -68,7 +68,8 @@ full list is in the [tool reference](../../TOOL-REFERENCE.md).
 
 The built checkout also provides `node packages/core/dist/cli.js doctor --json` for a standalone
 preflight of Node, Playwright, Electron, display, paths, and eval policy. Do not append it to an MCP
-host's server arguments. The pinned public core 0.2.0 package does not include this command yet.
+host's server arguments. The published CLI exposes the same command as
+`electron-stagewright doctor --json`.
 
 That `node …/dist/cli.js` form points at this cloned checkout, which is what runs the bundled
 example. To wire the **published** package into your client and drive **your own** app instead — with
