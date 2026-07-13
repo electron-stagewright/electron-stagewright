@@ -233,8 +233,8 @@ describe('visual plugin (in-process)', () => {
         code: 'visual.MISMATCH',
         details: {
           diff_pixels: expect.any(Number),
-          actual_path: expect.stringMatching(/\.mismatch\/actual\.png$/),
-          diff_path: expect.stringMatching(/\.mismatch\/diff\.png$/),
+          actual_path: expect.stringMatching(/\.mismatch[\\/]actual\.png$/),
+          diff_path: expect.stringMatching(/\.mismatch[\\/]diff\.png$/),
         },
       })
     }

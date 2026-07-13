@@ -11,7 +11,7 @@ const SCRIPT = pathToFileURL(path.join(REPO_ROOT, 'scripts', 'release-publish.mj
 
 describe('trusted npm publishing release guard', () => {
   it('uses a protected OIDC workflow without a long-lived publish credential', async () => {
-    const workflow = await readFile(WORKFLOW, 'utf8')
+    const workflow = (await readFile(WORKFLOW, 'utf8')).replaceAll('\r\n', '\n')
 
     expect(workflow).toContain('release:\n    types: [published]')
     expect(workflow).toContain('workflow_dispatch:')

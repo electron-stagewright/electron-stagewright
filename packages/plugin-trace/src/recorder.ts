@@ -354,7 +354,9 @@ export class Recorder {
       this.#footer = footer
     }
     if (this.#fsync) {
-      const handle = await open(this.partialPath, 'r')
+      // Windows rejects fsync on a read-only handle (EPERM); the recorder owns this partial file,
+      // so a writable handle is both valid and required for the durability barrier on every OS.
+      const handle = await open(this.partialPath, 'r+')
       try {
         await handle.sync()
       } finally {
