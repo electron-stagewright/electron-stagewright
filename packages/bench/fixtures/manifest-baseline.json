@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reason": "Initial host-visible manifest budget baseline for explicit core profiles.",
+  "reason": "Add trace promotion capability to host-visible plugin manifests",
   "variants": {
     "core-safe": {
       "toolCount": 52,
@@ -2472,10 +2472,10 @@
       ]
     },
     "plugin-trace-safe": {
-      "toolCount": 60,
-      "characters": 84435,
-      "utf8Bytes": 84543,
-      "bpe": 19366,
+      "toolCount": 61,
+      "characters": 86120,
+      "utf8Bytes": 86228,
+      "bpe": 19715,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2531,6 +2531,7 @@
         "electron_wait_for_state",
         "electron_windows_list",
         "trace_budget",
+        "trace_promote",
         "trace_replay",
         "trace_start",
         "trace_status",
@@ -2602,10 +2603,10 @@
       ]
     },
     "plugin-trace-eval": {
-      "toolCount": 62,
-      "characters": 87193,
-      "utf8Bytes": 87301,
-      "bpe": 19998,
+      "toolCount": 63,
+      "characters": 88878,
+      "utf8Bytes": 88986,
+      "bpe": 20347,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2663,6 +2664,7 @@
         "electron_wait_for_state",
         "electron_windows_list",
         "trace_budget",
+        "trace_promote",
         "trace_replay",
         "trace_start",
         "trace_status",
@@ -2734,10 +2736,10 @@
       ]
     },
     "all-safe": {
-      "toolCount": 91,
-      "characters": 116613,
-      "utf8Bytes": 116789,
-      "bpe": 26684,
+      "toolCount": 92,
+      "characters": 118298,
+      "utf8Bytes": 118474,
+      "bpe": 27033,
       "toolNames": [
         "clock_advance",
         "clock_install",
@@ -2824,6 +2826,7 @@
         "storage_set_cookie",
         "storage_snapshot",
         "trace_budget",
+        "trace_promote",
         "trace_replay",
         "trace_start",
         "trace_status",
@@ -2895,10 +2898,10 @@
       ]
     },
     "all-eval": {
-      "toolCount": 110,
-      "characters": 135570,
-      "utf8Bytes": 135760,
-      "bpe": 31035,
+      "toolCount": 111,
+      "characters": 137255,
+      "utf8Bytes": 137445,
+      "bpe": 31384,
       "toolNames": [
         "clock_advance",
         "clock_install",
@@ -3004,6 +3007,7 @@
         "storage_set_cookie",
         "storage_snapshot",
         "trace_budget",
+        "trace_promote",
         "trace_replay",
         "trace_start",
         "trace_status",

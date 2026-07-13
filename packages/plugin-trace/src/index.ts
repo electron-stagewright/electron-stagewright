@@ -9,7 +9,8 @@
  * depending on it.
  *
  * Tools (namespaced by the loader): `trace_start`, `trace_stop`, `trace_tokens`, `trace_status`,
- * `trace_budget`, `trace_replay`, and `trace_view` (render a trace to a self-contained HTML report).
+ * `trace_budget`, `trace_replay`, `trace_view` (render a trace to a self-contained HTML report),
+ * and `trace_promote` (turn a diagnostic trace into a reviewable replay specification).
  *
  * PRIVACY: a trace captures tool inputs/outputs, which may include typed text or eval payloads.
  * It is opt-in (only records between start/stop) and writes to an operator-chosen path — the
@@ -47,6 +48,7 @@ import {
   type ParsedTrace,
 } from './recorder.js'
 import { replayTrace } from './replay.js'
+import { promoteTrace, serializeReplaySpec } from './spec.js'
 import { renderTraceHtml } from './viewer.js'
 
 /**
@@ -552,10 +554,76 @@ export function createTracePlugin(): StagewrightPlugin {
     },
   })
 
+  const promoteTool: AnyToolDefinition = defineTool({
+    name: 'promote',
+    title: 'Promote a trace to a replay specification',
+    description: [
+      'Convert a diagnostic JSONL trace into a compact, reviewable stagewright-replay v1 spec.',
+      'The promoted spec keeps tool args plus explicit ok checkpoints, replaces recorded session',
+      'ids with stable placeholders, keeps any required session creator, and applies named args.*',
+      'redactions BEFORE writing. Use it as',
+      'the starting point for committed regression checks; add result matchers intentionally rather',
+      'than treating every raw response as a brittle oracle. Returns: { ok, path, source, steps }.',
+      'Errors: trace.ARTIFACT_NOT_FOUND, trace.ARTIFACT_INVALID, trace.ARTIFACT_WRITE_FAILED.',
+    ].join(' '),
+    inputSchema: z.object({
+      path: z.string().describe('Source trace artifact (JSONL).'),
+      out: z
+        .string()
+        .optional()
+        .describe('Output replay-spec JSON path. Defaults beside the trace with .replay.json.'),
+      redactions: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Fields to redact before writing, such as args.password or args.headers.authorization.',
+        ),
+      include: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Promote calls whose tool is in this list, plus required earlier session creators.',
+        ),
+      exclude: z
+        .array(z.string())
+        .optional()
+        .describe('Skip matching calls unless one is required to create a selected session.'),
+    }),
+    operationType: 'command',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const target = path.resolve(args.path)
+      const loaded = await loadTrace(target, meta)
+      if ('error' in loaded) return loaded.error
+      const out =
+        args.out !== undefined
+          ? path.resolve(args.out)
+          : target.endsWith('.jsonl')
+            ? `${target.slice(0, -'.jsonl'.length)}.replay.json`
+            : `${target}.replay.json`
+      const spec = promoteTrace(loaded.parsed.calls, {
+        ...(args.redactions !== undefined ? { redactions: args.redactions } : {}),
+        ...(args.include !== undefined ? { include: args.include } : {}),
+        ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
+      })
+      try {
+        await mkdir(path.dirname(out), { recursive: true })
+        await writeFile(out, serializeReplaySpec(spec), 'utf8')
+      } catch (err) {
+        return makePluginError('trace.ARTIFACT_WRITE_FAILED', {
+          ...meta,
+          message: `Could not write the replay specification to ${out}: ${err instanceof Error ? err.message : String(err)}.`,
+          details: { path: out },
+        })
+      }
+      return makeSuccess({ path: out, source: target, steps: spec.steps.length }, meta)
+    },
+  })
+
   /**
    * The trace plugin. Load with `--plugin @electron-stagewright/plugin-trace` or
    * `createServer({ plugins: [tracePlugin] })`. Configure via `pluginConfigs.trace`
-   * (`{ dir?, maxRecords?, redact?, budgetTokens?, enforceBudget?, warnThreshold? }`).
+   * (`{ dir?, maxRecords?, redact?, budgetTokens?, enforceBudget?, warnThreshold?, fsync? }`).
    */
   return {
     name: TRACE_NAMESPACE,
@@ -594,7 +662,16 @@ export function createTracePlugin(): StagewrightPlugin {
         hint: 'The recording’s token budget is exhausted; call trace_stop or start a new trace with a higher budgetTokens.',
       },
     },
-    tools: [startTool, stopTool, tokensTool, statusTool, budgetTool, replayTool, viewTool],
+    tools: [
+      startTool,
+      stopTool,
+      tokensTool,
+      statusTool,
+      budgetTool,
+      replayTool,
+      viewTool,
+      promoteTool,
+    ],
     setup: (raw) => {
       config.set(raw as TraceConfig)
     },
@@ -663,5 +740,24 @@ export type {
   ReplayCallOutcome,
   ResultDiff,
 } from './replay.js'
+export {
+  promoteTrace,
+  replaySpec,
+  parseReplaySpec,
+  serializeReplaySpec,
+  REPLAY_SPEC_FORMAT,
+  REPLAY_SPEC_VERSION,
+} from './spec.js'
+export type {
+  ReplayNormalizer,
+  ReplayMatcher,
+  ReplayStep,
+  ReplaySpec,
+  PromoteTraceOptions,
+  ReplaySpecDeps,
+  ReplaySpecOptions,
+  ReplaySpecOutcome,
+  ReplaySpecReport,
+} from './spec.js'
 export { renderTraceHtml, escapeHtml } from './viewer.js'
 export type { RenderOptions } from './viewer.js'

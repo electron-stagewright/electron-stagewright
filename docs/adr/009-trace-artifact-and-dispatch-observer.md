@@ -210,3 +210,23 @@ host failure:
 New references: `packages/plugin-trace/src/recorder.ts` (streaming writer, v1/v2 readers);
 `packages/plugin-trace/src/index.ts` (start/stop lifecycle); `packages/plugin-trace/src/viewer.ts`
 (partial-artifact disclosure).
+
+## Status Update (2026-07-13) — promoted replay specifications
+
+Raw replay intentionally remains a diagnostic comparison of stable `ok`/error-code outcomes. A
+new `trace_promote` path turns selected trace calls into a compact `stagewright-replay` v1 JSON
+specification for review and eventual automation:
+
+- Promotion retains only call args and explicit `ok` checkpoints; it does not copy arbitrary
+  response payloads into a committed contract. Recorded session ids become deterministic
+  placeholders that a runner resolves from the fresh launch result.
+- Promotion redacts password, token, authorization, and cookie argument fields by default and
+  accepts additional scoped `args.*` redactions before it writes the spec. The same configured
+  result redactions are applied to mismatch reports.
+- The pure spec engine supports intentional result checks (`exact`, `subset`, `regex`, `ignore`)
+  and numeric tolerance. Session ids, timestamps, and absolute paths can be normalized so they do
+  not create false positives. Regex checks reject oversize or nested-quantifier sources before
+  execution and cap their input.
+
+New references: `packages/plugin-trace/src/spec.ts` (schema, promotion, oracle engine) and the
+`trace_promote` tool in `packages/plugin-trace/src/index.ts`.

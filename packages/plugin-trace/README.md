@@ -62,6 +62,13 @@ warn_threshold }`. For an agent to self-limit mid-session without the full token
   report (inline CSS/JS, no external assets) and return `{ path, source, calls, bytes }`, where
   `path` is the written report. With no `out` the report is written next to the trace with a
   `.html` extension.
+- **`trace_promote`** `{ path, out?, redactions?, include?, exclude? }` — turn a diagnostic trace
+  into a reviewable `stagewright-replay` v1 JSON spec. It retains tool args plus explicit `ok`
+  checkpoints, replaces captured session ids with stable placeholders, and redacts sensitive args
+  before writing (password/token/authorization/cookie defaults plus any named `args.*` fields).
+  When filters select a later session-bound call, it retains the earlier session creator so the
+  resulting spec remains runnable.
+  Add result matchers intentionally when a regression needs to observe a value.
 
 Error codes: `trace.ALREADY_RECORDING`, `trace.NOT_RECORDING`, `trace.ARTIFACT_NOT_FOUND`,
 `trace.ARTIFACT_INVALID`, `trace.ARTIFACT_WRITE_FAILED`, `trace.BUDGET_EXCEEDED`.
@@ -113,6 +120,15 @@ Replay is deterministic only for traces whose arguments remain meaningful in a f
 calls, but it cannot reconstruct values removed by `redact`: a redacted argument such as
 `"[redacted]"` is replayed exactly as recorded and may diverge. Use `dryRun` to check schema
 drift without launching an app, and `include` / `exclude` / `maxCalls` to narrow a replay.
+
+## Promoted regression specs
+
+`trace_promote` separates evidence from a durable regression contract. The generated JSON carries
+`format: "stagewright-replay"`, `version: 1`, stable session placeholders, normalizers for session
+ids/timestamps/absolute paths, and one explicit `{ ok }` checkpoint per selected call. It does not
+copy arbitrary result payloads from the diagnostic trace. Reviewers can add a result matcher only
+where a behavior matters: `exact`, `subset`, `regex`, or `ignore`, with optional numeric tolerance
+for exact/subset comparisons. Unsafe nested-quantifier regexes are refused by the runner.
 
 ## Offline viewer
 

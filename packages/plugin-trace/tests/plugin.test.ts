@@ -168,6 +168,29 @@ describe('trace plugin (in-process)', () => {
     }
   })
 
+  it('promotes a trace into a redacted, reviewable replay spec', async () => {
+    const file = await tmpFile()
+    const out = file.replace(/\.jsonl$/, '.replay.json')
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file })
+      await server.dispatcher.dispatch('demo_echo', { value: 'secret-to-remove' })
+      await server.dispatcher.dispatch('trace_stop', {})
+      expect(
+        await server.dispatcher.dispatch('trace_promote', {
+          path: file,
+          redactions: ['args.value'],
+        }),
+      ).toMatchObject({ ok: true, path: out, source: file, steps: 1 })
+      const spec = await readFile(out, 'utf8')
+      expect(spec).toContain('stagewright-replay')
+      expect(spec).toContain('[redacted]')
+      expect(spec).not.toContain('secret-to-remove')
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
   it('reports an invalid output target when starting without leaving a fake active recording', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sw-trace-stop-fails-'))
     created.push(dir)

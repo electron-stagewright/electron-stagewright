@@ -73,6 +73,10 @@ trace_view { "path": "/abs/traces/<artifact>.jsonl" }
   returns its path plus a token report.
 - **`trace_view`** renders the artifact to a single self-contained HTML file — summary cards, a
   token-budget bar, per-tool tables, an expandable timeline — openable anywhere, no server.
+- **`trace_promote`** creates a small reviewable replay spec from a raw trace. It keeps explicit
+  success checkpoints, normalizes session ids, and redacts password/token/authorization/cookie
+  fields before writing; filtered calls retain their required session creators. Add result matchers
+  only for the values a regression must observe.
 - **`trace_replay`** re-dispatches a recorded session against a fresh app instance (session ids
   remapped automatically) and judges each step on its stable outcome — the regression-check
   companion: record once, replay after the change.
