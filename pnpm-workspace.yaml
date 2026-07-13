@@ -2,6 +2,13 @@ packages:
   - 'packages/*'
   - 'examples/*'
 
+# Force patched transitive versions while their direct parents remain on compatible ranges.
+# These pins remediate the production advisories reported for Hono via the MCP SDK and Undici via
+# Electron's downloader without taking an SDK or Electron major upgrade.
+overrides:
+  hono: 4.12.29
+  undici: 7.28.0
+
 # Approve native postinstall builds for trusted packages. pnpm 11+ blocks all
 # postinstall scripts by default as a supply-chain safeguard; `allowBuilds` opts
 # them back in. electron runs a postinstall that downloads its prebuilt binary —
