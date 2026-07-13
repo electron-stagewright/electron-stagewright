@@ -147,6 +147,11 @@ export interface ToolContext {
    */
   readonly appRoot?: string | undefined
   /**
+   * Server-supplied Electron entry used by `electron_launch` when the call omits both `main` and
+   * `executablePath`. It is explicit server configuration, never agent-provided input.
+   */
+  readonly launchDefaultMain?: string | undefined
+  /**
    * Epoch-ms timestamp captured by the dispatcher when the call began. Pass it
    * (with {@link ToolContext.now}) to `makeSuccess` / `makeError` so the
    * response's `_meta.elapsed_ms` reflects the whole dispatch, not just the

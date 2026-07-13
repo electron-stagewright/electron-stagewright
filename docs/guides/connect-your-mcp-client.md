@@ -141,6 +141,11 @@ Append flags to `args` (after the package/CLI). The common ones:
   `testing` adds the broader test-driving tools, `debug` adds attach and diagnostics, and `full`
   remains the compatibility default. This flag does not enable eval or load plugins.
 - `--screenshot-dir <dir>` sets a stable location for captured screenshots.
+- `--demo` resolves the separately installed `@electron-stagewright/demo` package and supplies its
+  local Electron entry when an agent calls `electron_launch {}`. It is useful for verifying a new
+  host configuration before driving your app; it cannot be combined with `--app-root`. See
+  [Try the packaged demo](./demo.md) for exact Claude Desktop, Cursor, generic, global, and local
+  configurations.
 - `doctor --json` is a standalone preflight command, not an MCP server flag:
   run it in a terminal to validate Node, Playwright, Electron, display setup,
   configured paths, and eval policy before adding the server to a client.

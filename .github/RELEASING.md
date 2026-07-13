@@ -10,6 +10,7 @@ the package shape these steps assume — and that this list names exactly the pa
 The publishable packages are every `packages/*` that is **not** `private: true`:
 
 - `@electron-stagewright/core` (ships the `electron-stagewright` CLI)
+- `@electron-stagewright/demo` (local-only Electron connection-verification app)
 - `@electron-stagewright/plugin-clock` (virtual-time control)
 - `@electron-stagewright/plugin-ipc` (IPC capture, invoke, and stub)
 - `@electron-stagewright/plugin-native-ui` (app menus, notifications, and system tray)

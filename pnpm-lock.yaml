@@ -208,6 +208,9 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@electron-stagewright/demo':
+        specifier: workspace:*
+        version: link:../demo
       electron:
         specifier: ^42.3.0
         version: 42.3.0
@@ -229,6 +232,12 @@ importers:
       playwright:
         specifier: ^1.60.0
         version: 1.60.0
+
+  packages/demo:
+    dependencies:
+      electron:
+        specifier: '>=12.2.0'
+        version: 42.3.0
 
   packages/plugin-clock:
     dependencies:

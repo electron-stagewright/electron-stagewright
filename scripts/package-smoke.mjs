@@ -86,6 +86,62 @@ try {
   await client.close().catch(() => undefined)
 }
 `
+const DEMO_CLIENT_SMOKE = `
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+
+const [cliPath] = process.argv.slice(2)
+const client = new Client({ name: 'demo-package-smoke', version: '1.0.0' })
+const transport = new StdioClientTransport({ command: process.execPath, args: [cliPath, '--demo'] })
+
+async function call(name, args) {
+  const result = await client.callTool({ name, arguments: args })
+  const text = result.content.find((block) => block.type === 'text')?.text
+  if (typeof text !== 'string') throw new Error(name + ': no text result')
+  const envelope = JSON.parse(text)
+  if (!envelope.ok) throw new Error(name + ': ' + (envelope.code ?? envelope.error ?? 'failed'))
+  return envelope
+}
+
+async function inspectorWindow(sessionId) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const listed = await call('electron_windows_list', { sessionId })
+    const inspector = listed.windows.find((window) => window.title === 'Stagewright demo inspector')
+    if (inspector !== undefined) return inspector
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('demo inspector window did not appear')
+}
+
+let sessionId
+try {
+  await client.connect(transport)
+  const launched = await call('electron_launch', {})
+  sessionId = launched.session_id
+  const snapshot = await call('electron_snapshot', { sessionId })
+  const addTask = snapshot.snapshot.entries.find((entry) => entry.name === 'Add a task')
+  if (typeof addTask?.ref !== 'number') throw new Error('demo snapshot omitted Add a task ref')
+  await call('electron_click', { sessionId, ref: addTask.ref })
+  await call('electron_type', { sessionId, selector: '#task-title', text: 'Tarball verified' })
+  await call('electron_click', { sessionId, selector: '#save-task' })
+  await call('electron_expect_text', {
+    sessionId,
+    selector: '#task-summary',
+    equals: '1 task · Tarball verified',
+  })
+  await call('electron_click', { sessionId, selector: '#open-inspector' })
+  const inspector = await inspectorWindow(sessionId)
+  await call('electron_switch_window', { sessionId, targetId: inspector.id })
+  await call('electron_expect_text', {
+    sessionId,
+    selector: '#inspector-status',
+    equals: '1 task in the board',
+  })
+} finally {
+  if (sessionId !== undefined) await call('electron_stop', { sessionId }).catch(() => undefined)
+  await client.close().catch(() => undefined)
+}
+`
 
 async function packageVersion(name) {
   const packagePath = requireFromCore.resolve(`${name}/package.json`)
@@ -107,13 +163,27 @@ async function packTracePlugin(packDir) {
   return path.join(packDir, filename)
 }
 
+async function packDemo(packDir) {
+  await execFile(
+    'pnpm',
+    ['--filter', '@electron-stagewright/demo', 'pack', '--pack-destination', packDir],
+    { cwd: ROOT, maxBuffer: 8 * 1024 * 1024 },
+  )
+  const filename = (await readdir(packDir)).find(
+    (entry) => entry.startsWith('electron-stagewright-demo-') && entry.endsWith('.tgz'),
+  )
+  if (filename === undefined) throw new Error('pnpm pack did not produce the demo tarball')
+  return path.join(packDir, filename)
+}
+
 async function main() {
   const tempRoot = await mkdtemp(path.join(tmpdir(), 'stagewright-package-smoke-'))
   const packDir = path.join(tempRoot, 'pack')
   const tracePackDir = path.join(tempRoot, 'trace-pack')
+  const demoPackDir = path.join(tempRoot, 'demo-pack')
   const scratchDir = path.join(tempRoot, 'scratch')
   try {
-    await Promise.all([mkdir(packDir), mkdir(tracePackDir), mkdir(scratchDir)])
+    await Promise.all([mkdir(packDir), mkdir(tracePackDir), mkdir(demoPackDir), mkdir(scratchDir)])
     const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', packDir], {
       cwd: CORE_DIR,
       maxBuffer: 1024 * 1024,
@@ -132,6 +202,7 @@ async function main() {
     }
     const coreTarball = path.join(packDir, filename)
     const traceTarball = await packTracePlugin(tracePackDir)
+    const demoTarball = await packDemo(demoPackDir)
     const [playwrightVersion, electronVersion] = await Promise.all([
       packageVersion('playwright'),
       packageVersion('electron'),
@@ -146,6 +217,7 @@ async function main() {
         '--prefer-offline',
         coreTarball,
         traceTarball,
+        demoTarball,
         `playwright@${playwrightVersion}`,
         `electron@${electronVersion}`,
       ],
@@ -156,9 +228,11 @@ async function main() {
       writeFile(path.join(scratchDir, 'index.html'), APP_HTML),
     ])
     const clientPath = path.join(scratchDir, 'client-smoke.mjs')
+    const demoClientPath = path.join(scratchDir, 'demo-client-smoke.mjs')
     const pluginSdkPath = path.join(scratchDir, 'plugin-sdk-smoke.mjs')
     await Promise.all([
       writeFile(clientPath, CLIENT_SMOKE),
+      writeFile(demoClientPath, DEMO_CLIENT_SMOKE),
       writeFile(pluginSdkPath, PLUGIN_SDK_SMOKE),
       writeFile(
         path.join(scratchDir, 'replay.json'),
@@ -218,6 +292,22 @@ async function main() {
       'dist',
       'cli.js',
     )
+    const demoRoot = path.join(scratchDir, 'node_modules', '@electron-stagewright', 'demo')
+    const demoRuntimeFiles = [
+      'dist/manifest.js',
+      'dist/main.js',
+      'dist/index.html',
+      'dist/inspector.html',
+    ]
+    const demoContents = await Promise.all(
+      demoRuntimeFiles.map(async (file) => ({
+        file,
+        content: await readFile(path.join(demoRoot, file), 'utf8'),
+      })),
+    )
+    if (demoContents.some(({ content }) => content.includes('packages/'))) {
+      throw new Error('published demo unexpectedly imports a monorepo path')
+    }
     await execFile(process.execPath, [clientPath, cliPath, path.join(scratchDir, 'app.mjs')], {
       cwd: scratchDir,
       maxBuffer: 8 * 1024 * 1024,
@@ -232,6 +322,11 @@ async function main() {
         timeout: 90_000,
       },
     )
+    await execFile(process.execPath, [demoClientPath, cliPath], {
+      cwd: scratchDir,
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: 90_000,
+    })
     const replayBin = path.join(scratchDir, 'node_modules', '.bin', 'electron-stagewright-replay')
     const { stdout: replayOutput } = await execFile(
       replayBin,

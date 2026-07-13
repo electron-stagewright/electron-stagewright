@@ -1,10 +1,16 @@
 import { defineConfig } from 'vitest/config'
 
+const runE2E = process.env['STAGEWRIGHT_E2E'] === '1'
+
 export default defineConfig({
   test: {
     globals: false,
     environment: 'node',
     passWithNoTests: true,
+    // The opt-in suite launches many full Chromium processes. Run its files serially so renderer
+    // startup stays representative instead of starving unrelated time-sensitive unit tests on the
+    // same host. The default unit suite keeps Vitest's normal parallelism.
+    ...(runE2E ? { fileParallelism: false } : {}),
     include: ['packages/*/tests/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
     coverage: {
       provider: 'v8',

@@ -42,6 +42,17 @@ claude mcp add electron-stagewright --scope user -- \
   npx -y --package @electron-stagewright/core --package playwright --package electron electron-stagewright
 ```
 
+To verify the connection before you point it at your app, add the separately packaged local demo:
+
+```bash
+claude mcp add electron-stagewright-demo --scope user -- \
+  npx -y --package @electron-stagewright/core --package @electron-stagewright/demo \
+  --package playwright --package electron electron-stagewright --demo
+```
+
+Then ask the agent to call `electron_launch {}`. The [packaged demo guide](docs/guides/demo.md)
+also has exact Claude Desktop, Cursor, generic, global, and local-checkout configurations.
+
 For local development, build the checkout and point your MCP host at the built CLI:
 
 ```bash
@@ -113,6 +124,8 @@ The full tool list — every tool, its parameters, and operation type — is in
 
 - [Getting started](docs/guides/getting-started.md) — from a clean checkout to a complete driven
   session against the bundled example app.
+- [Try the packaged demo](docs/guides/demo.md) — verify a published MCP host setup against a local,
+  multi-window Electron task board without supplying your own app path.
 - [Connect your MCP client](docs/guides/connect-your-mcp-client.md) — wire the published package
   into Claude Desktop, Cursor, or any MCP host, and confirm it connected.
 - [Launch, attach, or inject](docs/guides/launch-or-attach.md) — getting a session against YOUR
@@ -147,6 +160,7 @@ option; diagnostics go to stderr (stdout is reserved for the JSON-RPC protocol c
 | `--screenshot-dir <dir>`        | Default directory `electron_screenshot` writes into when the call gives no explicit path. Default: the OS temp dir.                                                                                                                                                                                                                                                                                                                                                           |
 | `--operation-timeout-ms <n>`    | Per-dispatch backstop timeout (ms); a handler that never settles resolves as a retryable `OPERATION_TIMEOUT` instead of hanging the agent on a frozen app. Default 120000; `0` disables it.                                                                                                                                                                                                                                                                                   |
 | `--tool-profile <profile>`      | Select the core tool surface: `essential` (the focused launch/snapshot/interact/assert path), `testing` (broader test-driving tools), `debug` (attach/inspect/diagnostics), or `full`. Default: `full`, preserving the complete core catalog. Eval authorization and explicitly loaded plugins compose independently.                                                                                                                                                         |
+| `--demo`                        | Resolve the separately installed `@electron-stagewright/demo` package and use its local Electron entry when `electron_launch` omits `main` and `executablePath`. It is opt-in and never becomes a normal core dependency. Cannot be combined with `--app-root`.                                                                                                                                                                                                               |
 | `doctor [--json]`               | Run preflight checks without starting the MCP server: Node, Playwright, Electron, Linux display, configured paths, and eval policy. JSON mode reserves stdout for a machine-readable report and exits non-zero when a required check fails.                                                                                                                                                                                                                                   |
 | `--plugin <name\|path>`         | Load a plugin by package name or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin @electron-stagewright/plugin-trace`. After loading one, call `electron_plugins` to inspect enabled or disabled tools and their gate requirements.                                                                                                                                                                                                               |
 | `--plugin-config <name>=<json>` | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name; invalid input reports its Zod field path and correction input. `electron_plugins` returns only fields the plugin explicitly marks safe.                                                                                                                                                                                                                                          |

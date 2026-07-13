@@ -61,6 +61,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron-stagewright/demo": "workspace:*",
     "electron": "^42.3.0",
     "esbuild": "^0.28.0",
     "highlight.js": "^11.11.1",

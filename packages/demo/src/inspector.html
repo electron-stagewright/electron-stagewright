@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'none'; connect-src 'none'; img-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>Stagewright demo inspector</title>
+    <style>
+      :root {
+        color: #1e293b;
+        background: #f8fafc;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 36px;
+      }
+      section {
+        background: white;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 24px;
+      }
+      h1 {
+        margin-top: 0;
+      }
+      p {
+        color: #475569;
+      }
+    </style>
+  </head>
+  <body>
+    <section>
+      <h1>Demo inspector</h1>
+      <p id="inspector-status" aria-live="polite"></p>
+      <p id="latest-task"></p>
+    </section>
+    <script>
+      const params = new URLSearchParams(location.search)
+      const count = Number(params.get('count') ?? '0')
+      document.querySelector('#inspector-status').textContent =
+        `${count} task${count === 1 ? '' : 's'} in the board`
+      document.querySelector('#latest-task').textContent =
+        `Latest: ${params.get('latest') ?? 'No tasks yet'}`
+    </script>
+  </body>
+</html>

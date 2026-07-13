@@ -82,6 +82,8 @@ export interface CreateServerOptions {
    * Unset means no confinement (paths may be anywhere). Resolved to an absolute path at startup.
    */
   readonly appRoot?: string
+  /** Optional Electron main entry used when `electron_launch` omits its own entry arguments. */
+  readonly launchDefaultMain?: string
   /** Clock injection for deterministic timing in tests. */
   readonly now?: () => number
   /**
@@ -138,6 +140,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     allowEval: opts.allowEval ?? false,
     ...(opts.screenshotDir !== undefined ? { screenshotDir: opts.screenshotDir } : {}),
     ...(opts.appRoot !== undefined ? { appRoot: opts.appRoot } : {}),
+    ...(opts.launchDefaultMain !== undefined ? { launchDefaultMain: opts.launchDefaultMain } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     ...(opts.operationTimeoutMs !== undefined
       ? { operationTimeoutMs: opts.operationTimeoutMs }

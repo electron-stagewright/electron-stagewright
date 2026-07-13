@@ -113,6 +113,8 @@ export interface DispatcherOptions {
   readonly screenshotDir?: string
   /** Optional root confining `electron_launch` paths; relative resolves at startup. Unset = no confinement. */
   readonly appRoot?: string
+  /** Optional Electron main entry used when `electron_launch` omits its own app entry. */
+  readonly launchDefaultMain?: string
   /** Clock injection for deterministic `_meta.elapsed_ms` in tests. */
   readonly now?: () => number
   /** Elapsed-ms threshold above which a dispatch logs a slow-op warning. */
@@ -245,6 +247,8 @@ export class Dispatcher {
   readonly #screenshotDir?: string
   /** Resolved `--app-root` confinement directory for launch paths; undefined = no confinement. */
   readonly #appRoot?: string
+  /** Optional server-supplied entry used only when a launch call omits `main`. */
+  readonly #launchDefaultMain?: string
   readonly #now: () => number
   readonly #slowMs: number
   /** Per-dispatch backstop timeout (ms); `0` disables it (ADR-011). */
@@ -279,6 +283,7 @@ export class Dispatcher {
     }
     if (opts.screenshotDir !== undefined) this.#screenshotDir = path.resolve(opts.screenshotDir)
     if (opts.appRoot !== undefined) this.#appRoot = path.resolve(opts.appRoot)
+    if (opts.launchDefaultMain !== undefined) this.#launchDefaultMain = opts.launchDefaultMain
     this.#now = opts.now ?? Date.now
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
     this.#operationTimeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
@@ -607,6 +612,9 @@ export class Dispatcher {
       allowEvalRenderer: this.#evalPolicy.renderer,
       ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
       ...(this.#appRoot !== undefined ? { appRoot: this.#appRoot } : {}),
+      ...(this.#launchDefaultMain !== undefined
+        ? { launchDefaultMain: this.#launchDefaultMain }
+        : {}),
       startedAt,
       now: this.#now,
       addDispatchObserver: (observer) => this.addObserver(observer),

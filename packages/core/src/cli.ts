@@ -40,6 +40,8 @@
  * - `--tool-profile <profile>` — choose an explicit core tool surface: `essential`, `testing`,
  *   `debug`, or `full` (the compatibility default). Eval and explicitly loaded plugins compose
  *   independently.
+ * - `--demo` — resolve the separately installed `@electron-stagewright/demo` package and make its
+ *   Electron main entry the default for `electron_launch {}`. The normal server never loads it.
  *
  * Unknown options and positional arguments fail startup rather than being
  * silently ignored. This keeps a typo from weakening a requested confinement or
@@ -54,6 +56,7 @@
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
+import { resolveDemoMain } from './demo.js'
 import { runDoctorChecks } from './doctor.js'
 import { importPlugin } from './plugins/index.js'
 import type { EvalPolicy } from './server/eval-policy.js'
@@ -67,6 +70,7 @@ export type CliCommand = 'serve' | 'help' | 'version' | 'doctor'
 export interface CliOptions {
   readonly command: CliCommand
   readonly doctorJson: boolean
+  readonly demo: boolean
   readonly allowEval: EvalPolicy
   readonly toolProfile: ToolProfile
   readonly screenshotDir?: string
@@ -157,6 +161,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     return {
       command: 'help',
       doctorJson: false,
+      demo: false,
       allowEval: { main: false, renderer: false },
       toolProfile: 'full',
       pluginSpecs: [],
@@ -167,6 +172,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     return {
       command: 'version',
       doctorJson: false,
+      demo: false,
       allowEval: { main: false, renderer: false },
       toolProfile: 'full',
       pluginSpecs: [],
@@ -188,6 +194,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
   let toolProfile: ToolProfile = 'full'
   let allowEval: EvalPolicy = { main: false, renderer: false }
   let doctorJson = false
+  let demo = false
   const pluginSpecs: string[] = []
   const pluginConfigs: Record<string, unknown> = {}
 
@@ -200,6 +207,14 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     }
     if (arg.startsWith('--allow-eval=')) {
       allowEval = parseEvalTargets(arg.slice('--allow-eval='.length))
+      continue
+    }
+    if (arg === '--demo') {
+      if (command === 'doctor') {
+        throw new Error('--demo is only valid when starting the MCP server')
+      }
+      if (demo) throw new Error('--demo may be specified only once')
+      demo = true
       continue
     }
     if (arg === '--screenshot-dir') {
@@ -273,6 +288,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
   return {
     command,
     doctorJson,
+    demo,
     allowEval,
     toolProfile,
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
@@ -294,6 +310,7 @@ export function formatCliHelp(): string {
     '  --screenshot-dir <path>           Default screenshot output directory.',
     '  --operation-timeout-ms <n>        Dispatch timeout in milliseconds (0 disables).',
     '  --tool-profile <profile>          Core tools: essential, testing, debug, or full.',
+    '  --demo                            Default electron_launch to the packaged demo app.',
     '  --plugin <name|path>              Load a plugin; repeatable and comma-separated.',
     '  --plugin-config <name>=<json>     Supply a plugin configuration.',
     '  --help, -h                        Print this help and exit.',
@@ -316,6 +333,7 @@ async function main(): Promise<void> {
     toolProfile,
     screenshotDir,
     appRoot,
+    demo,
     pluginSpecs,
     pluginConfigs,
     operationTimeoutMs,
@@ -340,6 +358,13 @@ async function main(): Promise<void> {
   }
   const logger = new StderrLogger({ level: 'info' })
 
+  if (demo && appRoot !== undefined) {
+    throw new Error(
+      '--demo cannot be combined with --app-root; the packaged demo is outside that root',
+    )
+  }
+  const launchDefaultMain = demo ? await resolveDemoMain() : undefined
+
   // Resolve plugins before assembling the server. An unresolvable plugin throws (a
   // StagewrightError) and aborts startup via main().catch — fail-closed.
   const plugins = []
@@ -353,6 +378,7 @@ async function main(): Promise<void> {
     logger,
     ...(screenshotDir !== undefined ? { screenshotDir } : {}),
     ...(appRoot !== undefined ? { appRoot } : {}),
+    ...(launchDefaultMain !== undefined ? { launchDefaultMain } : {}),
     ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
     ...(plugins.length > 0 ? { plugins } : {}),
     ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
@@ -381,6 +407,7 @@ async function main(): Promise<void> {
     allowEval,
     toolProfile,
     plugins: plugins.length,
+    demo,
   })
 }
 

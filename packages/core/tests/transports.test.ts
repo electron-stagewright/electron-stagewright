@@ -16,7 +16,6 @@
 
 import { existsSync } from 'node:fs'
 
-import { JSDOM } from 'jsdom'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { StagewrightError } from '../src/errors/registry.js'
@@ -964,23 +963,27 @@ describe('PlaywrightElectronTransport', () => {
       loadElectron: async () => ({ launch: async () => app }),
     })
     const session = await transport.launch({ appPath: '/abs/main.js' })
-    const dom = new JSDOM('<main></main>')
     const documentGlobal = globalThis as typeof globalThis & { document?: Document }
     const previousDocument = documentGlobal.document
     let scrolled = false
-
-    documentGlobal.document = dom.window.document
-    setTimeout(() => {
-      const button = dom.window.document.createElement('button')
-      button.id = 'late'
-      button.scrollIntoView = () => {
+    let queries = 0
+    const lateButton = {
+      scrollIntoView: () => {
         scrolled = true
-      }
-      dom.window.document.querySelector('main')?.append(button)
-    }, 1)
+      },
+    }
+
+    // Keep the renderer poll deterministic: the first lookup misses, then the
+    // next polling pass finds the element. A host timer used to add a JSDOM node
+    // after 1 ms, which could be delayed past this test's short deadline when
+    // the full Electron suite was busy launching processes.
+    documentGlobal.document = {
+      querySelector: (selector: string) =>
+        selector === '#late' && queries++ > 0 ? lateButton : null,
+    } as unknown as Document
 
     try {
-      await expect(session.scroll({ selector: '#late', timeoutMs: 100 })).resolves.toBeUndefined()
+      await expect(session.scroll({ selector: '#late', timeoutMs: 1_000 })).resolves.toBeUndefined()
     } finally {
       if (previousDocument === undefined) {
         delete documentGlobal.document
@@ -989,6 +992,7 @@ describe('PlaywrightElectronTransport', () => {
       }
     }
     expect(scrolled).toBe(true)
+    expect(queries).toBeGreaterThanOrEqual(2)
   })
 
   it('rejects with SELECTOR_NO_MATCH when scroll-into-view finds no element', async () => {

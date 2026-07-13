@@ -126,7 +126,7 @@ const inputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Absolute path to the app main-process JS entry. Required unless executablePath is given.',
+      'Absolute path to the app main-process JS entry. Required unless executablePath is given or the server configured a default demo entry.',
     ),
   executablePath: z
     .string()
@@ -162,7 +162,8 @@ const inputSchema = z.object({
 
 const DESCRIPTION = [
   'Launch an Electron app and start a driving session. Provide main (absolute path to the',
-  'main-process entry) or executablePath. Returns: { ok, session_id, transport, windows, renderer_ready }.',
+  'main-process entry) or executablePath. A server started with --demo supplies its packaged demo',
+  'entry when both are omitted. Returns: { ok, session_id, transport, windows, renderer_ready }.',
   'Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a',
   'snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed',
   'in time (the session is still usable — retry the read, or wait_for_selector on an expected element).',
@@ -252,13 +253,19 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           next_actions: ['electron_stop({ sessionId })'],
         })
       }
-      if (args.main === undefined && args.executablePath === undefined) {
+      // A configured default is only an ergonomic fallback for an otherwise empty launch call.
+      // An explicit executable-only launch keeps its established semantics rather than gaining an
+      // unrelated app entry as a positional argument.
+      const main =
+        args.main ?? (args.executablePath === undefined ? ctx.launchDefaultMain : undefined)
+      if (main === undefined && args.executablePath === undefined) {
         return makeError('BAD_ARGUMENT', {
           ...meta,
-          message: 'Provide main (the app entry) or executablePath.',
+          message:
+            'Provide main (the app entry) or executablePath, or start the server with --demo.',
         })
       }
-      if (args.instrumentNative === true && args.main === undefined) {
+      if (args.instrumentNative === true && main === undefined) {
         return makeError('BAD_ARGUMENT', {
           ...meta,
           message:
@@ -276,7 +283,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         }
       }
       // Preflight throws a registered error the dispatcher maps to an envelope.
-      preflight(args.main, args.executablePath, fileExists)
+      preflight(main, args.executablePath, fileExists)
 
       // When the operator configured --app-root, confine the launch surface to it: main and
       // executablePath both run code (a main.js as the Electron main process, or an arbitrary
@@ -284,7 +291,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
       // arbitrary host execution. cwd is confined too. Without --app-root, paths are unconstrained.
       if (ctx.appRoot !== undefined) {
         for (const [label, value] of [
-          ['main', args.main],
+          ['main', main],
           ['executablePath', args.executablePath],
           ['cwd', args.cwd],
         ] as const) {
@@ -301,7 +308,9 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
       const transport = ctx.transports.requireCapability('canLaunch')
       let session
       try {
-        session = await transport.launch(toLaunchOptions(args))
+        session = await transport.launch(
+          toLaunchOptions({ ...args, ...(main !== undefined ? { main } : {}) }),
+        )
       } catch (err) {
         throw diagnoseLaunchError(err)
       }

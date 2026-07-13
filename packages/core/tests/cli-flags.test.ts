@@ -58,6 +58,15 @@ describe('parseCliArgs — value-bearing flags fail closed on a missing value', 
     )
   })
 
+  it('parses the opt-in demo flag once and refuses it in doctor mode', () => {
+    expect(parseCliArgs(['--demo']).demo).toBe(true)
+    expect(parseCliArgs([]).demo).toBe(false)
+    expect(() => parseCliArgs(['--demo', '--demo'])).toThrow('--demo may be specified only once')
+    expect(() => parseCliArgs(['doctor', '--demo'])).toThrow(
+      '--demo is only valid when starting the MCP server',
+    )
+  })
+
   it('rejects unknown flags and positional arguments instead of silently ignoring them', () => {
     expect(() => parseCliArgs(['--plugn', 'trace'])).toThrow('Unknown option: --plugn')
     expect(() => parseCliArgs(['doctor', 'unexpected'])).toThrow('Unexpected argument: unexpected')
@@ -90,7 +99,8 @@ describe('parseCliArgs — value-bearing flags fail closed on a missing value', 
     )
   })
 
-  it('documents the profile flag in standalone help', () => {
+  it('documents the profile and demo flags in standalone help', () => {
     expect(formatCliHelp()).toContain('--tool-profile <profile>')
+    expect(formatCliHelp()).toContain('--demo')
   })
 })
