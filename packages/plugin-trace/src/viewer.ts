@@ -20,6 +20,8 @@
 
 import {
   summarizeTrace,
+  traceBudgetStatus,
+  traceOverflowed,
   type BudgetStatus,
   type ParsedTrace,
   type TraceCallRecord,
@@ -87,7 +89,7 @@ function budgetBar(budget: BudgetStatus | undefined): string {
 
 /** Render the "largest responses" + "by tool" tables from a token summary. */
 function tables(parsed: ParsedTrace, topN: number): string {
-  const summary = summarizeTrace(parsed.calls, topN, parsed.meta?.overflowed ?? false)
+  const summary = summarizeTrace(parsed.calls, topN, traceOverflowed(parsed))
   const largestRows = summary.largest
     .map(
       (l) =>
@@ -141,10 +143,14 @@ export function renderTraceHtml(parsed: ParsedTrace, options: RenderOptions = {}
   const okCount = calls.filter((c) => c.ok).length
   const errCount = calls.length - okCount
   const totalTokens = calls.reduce((sum, c) => sum + c.estimated_tokens, 0)
-  const budget = budgetStatusFromMeta(parsed)
-  const generatedAt = options.generatedAt ?? parsed.meta?.started_at
-  const overflow = parsed.meta?.overflowed
+  const metadata = parsed.meta ?? parsed.header
+  const budget = traceBudgetStatus(parsed)
+  const generatedAt = options.generatedAt ?? metadata?.started_at
+  const overflow = traceOverflowed(parsed)
     ? `<div class="warn">This trace hit its record cap and dropped later calls — the timeline below is truncated.</div>`
+    : ''
+  const incomplete = !parsed.complete
+    ? `<div class="warn">This is a recoverable partial trace: it has no completion footer, so later calls may be missing.</div>`
     : ''
   const timeline = calls.map((c, i) => timelineEntry(c, i)).join('\n')
 
@@ -159,9 +165,10 @@ export function renderTraceHtml(parsed: ParsedTrace, options: RenderOptions = {}
 <body>
 <header>
   <h1>Stagewright trace</h1>
-  <p class="sub">Generated ${escapeHtml(formatTime(generatedAt))} · core ${escapeHtml(parsed.meta?.core_version ?? 'unknown')} · started ${escapeHtml(formatTime(parsed.meta?.started_at))}</p>
+  <p class="sub">Generated ${escapeHtml(formatTime(generatedAt))} · core ${escapeHtml(metadata?.core_version ?? 'unknown')} · started ${escapeHtml(formatTime(metadata?.started_at))}</p>
 </header>
 ${overflow}
+${incomplete}
 <section class="cards">
   ${card('Calls', String(calls.length))}
   ${card('OK', String(okCount))}
@@ -186,23 +193,6 @@ ${timeline || '<p class="empty">No calls recorded.</p>'}
 <script>${SCRIPT}</script>
 </body>
 </html>`
-}
-
-/** Derive budget status from the artifact meta header (exact `spent`), or undefined when none. */
-function budgetStatusFromMeta(parsed: ParsedTrace): BudgetStatus | undefined {
-  const m = parsed.meta
-  if (m?.budget === undefined) return undefined
-  const spent = m.spent ?? parsed.calls.reduce((sum, c) => sum + c.estimated_tokens, 0)
-  const warn = m.warn_threshold ?? 0.8
-  const overBudget = spent > m.budget
-  return {
-    budget_tokens: m.budget,
-    spent,
-    remaining: Math.max(0, m.budget - spent),
-    over_budget: overBudget,
-    near_budget: !overBudget && spent >= m.budget * warn,
-    warn_threshold: warn,
-  }
 }
 
 /** Inline stylesheet. A fixed constant — no trace data is interpolated into it. */

@@ -71,7 +71,8 @@ describe('trace plugin (in-process)', () => {
       })
       await server.dispatcher.dispatch('demo_echo', { value: 'a' })
       await server.dispatcher.dispatch('demo_echo', { value: 'b' })
-      // Live token report (artifact is not written until stop). trace_* calls are not counted.
+      // Live token report is aggregated while calls stream to the partial artifact. trace_* calls
+      // are not counted.
       expect(await server.dispatcher.dispatch('trace_tokens', {})).toMatchObject({
         ok: true,
         calls: 2,
@@ -167,27 +168,19 @@ describe('trace plugin (in-process)', () => {
     }
   })
 
-  it('keeps the active recording retryable when stop fails to write', async () => {
+  it('reports an invalid output target when starting without leaving a fake active recording', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sw-trace-stop-fails-'))
     created.push(dir)
     const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
     try {
-      await server.dispatcher.dispatch('trace_start', { path: dir })
-      await server.dispatcher.dispatch('demo_echo', { value: 'a' })
-      expect(await server.dispatcher.dispatch('trace_stop', {})).toMatchObject({
+      expect(await server.dispatcher.dispatch('trace_start', { path: dir })).toMatchObject({
         ok: false,
         code: 'trace.ARTIFACT_WRITE_FAILED',
         retryable: true,
       })
       expect(await server.dispatcher.dispatch('trace_status', {})).toMatchObject({
         ok: true,
-        recording: true,
-        records: 1,
-      })
-      await server.dispatcher.dispatch('demo_echo', { value: 'b' })
-      expect(await server.dispatcher.dispatch('trace_status', {})).toMatchObject({
-        ok: true,
-        records: 2,
+        recording: false,
       })
     } finally {
       await server.close().catch(() => undefined)

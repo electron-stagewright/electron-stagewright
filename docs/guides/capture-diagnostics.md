@@ -61,13 +61,16 @@ trace_stop {}
 trace_view { "path": "/abs/traces/<artifact>.jsonl" }
 ```
 
-- **`trace_start`** begins recording (JSONL artifact: a meta header plus one record per dispatch —
-  arguments, result envelope, timing, token estimate; sensitive values can be redacted via plugin
-  config). Optional `budgetTokens` + `enforce` turn the trace into a live token budget: advisory
-  by default, vetoing over-budget calls when enforced.
+- **`trace_start`** begins recording (a streaming JSONL v2 artifact: header plus one sequenced
+  record per dispatch — arguments, result envelope, timing, token estimate; sensitive values can
+  be redacted via plugin config). Calls land in a `.partial` file until a clean stop atomically
+  publishes the final artifact; a partial is readable for crash recovery. Optional `budgetTokens`
+  and `enforce` turn the trace into a live token budget: advisory by default, vetoing over-budget
+  calls when enforced.
 - **`trace_status`** / **`trace_tokens`** / **`trace_budget`** — is it recording, where, how many
   records; per-tool token totals and the largest responses; a cheap budget poll.
-- **`trace_stop`** flushes and returns the artifact path plus a token report.
+- **`trace_stop`** flushes, adds a completion footer, atomically publishes the artifact, and
+  returns its path plus a token report.
 - **`trace_view`** renders the artifact to a single self-contained HTML file — summary cards, a
   token-budget bar, per-tool tables, an expandable timeline — openable anywhere, no server.
 - **`trace_replay`** re-dispatches a recorded session against a fresh app instance (session ids

@@ -4,7 +4,7 @@ Record a driving session to a portable artifact, see where the token budget went
 budget, and replay the session against a fresh app instance. The first session-observing plugin
 (ADR-009, built on the ADR-004 plugin contract): between `trace_start` and `trace_stop` it
 subscribes to the server's dispatch-observer seam and captures every tool call — input, output
-envelope, timing, and token estimate — to a JSONL file, then `trace_tokens` summarises the cost
+envelope, timing, and token estimate — to a crash-recoverable JSONL artifact, then `trace_tokens` summarises the cost
 and `trace_replay` re-dispatches the calls. Give a recording a `budgetTokens` to track spend
 live, and `enforce` to block over-budget calls. `trace_view` renders a recorded trace to a
 self-contained HTML report you can open in any browser, offline.
@@ -40,11 +40,12 @@ The loader namespaces each tool under the plugin name `trace`:
 
 - **`trace_start`** `{ path?, dir?, budgetTokens?, enforce?, warnThreshold? }` — begin recording
   to a JSONL artifact (path takes precedence over dir; both default to the configured dir or the
-  OS temp dir). With `budgetTokens`, track an estimated-token budget; with `enforce:true`, also
+  OS temp dir). Calls stream to `<path>.partial`; `trace_stop` publishes `<path>` atomically.
+  With `budgetTokens`, track an estimated-token budget; with `enforce:true`, also
   block over-budget calls (`trace.BUDGET_EXCEEDED`). Returns `{ recording, path, budget? }`. The
   plugin's own `trace_*` calls are not recorded (and never blocked by enforcement).
-- **`trace_stop`** — flush the artifact and return `{ path, records, total_estimated_tokens,
-overflowed, budget? }`.
+- **`trace_stop`** — flush the artifact, append its completion footer, atomically publish the
+  final path, and return `{ path, records, total_estimated_tokens, overflowed, budget? }`.
 - **`trace_tokens`** `{ path? }` — summarise token usage: total, per-tool totals, largest
   individual responses, whether the trace overflowed, and budget status (when budgeted). With no
   path it reports the live recording; otherwise reads a written artifact.
@@ -70,20 +71,22 @@ Error codes: `trace.ALREADY_RECORDING`, `trace.NOT_RECORDING`, `trace.ARTIFACT_N
 `trace` plugin config (all optional):
 
 - **`dir`** — default directory for artifacts when `trace_start` gets no `path`/`dir`.
-- **`maxRecords`** — cap on buffered call records (default 10000); later calls are dropped and
+- **`maxRecords`** — cap on written call records (default 10000); later calls are dropped and
   `overflowed` is reported.
 - **`redact`** — argument property names to replace with `"[redacted]"` before recording.
 - **`budgetTokens`** — default estimated-token budget when `trace_start` gets no `budgetTokens`.
 - **`enforceBudget`** — when true, budgeted recordings block over-budget calls (default false).
 - **`warnThreshold`** — fraction of the budget (`0 < warnThreshold <= 1`) at which `near_budget`
   trips (default 0.8).
+- **`fsync`** — sync a partial artifact before its final rename (default false). Enable this only
+  when the extra durability is worth the stop-time I/O cost.
 
 ## Token budget
 
 Pass `budgetTokens` to `trace_start` (or set the `budgetTokens` config default) to track an
 estimated-token budget. `trace_status`, `trace_tokens`, `trace_budget`, and `trace_stop` then carry
 a `budget` object: `{ budget_tokens, spent, remaining, over_budget, near_budget, warn_threshold }`.
-`spent` is exact even when the record buffer overflows (`maxRecords`) — dropped calls still count.
+`spent` is exact even when the record cap overflows (`maxRecords`) — dropped calls still count.
 
 By default the budget is advisory: an agent polls `trace_budget` and self-limits. Set `enforce:true`
 (or the `enforceBudget` config) to additionally BLOCK calls once over budget — the dispatcher vetoes
@@ -94,12 +97,14 @@ everything after it is blocked. Token counts are estimates (char/4, per the core
 
 ## Artifact format
 
-JSONL, schema version 1. The first line is a `meta` record (`{ v, kind: "meta", started_at,
-core_version, overflowed }`, plus `budget`, `warn_threshold`, and exact `spent` when the recording
-had a budget); each subsequent line is a `call` record (`{ kind: "call", tool, ok, code?,
-started_at, finished_at, elapsed_ms, estimated_tokens, args, result }`). Records are buffered in
-memory and written on `trace_stop`, so a crash before stop loses the buffer (streaming is a
-forthcoming improvement).
+JSONL, schema version 2. `trace_start` writes a `header` record to `<path>.partial`; each call
+has a monotonic `seq`; `trace_stop` appends a `footer` (`complete:true`, call count, overflow,
+and exact budget spend) and atomically renames the file to `<path>`. The observer path only adds
+redacted records to a bounded queue, so dispatches do not wait for disk I/O. If the process stops
+unexpectedly, the `.partial` file remains readable with `complete:false` (and a possibly
+interrupted final line is ignored); `trace_tokens`, `trace_replay`, and `trace_view` accept it for
+recovery. Existing version-1 `meta`/`call` artifacts remain readable through a separate legacy
+reader.
 
 ## Replay limits
 

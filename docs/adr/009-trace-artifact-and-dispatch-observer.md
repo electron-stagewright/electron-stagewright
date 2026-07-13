@@ -180,3 +180,33 @@ because a trace is a _portable_ record — the viewer should be as portable as t
 
 New references: `packages/plugin-trace/src/viewer.ts` (`renderTraceHtml` / `escapeHtml`); the
 `trace_view` tool in `packages/plugin-trace/src/index.ts`.
+
+## Status Update (2026-07-13) — streaming JSONL v2 and crash recovery
+
+The original v1 buffer-on-stop tradeoff is replaced for new recordings. Version 2 keeps JSONL's
+human-readable, dependency-free format while making trace capture recoverable after a process or
+host failure:
+
+- **Lifecycle.** `trace_start` first creates `<path>.partial` and writes a `header` record
+  (`format: "stagewright-trace", version: 2`). Each dispatch appends a sequenced `call` record.
+  A clean `trace_stop` drains the writer, appends a `footer` with `complete:true`, the persisted
+  call count, overflow state, and exact budget spend, then atomically renames the partial file to
+  the requested path. An optional `fsync` plugin setting syncs before that rename when an operator
+  prefers durability over stop-time throughput.
+- **Recovery and compatibility.** A v2 reader accepts a `.partial` file without a footer and
+  returns `complete:false`; it also ignores only a final, unterminated JSON fragment, the expected
+  shape if execution ended during an append. It rejects malformed ordering, duplicate or skipped
+  sequence numbers, and lying footers. The v1 `meta`/`call` reader remains separate so a v2 file is
+  never presented as v1-compatible.
+- **Bounded observer path.** Dispatches redact and enqueue one record without awaiting disk I/O.
+  The queue is bounded by the configured persisted-record cap, preserves write order, and retains
+  only aggregate token data plus a bounded largest-response set for live reporting. A write error
+  leaves the partial artifact available, surfaces `trace.ARTIFACT_WRITE_FAILED`, and never reports
+  a false successful final artifact.
+- **Consumers.** Replay, token reporting, and the offline viewer consume the shared parsed v1/v2
+  projection. They can inspect partial evidence; only a footer-complete v2 artifact is published
+  at the requested final path.
+
+New references: `packages/plugin-trace/src/recorder.ts` (streaming writer, v1/v2 readers);
+`packages/plugin-trace/src/index.ts` (start/stop lifecycle); `packages/plugin-trace/src/viewer.ts`
+(partial-artifact disclosure).

@@ -40,8 +40,9 @@ import {
   Recorder,
   readTrace,
   summarizeTrace,
-  budgetStatusOf,
   DEFAULT_WARN_THRESHOLD,
+  traceBudgetStatus,
+  traceOverflowed,
   type BudgetStatus,
   type ParsedTrace,
 } from './recorder.js'
@@ -74,7 +75,7 @@ const configSchema = z.object({
     .int()
     .positive()
     .default(10000)
-    .describe('Max tool-call records buffered per trace; later calls are dropped (overflowed).'),
+    .describe('Max tool-call records written per trace; later calls are dropped (overflowed).'),
   redact: z
     .array(z.string())
     .default([])
@@ -101,6 +102,10 @@ const configSchema = z.object({
     .describe(
       'Fraction of the budget (0 < warnThreshold <= 1) at which near_budget trips. Default 0.8.',
     ),
+  fsync: z
+    .boolean()
+    .default(false)
+    .describe('Sync the partial trace artifact before its final atomic rename. Default false.'),
 })
 
 /** Resolved plugin configuration — the validated output of {@link configSchema}. */
@@ -112,6 +117,7 @@ const DEFAULT_CONFIG: TraceConfig = {
   redact: [],
   enforceBudget: false,
   warnThreshold: DEFAULT_WARN_THRESHOLD,
+  fsync: false,
 }
 
 /** Build a fresh trace plugin whose recording and configuration belong to one server instance. */
@@ -163,15 +169,11 @@ export function createTracePlugin(): StagewrightPlugin {
   }
 
   /**
-   * Derive budget status from a written artifact's meta header, or `undefined` when it carries no
-   * budget. Uses the persisted exact `spent` (which counts overflow-dropped calls); falls back to
-   * summing the buffered calls only if an older artifact lacks it.
+   * Derive budget status from either supported written artifact format, or `undefined` when it
+   * carries no budget. v2 obtains its exact spent from the completion footer.
    */
   function artifactBudgetStatus(parsed: ParsedTrace): BudgetStatus | undefined {
-    const m = parsed.meta
-    if (m?.budget === undefined) return undefined
-    const spent = m.spent ?? parsed.calls.reduce((sum, c) => sum + c.estimated_tokens, 0)
-    return budgetStatusOf(m.budget, spent, m.warn_threshold ?? DEFAULT_WARN_THRESHOLD)
+    return traceBudgetStatus(parsed)
   }
 
   const startTool: AnyToolDefinition = defineTool({
@@ -179,7 +181,9 @@ export function createTracePlugin(): StagewrightPlugin {
     title: 'Start a trace recording',
     description: [
       'Begin recording every subsequent tool call (input, output, timing, token estimate) to a',
-      'JSONL artifact until trace_stop. Optional path (exact file) or dir (generated filename);',
+      'streaming JSONL artifact until trace_stop. Calls are written to path.partial; trace_stop',
+      'adds a completion footer and atomically publishes path. Optional path (exact file) or dir',
+      '(generated filename);',
       'defaults to the configured dir or the OS temp dir. The trace plugin’s own tools are not',
       'recorded. Set budgetTokens to track an estimated-token budget (reported by trace_status /',
       'trace_tokens / trace_budget); set enforce:true to additionally BLOCK over-budget tool calls',
@@ -227,8 +231,21 @@ export function createTracePlugin(): StagewrightPlugin {
         redact: config.current.redact,
         coreVersion: VERSION,
         startedAt: ctx.now(),
+        fsync: config.current.fsync,
         ...(budget !== undefined ? { budget, warnThreshold } : {}),
       })
+      try {
+        await recorder.start()
+      } catch (err) {
+        return makePluginError('trace.ARTIFACT_WRITE_FAILED', {
+          ...meta,
+          message: `Could not create trace artifact at ${outPath}.`,
+          details: {
+            path: outPath,
+            cause: err instanceof Error ? err.message : String(err),
+          },
+        })
+      }
       const unsubscribe = ctx.addDispatchObserver((rec) => {
         // Skip the trace plugin's own tools (it observes its own trace_start/stop calls too) so
         // the artifact records the app session, not itself.
@@ -272,7 +289,8 @@ export function createTracePlugin(): StagewrightPlugin {
     name: 'stop',
     title: 'Stop the trace recording',
     description: [
-      'Stop the active recording, flush the JSONL artifact to disk, and return a summary.',
+      'Stop the active recording, flush its JSONL artifact, add a completion footer, atomically',
+      'publish the final path, and return a summary.',
       'Returns: { ok, path, records, total_estimated_tokens, overflowed, budget? }. Errors:',
       'trace.NOT_RECORDING (no active trace; call trace_start first; not retryable),',
       'trace.ARTIFACT_WRITE_FAILED (artifact could not be written; fix path/permissions and retry).',
@@ -327,8 +345,8 @@ export function createTracePlugin(): StagewrightPlugin {
     operationType: 'query',
     handler: async (args, ctx) => {
       const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      // No explicit path: summarise the live in-memory buffer (the artifact is not written until
-      // trace_stop), so an agent can check the budget mid-session.
+      // No explicit path: aggregate the live stream without retaining every recorded call, so an
+      // agent can inspect its budget mid-session while the partial artifact keeps growing.
       if (args.path === undefined) {
         if (active === undefined) {
           return makePluginError('trace.NOT_RECORDING', {
@@ -339,12 +357,7 @@ export function createTracePlugin(): StagewrightPlugin {
         return makeSuccess(
           {
             path: active.recorder.path,
-            ...summarizeTrace(
-              active.recorder.calls,
-              10,
-              active.recorder.overflowed,
-              active.recorder.budgetStatus(),
-            ),
+            ...active.recorder.tokenReport(),
           },
           meta,
         )
@@ -358,7 +371,7 @@ export function createTracePlugin(): StagewrightPlugin {
           ...summarizeTrace(
             loaded.parsed.calls,
             10,
-            loaded.parsed.meta?.overflowed ?? false,
+            traceOverflowed(loaded.parsed),
             artifactBudgetStatus(loaded.parsed),
           ),
         },
@@ -371,7 +384,7 @@ export function createTracePlugin(): StagewrightPlugin {
     name: 'status',
     title: 'Report trace recording status',
     description: [
-      'Report whether a trace is currently recording and, if so, its path + buffered record count',
+      'Report whether a trace is currently recording and, if so, its path + streamed record count',
       '(and budget status when the recording has a token budget).',
       'Needs no app. Returns: { ok, recording, path?, records?, overflowed?, budget? }. Errors: none.',
     ].join(' '),
@@ -573,7 +586,7 @@ export function createTracePlugin(): StagewrightPlugin {
       ARTIFACT_WRITE_FAILED: {
         http: 500,
         retryable: true,
-        hint: 'The trace artifact could not be written; check the path and permissions, then retry trace_stop.',
+        hint: 'The trace artifact could not be written; check the path and permissions, then retry the trace operation.',
       },
       BUDGET_EXCEEDED: {
         http: 429,
@@ -619,15 +632,23 @@ export const tracePlugin: StagewrightPlugin = {
 export default tracePlugin
 
 export {
+  LEGACY_TRACE_FORMAT_VERSION,
   Recorder,
+  TRACE_FORMAT_VERSION,
   readTrace,
+  readTraceV1,
+  readTraceV2,
   summarizeTrace,
   budgetStatusOf,
   DEFAULT_WARN_THRESHOLD,
+  traceBudgetStatus,
+  traceOverflowed,
 } from './recorder.js'
 export type {
   TraceRecord,
   TraceMetaRecord,
+  TraceHeaderRecord,
+  TraceFooterRecord,
   TraceCallRecord,
   TraceSummary,
   TokensReport,
