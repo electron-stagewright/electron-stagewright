@@ -41,6 +41,9 @@ import { z } from 'zod'
 const CLOCK_NAMESPACE = 'clock'
 /** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
 const CLOCK_PLUGIN_VERSION = readPackageVersion(import.meta.url)
+const CLOCK_INTROSPECTION = {
+  requirements: { transportCapabilities: ['canControlClock'] },
+} as const
 
 function isParseableClockTime(value: string): boolean {
   return Number.isFinite(Date.parse(value))
@@ -325,6 +328,7 @@ export function createClockPlugin(): StagewrightPlugin {
     name: CLOCK_NAMESPACE,
     version: CLOCK_PLUGIN_VERSION,
     coreVersionRange: '*',
+    introspection: CLOCK_INTROSPECTION,
     errorCodes: {
       UNSUPPORTED: {
         http: 409,
@@ -369,6 +373,7 @@ export const clockPlugin: StagewrightPlugin = {
   get errorCodes() {
     return createClockPlugin().errorCodes ?? {}
   },
+  introspection: CLOCK_INTROSPECTION,
   createInstance: createClockPlugin,
 }
 

@@ -15,7 +15,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { definePluginsInfoTool, loadPlugins } from '../plugins/index.js'
-import type { StagewrightPlugin } from '../plugins/index.js'
+import type { LoadedPluginInfo, StagewrightPlugin } from '../plugins/index.js'
 import {
   DEFAULT_TOOLS,
   excludedCoreToolProfileHints,
@@ -172,23 +172,40 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     }
   }
 
-  // Register core tools, then plugin tools. When plugins are present, also register the
-  // plugins-introspection tool — only then, so a plugin-free server keeps its tool surface
-  // minimal. If registration throws after plugins loaded (e.g. a defensive duplicate-name
-  // guard), tear the plugins back down before failing.
+  // Register core tools, then plugin tools. We build introspection only AFTER plugin registration:
+  // a tool with requiresEvalFlag may be intentionally absent under the current policy, and the
+  // agent needs that actual state rather than the plugin's merely declared tool list. Register the
+  // introspection tool only when plugins are present, so a plugin-free server stays lean.
+  // If registration throws after plugins loaded (e.g. a defensive duplicate-name guard), tear the
+  // plugins back down before failing.
   try {
     dispatcher.registerAll(coreTools)
     if (pluginResult && pluginResult.loaded.length > 0) {
-      dispatcher.register(
-        definePluginsInfoTool(
-          pluginResult.loaded.map((plugin) => ({
-            name: plugin.name,
-            version: plugin.version,
-            tools: plugin.tools.map((tool) => tool.name),
-          })),
-        ),
-      )
       dispatcher.registerAll(pluginResult.tools)
+      const pluginsInfo: LoadedPluginInfo[] = pluginResult.loaded.map((plugin) => ({
+        name: plugin.name,
+        version: plugin.version,
+        state: 'enabled',
+        tools: plugin.tools.map((tool) => {
+          if (dispatcher.has(tool.name)) return { name: tool.name, state: 'enabled' }
+          return {
+            name: tool.name,
+            state: 'disabled',
+            disabledReason: {
+              kind: 'eval_policy_disabled',
+              target: tool.evalTarget ?? 'any',
+            },
+          }
+        }),
+        errorCodes: plugin.errorCodes,
+        ...(plugin.introspection?.requirements !== undefined
+          ? { requirements: plugin.introspection.requirements }
+          : {}),
+        ...(plugin.effectiveConfig !== undefined
+          ? { effectiveConfig: plugin.effectiveConfig }
+          : {}),
+      }))
+      dispatcher.register(definePluginsInfoTool(pluginsInfo))
     }
   } catch (err) {
     if (pluginResult) await pluginResult.teardownAll()

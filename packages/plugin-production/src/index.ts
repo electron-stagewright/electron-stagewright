@@ -42,6 +42,9 @@ import { makeRunCommand } from './command.js'
 const PRODUCTION_NAMESPACE = 'production'
 /** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
 const PRODUCTION_PLUGIN_VERSION = readPackageVersion(import.meta.url)
+const PRODUCTION_INTROSPECTION = {
+  config: { safeFields: ['commandTimeoutMs'] },
+} as const
 
 const configSchema = z.object({
   commandTimeoutMs: z
@@ -152,6 +155,7 @@ export function createProductionPlugin(): StagewrightPlugin {
     version: PRODUCTION_PLUGIN_VERSION,
     coreVersionRange: '*',
     configSchema,
+    introspection: PRODUCTION_INTROSPECTION,
     errorCodes: {
       APP_NOT_FOUND: {
         http: 404,
@@ -189,6 +193,7 @@ export const productionPlugin: StagewrightPlugin = {
   get configSchema() {
     return configSchema
   },
+  introspection: PRODUCTION_INTROSPECTION,
   createInstance: createProductionPlugin,
 }
 

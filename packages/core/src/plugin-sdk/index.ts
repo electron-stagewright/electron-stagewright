@@ -10,6 +10,7 @@
 export {
   createPluginConfigState,
   parsePluginConfig,
+  type PluginConfigIssue,
   PluginConfigValidationError,
   type DeepReadonly,
   type PluginConfigState,

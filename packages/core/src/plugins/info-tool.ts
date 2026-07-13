@@ -1,8 +1,8 @@
 /**
- * `electron_plugins` — list the plugins loaded into this server (name, version, and their
- * namespaced tool names). Session-independent: it reports a per-server metadata snapshot
- * captured during server assembly, so an agent can discover plugin-provided capabilities
- * without launching an app.
+ * `electron_plugins` — list the plugins loaded into this server and explain their availability.
+ * Session-independent: it reports a per-server metadata snapshot captured after registration,
+ * so an agent can discover plugin-provided capabilities and an eval-policy-hidden tool without
+ * launching an app or inspecting local files.
  *
  * The server registers this tool ONLY when at least one plugin is loaded, so a plugin-free
  * server keeps its `tools/list` minimal (the lean-core principle this plugin model exists
@@ -22,7 +22,34 @@ function snapshotPluginInfo(plugins: readonly LoadedPluginInfo[]): readonly Load
     .map((plugin) => ({
       name: plugin.name,
       version: plugin.version,
-      tools: [...plugin.tools],
+      state: plugin.state,
+      tools: plugin.tools
+        .map((tool) => ({
+          name: tool.name,
+          state: tool.state,
+          ...(tool.disabledReason !== undefined
+            ? { disabledReason: { ...tool.disabledReason } }
+            : {}),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      errorCodes: [...plugin.errorCodes].sort((a, b) => a.localeCompare(b)),
+      ...(plugin.requirements !== undefined
+        ? {
+            requirements: {
+              ...(plugin.requirements.evalTargets !== undefined
+                ? { evalTargets: [...plugin.requirements.evalTargets].sort() }
+                : {}),
+              ...(plugin.requirements.transportCapabilities !== undefined
+                ? {
+                    transportCapabilities: [...plugin.requirements.transportCapabilities].sort(),
+                  }
+                : {}),
+            },
+          }
+        : {}),
+      ...(plugin.effectiveConfig !== undefined
+        ? { effectiveConfig: { ...plugin.effectiveConfig } }
+        : {}),
     }))
     .sort((a, b) => a.name.localeCompare(b.name))
 }
@@ -37,10 +64,12 @@ export function definePluginsInfoTool(plugins: readonly LoadedPluginInfo[]): Any
     name: 'electron_plugins',
     title: 'List loaded plugins',
     description: [
-      "List the plugins loaded into this server: each plugin's name, version, and its",
-      'namespaced tool names (e.g. trace_start). Use it to discover plugin-provided capabilities',
-      'beyond the core tool surface. Takes no arguments and needs no running app. Returns:',
-      '{ ok, plugins: [{ name, version, tools }] }. Errors: none (empty list when none loaded).',
+      "List the plugins loaded into this server: each plugin's name, version, enabled state, namespaced",
+      'tools and their availability, error codes, declared eval/transport gates, and explicitly safe',
+      'effective config. A disabled tool is hidden by the server eval policy; its reason says which',
+      'target to enable. Use this to discover plugin capabilities beyond the core tool surface. Takes',
+      'no arguments and needs no running app. Returns: { ok, plugins: [{ name, version, state, tools,',
+      'errorCodes, requirements?, effectiveConfig? }] }. Errors: none.',
     ].join(' '),
     inputSchema: z.object({}),
     // State-reading, non-eval, no session required — classified as a query.

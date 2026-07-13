@@ -113,6 +113,19 @@ async function collectKnownToolNames(): Promise<ReadonlySet<string>> {
   } finally {
     await server.close().catch(() => undefined)
   }
+  // `electron_plugins` is deliberately absent from a lean plugin-free core, so include the
+  // conditional surface through one real loaded plugin rather than treating its docs mention as
+  // an unverified string literal.
+  const pluginServer = await createServer({
+    allowEval: true,
+    logger: NOOP_LOGGER,
+    plugins: [tracePlugin],
+  })
+  try {
+    for (const entry of pluginServer.dispatcher.listManifest()) known.add(entry.name)
+  } finally {
+    await pluginServer.close().catch(() => undefined)
+  }
   // The loader registers plugin tools as `<plugin>_<tool>` (ADR-004).
   for (const plugin of FIRST_PARTY_PLUGINS) {
     for (const tool of plugin.tools ?? []) known.add(`${plugin.name}_${tool.name}`)

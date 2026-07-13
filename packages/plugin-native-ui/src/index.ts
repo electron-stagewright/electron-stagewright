@@ -49,6 +49,9 @@ import { z } from 'zod'
 const NATIVE_NAMESPACE = 'native'
 /** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
 const NATIVE_PLUGIN_VERSION = readPackageVersion(import.meta.url)
+const NATIVE_INTROSPECTION = {
+  requirements: { transportCapabilities: ['canAccessNativeUI'] },
+} as const
 
 /** The envelope meta a plugin tool threads into `makeSuccess` / `makePluginError`. */
 interface PluginMeta {
@@ -360,6 +363,7 @@ export function createNativeUiPlugin(): StagewrightPlugin {
     name: NATIVE_NAMESPACE,
     version: NATIVE_PLUGIN_VERSION,
     coreVersionRange: '*',
+    introspection: NATIVE_INTROSPECTION,
     errorCodes: {
       UNSUPPORTED: {
         http: 409,
@@ -414,6 +418,7 @@ export const nativeUiPlugin: StagewrightPlugin = {
   get errorCodes() {
     return createNativeUiPlugin().errorCodes ?? {}
   },
+  introspection: NATIVE_INTROSPECTION,
   createInstance: createNativeUiPlugin,
 }
 

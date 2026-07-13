@@ -66,6 +66,12 @@ interface ActiveRecording {
 const TRACE_NAMESPACE = 'trace'
 /** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
 const TRACE_PLUGIN_VERSION = readPackageVersion(import.meta.url)
+const TRACE_INTROSPECTION = {
+  config: {
+    // The configured artifact directory can disclose a local username or filesystem layout; omit it.
+    safeFields: ['maxRecords', 'redact', 'budgetTokens', 'enforceBudget', 'warnThreshold', 'fsync'],
+  },
+} as const
 
 const configSchema = z.object({
   dir: z
@@ -630,6 +636,7 @@ export function createTracePlugin(): StagewrightPlugin {
     version: TRACE_PLUGIN_VERSION,
     coreVersionRange: '*',
     configSchema,
+    introspection: TRACE_INTROSPECTION,
     errorCodes: {
       ALREADY_RECORDING: {
         http: 409,
@@ -703,6 +710,7 @@ export const tracePlugin: StagewrightPlugin = {
   get configSchema() {
     return configSchema
   },
+  introspection: TRACE_INTROSPECTION,
   createInstance: createTracePlugin,
 }
 

@@ -45,6 +45,13 @@ import { INSTRUMENT_BODY, filterEvents, redactEvents, type IpcEvent } from './in
 const IPC_NAMESPACE = 'ipc'
 /** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
 const IPC_PLUGIN_VERSION = readPackageVersion(import.meta.url)
+const IPC_INTROSPECTION = {
+  requirements: {
+    evalTargets: ['main'],
+    transportCapabilities: ['supportsMainEval'],
+  },
+  config: { safeFields: ['redact', 'maxEvents', 'invokeAllow'] },
+} as const
 
 const configSchema = z.object({
   redact: z
@@ -403,6 +410,7 @@ export function createIpcPlugin(): StagewrightPlugin {
     version: IPC_PLUGIN_VERSION,
     coreVersionRange: '*',
     configSchema,
+    introspection: IPC_INTROSPECTION,
     errorCodes: {
       EVAL_REQUIRED: {
         http: 403,
@@ -463,6 +471,7 @@ export const ipcPlugin: StagewrightPlugin = {
   get configSchema() {
     return configSchema
   },
+  introspection: IPC_INTROSPECTION,
   createInstance: createIpcPlugin,
 }
 

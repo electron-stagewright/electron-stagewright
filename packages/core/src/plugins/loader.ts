@@ -25,6 +25,7 @@ import type {
   LoadedPlugin,
   LoadPluginsOptions,
   LoadPluginsResult,
+  PluginIntrospection,
   StagewrightPlugin,
 } from './types.js'
 
@@ -34,6 +35,25 @@ const PLUGIN_NAME = /^[a-z][a-z0-9]*$/
 const TOOL_SHORT_NAME = /^[a-z][a-z0-9_]*$/
 /** Namespaces reserved for the core; a plugin may not claim them. */
 const RESERVED_NAMESPACES = new Set(['electron'])
+const EVAL_TARGETS = new Set(['main', 'renderer'])
+const TRANSPORT_CAPABILITIES = new Set([
+  'canLaunch',
+  'canAttach',
+  'canInject',
+  'canIntercept',
+  'canControlClock',
+  'canAccessStorage',
+  'canAccessNativeUI',
+  'supportsMainEval',
+  'supportsRendererEval',
+  'supportsInteraction',
+])
+const UNSAFE_CONFIG_FIELDS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** Internal construction handle: config is parsed only after the record is queued for rollback. */
+interface PendingLoadedPlugin extends LoadedPlugin {
+  setEffectiveConfig(config: Readonly<Record<string, unknown>> | undefined): void
+}
 
 /** Reject a manifest with a `PLUGIN_MANIFEST_INVALID` error carrying the reason. */
 function invalid(reason: string): never {
@@ -58,6 +78,75 @@ function validateManifest(plugin: StagewrightPlugin): void {
       )
     }
   }
+  validateIntrospection(plugin)
+}
+
+/** Validate declarative onboarding metadata before any plugin side effect. */
+function validateIntrospection(plugin: StagewrightPlugin): void {
+  const introspection = plugin.introspection
+  if (introspection === undefined) return
+  if (!isPlainRecord(introspection)) {
+    invalid(`Plugin "${plugin.name}" introspection must be an object.`)
+  }
+
+  const requirements = introspection.requirements
+  if (requirements !== undefined && !isPlainRecord(requirements)) {
+    invalid(`Plugin "${plugin.name}" introspection requirements must be an object.`)
+  }
+  if (requirements?.evalTargets !== undefined) {
+    if (!Array.isArray(requirements.evalTargets)) {
+      invalid(`Plugin "${plugin.name}" introspection evalTargets must be an array.`)
+    }
+    for (const target of requirements.evalTargets) {
+      if (!EVAL_TARGETS.has(target)) {
+        invalid(
+          `Plugin "${plugin.name}" introspection eval target "${String(target)}" must be "main" or "renderer".`,
+        )
+      }
+    }
+  }
+  if (requirements?.transportCapabilities !== undefined) {
+    if (!Array.isArray(requirements.transportCapabilities)) {
+      invalid(`Plugin "${plugin.name}" introspection transportCapabilities must be an array.`)
+    }
+    for (const capability of requirements.transportCapabilities) {
+      if (!TRANSPORT_CAPABILITIES.has(capability)) {
+        invalid(
+          `Plugin "${plugin.name}" introspection transport capability "${String(capability)}" is unknown.`,
+        )
+      }
+    }
+  }
+
+  const configDisclosure = introspection.config
+  if (configDisclosure !== undefined && !isPlainRecord(configDisclosure)) {
+    invalid(`Plugin "${plugin.name}" introspection config must be an object.`)
+  }
+  const safeFields = configDisclosure?.safeFields
+  if (safeFields === undefined) return
+  if (!Array.isArray(safeFields)) {
+    invalid(`Plugin "${plugin.name}" introspection safeFields must be an array.`)
+  }
+  if (plugin.configSchema === undefined) {
+    invalid(`Plugin "${plugin.name}" declares introspection config fields but has no configSchema.`)
+  }
+  const seen = new Set<string>()
+  for (const field of safeFields) {
+    if (typeof field !== 'string' || field.length === 0 || UNSAFE_CONFIG_FIELDS.has(field)) {
+      invalid(
+        `Plugin "${plugin.name}" introspection safe config fields must be non-empty ordinary top-level keys.`,
+      )
+    }
+    if (seen.has(field)) {
+      invalid(`Plugin "${plugin.name}" introspection repeats safe config field "${field}".`)
+    }
+    seen.add(field)
+  }
+}
+
+/** Plain JSON-style object guard for runtime plugin-manifest validation. */
+function isPlainRecord<T>(value: T): value is T & Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 /** Materialize a fresh per-server plugin instance when an API 1.1 factory is available. */
@@ -97,10 +186,35 @@ function resolveConfig(plugin: StagewrightPlugin, configs: LoadPluginsOptions['c
           : String(cause)
     throw new StagewrightError(
       'PLUGIN_CONFIG_INVALID',
-      `Plugin "${plugin.name}" config is invalid: ${message}`,
-      { plugin: plugin.name },
+      `Plugin "${plugin.name}" config is invalid: ${message}. Correct --plugin-config ${plugin.name}=<json> (or pluginConfigs.${plugin.name}) and restart.`,
+      {
+        plugin: plugin.name,
+        ...(cause instanceof PluginConfigValidationError ? { issues: cause.issues } : {}),
+        remediation: `Correct --plugin-config ${plugin.name}=<json> (or pluginConfigs.${plugin.name}) and restart.`,
+      },
     )
   }
+}
+
+/** Return only explicitly allowlisted top-level parsed config values for agent-facing introspection. */
+function selectEffectiveConfig(
+  plugin: StagewrightPlugin,
+  config: unknown,
+): Readonly<Record<string, unknown>> | undefined {
+  const safeFields = plugin.introspection?.config?.safeFields
+  if (safeFields === undefined || safeFields.length === 0) return undefined
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) {
+    invalid(
+      `Plugin "${plugin.name}" introspection config fields require an object-shaped parsed config.`,
+    )
+  }
+
+  const record = config as Record<string, unknown>
+  const selected: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+  for (const field of [...safeFields].sort((a, b) => a.localeCompare(b))) {
+    if (Object.hasOwn(record, field)) selected[field] = record[field]
+  }
+  return Object.freeze(selected)
 }
 
 /**
@@ -150,14 +264,24 @@ function makeLoadedPlugin(
   plugin: StagewrightPlugin,
   tools: readonly AnyToolDefinition[],
   errorCodes: readonly string[],
-): LoadedPlugin {
+): PendingLoadedPlugin {
   let toreDown = false
   let setupRan = false
+  let effectiveConfig: Readonly<Record<string, unknown>> | undefined
   return {
     name: plugin.name,
     version: plugin.version,
     tools,
     errorCodes,
+    ...(plugin.introspection !== undefined
+      ? { introspection: snapshotIntrospection(plugin.introspection) }
+      : {}),
+    get effectiveConfig(): Readonly<Record<string, unknown>> | undefined {
+      return effectiveConfig
+    },
+    setEffectiveConfig(config): void {
+      effectiveConfig = config
+    },
     markSetupRan(): void {
       setupRan = true
     },
@@ -171,6 +295,35 @@ function makeLoadedPlugin(
       if (setupRan) await plugin.teardown?.()
     },
   }
+}
+
+/** Freeze a copied metadata snapshot so a plugin cannot mutate its published contract after load. */
+function snapshotIntrospection(introspection: PluginIntrospection): PluginIntrospection {
+  return Object.freeze({
+    ...(introspection.requirements !== undefined
+      ? {
+          requirements: Object.freeze({
+            ...(introspection.requirements.evalTargets !== undefined
+              ? { evalTargets: Object.freeze([...introspection.requirements.evalTargets]) }
+              : {}),
+            ...(introspection.requirements.transportCapabilities !== undefined
+              ? {
+                  transportCapabilities: Object.freeze([
+                    ...introspection.requirements.transportCapabilities,
+                  ]),
+                }
+              : {}),
+          }),
+        }
+      : {}),
+    ...(introspection.config !== undefined
+      ? {
+          config: Object.freeze({
+            safeFields: Object.freeze([...introspection.config.safeFields]),
+          }),
+        }
+      : {}),
+  })
 }
 
 /**
@@ -219,6 +372,7 @@ export async function loadPlugins(
       // plugin's tools.
       loaded.push(record)
       const config = resolveConfig(plugin, opts.configs)
+      record.setEffectiveConfig(selectEffectiveConfig(plugin, config))
       await plugin.setup?.(config, opts.context)
       record.markSetupRan()
       allTools.push(...tools)

@@ -141,10 +141,10 @@ this records what was added on top of it:
   supplied config (defaults applied) before `setup(config)` runs; a mismatch throws the new
   `PLUGIN_CONFIG_INVALID` core code. Config validation happens AFTER codes + loaded-metadata are
   recorded, so the fail-closed teardown unwinds both on a bad config.
-- **Introspection**: `electron_plugins` (query) reports loaded `{ name, version, tools }`, and is
-  registered ONLY when at least one plugin loaded — a plugin-free server keeps the lean core
-  surface. Backed by a best-effort, name-keyed loaded-plugin registry (not reference-counted,
-  unlike error codes — display metadata only; the dispatcher's `tools/list` stays authoritative).
+- **Introspection**: `electron_plugins` (query) initially reports loaded `{ name, version, tools }`
+  and is registered ONLY when at least one plugin loaded — a plugin-free server keeps the lean core
+  surface. Its later, richer availability and config contract is recorded below; the dispatcher's
+  `tools/list` stays authoritative.
 - **Example**: `examples/plugin-sample` is a plain-ESM plugin (one tool, one error code, a config
   schema, lifecycle hooks) plus a real-MCP scenario that loads it through the CLI `--plugin` flag.
 
@@ -177,6 +177,26 @@ The plugin contract remains exported from `@electron-stagewright/core`; the SDK 
 not a separate package or a replacement for `StagewrightPlugin`. Both surfaces follow the core package's
 semantic-versioning policy: additions are minor-compatible, while a removal or incompatible signature
 change requires a core major release. Plugins must import this documented subpath, never `core/dist/*`.
+
+## Status update (onboarding introspection, 2026-07-13)
+
+The plugin contract is now at API `1.2.0`. A plugin may add optional `introspection` metadata with
+two declarative parts: `requirements` names eval targets and transport capabilities used by at least
+one of its tools, while `config.safeFields` is an explicit top-level allowlist for parsed effective
+configuration. This is explanatory metadata, not authorization: tool handlers retain their existing
+runtime eval and transport-capability checks.
+
+The loader validates that metadata before side effects, snapshots it on the loaded plugin, and exposes
+only allowlisted config fields after schema defaults and parsing. It never returns undeclared config
+values, so adding a credential field cannot silently disclose it through MCP. `PLUGIN_CONFIG_INVALID`
+now carries field-addressable Zod issues and a correction path for `--plugin-config` or
+`pluginConfigs`, while still unwinding registered codes on failure.
+
+`electron_plugins` is assembled after plugin tool registration. Each reported tool therefore has an
+actual `enabled` or `disabled` state; an eval-policy-hidden tool names the
+`eval_policy_disabled` availability kind and the narrow eval target to grant. The response also lists registered
+namespaced error codes, declared requirements, and safe effective config. It remains absent when no
+plugin is loaded, preserving the lean-core invariant.
 
 ## Related decisions
 

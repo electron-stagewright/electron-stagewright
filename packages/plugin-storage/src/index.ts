@@ -69,6 +69,13 @@ import { INDEXEDDB_BODY, type IdbRequest, type IdbResult } from './indexeddb.js'
 const STORAGE_NAMESPACE = 'storage'
 /** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
 const STORAGE_PLUGIN_VERSION = readPackageVersion(import.meta.url)
+const STORAGE_INTROSPECTION = {
+  requirements: {
+    evalTargets: ['renderer'],
+    transportCapabilities: ['canAccessStorage', 'supportsRendererEval'],
+  },
+  config: { safeFields: ['revealValues', 'redactValues'] },
+} as const
 
 const configSchema = z.object({
   revealValues: z
@@ -1108,6 +1115,7 @@ export function createStoragePlugin(): StagewrightPlugin {
     version: STORAGE_PLUGIN_VERSION,
     coreVersionRange: '*',
     configSchema,
+    introspection: STORAGE_INTROSPECTION,
     errorCodes: {
       UNSUPPORTED: {
         http: 409,
@@ -1161,6 +1169,7 @@ export const storagePlugin: StagewrightPlugin = {
   get configSchema() {
     return configSchema
   },
+  introspection: STORAGE_INTROSPECTION,
   createInstance: createStoragePlugin,
 }
 

@@ -46,9 +46,16 @@ describe('plugin SDK config helpers', () => {
   })
 
   it('reports schema failures with a public validation error', () => {
-    expect(() => parsePluginConfig(z.object({ enabled: z.boolean() }), { enabled: 'yes' })).toThrow(
-      PluginConfigValidationError,
-    )
+    let caught: unknown
+    try {
+      parsePluginConfig(z.object({ enabled: z.boolean() }), { enabled: 'yes' })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(PluginConfigValidationError)
+    expect(caught).toMatchObject({
+      issues: [{ path: '$.enabled' }],
+    })
   })
 
   it('keeps config state isolated from both inputs and its initial defaults', () => {

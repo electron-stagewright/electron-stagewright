@@ -86,6 +86,23 @@ describe('storage plugin smoke (real Electron)', () => {
       })
       closers.push(() => server.close())
 
+      // The runtime onboarding surface reflects the same enabled renderer-eval tools that this
+      // real Electron run will exercise, without leaking any operator-only configuration.
+      const plugins = (await server.dispatcher.dispatch('electron_plugins', {})) as Envelope & {
+        plugins?: ReadonlyArray<{
+          name: string
+          state: string
+          tools: ReadonlyArray<{ name: string; state: string }>
+          effectiveConfig?: Record<string, unknown>
+        }>
+      }
+      const storageInfo = plugins.plugins?.find((plugin) => plugin.name === 'storage')
+      expect(storageInfo).toMatchObject({
+        state: 'enabled',
+        effectiveConfig: { redactValues: false, revealValues: false },
+      })
+      expect(storageInfo?.tools).toContainEqual({ name: 'storage_local_get', state: 'enabled' })
+
       const launched = (await server.dispatcher.dispatch('electron_launch', {
         main: FIXTURE_MAIN,
       })) as { ok: boolean; session_id?: string; _meta?: { session_id?: string } }

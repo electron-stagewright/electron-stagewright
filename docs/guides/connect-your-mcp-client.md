@@ -146,7 +146,9 @@ Append flags to `args` (after the package/CLI). The common ones:
   configured paths, and eval policy before adding the server to a client.
 - `--plugin <name>` loads an installed plugin (trace, network, storage, clock, and others). With
   `npx`, add that plugin package as another `--package` before the `electron-stagewright` bin; with
-  a global install, install the plugin package globally too.
+  a global install, install the plugin package globally too. Then call `electron_plugins` to see
+  exactly which namespaced tools are enabled and which gate (if any) keeps a tool hidden. See
+  [Load, configure, and diagnose plugins](./plugins.md).
 
 With `npx`, server flags follow the `electron-stagewright` bin name:
 
@@ -200,5 +202,6 @@ The failure modes are almost all about the stdio channel or the spawn command.
 - [Getting started](./getting-started.md) — drive the bundled example end to end, one call at a time.
 - [Launch, attach, or inject](./launch-or-attach.md) — get a session against **your** app.
 - [Security model](./security-model.md) — read before enabling `--allow-eval` or exposing the server.
+- [Load, configure, and diagnose plugins](./plugins.md) — load an extension and inspect its gates.
 - [Concepts](./concepts.md) — the agent-native model behind the tool surface.
 - [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) — every tool's parameters, return shape, and error codes.

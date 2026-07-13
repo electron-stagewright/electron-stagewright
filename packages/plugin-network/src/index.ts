@@ -46,6 +46,10 @@ import { z } from 'zod'
 const NETWORK_NAMESPACE = 'network'
 /** Plugin package version advertised by `electron_plugins`; read from package.json so it cannot drift. */
 const NETWORK_PLUGIN_VERSION = readPackageVersion(import.meta.url)
+const NETWORK_INTROSPECTION = {
+  requirements: { transportCapabilities: ['canIntercept'] },
+  config: { safeFields: ['redactHeaders', 'redactSecureDefaults', 'redactBodies'] },
+} as const
 
 /** Header names redacted by default when `redactSecureDefaults` is on (lower-cased). */
 const SECURE_DEFAULT_REDACT = ['authorization', 'cookie', 'set-cookie'] as const
@@ -549,6 +553,7 @@ export function createNetworkPlugin(): StagewrightPlugin {
     version: NETWORK_PLUGIN_VERSION,
     coreVersionRange: '*',
     configSchema,
+    introspection: NETWORK_INTROSPECTION,
     errorCodes: {
       UNSUPPORTED: {
         http: 409,
@@ -593,6 +598,7 @@ export const networkPlugin: StagewrightPlugin = {
   get configSchema() {
     return configSchema
   },
+  introspection: NETWORK_INTROSPECTION,
   createInstance: createNetworkPlugin,
 }
 

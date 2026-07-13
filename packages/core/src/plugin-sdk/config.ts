@@ -27,9 +27,21 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown
 export class PluginConfigValidationError extends Error {
   override readonly name = 'PluginConfigValidationError'
 
-  constructor(message: string) {
+  /** Machine-readable, field-addressable validation issues suitable for startup diagnostics. */
+  public readonly issues: readonly PluginConfigIssue[]
+
+  constructor(message: string, issues: readonly PluginConfigIssue[]) {
     super(message)
+    this.issues = issues
   }
+}
+
+/** A compact, JSON-serialisable plugin-config validation issue. */
+export interface PluginConfigIssue {
+  /** Dot/bracket path from the config root (`$` means the root itself). */
+  readonly path: string
+  /** Zod's human-readable validation reason for this path. */
+  readonly message: string
 }
 
 /** Mutable holder with an immutable current configuration value. */
@@ -50,8 +62,33 @@ export interface PluginConfigState<T> {
  */
 export function parsePluginConfig<T>(schema: z.ZodType<T>, raw: unknown): DeepReadonly<T> {
   const result = schema.safeParse(raw)
-  if (!result.success) throw new PluginConfigValidationError(result.error.message)
+  if (!result.success) {
+    const issues = result.error.issues.map((issue) => ({
+      path: formatConfigPath(issue.path),
+      message: issue.message,
+    }))
+    throw new PluginConfigValidationError(
+      issues.map((issue) => `${issue.path}: ${issue.message}`).join('; '),
+      issues,
+    )
+  }
   return immutableConfig(result.data)
+}
+
+/** Render a Zod issue path without exposing the original config values. */
+function formatConfigPath(path: readonly PropertyKey[]): string {
+  if (path.length === 0) return '$'
+  let result = '$'
+  for (const segment of path) {
+    if (typeof segment === 'number') {
+      result += `[${segment}]`
+    } else if (typeof segment === 'string' && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment)) {
+      result += `.${segment}`
+    } else {
+      result += `[${JSON.stringify(String(segment))}]`
+    }
+  }
+  return result
 }
 
 /** Create per-plugin-instance config state with isolated immutable defaults. */
