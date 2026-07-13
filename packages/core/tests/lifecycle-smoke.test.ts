@@ -23,7 +23,13 @@ import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { PlaywrightElectronTransport } from '../src/transports/index.js'
-import { infoTool, launchTool, stopTool, windowsListTool } from '../src/tools/lifecycle/index.js'
+import {
+  infoTool,
+  launchTool,
+  statusTool,
+  stopTool,
+  windowsListTool,
+} from '../src/tools/lifecycle/index.js'
 import { snapshotTool } from '../src/tools/snapshot/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
@@ -43,15 +49,33 @@ afterAll(async () => {
 
 describe('lifecycle smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
-    'launches the fixture, reports info, lists windows, and stops',
+    'launches the fixture, reports compact status and info, lists windows, and stops',
     async () => {
       const transports = new TransportRegistry({ transports: [new PlaywrightElectronTransport()] })
       const dispatcher = new Dispatcher({ sessions, transports })
-      dispatcher.registerAll([launchTool, infoTool, windowsListTool, snapshotTool, stopTool])
+      dispatcher.registerAll([
+        launchTool,
+        statusTool,
+        infoTool,
+        windowsListTool,
+        snapshotTool,
+        stopTool,
+      ])
 
       const launched = await dispatcher.dispatch('electron_launch', { main: FIXTURE_MAIN })
       expect(launched.ok).toBe(true)
       const sessionId = (launched as SuccessResponse & { session_id: string }).session_id
+
+      const status = (await dispatcher.dispatch('electron_status', {})) as SuccessResponse & {
+        active_sessions: number
+        sessions: Array<{ session_id: string; renderer_ready: boolean; active_surface?: unknown }>
+      }
+      expect(status.active_sessions).toBe(1)
+      expect(status.sessions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ session_id: sessionId, renderer_ready: true }),
+        ]),
+      )
 
       const info = await dispatcher.dispatch('electron_info', { sessionId })
       expect(info.ok).toBe(true)

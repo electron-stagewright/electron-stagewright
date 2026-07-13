@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'none'; connect-src 'none'; img-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>Stagewright demo</title>
+    <style>
+      :root {
+        color: #1e293b;
+        background: #f8fafc;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+      }
+      main {
+        box-sizing: border-box;
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 48px 32px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 2rem;
+      }
+      .lede {
+        color: #475569;
+        margin: 0 0 32px;
+      }
+      .panel {
+        background: white;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 12px 30px rgb(15 23 42 / 0.08);
+      }
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        background: #0f766e;
+        color: white;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 650;
+        padding: 10px 14px;
+      }
+      button:hover {
+        background: #115e59;
+      }
+      button.secondary {
+        background: #e2e8f0;
+        color: #1e293b;
+      }
+      button.secondary:hover {
+        background: #cbd5e1;
+      }
+      #task-summary {
+        color: #475569;
+        font-weight: 600;
+      }
+      ul {
+        display: grid;
+        gap: 8px;
+        padding: 0;
+        list-style: none;
+      }
+      li {
+        background: #f1f5f9;
+        border-radius: 8px;
+        padding: 12px;
+      }
+      dialog {
+        border: 0;
+        border-radius: 12px;
+        box-shadow: 0 25px 65px rgb(15 23 42 / 0.3);
+        max-width: 420px;
+        padding: 0;
+      }
+      dialog::backdrop {
+        background: rgb(15 23 42 / 0.42);
+      }
+      form {
+        display: grid;
+        gap: 16px;
+        padding: 24px;
+      }
+      label {
+        display: grid;
+        gap: 8px;
+        font-weight: 650;
+      }
+      input {
+        border: 1px solid #94a3b8;
+        border-radius: 8px;
+        font: inherit;
+        padding: 10px;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        justify-content: end;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Stagewright task board</h1>
+      <p class="lede">
+        A local-only Electron demo with a modal, mutable task list, and a second window.
+      </p>
+      <section class="panel" aria-labelledby="tasks-heading">
+        <div class="toolbar">
+          <div>
+            <h2 id="tasks-heading">Today</h2>
+            <p id="task-summary" aria-live="polite">No tasks yet</p>
+          </div>
+          <div class="toolbar">
+            <button id="new-task" type="button">Add a task</button>
+            <button id="open-inspector" class="secondary" type="button">Open inspector</button>
+          </div>
+        </div>
+        <ul id="task-list" aria-label="Tasks"></ul>
+      </section>
+    </main>
+
+    <dialog id="task-dialog" aria-labelledby="task-dialog-title">
+      <form id="task-form" method="dialog">
+        <h2 id="task-dialog-title">Create a task</h2>
+        <label>Task title <input id="task-title" name="title" autocomplete="off" required /></label>
+        <div class="actions">
+          <button id="cancel-task" class="secondary" type="button">Cancel</button>
+          <button id="save-task" type="submit">Save task</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script>
+      const tasks = []
+      const list = document.querySelector('#task-list')
+      const summary = document.querySelector('#task-summary')
+      const dialog = document.querySelector('#task-dialog')
+      const title = document.querySelector('#task-title')
+
+      function render() {
+        list.replaceChildren(
+          ...tasks.map((task) =>
+            Object.assign(document.createElement('li'), { textContent: task }),
+          ),
+        )
+        summary.textContent =
+          tasks.length === 0
+            ? 'No tasks yet'
+            : `${tasks.length} task${tasks.length === 1 ? '' : 's'} · ${tasks.at(-1)}`
+      }
+
+      document.querySelector('#new-task').addEventListener('click', () => {
+        title.value = ''
+        dialog.showModal()
+        title.focus()
+      })
+      document.querySelector('#cancel-task').addEventListener('click', () => dialog.close())
+      document.querySelector('#task-form').addEventListener('submit', (event) => {
+        event.preventDefault()
+        const value = title.value.trim()
+        if (value.length === 0) return
+        tasks.push(value)
+        render()
+        dialog.close()
+      })
+      document.querySelector('#open-inspector').addEventListener('click', () => {
+        const query = new URLSearchParams({
+          count: String(tasks.length),
+          latest: tasks.at(-1) ?? 'No tasks yet',
+        })
+        window.open(`inspector.html?${query.toString()}`, 'stagewright-demo-inspector')
+      })
+    </script>
+  </body>
+</html>

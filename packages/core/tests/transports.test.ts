@@ -16,7 +16,6 @@
 
 import { existsSync } from 'node:fs'
 
-import { JSDOM } from 'jsdom'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { StagewrightError } from '../src/errors/registry.js'
@@ -56,6 +55,26 @@ const FAKE_SESSION: TransportSession = {
   evaluate: async <T = unknown>() => undefined as T,
   screenshot: async () => Buffer.alloc(0),
   windowsList: async () => [],
+  activateWindow: async () => ({
+    id: 'fake-window',
+    index: 0,
+    title: '',
+    visible: true,
+    focused: true,
+  }),
+  surfacesList: async () => [],
+  activeSurface: async () => ({
+    id: 'fake-surface',
+    kind: 'window',
+    active: true,
+    capabilities: { snapshot: true, interaction: true, rendererEval: true },
+  }),
+  activateSurface: async () => ({
+    id: 'fake-surface',
+    kind: 'window',
+    active: true,
+    capabilities: { snapshot: true, interaction: true, rendererEval: true },
+  }),
   consoleLogs: async () => ({ entries: [], overflowed: 0 }),
   setDialogPolicy: async () => undefined,
   dialogEvents: async () => ({ entries: [], overflowed: 0, policy: { action: 'dismiss' } }),
@@ -92,6 +111,7 @@ const FAKE_SESSION: TransportSession = {
   setInputFiles: async () => undefined,
   dragTo: async () => undefined,
   scroll: async () => undefined,
+  detach: async () => undefined,
   dispose: async () => undefined,
 }
 
@@ -569,6 +589,21 @@ describe('PlaywrightElectronTransport', () => {
     expect((result as StagewrightError).code).toBe('TRANSPORT_UNSUPPORTED')
   })
 
+  it('reports an actionable remediation when Playwright cannot resolve Electron', async () => {
+    const missingRuntime = new PlaywrightElectronTransport({
+      loadElectron: async () => ({
+        launch: async () => {
+          throw new Error("Cannot find module 'electron'")
+        },
+      }),
+    })
+
+    await expect(missingRuntime.launch({ appPath: '/abs/main.js' })).rejects.toMatchObject({
+      code: 'TRANSPORT_UNSUPPORTED',
+      message: expect.stringContaining('--package electron'),
+    })
+  })
+
   it('maps a main-process appPath to Playwright args instead of executablePath', () => {
     const opts = buildPlaywrightLaunchOptions({
       appPath: '/abs/main.js',
@@ -941,23 +976,27 @@ describe('PlaywrightElectronTransport', () => {
       loadElectron: async () => ({ launch: async () => app }),
     })
     const session = await transport.launch({ appPath: '/abs/main.js' })
-    const dom = new JSDOM('<main></main>')
     const documentGlobal = globalThis as typeof globalThis & { document?: Document }
     const previousDocument = documentGlobal.document
     let scrolled = false
-
-    documentGlobal.document = dom.window.document
-    setTimeout(() => {
-      const button = dom.window.document.createElement('button')
-      button.id = 'late'
-      button.scrollIntoView = () => {
+    let queries = 0
+    const lateButton = {
+      scrollIntoView: () => {
         scrolled = true
-      }
-      dom.window.document.querySelector('main')?.append(button)
-    }, 1)
+      },
+    }
+
+    // Keep the renderer poll deterministic: the first lookup misses, then the
+    // next polling pass finds the element. A host timer used to add a JSDOM node
+    // after 1 ms, which could be delayed past this test's short deadline when
+    // the full Electron suite was busy launching processes.
+    documentGlobal.document = {
+      querySelector: (selector: string) =>
+        selector === '#late' && queries++ > 0 ? lateButton : null,
+    } as unknown as Document
 
     try {
-      await expect(session.scroll({ selector: '#late', timeoutMs: 100 })).resolves.toBeUndefined()
+      await expect(session.scroll({ selector: '#late', timeoutMs: 1_000 })).resolves.toBeUndefined()
     } finally {
       if (previousDocument === undefined) {
         delete documentGlobal.document
@@ -966,6 +1005,7 @@ describe('PlaywrightElectronTransport', () => {
       }
     }
     expect(scrolled).toBe(true)
+    expect(queries).toBeGreaterThanOrEqual(2)
   })
 
   it('rejects with SELECTOR_NO_MATCH when scroll-into-view finds no element', async () => {
@@ -2675,6 +2715,57 @@ describe('PlaywrightSession multi-window capture', () => {
 
     const { entries } = await session.consoleLogs()
     expect(entries).toHaveLength(1)
+  })
+
+  it('switches the active interaction target and recovers to a live window after close', async () => {
+    const pageA = createFakePage('A')
+    const pageB = createFakePage('B')
+    const { app, launch } = launchWith([pageA, pageB])
+    const session = await launch()
+    const windows = await session.windowsList()
+    const second = windows[1]
+    if (second === undefined) throw new Error('fixture did not expose second window')
+
+    await expect(session.activateWindow({ kind: 'id', id: second.id })).resolves.toMatchObject({
+      id: second.id,
+      focused: true,
+    })
+    await session.click('#second')
+    expect(pageB.interactions.at(-1)).toMatchObject({ method: 'click', args: ['#second', {}] })
+
+    app.setPages([pageA])
+    await session.click('#recovered')
+    expect(pageA.interactions.at(-1)).toMatchObject({ method: 'click', args: ['#recovered', {}] })
+    await expect(session.windowsList()).resolves.toMatchObject([{ title: 'A', focused: true }])
+  })
+
+  it('serializes a pending switch before a following implicit interaction', async () => {
+    const pageA = createFakePage('A')
+    const pageB = createFakePage('B')
+    const { launch } = launchWith([pageA, pageB])
+    const session = await launch()
+    const second = (await session.windowsList())[1]
+    if (second === undefined) throw new Error('fixture did not expose second window')
+
+    const switching = session.activateWindow({ kind: 'id', id: second.id })
+    const clicking = session.click('#after-switch')
+    await Promise.all([switching, clicking])
+
+    expect(pageB.interactions.at(-1)).toMatchObject({
+      method: 'click',
+      args: ['#after-switch', {}],
+    })
+    expect(pageA.interactions).toHaveLength(0)
+  })
+
+  it('rejects detach for a launch-owned Playwright session without closing the app', async () => {
+    const page = createFakePage('A')
+    const { app, launch } = launchWith([page])
+    const session = await launch()
+
+    await expect(session.detach()).rejects.toMatchObject({ code: 'TRANSPORT_UNSUPPORTED' })
+    expect(app.closeCalls).toBe(0)
+    await expect(session.windowsList()).resolves.toHaveLength(1)
   })
 })
 

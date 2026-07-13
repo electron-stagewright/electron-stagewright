@@ -18,16 +18,22 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { stagewrightAdapters } from './adapters.js'
-import { computeContrast, runComparison, type TaskContrast } from './comparison.js'
+import { comparisonAdapters } from './adapters.js'
+import {
+  computeContrast,
+  runComparisonSeries,
+  summarizeComparisonSeries,
+  type ComparisonSummary,
+  type TaskContrast,
+} from './comparison.js'
 import {
   runScenario,
   STAGEWRIGHT_TARGET,
+  type ComparableTask,
   type ComparisonResult,
   type ScenarioResult,
-  type ServerTarget,
-  type TaskAdapter,
 } from './harness.js'
+import { collectComparisonProvenance } from './provenance.js'
 import { SCENARIOS } from './scenarios.js'
 import {
   checkThresholds,
@@ -39,10 +45,10 @@ import {
 } from './thresholds.js'
 
 /** Schema version of the scenario JSON report; bump when the shape changes (for regression tooling). */
-const REPORT_SCHEMA_VERSION = 3
+const REPORT_SCHEMA_VERSION = 4
 
 /** Schema version of the `--compare` JSON report (its own shape, versioned independently). */
-const COMPARISON_SCHEMA_VERSION = 1
+const COMPARISON_SCHEMA_VERSION = 3
 
 /** The machine-readable report written to stdout / the --json file. */
 interface BenchReport {
@@ -76,6 +82,11 @@ function jsonOutPath(argv: readonly string[]): string | undefined {
 
 function mib(bytes: number | null): string {
   return bytes == null ? '   n/a' : `${(bytes / 1024 / 1024).toFixed(1)} MiB`
+}
+
+/** Render an observed millisecond measure without inventing a value for absent data. */
+function milliseconds(value: number | undefined): string {
+  return value === undefined ? 'n/a' : `${value.toFixed(0)}ms`
 }
 
 /** Render the results as a fixed-width table to stderr. */
@@ -124,85 +135,97 @@ function printViolations(violations: ReadonlyArray<ThresholdViolation>): void {
   for (const v of violations) log(`  REGRESSION [${v.kind}] ${v.message}`)
 }
 
-/**
- * Parse `--compare-target name=command,arg,arg` overrides. Each overrides the SPAWN of a registered
- * adapter whose target name matches (e.g. point the `stagewright` adapter at a different build). It
- * cannot add a brand-new competitor — that needs an adapter (code); see the bench README.
- */
-function parseCompareTargets(argv: readonly string[]): Map<string, ServerTarget> {
-  const overrides = new Map<string, ServerTarget>()
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] !== '--compare-target') continue
-    const spec = argv[i + 1]
-    const eq = spec === undefined ? -1 : spec.indexOf('=')
-    if (spec === undefined || eq <= 0) {
-      log(`warning: --compare-target needs name=command,arg,arg; ignoring "${spec ?? ''}".`)
-      continue
-    }
-    const name = spec.slice(0, eq)
-    const parts = spec
-      .slice(eq + 1)
-      .split(',')
-      .filter((s) => s.length > 0)
-    const command = parts[0]
-    if (command === undefined) {
-      log(`warning: --compare-target "${spec}" has no command; ignoring.`)
-      continue
-    }
-    overrides.set(name, { name, command, args: parts.slice(1) })
+/** Read one non-negative integer CLI option without silently accepting a malformed artifact protocol. */
+function parseNonNegativeInteger(
+  argv: readonly string[],
+  flag: string,
+  defaultValue: number,
+): number {
+  const index = argv.indexOf(flag)
+  if (index < 0) return defaultValue
+  const raw = argv[index + 1]
+  if (raw === undefined || !/^\d+$/.test(raw)) {
+    throw new Error(`${flag} expects a non-negative integer`)
   }
-  return overrides
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value)) throw new Error(`${flag} is outside the safe integer range`)
+  return value
 }
 
-/** Apply spawn overrides to the registered adapters, preserving each adapter's memory capability. */
-function applyTargetOverrides(
-  adapters: readonly TaskAdapter[],
-  overrides: ReadonlyMap<string, ServerTarget>,
-): TaskAdapter[] {
-  return adapters.map((adapter) => {
-    const override = overrides.get(adapter.target.name)
-    if (override === undefined) return adapter
-    return {
-      ...adapter,
-      target: {
-        ...override,
-        ...(adapter.target.supportsMemory !== undefined
-          ? { supportsMemory: adapter.target.supportsMemory }
+/** Keep the one-run smoke useful, but mark it clearly as insufficient evidence for a comparison claim. */
+function comparisonEvidenceTier(
+  iterations: number,
+  warmupRuns: number,
+  summaries: readonly ComparisonSummary[],
+): 'exploratory' | 'reviewable' {
+  const allSucceeded =
+    summaries.length > 0 && summaries.every((summary) => summary.failedRuns === 0)
+  return iterations >= 10 && warmupRuns >= 1 && allSucceeded ? 'reviewable' : 'exploratory'
+}
+
+/** Convert per-target medians into the existing contrast shape for concise human reporting. */
+function medianRows(summaries: readonly ComparisonSummary[]): ComparisonResult[] {
+  return summaries.flatMap((summary) => {
+    if (summary.metrics === null) return []
+    return [
+      {
+        target: summary.target,
+        task: summary.task,
+        toolCalls: summary.metrics.toolCalls.median,
+        estimatedTokens: summary.metrics.estimatedTokens.median,
+        requestTokens: summary.metrics.requestBpe.median,
+        measuredTokens: summary.metrics.responseBpe.median,
+        requestCharacters: summary.metrics.requestCharacters.median,
+        responseCharacters: summary.metrics.responseCharacters.median,
+        failedCalls: summary.metrics.failedCalls.median,
+        retries: summary.metrics.retries.median,
+        latencyMs: summary.metrics.latencyMs.median,
+        memoryRssBytes: summary.memoryRssBytes?.median ?? null,
+        manifest:
+          summary.manifest === null
+            ? null
+            : {
+                characters: summary.manifest.characters.median,
+                bpe: summary.manifest.bpe.median,
+                coldStartMs: summary.manifest.coldStartMs.median,
+              },
+        ok: summary.failedRuns === 0,
+        ...(summary.failedRuns > 0
+          ? { error: `${summary.failedRuns} retained run(s) failed` }
           : {}),
       },
-    }
+    ]
   })
 }
 
-/** Render the cross-server comparison: a per-row table, then each target's deltas vs the baseline. */
+/** Render median/p95 retained measurements, then each target's delta of medians vs the baseline. */
 function printComparison(
-  results: ReadonlyArray<ComparisonResult>,
+  summaries: ReadonlyArray<ComparisonSummary>,
   contrasts: ReadonlyArray<TaskContrast>,
 ): void {
+  log('\nCross-server comparison (retained medians; real tok = BPE via gpt-tokenizer)')
+  log('─'.repeat(126))
   log(
-    '\nCross-server comparison (real tok = BPE via gpt-tokenizer — the cross-server-comparable metric)',
+    `  ${'task'.padEnd(18)} ${'target'.padEnd(16)} ${'runs'.padStart(7)} ${'calls'.padStart(7)} ${'req BPE'.padStart(8)} ${'resp BPE'.padStart(9)} ${'cold p50'.padStart(10)} ${'lat p95'.padStart(9)}  result`,
   )
-  log('─'.repeat(96))
-  log(
-    `  ${'task'.padEnd(18)} ${'target'.padEnd(16)} ${'calls'.padStart(5)} ${'real tok'.padStart(8)} ${'latency'.padStart(9)} ${'memory'.padStart(8)}  result`,
-  )
-  for (const r of results) {
-    const verdict = r.ok ? 'ok' : `FAIL: ${r.error ?? ''}`
+  for (const summary of summaries) {
+    const metrics = summary.metrics
+    const verdict = summary.failedRuns === 0 ? 'ok' : `FAIL: ${summary.failedRuns} run(s)`
     log(
-      `  ${r.task.padEnd(18)} ${r.target.padEnd(16)} ${String(r.toolCalls).padStart(5)} ${String(r.measuredTokens).padStart(8)} ${`${r.latencyMs.toFixed(0)}ms`.padStart(9)} ${mib(r.memoryRssBytes).padStart(8)}  ${verdict}`,
+      `  ${summary.task.padEnd(18)} ${summary.target.padEnd(16)} ${`${summary.successfulRuns}/${summary.retainedRuns}`.padStart(7)} ${String(metrics?.toolCalls.median ?? 'n/a').padStart(7)} ${String(metrics?.requestBpe.median ?? 'n/a').padStart(8)} ${String(metrics?.responseBpe.median ?? 'n/a').padStart(9)} ${milliseconds(summary.manifest?.coldStartMs.median).padStart(10)} ${milliseconds(metrics?.latencyMs.p95).padStart(9)}  ${verdict}`,
     )
   }
   const withDeltas = contrasts.filter((c) => c.deltas.length > 0)
   if (withDeltas.length === 0) return
   log(
-    '\nDeltas vs the baseline (target − baseline; positive = the target spent MORE than the baseline)',
+    '\nDeltas of per-target medians vs the baseline (target − baseline; positive = target spent MORE)',
   )
   for (const c of withDeltas) {
     log(`  ${c.task} (vs ${c.baseline})`)
     for (const d of c.deltas) {
       const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`)
       log(
-        `    ${d.target}: ${sign(d.toolCallsVsBaseline)} calls, ${sign(d.measuredTokensVsBaseline)} BPE tokens`,
+        `    ${d.target}: ${sign(d.toolCallsVsBaseline)} calls, ${sign(d.requestTokensVsBaseline)} request BPE, ${sign(d.measuredTokensVsBaseline)} response BPE, ${d.manifestBpeVsBaseline === undefined ? 'n/a' : `${sign(d.manifestBpeVsBaseline)} manifest BPE`}`,
       )
     }
   }
@@ -212,35 +235,75 @@ function printComparison(
 interface ComparisonReport {
   readonly schema_version: number
   readonly generated_at: string
-  readonly env: { readonly node: string; readonly platform: string; readonly arch: string }
   readonly comparison: {
     readonly baseline: string
-    readonly results: ReadonlyArray<ComparisonResult>
+    /** `reviewable` needs at least ten successful retained runs after a warmup; it is not a public claim. */
+    readonly evidence_tier: 'exploratory' | 'reviewable'
+    readonly protocol: {
+      readonly execution: 'sequential-fresh-processes'
+      readonly warmup_runs: number
+      readonly retained_iterations: number
+    }
+    readonly provenance: Awaited<ReturnType<typeof collectComparisonProvenance>>
+    readonly tasks: ReadonlyArray<
+      Omit<ComparableTask, 'oracle'> & { readonly oracle: NonNullable<ComparableTask['oracle']> }
+    >
+    /** Warmups are retained for audit but excluded from distributions. */
+    readonly warmups: ReadonlyArray<ReadonlyArray<ComparisonResult>>
+    /** Every retained per-process observation; summaries never hide an individual failure. */
+    readonly samples: ReadonlyArray<ReadonlyArray<ComparisonResult>>
+    readonly summaries: ReadonlyArray<ComparisonSummary>
     readonly contrasts: ReadonlyArray<TaskContrast>
   }
 }
 
 /**
- * `--compare` mode: drive every registered adapter (our baseline + any registered competitor, with
- * `--compare-target` spawn overrides applied), contrast the metrics vs our server, print the table, and
- * emit the comparison JSON. Distinct from the default scenario run.
+ * `--compare` mode: drive the pinned baseline and competitor adapters through repeated fresh processes,
+ * contrast their retained medians, print the table, and emit a reproducible JSON artifact. Distinct
+ * from the default scenario run.
  */
 async function runCompareMode(argv: readonly string[]): Promise<void> {
-  const overrides = parseCompareTargets(argv)
-  const adapters = applyTargetOverrides(stagewrightAdapters(), overrides)
+  const warmupRuns = parseNonNegativeInteger(argv, '--compare-warmup', 2)
+  const iterations = parseNonNegativeInteger(argv, '--compare-iterations', 10)
+  if (iterations < 1) throw new Error('--compare-iterations must be at least 1')
+  const adapters = comparisonAdapters()
   const targets = new Set(adapters.map((a) => a.target.name))
   log(
-    `Running the cross-server comparison (${adapters.length} task-runs across ${targets.size} target(s))...`,
+    `Running the cross-server comparison (${warmupRuns} warmup + ${iterations} retained full run(s); ${adapters.length} task-runs across ${targets.size} target(s))...`,
   )
-  const results = await runComparison(adapters)
-  const contrasts = computeContrast(results, STAGEWRIGHT_TARGET.name)
-  printComparison(results, contrasts)
+  const series = await runComparisonSeries(adapters, { warmupRuns, iterations })
+  const summaries = summarizeComparisonSeries(series)
+  const contrasts = computeContrast(medianRows(summaries), STAGEWRIGHT_TARGET.name)
+  const evidenceTier = comparisonEvidenceTier(iterations, warmupRuns, summaries)
+  printComparison(summaries, contrasts)
+  log(
+    `\nEvidence tier: ${evidenceTier}${evidenceTier === 'reviewable' ? ' (local artifact is ready for human review, not a published claim).' : ' (insufficient retained runs, warmup, or success for a comparison claim).'}`,
+  )
 
   const report: ComparisonReport = {
     schema_version: COMPARISON_SCHEMA_VERSION,
     generated_at: new Date().toISOString(),
-    env: { node: process.versions.node, platform: process.platform, arch: process.arch },
-    comparison: { baseline: STAGEWRIGHT_TARGET.name, results, contrasts },
+    comparison: {
+      baseline: STAGEWRIGHT_TARGET.name,
+      evidence_tier: evidenceTier,
+      protocol: {
+        execution: 'sequential-fresh-processes',
+        warmup_runs: warmupRuns,
+        retained_iterations: iterations,
+      },
+      provenance: await collectComparisonProvenance(adapters.map((adapter) => adapter.target)),
+      tasks: [
+        ...new Map(adapters.map((adapter) => [adapter.task.name, adapter.task])).values(),
+      ].map((task) => {
+        if (task.oracle === undefined)
+          throw new Error(`${task.name} is missing a comparison oracle`)
+        return { name: task.name, description: task.description, oracle: task.oracle }
+      }),
+      warmups: series.warmups,
+      samples: series.samples,
+      summaries,
+      contrasts,
+    },
   }
   const json = JSON.stringify(report, null, 2)
   process.stdout.write(`${json}\n`)
@@ -250,9 +313,10 @@ async function runCompareMode(argv: readonly string[]): Promise<void> {
     await writeFile(outPath, `${json}\n`, 'utf8')
     log(`\nWrote machine-readable comparison report to ${outPath}`)
   }
-  const failed = results.filter((r) => !r.ok)
+  const failed = series.samples.flat().filter((row) => !row.ok)
+  const retainedRows = series.samples.flat().length
   if (failed.length > 0) {
-    log(`\n${failed.length} of ${results.length} comparison run(s) FAILED.`)
+    log(`\n${failed.length} of ${retainedRows} retained comparison row(s) FAILED.`)
     process.exitCode = 1
   } else {
     log(`\nComparison complete across ${targets.size} target(s).`)

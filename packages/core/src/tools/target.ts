@@ -24,7 +24,7 @@ import { type ErrorResponse, type SimilarRef, makeError } from '../errors/envelo
 import { type ErrorCode, StagewrightError } from '../errors/registry.js'
 import type { Snapshot } from '../snapshot/index.js'
 import type { TransportSession } from '../transports/index.js'
-import { buildWalkBody, loadInjectedWalker } from './snapshot/inject.js'
+import { loadInjectedWalker, runWalk } from './snapshot/inject.js'
 import { reconcileRetagAndStore } from './snapshot/refs.js'
 import type { ToolContext } from './types.js'
 
@@ -179,6 +179,27 @@ export function refName(
 }
 
 /**
+ * Best-effort name hint for a ref on the currently selected renderer surface.
+ *
+ * Failure diagnosis must never hide the original operation error merely because
+ * a renderer closed while we were collecting an optional recovery hint.
+ */
+export async function refNameForActiveSurface(
+  ctx: ToolContext,
+  session: TransportSession,
+  sessionId: string,
+  ref: number | undefined,
+): Promise<string | undefined> {
+  if (ref === undefined) return undefined
+  try {
+    const surface = await session.activeSurface()
+    return refName(ctx.snapshots.get(sessionId, surface.id), ref)
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Source `similar_refs` for a "can't find it" failure. Re-walks the live DOM so
  * the candidates reflect the current screen (a hot-reload makes the stored
  * baseline misleading) and reconciles + retags + stores the result so the refs it
@@ -190,16 +211,18 @@ async function gatherSimilarRefs(cx: {
   readonly session: TransportSession
   readonly sessionId: string
   readonly hint?: string | undefined
-}): Promise<SimilarRef[]> {
-  let source = cx.ctx.snapshots.get(cx.sessionId)
+}): Promise<{ readonly similar: SimilarRef[]; readonly hadSnapshot: boolean }> {
+  const surface = await cx.session.activeSurface()
+  let source = cx.ctx.snapshots.get(cx.sessionId, surface.id)
+  const hadSnapshot = source !== undefined
   try {
-    const body = buildWalkBody(loadInjectedWalker())
-    const walked = await cx.session.evaluate<Snapshot | undefined>('renderer', body, {})
+    const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {})
     if (walked !== undefined && Array.isArray(walked.entries)) {
       const stabilised = await reconcileRetagAndStore({
         session: cx.session,
         store: cx.ctx.snapshots,
         sessionId: cx.sessionId,
+        surfaceId: surface.id,
         prev: source,
         walked,
       })
@@ -209,7 +232,21 @@ async function gatherSimilarRefs(cx: {
     // Live re-walk failed (bundle missing in a pre-build test run, or a dead
     // renderer) — fall through to the stored snapshot.
   }
-  return source !== undefined ? computeSimilarRefs(source, cx.hint) : []
+  return {
+    similar: source !== undefined ? computeSimilarRefs(source, cx.hint) : [],
+    hadSnapshot,
+  }
+}
+
+/** Recovery text must describe the observed state, not speculate about a different failure mode. */
+function missHint(code: 'SELECTOR_NO_MATCH' | 'REF_NOT_FOUND', hadSnapshot: boolean): string {
+  if (!hadSnapshot) {
+    return 'No snapshot is available for this renderer. Call electron_snapshot() before retrying so refs and candidates are current.'
+  }
+  if (code === 'REF_NOT_FOUND') {
+    return 'This ref is stale because it is absent from the latest snapshot. Call electron_snapshot() to refresh refs, then retry with a returned ref.'
+  }
+  return 'The selector did not match the current DOM. It is not a stale-ref diagnosis; inspect a fresh snapshot or refine the selector.'
 }
 
 /** Trim a transport error message to a single bounded line. */
@@ -236,7 +273,7 @@ export async function buildMissError(
     readonly nameHint?: string | undefined
   },
 ): Promise<ErrorResponse> {
-  const similar = await gatherSimilarRefs({
+  const { similar, hadSnapshot } = await gatherSimilarRefs({
     ctx: cx.ctx,
     session: cx.session,
     sessionId: cx.meta.session_id,
@@ -245,6 +282,7 @@ export async function buildMissError(
   return makeError(code, {
     ...cx.meta,
     message: cx.message,
+    hint: missHint(code, hadSnapshot),
     ...(similar.length > 0 ? { similar_refs: similar } : {}),
     next_actions: ['electron_snapshot()', 'electron_find({ role: "button" })'],
   })
@@ -299,7 +337,8 @@ export async function refFreshnessError(
   ref: number | undefined,
 ): Promise<ErrorResponse | undefined> {
   if (ref === undefined) return undefined
-  const stored = ctx.snapshots.get(meta.session_id)
+  const surface = await session.activeSurface()
+  const stored = ctx.snapshots.get(meta.session_id, surface.id)
   if (stored === undefined || snapshotHasRef(stored, ref)) return undefined
   return buildMissError('REF_NOT_FOUND', {
     ctx,

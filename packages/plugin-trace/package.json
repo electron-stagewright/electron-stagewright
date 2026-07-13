@@ -25,6 +25,9 @@
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "electron-stagewright-replay": "./dist/cli.js"
+  },
   "files": [
     "dist/",
     "README.md",
@@ -45,6 +48,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron-stagewright/testkit": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "engines": {

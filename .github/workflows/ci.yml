@@ -25,10 +25,10 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Build core first: packages that import @electron-stagewright/core by name (e.g.
-      # plugin-trace) resolve it through its published dist, which a clean checkout has not
-      # built yet. Without this, typecheck fails with "Cannot find module".
-      - run: pnpm --filter @electron-stagewright/core build
+      # Build every workspace before resolving workspace package exports. The benchmark
+      # manifest imports each first-party plugin by package name, so a core-only build
+      # leaves their dist/type entrypoints absent in a clean checkout.
+      - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
 
@@ -48,9 +48,9 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Build core first so packages whose tests import @electron-stagewright/core by name
-      # (e.g. plugin-trace) can resolve its dist; a clean checkout has not built it yet.
-      - run: pnpm --filter @electron-stagewright/core build
+      # Tests import the benchmark manifest, which imports every first-party plugin by
+      # package name. Build all workspace exports before starting Vitest.
+      - run: pnpm build
       - run: pnpm test
 
   coverage:
@@ -64,9 +64,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Build core first so packages whose tests import @electron-stagewright/core by name can
-      # resolve its dist (same reason as the test job).
-      - run: pnpm --filter @electron-stagewright/core build
+      # Coverage loads the same workspace package entrypoints as the test job.
+      - run: pnpm build
       # Fails when line/branch/statement/function coverage drops below the floors in
       # vitest.config.ts, so the token-economy and correctness suites can't silently decay.
       - run: pnpm test:coverage
@@ -84,3 +83,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Manifest budget gate (ADR-021): measures the host-visible tools/list payload for every
+      # committed variant against packages/bench/fixtures/manifest-baseline.json and fails on
+      # unreviewed BPE growth over 3%. In-memory MCP only — no Electron binary, no display — so
+      # it belongs in this job rather than the e2e workflow.
+      - run: pnpm manifest:check

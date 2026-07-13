@@ -61,18 +61,48 @@ trace_stop {}
 trace_view { "path": "/abs/traces/<artifact>.jsonl" }
 ```
 
-- **`trace_start`** begins recording (JSONL artifact: a meta header plus one record per dispatch —
-  arguments, result envelope, timing, token estimate; sensitive values can be redacted via plugin
-  config). Optional `budgetTokens` + `enforce` turn the trace into a live token budget: advisory
-  by default, vetoing over-budget calls when enforced.
+- **`trace_start`** begins recording (a streaming JSONL v2 artifact: header plus one sequenced
+  record per dispatch — arguments, result envelope, timing, token estimate; sensitive values can
+  be redacted via plugin config). Calls land in a `.partial` file until a clean stop atomically
+  publishes the final artifact; a partial is readable for crash recovery. Optional `budgetTokens`
+  and `enforce` turn the trace into a live token budget: advisory by default, vetoing over-budget
+  calls when enforced.
 - **`trace_status`** / **`trace_tokens`** / **`trace_budget`** — is it recording, where, how many
   records; per-tool token totals and the largest responses; a cheap budget poll.
-- **`trace_stop`** flushes and returns the artifact path plus a token report.
+- **`trace_stop`** flushes, adds a completion footer, atomically publishes the artifact, and
+  returns its path plus a token report.
 - **`trace_view`** renders the artifact to a single self-contained HTML file — summary cards, a
   token-budget bar, per-tool tables, an expandable timeline — openable anywhere, no server.
+- **`trace_promote`** creates a small reviewable replay spec from a raw trace. It keeps explicit
+  success checkpoints, normalizes session ids, and redacts password/token/authorization/cookie
+  fields before writing; filtered calls retain their required session creators. Add result matchers
+  only for the values a regression must observe.
 - **`trace_replay`** re-dispatches a recorded session against a fresh app instance (session ids
   remapped automatically) and judges each step on its stable outcome — the regression-check
   companion: record once, replay after the change.
+
+## Run a promoted spec in CI
+
+Install `@electron-stagewright/plugin-trace` with the core runtime, then invoke the package's
+headless runner against the reviewed JSON artifact. `--json` writes a single bounded report to
+stdout and separates meaningful outcomes: checkpoint mismatch (`1`), malformed spec (`2`), app
+launch failure (`3`), infrastructure (`4`), and invalid CLI usage (`64`).
+
+```yaml
+- name: Replay Electron regression
+  run: xvfb-run --auto-servernum electron-stagewright-replay tests/regressions/greeting.replay.json --json > replay-report.json
+
+- name: Upload replay report
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: replay-report
+    path: replay-report.json
+```
+
+Add `--plugin`, `--plugin-config`, `--allow-eval`, or the same confinement/timeout options as the
+MCP server when the spec needs them. `--include` and `--exclude` narrow a run while retaining the
+session creator required by a selected later call.
 
 The token accounting exists because the trace's first consumer is an agent operating under a
 context budget: it shows which tools cost the most before the budget bites.

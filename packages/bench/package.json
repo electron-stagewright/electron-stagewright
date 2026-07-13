@@ -8,14 +8,28 @@
   "scripts": {
     "bench": "tsx src/run-bench.ts",
     "bench:check": "tsx src/run-bench.ts --check",
+    "manifest:check": "tsx src/run-manifest.ts --check",
+    "manifest:report": "tsx src/run-manifest.ts",
+    "manifest:update": "tsx src/run-manifest.ts --update-manifest-baseline",
+    "bench:profiles": "tsx src/run-profile-bench.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@electron-stagewright/core": "workspace:*",
+    "@electron-stagewright/plugin-a11y": "workspace:*",
+    "@electron-stagewright/plugin-clock": "workspace:*",
+    "@electron-stagewright/plugin-ipc": "workspace:*",
+    "@electron-stagewright/plugin-native-ui": "workspace:*",
+    "@electron-stagewright/plugin-network": "workspace:*",
+    "@electron-stagewright/plugin-production": "workspace:*",
+    "@electron-stagewright/plugin-storage": "workspace:*",
+    "@electron-stagewright/plugin-trace": "workspace:*",
+    "@electron-stagewright/plugin-visual": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "gpt-tokenizer": "^3.4.0"
   },
   "devDependencies": {
-    "tsx": "^4.22.3"
+    "electron-driver": "0.3.1",
+    "tsx": "^4.23.0"
   }
 }

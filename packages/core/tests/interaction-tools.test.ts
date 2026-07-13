@@ -37,6 +37,7 @@ const NO_INTERACTION_CAPS: TransportCapabilities = {
   supportsMainEval: true,
   supportsRendererEval: true,
   supportsInteraction: false,
+  supportsSurfaceTargeting: true,
 }
 
 function setup(

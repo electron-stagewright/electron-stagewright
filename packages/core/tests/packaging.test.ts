@@ -1,6 +1,6 @@
 /**
  * Publish-readiness gate. Asserts every PUBLISHABLE workspace package has a manifest npm can
- * publish without surprises, and that INTERNAL packages (examples, bench) stay unpublishable. Runs
+ * publish without surprises, and that INTERNAL packages (examples and private helpers) stay unpublishable. Runs
  * in `pnpm test` as pure manifest inspection (no build needed), so a manifest that drifts out of
  * publish-correctness fails CI before it reaches a release rather than breaking the first
  * `npx @electron-stagewright/core`.
@@ -70,6 +70,7 @@ async function fileExists(p: string): Promise<boolean> {
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 const NODE_ENGINE = '>=24.0.0'
 const REQUIRED_FILE_ENTRIES = ['README.md', 'LICENSE'] as const
+const REPOSITORY_URL = 'git+https://github.com/electron-stagewright/electron-stagewright.git'
 
 /** Collect the publish-correctness violations for one manifest (empty array = publish-ready). */
 async function manifestViolations({ dir, relDir, pkg }: PackageManifest): Promise<string[]> {
@@ -91,7 +92,13 @@ async function manifestViolations({ dir, relDir, pkg }: PackageManifest): Promis
   }
   if (pkg['type'] !== 'module') fail(`type must be "module" (got ${String(pkg['type'])})`)
 
-  const repository = pkg['repository'] as { directory?: unknown } | undefined
+  const repository = pkg['repository'] as
+    { type?: unknown; url?: unknown; directory?: unknown } | undefined
+  if (repository?.type !== 'git')
+    fail(`repository.type must be "git" (got ${String(repository?.type)})`)
+  if (repository?.url !== REPOSITORY_URL) {
+    fail(`repository.url must be "${REPOSITORY_URL}" (got ${String(repository?.url)})`)
+  }
   if (repository?.directory !== relDir) {
     fail(`repository.directory must be "${relDir}" (got ${String(repository?.directory)})`)
   }
@@ -119,8 +126,7 @@ async function manifestViolations({ dir, relDir, pkg }: PackageManifest): Promis
   }
 
   const exportsObject = pkg['exports'] as
-    | { '.'?: { types?: unknown; import?: unknown } }
-    | undefined
+    { '.'?: { types?: unknown; import?: unknown } } | undefined
   const exportsRoot = exportsObject?.['.']
   if (typeof exportsRoot?.types !== 'string' || !exportsRoot.types.startsWith('./dist/')) {
     fail(`exports["."].types must point under ./dist/ (got ${String(exportsRoot?.types)})`)
@@ -182,7 +188,7 @@ describe('publish-readiness — publishable package manifests', () => {
     license: 'MIT',
     description: 'Example publishable package',
     type: 'module',
-    repository: { directory: 'packages/core' },
+    repository: { type: 'git', url: REPOSITORY_URL, directory: 'packages/core' },
     engines: { node: NODE_ENGINE },
     publishConfig: { access: 'public' },
     main: './dist/index.js',
@@ -209,10 +215,10 @@ describe('publish-readiness — publishable package manifests', () => {
     ).toEqual([])
   })
 
-  it('internal packages (examples + bench) are private so a publish never pushes them', async () => {
+  it('internal packages are private so a publish never pushes them', async () => {
     const internal = [
       ...(await loadManifests('examples')),
-      ...(await loadManifests('packages')).filter((m) => m.relDir === 'packages/bench'),
+      ...(await loadManifests('packages')).filter((m) => isPrivate(m.pkg)),
     ]
     expect(internal.length, 'expected internal packages to exist').toBeGreaterThan(0)
 
@@ -241,6 +247,51 @@ describe('publish-readiness — publishable package manifests', () => {
         'packages/core: files must include "LICENSE"',
       ]),
     )
+  })
+
+  it('rejects a publishable package whose repository cannot match the trusted publisher', async () => {
+    const violations = await manifestViolations(
+      manifestFor({
+        ...validPublishablePkg,
+        repository: {
+          type: 'git',
+          url: 'git+https://github.com/example/other.git',
+          directory: 'packages/core',
+        },
+      }),
+    )
+
+    expect(violations).toContain(
+      `packages/core: repository.url must be "${REPOSITORY_URL}" (got git+https://github.com/example/other.git)`,
+    )
+  })
+
+  it('declares Playwright and Electron as optional peers for the default launch transport', async () => {
+    const core = (await loadManifests('packages')).find(
+      (manifest) => manifest.relDir === 'packages/core',
+    )
+    expect(core, 'expected packages/core manifest').toBeDefined()
+    const peers = core?.pkg['peerDependencies'] as Record<string, string> | undefined
+    const peerMeta = core?.pkg['peerDependenciesMeta'] as
+      Record<string, { readonly optional?: unknown }> | undefined
+
+    expect(peers?.['playwright']).toBe('>=1.49.0')
+    expect(peers?.['electron']).toBe('>=12.2.0')
+    expect(peerMeta?.['playwright']?.optional).toBe(true)
+    expect(peerMeta?.['electron']?.optional).toBe(true)
+  })
+
+  it('publishes the stable plugin-sdk subpath from the core tarball', async () => {
+    const core = (await loadManifests('packages')).find(
+      (manifest) => manifest.relDir === 'packages/core',
+    )
+    const exportsObject = core?.pkg['exports'] as
+      Record<string, { readonly types?: unknown; readonly import?: unknown }> | undefined
+
+    expect(exportsObject?.['./plugin-sdk']).toEqual({
+      types: './dist/plugin-sdk/index.d.ts',
+      import: './dist/plugin-sdk/index.js',
+    })
   })
 })
 

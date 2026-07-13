@@ -62,6 +62,7 @@ import { anyEvalAllowed, type EvalPolicy, normalizeEvalPolicy } from './eval-pol
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
+import { ServerStatus } from './status.js'
 import { TransportRegistry } from './transport-registry.js'
 
 /**
@@ -101,6 +102,8 @@ export interface DispatcherOptions {
   readonly transports?: TransportRegistry
   /** Per-session snapshot store threaded into every tool context. Defaults to a fresh store. */
   readonly snapshots?: SnapshotStore
+  /** Compact state used by `electron_status`. Defaults to a fresh server-local tracker. */
+  readonly status?: ServerStatus
   /** Logger for slow-op warnings and diagnostics. Defaults to a no-op logger. */
   readonly logger?: Logger
   /**
@@ -113,6 +116,8 @@ export interface DispatcherOptions {
   readonly screenshotDir?: string
   /** Optional root confining `electron_launch` paths; relative resolves at startup. Unset = no confinement. */
   readonly appRoot?: string
+  /** Optional Electron main entry used when `electron_launch` omits its own app entry. */
+  readonly launchDefaultMain?: string
   /** Clock injection for deterministic `_meta.elapsed_ms` in tests. */
   readonly now?: () => number
   /** Elapsed-ms threshold above which a dispatch logs a slow-op warning. */
@@ -125,6 +130,12 @@ export interface DispatcherOptions {
    * long wait; `0` disables the backstop. Defaults to {@link DEFAULT_OPERATION_TIMEOUT_MS}.
    */
   readonly operationTimeoutMs?: number
+  /**
+   * Known core tools intentionally excluded by the selected profile, mapped to a profile that
+   * contains each one. Eval-gated tools are deliberately excluded: their more specific eval hint
+   * remains authoritative.
+   */
+  readonly excludedToolProfileHints?: ReadonlyMap<string, string>
 }
 
 /**
@@ -151,6 +162,15 @@ export interface ToolManifestEntry {
    */
   readonly evalTarget?: EvalTarget
   /** MCP behaviour hints (readOnlyHint, destructiveHint, …) surfaced in `tools/list`. */
+  readonly annotations: ToolAnnotations
+}
+
+/** The exact public tool entry emitted in the MCP `tools/list` result. */
+export interface McpToolManifestEntry {
+  readonly name: string
+  readonly title?: string
+  readonly description: string
+  readonly inputSchema: { type: 'object' } & Record<string, unknown>
   readonly annotations: ToolAnnotations
 }
 
@@ -224,12 +244,15 @@ export class Dispatcher {
   readonly #sessions: SessionManager
   readonly #transports: TransportRegistry
   readonly #snapshots: SnapshotStore
+  readonly #status: ServerStatus
   readonly #logger: Logger
   /** The per-target eval authorization policy (ADR-014); normalised from the option. */
   readonly #evalPolicy: EvalPolicy
   readonly #screenshotDir?: string
   /** Resolved `--app-root` confinement directory for launch paths; undefined = no confinement. */
   readonly #appRoot?: string
+  /** Optional server-supplied entry used only when a launch call omits `main`. */
+  readonly #launchDefaultMain?: string
   readonly #now: () => number
   readonly #slowMs: number
   /** Per-dispatch backstop timeout (ms); `0` disables it (ADR-011). */
@@ -245,6 +268,8 @@ export class Dispatcher {
    * agent cannot distinguish from a typo.
    */
   readonly #gatedToolNames = new Map<string, EvalTarget | undefined>()
+  /** Core tools deliberately hidden by the selected profile, with an actionable alternative. */
+  readonly #excludedToolProfileHints: ReadonlyMap<string, string>
 
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
@@ -262,9 +287,15 @@ export class Dispatcher {
     }
     if (opts.screenshotDir !== undefined) this.#screenshotDir = path.resolve(opts.screenshotDir)
     if (opts.appRoot !== undefined) this.#appRoot = path.resolve(opts.appRoot)
+    if (opts.launchDefaultMain !== undefined) this.#launchDefaultMain = opts.launchDefaultMain
     this.#now = opts.now ?? Date.now
+    this.#status = opts.status ?? new ServerStatus({ now: this.#now })
+    this.#sessions.onSessionEnd((event) => {
+      this.#status.clearSession(event.sessionId)
+    })
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
     this.#operationTimeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
+    this.#excludedToolProfileHints = opts.excludedToolProfileHints ?? new Map()
     if (!Number.isInteger(this.#operationTimeoutMs) || this.#operationTimeoutMs < 0) {
       throw new Error(
         `operationTimeoutMs must be a non-negative integer number of milliseconds, got ${String(
@@ -406,9 +437,9 @@ export class Dispatcher {
     return this.#tools.has(name)
   }
 
-  /** The registered (visible) tool definitions, in registration order. */
+  /** The registered (visible) tool definitions, in canonical name order. */
   list(): readonly AnyToolDefinition[] {
-    return [...this.#tools.values()]
+    return [...this.#tools.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
   /** Machine-readable manifest of all registered tools. */
@@ -421,6 +452,21 @@ export class Dispatcher {
       inputJsonSchema: z.toJSONSchema(def.inputSchema) as Record<string, unknown>,
       ...(def.requiresEvalFlag === true ? { requiresEvalFlag: true } : {}),
       ...(def.evalTarget !== undefined ? { evalTarget: def.evalTarget } : {}),
+      annotations: annotationsFor(def),
+    }))
+  }
+
+  /**
+   * The exact `tools` entries emitted to MCP hosts. Manifest-budget accounting must serialize the
+   * enclosing `{ tools: dispatcher.listMcpTools() }` object rather than the richer internal
+   * {@link ToolManifestEntry} projection, which contains fields unavailable to the host.
+   */
+  listMcpTools(): readonly McpToolManifestEntry[] {
+    return this.list().map((def) => ({
+      name: def.name,
+      ...(def.title !== undefined ? { title: def.title } : {}),
+      description: def.description,
+      inputSchema: z.toJSONSchema(def.inputSchema) as { type: 'object' } & Record<string, unknown>,
       annotations: annotationsFor(def),
     }))
   }
@@ -454,6 +500,17 @@ export class Dispatcher {
         message: `Tool "${name}" is gated: it is only registered when the server is started with ${flag}.`,
         next_actions: [
           `Ask the operator to restart the server with ${flag} to enable this tool, or use a granular non-eval tool instead.`,
+        ],
+        startedAt,
+        now: this.#now,
+      })
+    }
+    const profile = this.#excludedToolProfileHints.get(name)
+    if (profile !== undefined) {
+      return makeError('BAD_ARGUMENT', {
+        message: `Tool "${name}" is excluded by the active core tool profile.`,
+        next_actions: [
+          `Ask the operator to restart the server with --tool-profile ${profile} to enable ${name}.`,
         ],
         startedAt,
         now: this.#now,
@@ -558,11 +615,15 @@ export class Dispatcher {
       sessions: this.#sessions,
       transports: this.#transports,
       snapshots: this.#snapshots,
+      status: this.#status,
       logger: this.#logger,
       allowEval: this.#evalPolicy.main,
       allowEvalRenderer: this.#evalPolicy.renderer,
       ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
       ...(this.#appRoot !== undefined ? { appRoot: this.#appRoot } : {}),
+      ...(this.#launchDefaultMain !== undefined
+        ? { launchDefaultMain: this.#launchDefaultMain }
+        : {}),
       startedAt,
       now: this.#now,
       addDispatchObserver: (observer) => this.addObserver(observer),
@@ -635,8 +696,10 @@ export class Dispatcher {
    * exactly once. A throwing observer is caught and logged; it never affects the agent result.
    */
   #complete(tool: string, args: unknown, result: ToolResult, startedAt: number): ToolResult {
+    const finishedAt = this.#now()
+    this.#status.record(result, finishedAt, (sessionId) => this.#sessions.has(sessionId))
     if (this.#observers.size > 0) {
-      const record: DispatchRecord = { tool, args, result, startedAt, finishedAt: this.#now() }
+      const record: DispatchRecord = { tool, args, result, startedAt, finishedAt }
       for (const observer of this.#observers) {
         try {
           observer(record)
@@ -677,18 +740,7 @@ export class Dispatcher {
         throw new McpError(ErrorCode.InvalidParams, 'tools/list is not paginated; omit the cursor.')
       }
       return {
-        tools: [...this.#tools.values()].map((def) => ({
-          name: def.name,
-          ...(def.title !== undefined ? { title: def.title } : {}),
-          description: def.description,
-          // z.toJSONSchema yields `{ type: 'object', … }`; the MCP Tool shape wants that
-          // literal type, so we assert it rather than widen the whole result to unknown.
-          inputSchema: z.toJSONSchema(def.inputSchema) as { type: 'object' } & Record<
-            string,
-            unknown
-          >,
-          annotations: annotationsFor(def),
-        })),
+        tools: this.listMcpTools(),
       }
     })
 

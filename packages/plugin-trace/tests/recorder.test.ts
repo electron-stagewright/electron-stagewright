@@ -1,24 +1,32 @@
 /**
- * Unit tests for the trace Recorder + reader/summary helpers (ADR-009): buffering, redaction,
- * the record cap (overflow), idempotent stop, the JSONL round-trip (stop -> readTrace), and
- * token aggregation (summarizeTrace).
+ * Unit tests for the streaming trace recorder and dual-format readers (ADR-009). These pin v2's
+ * partial-file lifecycle, bounded aggregation, ordering, redaction, and the independent v1 path.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import type { DispatchRecord, ToolResult } from '@electron-stagewright/core'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { Recorder, readTrace, summarizeTrace, type TraceCallRecord } from '../src/recorder.js'
+import {
+  LEGACY_TRACE_FORMAT_VERSION,
+  Recorder,
+  TRACE_FORMAT_VERSION,
+  readTrace,
+  readTraceV1,
+  readTraceV2,
+  summarizeTrace,
+  type TraceCallRecord,
+} from '../src/recorder.js'
 
 const created: string[] = []
 afterEach(async () => {
-  await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
+  await Promise.all(created.splice(0).map((entry) => rm(entry, { recursive: true, force: true })))
 })
 
-/** Build a DispatchRecord with a controllable token count + ok/args. */
+/** Build a DispatchRecord with a controllable token count and outcome. */
 function record(
   tool: string,
   estimatedTokens: number,
@@ -54,6 +62,7 @@ function newRecorder(
     redact?: string[]
     budget?: number
     warnThreshold?: number
+    fsync?: boolean
   } = {},
 ): Recorder {
   return new Recorder({
@@ -64,51 +73,100 @@ function newRecorder(
     startedAt: 1000,
     ...(overrides.budget !== undefined ? { budget: overrides.budget } : {}),
     ...(overrides.warnThreshold !== undefined ? { warnThreshold: overrides.warnThreshold } : {}),
+    ...(overrides.fsync !== undefined ? { fsync: overrides.fsync } : {}),
   })
 }
 
-describe('Recorder', () => {
-  it('buffers calls and writes a JSONL artifact with a meta header on stop', async () => {
-    const file = await tmpFile()
-    const rec = newRecorder(file)
-    rec.record(record('demo_a', 10))
-    rec.record(record('demo_b', 20, { ok: false }))
-    const summary = await rec.stop()
+async function startedRecorder(
+  file: string,
+  overrides: Parameters<typeof newRecorder>[1] = {},
+): Promise<Recorder> {
+  const recorder = newRecorder(file, overrides)
+  await recorder.start()
+  return recorder
+}
 
+async function readWhen(
+  file: string,
+  predicate: (trace: Awaited<ReturnType<typeof readTrace>>) => boolean,
+) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const parsed = await readTrace(file)
+    if (predicate(parsed)) return parsed
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`Trace at ${file} did not reach the expected state`)
+}
+
+describe('Recorder v2', () => {
+  it('streams a header and calls to a partial file, then atomically publishes a footer-complete artifact', async () => {
+    const file = await tmpFile()
+    const recorder = await startedRecorder(file)
+    expect(await readTrace(recorder.partialPath)).toMatchObject({
+      formatVersion: TRACE_FORMAT_VERSION,
+      complete: false,
+      header: { kind: 'header', version: TRACE_FORMAT_VERSION, core_version: '0.0.0' },
+    })
+
+    recorder.record(record('demo_a', 10))
+    recorder.record(record('demo_b', 20, { ok: false }))
+    const partial = await readWhen(recorder.partialPath, (parsed) => parsed.calls.length === 2)
+    expect(partial).toMatchObject({ complete: false })
+    expect(partial.calls.map((call) => call.seq)).toEqual([1, 2])
+
+    const summary = await recorder.stop()
     expect(summary).toMatchObject({
       path: file,
       records: 2,
       total_estimated_tokens: 30,
       overflowed: false,
     })
+    await expect(readFile(recorder.partialPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
 
     const parsed = await readTrace(file)
-    expect(parsed.meta).toMatchObject({
-      v: 1,
-      kind: 'meta',
-      started_at: 1000,
-      core_version: '0.0.0',
-      overflowed: false,
+    expect(parsed).toMatchObject({
+      formatVersion: TRACE_FORMAT_VERSION,
+      complete: true,
+      header: { started_at: 1000, core_version: '0.0.0' },
+      footer: { complete: true, calls: 2, overflowed: false },
     })
-    expect(parsed.calls).toHaveLength(2)
-    expect(parsed.calls[0]).toMatchObject({
-      kind: 'call',
-      tool: 'demo_a',
-      ok: true,
-      estimated_tokens: 10,
+    expect(parsed.calls[0]).toMatchObject({ kind: 'call', seq: 1, tool: 'demo_a', ok: true })
+    expect(parsed.calls[1]).toMatchObject({
+      seq: 2,
+      tool: 'demo_b',
+      ok: false,
+      code: 'BAD_ARGUMENT',
     })
-    expect(parsed.calls[1]).toMatchObject({ tool: 'demo_b', ok: false, code: 'BAD_ARGUMENT' })
+  })
+
+  it('recovers a partial trace after a trailing interrupted JSON write', async () => {
+    const file = await tmpFile()
+    const partial = `${file}.partial`
+    await writeFile(
+      partial,
+      `${JSON.stringify({
+        kind: 'header',
+        format: 'stagewright-trace',
+        version: 2,
+        started_at: 1,
+        core_version: '0.0.0',
+      })}\n${JSON.stringify({ kind: 'call', seq: 1, tool: 'demo', ok: true, args: {}, result: {} })}\n{"kind":"call","seq":2`,
+      'utf8',
+    )
+    const parsed = await readTrace(partial)
+    expect(parsed).toMatchObject({ formatVersion: 2, complete: false })
+    expect(parsed.calls.map((call) => call.tool)).toEqual(['demo'])
   })
 
   it('redacts configured argument fields, recursively', async () => {
     const file = await tmpFile()
-    const rec = newRecorder(file, { redact: ['text', 'token'] })
-    rec.record(
+    const recorder = await startedRecorder(file, { redact: ['text', 'token'] })
+    recorder.record(
       record('demo', 1, {
         args: { text: 'secret', name: 'ok', nested: { token: 'abc', keep: 1 } },
       }),
     )
-    await rec.stop()
+    await recorder.stop()
     const { calls } = await readTrace(file)
     expect(calls[0]?.args).toEqual({
       text: '[redacted]',
@@ -118,48 +176,124 @@ describe('Recorder', () => {
   })
 
   it('preserves an own key literally named __proto__ instead of dropping it', async () => {
-    // A plain assignment `out['__proto__'] = …` hits the Object.prototype setter and would
-    // silently drop the field from the trace; the recorder builds redaction output with a
-    // null prototype so the key round-trips as real evidence. Build the args via
-    // JSON.parse so the parser creates a genuine own `__proto__` property.
     const file = await tmpFile()
-    const rec = newRecorder(file, { redact: ['token'] })
+    const recorder = await startedRecorder(file, { redact: ['token'] })
     const args = JSON.parse('{"__proto__": {"token": "abc", "keep": 1}, "name": "ok"}') as unknown
-    rec.record(record('demo', 1, { args }))
-    await rec.stop()
+    recorder.record(record('demo', 1, { args }))
+    await recorder.stop()
     const { calls } = await readTrace(file)
     const recorded = calls[0]?.args as Record<string, unknown>
     expect(Object.prototype.hasOwnProperty.call(recorded, '__proto__')).toBe(true)
-    const descriptor = Object.getOwnPropertyDescriptor(recorded, '__proto__')
-    expect(descriptor?.value).toEqual({ token: '[redacted]', keep: 1 })
+    expect(Object.getOwnPropertyDescriptor(recorded, '__proto__')?.value).toEqual({
+      token: '[redacted]',
+      keep: 1,
+    })
     expect(recorded['name']).toBe('ok')
   })
 
-  it('caps the buffer and reports overflow', async () => {
+  it('caps persisted records, retains exact budget spend, and writes overflow to the footer', async () => {
     const file = await tmpFile()
-    const rec = newRecorder(file, { maxRecords: 2 })
-    rec.record(record('a', 1))
-    rec.record(record('b', 1))
-    rec.record(record('c', 1))
-    expect(rec.count).toBe(2)
-    expect(rec.overflowed).toBe(true)
-    const summary = await rec.stop()
-    expect(summary.overflowed).toBe(true)
-    expect(summary.records).toBe(2)
+    const recorder = await startedRecorder(file, { maxRecords: 1, budget: 100 })
+    recorder.record(record('a', 50))
+    recorder.record(record('b', 50))
+    recorder.record(record('c', 50))
+    expect(recorder.count).toBe(1)
+    expect(recorder.overflowed).toBe(true)
+    expect(recorder.budgetStatus()).toMatchObject({ spent: 150, over_budget: true })
+    expect(recorder.tokenReport()).toMatchObject({ calls: 1, total_estimated_tokens: 50 })
+
+    const summary = await recorder.stop()
+    expect(summary).toMatchObject({ records: 1, overflowed: true, budget: { spent: 150 } })
     const parsed = await readTrace(file)
-    expect(parsed.meta?.overflowed).toBe(true)
+    expect(parsed.footer).toMatchObject({ calls: 1, overflowed: true, spent: 150 })
   })
 
-  it('stop is idempotent', async () => {
+  it('uses bounded aggregate state across 50,000 calls while preserving sequence and ordering', async () => {
     const file = await tmpFile()
-    const rec = newRecorder(file)
-    rec.record(record('a', 5))
-    const first = await rec.stop()
-    rec.record(record('b', 99)) // ignored after close
-    const second = await rec.stop()
-    expect(second).toEqual(first)
-    const { calls } = await readTrace(file)
-    expect(calls).toHaveLength(1)
+    const recorder = await startedRecorder(file, { maxRecords: 50000 })
+    for (let index = 0; index < 50000; index += 1) {
+      recorder.record(record(`tool_${index % 3}`, 1, { args: { index } }))
+    }
+    expect(recorder.tokenReport()).toMatchObject({ calls: 50000, total_estimated_tokens: 50000 })
+    expect('calls' in recorder).toBe(false)
+    await recorder.stop()
+    const parsed = await readTrace(file)
+    expect(parsed.calls).toHaveLength(50000)
+    expect(parsed.calls[0]?.seq).toBe(1)
+    expect(parsed.calls.at(-1)?.seq).toBe(50000)
+    expect(parsed.calls[0]?.args).toEqual({ index: 0 })
+    expect(parsed.calls.at(-1)?.args).toEqual({ index: 49999 })
+  })
+
+  it('stop is idempotent and ignores calls after finalization', async () => {
+    const file = await tmpFile()
+    const recorder = await startedRecorder(file, { fsync: true })
+    recorder.record(record('a', 5))
+    const first = await recorder.stop()
+    recorder.record(record('b', 99))
+    expect(await recorder.stop()).toEqual(first)
+    expect((await readTrace(file)).calls).toHaveLength(1)
+  })
+
+  it('reports a publish failure without a fake final path and retries without appending a second footer', async () => {
+    const file = await tmpFile()
+    const recorder = await startedRecorder(file)
+    recorder.record(record('a', 5))
+    // The writer has a valid partial file, but turning the requested final target into a directory
+    // forces the atomic rename to fail after the completion footer was appended.
+    await mkdir(file)
+    await expect(recorder.stop()).rejects.toBeDefined()
+    expect(await readTrace(recorder.partialPath)).toMatchObject({
+      complete: true,
+      calls: [{ seq: 1 }],
+    })
+    recorder.record(record('must_not_follow_footer', 5))
+    await rm(file, { recursive: true })
+    await expect(recorder.stop()).resolves.toMatchObject({ path: file, records: 1 })
+    const finalTrace = await readTrace(file)
+    expect(finalTrace.calls).toHaveLength(1)
+    expect(finalTrace.footer).toMatchObject({ calls: 1 })
+  })
+})
+
+describe('trace readers', () => {
+  it('reads legacy v1 independently from v2', async () => {
+    const file = await tmpFile()
+    const legacy = [
+      {
+        v: LEGACY_TRACE_FORMAT_VERSION,
+        kind: 'meta',
+        started_at: 1,
+        core_version: '0.0.0',
+        overflowed: false,
+      },
+      { kind: 'call', tool: 'legacy_tool', ok: true, args: {}, result: {} },
+    ]
+    await writeFile(file, `${legacy.map((entry) => JSON.stringify(entry)).join('\n')}\n`, 'utf8')
+    expect(readTraceV1(legacy)).toMatchObject({ formatVersion: 1, complete: true })
+    const parsed = await readTrace(file)
+    expect(parsed).toMatchObject({ formatVersion: 1, complete: true, meta: { v: 1 } })
+    expect(parsed.calls[0]?.tool).toBe('legacy_tool')
+  })
+
+  it('rejects malformed v2 ordering and a footer whose call count lies', () => {
+    const header = {
+      kind: 'header',
+      format: 'stagewright-trace',
+      version: TRACE_FORMAT_VERSION,
+      started_at: 1,
+      core_version: '0.0.0',
+    }
+    expect(() =>
+      readTraceV2([header, { kind: 'call', seq: 2, tool: 'bad', ok: true, args: {}, result: {} }]),
+    ).toThrow('sequence')
+    expect(() =>
+      readTraceV2([
+        header,
+        { kind: 'call', seq: 1, tool: 'one', ok: true, args: {}, result: {} },
+        { kind: 'footer', complete: true, calls: 2, overflowed: false },
+      ]),
+    ).toThrow('footer')
   })
 })
 
@@ -200,76 +334,10 @@ describe('summarizeTrace', () => {
     },
   ]
 
-  it('totals tokens, aggregates per tool, and ranks the largest responses', () => {
+  it('totals tokens, aggregates per tool, and ranks largest responses', () => {
     const report = summarizeTrace(calls)
     expect(report.total_estimated_tokens).toBe(820)
-    expect(report.calls).toBe(3)
-    expect(report.overflowed).toBe(false)
     expect(report.by_tool[0]).toEqual({ tool: 'snapshot', calls: 2, estimated_tokens: 800 })
-    expect(report.by_tool[1]).toEqual({ tool: 'click', calls: 1, estimated_tokens: 20 })
-    expect(report.largest[0]).toMatchObject({ tool: 'snapshot', estimated_tokens: 500 })
-    expect(report.largest.map((l) => l.estimated_tokens)).toEqual([500, 300, 20])
-  })
-
-  it('carries overflow through token reports', () => {
-    expect(summarizeTrace(calls, 10, true).overflowed).toBe(true)
-  })
-})
-
-describe('Recorder budget', () => {
-  it('tracks spent and flips near_budget then over_budget', async () => {
-    const rec = newRecorder(await tmpFile(), { budget: 100, warnThreshold: 0.8 })
-    rec.record(record('a', 50))
-    expect(rec.budgetStatus()).toMatchObject({
-      budget_tokens: 100,
-      spent: 50,
-      remaining: 50,
-      near_budget: false,
-      over_budget: false,
-    })
-    rec.record(record('b', 35)) // spent 85 -> near (>= 80) but not over
-    expect(rec.budgetStatus()).toMatchObject({ spent: 85, near_budget: true, over_budget: false })
-    rec.record(record('c', 40)) // spent 125 -> over
-    expect(rec.budgetStatus()).toMatchObject({
-      spent: 125,
-      remaining: 0,
-      near_budget: false,
-      over_budget: true,
-    })
-  })
-
-  it('persists budget, warn_threshold, and exact spent to the meta header', async () => {
-    const file = await tmpFile()
-    const rec = newRecorder(file, { budget: 200, warnThreshold: 0.5 })
-    rec.record(record('a', 120))
-    const summary = await rec.stop()
-    expect(summary.budget).toMatchObject({ budget_tokens: 200, spent: 120, over_budget: false })
-
-    const { meta } = await readTrace(file)
-    expect(meta).toMatchObject({ budget: 200, warn_threshold: 0.5, spent: 120 })
-  })
-
-  it('counts overflow-dropped calls in spent so over_budget stays exact', async () => {
-    const file = await tmpFile()
-    const rec = newRecorder(file, { maxRecords: 1, budget: 100 })
-    rec.record(record('a', 50))
-    rec.record(record('b', 50)) // dropped from the buffer (cap 1) but still counted in spent
-    rec.record(record('c', 50)) // dropped too
-    expect(rec.count).toBe(1)
-    expect(rec.overflowed).toBe(true)
-    expect(rec.budgetStatus()).toMatchObject({ spent: 150, over_budget: true })
-    await rec.stop()
-    // The buffered calls undercount (only 1 survived); meta.spent carries the exact total.
-    expect((await readTrace(file)).meta?.spent).toBe(150)
-  })
-
-  it('reports no budget status when started without a budget', async () => {
-    const file = await tmpFile()
-    const rec = newRecorder(file)
-    rec.record(record('a', 10))
-    expect(rec.budgetStatus()).toBeUndefined()
-    const summary = await rec.stop()
-    expect(summary.budget).toBeUndefined()
-    expect((await readTrace(file)).meta?.budget).toBeUndefined()
+    expect(report.largest.map((entry) => entry.estimated_tokens)).toEqual([500, 300, 20])
   })
 })

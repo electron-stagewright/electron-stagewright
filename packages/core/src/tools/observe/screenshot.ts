@@ -17,8 +17,13 @@ import { z } from 'zod'
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import type { ScreenshotOptions, TransportSession, WindowRef } from '../../transports/index.js'
 import { refField, selectorField, sessionIdField } from '../schema.js'
-import { buildProbeBody, loadInjectedWalker } from '../snapshot/inject.js'
-import { buildMissError, refFreshnessError, refName, resolveTarget } from '../target.js'
+import { loadInjectedWalker, runProbe } from '../snapshot/inject.js'
+import {
+  buildMissError,
+  refFreshnessError,
+  refNameForActiveSurface,
+  resolveTarget,
+} from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 
 /** Dependency seam — injected by tests so the probe bundle is not read from disk. */
@@ -40,16 +45,16 @@ type ElementClipResult =
   | { readonly kind: 'invalid-selector'; readonly error?: string }
   | { readonly kind: 'not-found' }
 
-/** Build the {@link WindowRef} from the targeting args; defaults to the active (first) window. */
-function toWindowRef(args: {
+/** Build an explicit {@link WindowRef} from targeting args, if the caller provided one. */
+function explicitWindowRef(args: {
   readonly windowId?: string | undefined
   readonly windowTitle?: string | undefined
   readonly windowIndex?: number | undefined
-}): WindowRef {
+}): WindowRef | undefined {
   if (args.windowId !== undefined) return { kind: 'id', id: args.windowId }
   if (args.windowTitle !== undefined) return { kind: 'title', pattern: args.windowTitle }
   if (args.windowIndex !== undefined) return { kind: 'index', index: args.windowIndex }
-  return { kind: 'index', index: 0 }
+  return undefined
 }
 
 /** Resolve an element's bounding box (CSS px) via the renderer probe, or null if absent. */
@@ -58,12 +63,12 @@ async function elementClip(
   selector: string,
   bundle: string,
 ): Promise<ElementClipResult> {
-  const raw = await session.evaluate<{
+  const raw = await runProbe<{
     found?: boolean
     invalid_selector?: boolean
     error?: string
     bbox?: { x: number; y: number; w: number; h: number }
-  }>('renderer', buildProbeBody(bundle), { mode: 'element', selector })
+  }>(session, bundle, { mode: 'element', selector })
   if (raw?.invalid_selector === true) {
     return {
       kind: 'invalid-selector',
@@ -135,7 +140,8 @@ const DESCRIPTION = [
   'else the OS temp dir — pass dir or set --screenshot-dir for a stable, retrievable artifact location.',
   'Returns: { ok, session_id, path, bytes, format, width?, height? } (path is the absolute file written).',
   'Errors: ABSOLUTE_PATH_REQUIRED (relative path), REF_NOT_FOUND (no such window),',
-  'SELECTOR_NO_MATCH (element not found), NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).',
+  'SELECTOR_NO_MATCH (element not found), SURFACE_UNSUPPORTED (iframe element crops are not window-relative),',
+  'NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).',
 ].join(' ')
 
 /** Build the `electron_screenshot` tool. */
@@ -243,7 +249,7 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
           args.windowIndex !== undefined)
       ) {
         // The element's bounding box is resolved by a renderer probe that always
-        // runs on the active (first) window, but a window-targeting arg would aim
+        // runs on the active session window, but a window-targeting arg would aim
         // the capture at a different window — clipping the active window's
         // coordinates onto another window's image. Reject the combination rather
         // than silently produce a wrong region. (Capturing an element in a
@@ -261,6 +267,17 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
       let clip: ClipRect | undefined
       if (elementTargeted) {
         const selector = resolveTarget({ ref: args.ref, selector: args.selector })
+        const surface = await managed.session.activeSurface()
+        if (surface.kind === 'frame') {
+          // A frame bbox is relative to the frame viewport, while the existing screenshot transport
+          // deliberately captures a WindowRef. Applying those coordinates to the host image would
+          // silently write the wrong crop, so keep screenshot addressing window-scoped for now.
+          return makeError('SURFACE_UNSUPPORTED', {
+            ...meta,
+            message:
+              'Element screenshots are not available for an iframe surface; select its root window or capture the window without ref/selector.',
+          })
+        }
         const stale = await refFreshnessError(ctx, managed.session, meta, args.ref)
         if (stale !== undefined) return stale
 
@@ -277,7 +294,7 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
             session: managed.session,
             meta,
             message: `No element matched ${selector}.`,
-            nameHint: refName(ctx.snapshots.get(managed.id), args.ref),
+            nameHint: await refNameForActiveSurface(ctx, managed.session, managed.id, args.ref),
           })
         }
         clip = resolved.clip
@@ -292,8 +309,21 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
         ...(clip !== undefined ? { clip } : {}),
       }
 
+      let target = explicitWindowRef(args)
+      if (target === undefined) {
+        const windows = await managed.session.windowsList()
+        const active = windows.find((window) => window.focused) ?? windows[0]
+        if (active === undefined) {
+          return makeError('REF_NOT_FOUND', {
+            ...meta,
+            message: 'No active Electron window is available for a screenshot.',
+          })
+        }
+        target = { kind: 'id', id: active.id }
+      }
+
       // A bad window ref throws REF_NOT_FOUND from the transport; the dispatcher maps it.
-      const buffer = await managed.session.screenshot(toWindowRef(args), opts)
+      const buffer = await managed.session.screenshot(target, opts)
 
       // Output path precedence: explicit file `path` > explicit `dir` (generated name) >
       // the server-configured default dir (--screenshot-dir) > the OS temp dir. Preferring

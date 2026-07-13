@@ -1,0 +1,62 @@
+{
+  "name": "@electron-stagewright/plugin-visual",
+  "version": "0.1.0",
+  "description": "Visual baseline plugin for Electron Stagewright: safe, surface-aware screenshot capture and pixel comparison with bounded diagnostic artifacts.",
+  "type": "module",
+  "license": "MIT",
+  "author": "johnny4young <johnny.iv.young@gmail.com>",
+  "homepage": "https://electron-stagewright.github.io/electron-stagewright/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electron-stagewright/electron-stagewright.git",
+    "directory": "packages/plugin-visual"
+  },
+  "bugs": {
+    "url": "https://github.com/electron-stagewright/electron-stagewright/issues"
+  },
+  "keywords": [
+    "electron",
+    "mcp",
+    "stagewright",
+    "visual-regression",
+    "screenshot",
+    "pixelmatch",
+    "testing",
+    "ai-agent"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@electron-stagewright/testkit": "workspace:*",
+    "@types/pngjs": "^6.0.5",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -141,12 +141,72 @@ this records what was added on top of it:
   supplied config (defaults applied) before `setup(config)` runs; a mismatch throws the new
   `PLUGIN_CONFIG_INVALID` core code. Config validation happens AFTER codes + loaded-metadata are
   recorded, so the fail-closed teardown unwinds both on a bad config.
-- **Introspection**: `electron_plugins` (query) reports loaded `{ name, version, tools }`, and is
-  registered ONLY when at least one plugin loaded — a plugin-free server keeps the lean core
-  surface. Backed by a best-effort, name-keyed loaded-plugin registry (not reference-counted,
-  unlike error codes — display metadata only; the dispatcher's `tools/list` stays authoritative).
+- **Introspection**: `electron_plugins` (query) initially reports loaded `{ name, version, tools }`
+  and is registered ONLY when at least one plugin loaded — a plugin-free server keeps the lean core
+  surface. Its later, richer availability and config contract is recorded below; the dispatcher's
+  `tools/list` stays authoritative.
 - **Example**: `examples/plugin-sample` is a plain-ESM plugin (one tool, one error code, a config
   schema, lifecycle hooks) plus a real-MCP scenario that loads it through the CLI `--plugin` flag.
+
+## Status update (per-server state and session cleanup, 2026-07-12)
+
+The plugin contract is now at API `1.1.0`. A plugin may expose `createInstance()`, which the loader
+calls once for each server before manifest validation and setup. First-party plugins use this factory
+path, so parsed config, capture registries, clocks, and active trace state live in per-server closures
+instead of process-shared module state. Existing API 1.0 plugin objects remain valid: the factory is
+optional and the loader uses the supplied object when it is absent.
+
+`setup(config, context?)` gains an optional, additive server context. Its `onSessionEnd` callback
+receives the released session id, reason (`stop`, `force_kill`, `detach`, or `server_close`), and the
+remaining live ids. The server invokes listeners after removing the session; listener failures are
+contained so a cleanup problem cannot turn a completed lifecycle operation into an MCP failure.
+First-party capture and clock plugins use the callback to discard per-session entries. Trace recording
+is server-scoped rather than session-scoped so it can include `electron_stop` and the later
+`trace_stop`; it remains active until explicitly stopped or server teardown. Teardown unregisters every
+listener, then clears the instance state as an idempotent final backstop.
+
+## Status update (plugin SDK subpath, 2026-07-12)
+
+`@electron-stagewright/core/plugin-sdk` is the public, intentionally narrow authoring surface for
+patterns proven across the first-party plugins: immutable parsed configuration and per-instance config
+state, per-session lifecycle cleanup, a parameterized transport-capability guard, and the optional
+`sessionId` schema fragment. It does not define generic plugin errors: plugins retain their own codes,
+messages, and remediation hints because a shared capability shape does not imply a shared operator action.
+
+The plugin contract remains exported from `@electron-stagewright/core`; the SDK is an additive subpath,
+not a separate package or a replacement for `StagewrightPlugin`. Both surfaces follow the core package's
+semantic-versioning policy: additions are minor-compatible, while a removal or incompatible signature
+change requires a core major release. Plugins must import this documented subpath, never `core/dist/*`.
+
+## Status update (onboarding introspection, 2026-07-13)
+
+The plugin contract is now at API `1.2.0`. A plugin may add optional `introspection` metadata with
+two declarative parts: `requirements` names eval targets and transport capabilities used by at least
+one of its tools, while `config.safeFields` is an explicit top-level allowlist for parsed effective
+configuration. This is explanatory metadata, not authorization: tool handlers retain their existing
+runtime eval and transport-capability checks.
+
+The loader validates that metadata before side effects, snapshots it on the loaded plugin, and exposes
+only allowlisted config fields after schema defaults and parsing. It never returns undeclared config
+values, so adding a credential field cannot silently disclose it through MCP. `PLUGIN_CONFIG_INVALID`
+now carries field-addressable Zod issues and a correction path for `--plugin-config` or
+`pluginConfigs`, while still unwinding registered codes on failure.
+
+`electron_plugins` is assembled after plugin tool registration. Each reported tool therefore has an
+actual `enabled` or `disabled` state; an eval-policy-hidden tool names the
+`eval_policy_disabled` availability kind and the narrow eval target to grant. The response also lists registered
+namespaced error codes, declared requirements, and safe effective config. It remains absent when no
+plugin is loaded, preserving the lean-core invariant.
+
+## Status update (read-only server orientation, 2026-07-13)
+
+The plugin contract is now at API `1.3.0`. `ToolContext.status` is a deliberately read-only
+orientation capability: it reports server uptime and the last stable error for a still-live session.
+It exists so the core status tool can use the same handler contract as every other tool without
+exposing the status tracker's mutation methods. It does not disclose logs, stacks, dialog content,
+window arrays, or plugin-owned state, and it is not a plugin-status contributor API. Plugins that
+need to surface their own operational state must continue to do so through their explicit tools or
+a future dedicated, capability-limited contributor contract.
 
 ## Related decisions
 

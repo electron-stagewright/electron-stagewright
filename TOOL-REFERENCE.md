@@ -2,17 +2,17 @@
 
 > Generated from the dispatcher manifest — do not edit by hand. Run `pnpm docs:tools` to regenerate.
 
-The server exposes 53 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
+The server exposes 57 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
 
 ## Contents
 
-- [Command tools](#command-tools) (23)
+- [Command tools](#command-tools) (24)
 - [Dialog tools](#dialog-tools) (1)
 - [Eval tools](#eval-tools) (2)
 - [Logs tools](#logs-tools) (1)
-- [Query tools](#query-tools) (24)
+- [Query tools](#query-tools) (26)
 - [Screenshot tools](#screenshot-tools) (1)
-- [Window_info tools](#window_info-tools) (1)
+- [Window_info tools](#window_info-tools) (2)
 
 ## Command tools
 
@@ -86,7 +86,7 @@ Click the element identified by ref (from a snapshot) or selector. Options: butt
 
 **Detach from Electron app**
 
-Disconnect from an app without stopping it. Not yet supported by any transport (detaching from a launched app is indistinguishable from stopping it today). Returns TRANSPORT_UNSUPPORTED; use electron_stop to end the session. Errors: TRANSPORT_UNSUPPORTED (not retryable), NOT_RUNNING (no such session), BAD_ARGUMENT (multiple sessions).
+Disconnect from an attached or injected app without stopping it. A launch-owned session cannot detach because its Playwright connection owns the process; use electron_stop for that case. Returns: { ok, session_id, detached: true }. Errors: TRANSPORT_UNSUPPORTED (launch-owned session; not retryable), NOT_RUNNING (no such session), BAD_ARGUMENT (multiple sessions).
 
 - Operation: `command`
 
@@ -208,13 +208,13 @@ Type text as real per-character keystrokes (fires keydown/keypress/input/keyup p
 
 **Launch Electron app**
 
-Launch an Electron app and start a driving session. Provide main (absolute path to the main-process entry) or executablePath. Returns: { ok, session_id, transport, windows, renderer_ready }. Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed in time (the session is still usable — retry the read, or wait_for_selector on an expected element). By default refuses a second launch while a session is live (pass allowMultiple: true to override). Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not retryable), BAD_ARGUMENT (neither main nor executablePath given; a runtime-altering env var like NODE_OPTIONS; instrumentNative without main; or, when the server set --app-root, a main/executablePath/cwd outside that root), SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable), LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).
+Launch an Electron app and start a driving session. Provide main (absolute path to the main-process entry) or executablePath. A server started with --demo supplies its packaged demo entry when both are omitted. Returns: { ok, session_id, transport, windows, renderer_ready }. Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed in time (the session is still usable — retry the read, or wait_for_selector on an expected element). By default refuses a second launch while a session is live (pass allowMultiple: true to override). Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not retryable), BAD_ARGUMENT (neither main nor executablePath given; a runtime-altering env var like NODE_OPTIONS; instrumentNative without main; or, when the server set --app-root, a main/executablePath/cwd outside that root), SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable), LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).
 
 - Operation: `command`
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `main` | string | no | Absolute path to the app main-process JS entry. Required unless executablePath is given. |
+| `main` | string | no | Absolute path to the app main-process JS entry. Required unless executablePath is given or the server configured a default demo entry. |
 | `executablePath` | string | no | Absolute path to an Electron/app binary. Defaults to the bundled Electron. |
 | `args` | string[] | no | Extra CLI args appended after the entry. |
 | `env` | object | no | Environment variables for the spawned process. |
@@ -319,11 +319,24 @@ Gracefully stop a session and release it. If the app ignores the close within ti
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 | `timeoutMs` | integer | no | Graceful-close budget in ms before escalating to SIGKILL. Defaults to 10000. |
 
+### `electron_switch_surface`
+
+**Switch active renderer surface**
+
+Select a live renderer surface by the opaque id returned by electron_surfaces_list. Following snapshot, find, renderer reads/eval, waits, expectations, and interactions target that surface; a ref from a different surface is rejected rather than reused. Returns: { ok, session_id, active, active_surface_id }. Errors: SURFACE_NOT_FOUND (the id was never observed in this session), SURFACE_CLOSED (it detached or closed), SURFACE_UNSUPPORTED (the live surface cannot be driven), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT.
+
+- Operation: `command`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `surfaceId` | string | yes | Opaque id returned by electron_surfaces_list. |
+| `sessionId` | string | no | Target session id. Omit when a single session is running. |
+
 ### `electron_switch_window`
 
 **Switch active Electron window**
 
-Select the active window by precedence targetId > windowTitle > index > default. Selecting the already-active window is a no-op success; switching to a different window is not yet supported by any transport. Returns: { ok, session_id, active } on success. Errors: REF_NOT_FOUND (no window matched; not retryable), TRANSPORT_UNSUPPORTED (cannot switch to a non-default window yet; not retryable), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
+Select the active window by precedence targetId > windowTitle > index > default. The selection changes Stagewright's renderer target; it does not promise native OS foreground focus. Returns: { ok, session_id, active, active_window_id } on success. Errors: REF_NOT_FOUND (no window matched; not retryable), TRANSPORT_UNSUPPORTED (transport has no renderer window target; not retryable), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
 
 - Operation: `command`
 
@@ -489,6 +502,16 @@ Scan the conventional CDP debug ports (9222-9225 by default) for already-running
 | `host` | string | no | Loopback host to scan. Defaults to 127.0.0.1. |
 | `timeoutMs` | integer | no | Per-port timeout in ms. Defaults to 300. Max 5000. |
 
+### `electron_doctor`
+
+**Diagnose Electron Stagewright environment**
+
+Run non-mutating preflight checks without starting an Electron session: Node version, Playwright, Electron, Linux display, configured app root and screenshot directory, and eval policy. Returns: { ok, doctor_ok, checks }. Inspect failed checks and their hints before electron_launch. Errors: none.
+
+- Operation: `query`
+
+_No parameters._
+
 ### `electron_elements_list`
 
 **List elements matching a selector**
@@ -633,7 +656,7 @@ Assert the element identified by ref or selector is visible, polling until it is
 
 **Find elements by role and name**
 
-Find elements in the renderer by accessibility role + name + state — no CSS selectors. Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps the matches returned (count still reports the true total). Returns: { ok, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Find elements in the renderer by accessibility role + name + state — no CSS selectors. Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps the matches returned (count still reports the true total). Returns: { ok, surface_id, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `query`
 
@@ -762,7 +785,7 @@ Report the running Electron app environment: runtime versions (electron/node/chr
 
 **Snapshot renderer accessibility tree**
 
-Capture the renderer accessibility tree: interactive elements (and landmarks) with role, name, state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap. format:"text" returns a compact one-line-per-entry rendering instead of JSON (5-10x fewer tokens): `[ref] role "name" value=… flags`, ~ marks recently-changed, [-] marks landmarks. Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive entries first. Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref. Closed shadow roots are opaque unless the app opts in: push each root onto window.__stagewright_closedShadowRoots at attachShadow time (or implement window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true. Returns: { ok, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?, diff_format?, renderer_reloaded, truncated }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Capture the selected renderer surface accessibility tree: interactive elements (and landmarks) with role, name, state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap. format:"text" returns a compact one-line-per-entry rendering instead of JSON (5-10x fewer tokens): `[ref] role "name" value=… flags`, ~ marks recently-changed, [-] marks landmarks. Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete prev/curr entries) and accept budgetTokens for server-side truncation that keeps interactive entries first. Each response carries renderer_reloaded so stale refs are detectable (P10). Refs are tagged on the DOM (data-sw-ref) so later interaction tools can act by ref. Closed shadow roots are opaque unless the app opts in: push each root onto window.__stagewright_closedShadowRoots at attachShadow time (or implement window.__stagewright_inspectShadow); their entries carry state.shadow_closed: true. Returns: { ok, surface_id, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?, diff_format?, renderer_reloaded, truncated }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `query`
 
@@ -775,6 +798,16 @@ Capture the renderer accessibility tree: interactive elements (and landmarks) wi
 | `format` | string | no | Payload encoding. 'json' (default) returns the structured snapshot/diff objects. 'text' returns a compact one-line-per-entry rendering (5-10x fewer tokens): ref, role, quoted name, non-empty value/placeholder, and only NON-default state flags; ~ prefixes recently-changed entries, [-] marks non-targetable landmarks. |
 | `diffFormat` | string | no | Encoding for since:'last' diffs. 'compact' (default) carries only the changed fields per entry; 'full' carries complete prev/curr entries. Ignored when format:'text'. |
 | `budgetTokens` | integer | no | Server-side token cap for a since:'last' diff payload. Lowest-value entries (non-interactive removed/changed first) are dropped until the estimate fits; _meta.truncated_entries reports how many were omitted. |
+
+### `electron_status`
+
+**Electron Stagewright status**
+
+Return compact orientation for this server: version, uptime, active-session count, and each live session's transport, renderer readiness, selected surface, last stable error code, and non-default dialog policy. It never returns window arrays, logs, stack traces, dialog entries, prompt text, or plugin payloads. Use electron_windows_list, electron_surfaces_list, or the relevant plugin tool for detailed state. Returns: { ok, server: { version, uptime_ms }, active_sessions, sessions }. Errors: none.
+
+- Operation: `query`
+
+_No parameters._
 
 ### `electron_wait`
 
@@ -843,7 +876,7 @@ Wait until the element identified by ref or selector matches the given state fla
 
 **Capture a screenshot**
 
-Capture a screenshot to an image file and return its path (the image is written on the server host; the bytes are NOT returned inline). With ref/selector, captures just that element; otherwise the targeted window (windowId > windowTitle > windowIndex, default the active window) with optional fullPage or clip. Options: format (png|jpeg), quality (jpeg), path (absolute file) or dir (absolute directory, generated filename). With neither, writes to the server --screenshot-dir if configured, else the OS temp dir — pass dir or set --screenshot-dir for a stable, retrievable artifact location. Returns: { ok, session_id, path, bytes, format, width?, height? } (path is the absolute file written). Errors: ABSOLUTE_PATH_REQUIRED (relative path), REF_NOT_FOUND (no such window), SELECTOR_NO_MATCH (element not found), NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).
+Capture a screenshot to an image file and return its path (the image is written on the server host; the bytes are NOT returned inline). With ref/selector, captures just that element; otherwise the targeted window (windowId > windowTitle > windowIndex, default the active window) with optional fullPage or clip. Options: format (png|jpeg), quality (jpeg), path (absolute file) or dir (absolute directory, generated filename). With neither, writes to the server --screenshot-dir if configured, else the OS temp dir — pass dir or set --screenshot-dir for a stable, retrievable artifact location. Returns: { ok, session_id, path, bytes, format, width?, height? } (path is the absolute file written). Errors: ABSOLUTE_PATH_REQUIRED (relative path), REF_NOT_FOUND (no such window), SELECTOR_NO_MATCH (element not found), SURFACE_UNSUPPORTED (iframe element crops are not window-relative), NOT_RUNNING, BAD_ARGUMENT (invalid selector/options).
 
 - Operation: `screenshot`
 
@@ -864,11 +897,23 @@ Capture a screenshot to an image file and return its path (the image is written 
 
 ## Window_info tools
 
+### `electron_surfaces_list`
+
+**List Electron renderer surfaces**
+
+List the session renderer surfaces in parent-first order: BrowserWindow roots, WebContentsViews, webview guests, and iframe children. Each opaque id is stable only while its surface stays live; select it with electron_switch_surface before snapshot/find/renderer interactions. Returns: { ok, session_id, surfaces, active_surface_id, count }. Existing window tools remain compatible for window-only flows. Errors: TRANSPORT_UNSUPPORTED (surface targeting is unavailable on this transport; not retryable), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).
+
+- Operation: `window_info`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `sessionId` | string | no | Target session id. Omit when a single session is running. |
+
 ### `electron_windows_list`
 
 **List Electron windows**
 
-List the app windows with their id, index, title, url, and visibility. Pass sessionId to target a specific session. Returns: { ok, session_id, windows, count }. Errors: NOT_RUNNING (no such session; not retryable), BAD_ARGUMENT (multiple sessions — pass sessionId).
+List the app windows with their id, index, title, url, and visibility. Pass sessionId to target a specific session. Returns: { ok, session_id, windows, active_window_id, count }. Errors: NOT_RUNNING (no such session; not retryable), BAD_ARGUMENT (multiple sessions — pass sessionId).
 
 - Operation: `window_info`
 

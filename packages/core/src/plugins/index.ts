@@ -6,7 +6,14 @@
 
 export {
   type StagewrightPlugin,
+  type PluginServerContext,
+  type PluginSessionEndEvent,
+  type PluginSessionEndReason,
+  type PluginRequirements,
+  type PluginConfigDisclosure,
+  type PluginIntrospection,
   type LoadedPlugin,
+  type LoadedPluginToolInfo,
   type LoadedPluginInfo,
   type LoadPluginsOptions,
   type LoadPluginsResult,

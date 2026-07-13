@@ -34,13 +34,23 @@ Microsoft's official Playwright MCP team [explicitly declined](https://github.co
 
 ## Quick start
 
-The default launch transport uses Playwright as an optional peer. For the published package, start
-the server with both packages available:
+The default launch transport uses Playwright and an Electron runtime. For a private setup in the
+current project, keep the server local to that project and pin the release-tested package set:
 
 ```bash
-claude mcp add electron-stagewright --scope user -- \
-  npx -y --package @electron-stagewright/core --package playwright electron-stagewright
+claude mcp add electron-stagewright -- \
+  npx -y --package @electron-stagewright/core@0.2.0 --package playwright@1.61.1 \
+  --package electron@42.3.0 electron-stagewright
 ```
+
+The default Claude Code scope is local: it is available only in the current project and stays out
+of unrelated workspaces. To share a reviewed configuration with a team, use `--scope project`,
+which writes the same `mcpServers` shape to `.mcp.json`. See the
+[Claude Code MCP scopes](https://code.claude.com/docs/en/mcp) for the host-specific behavior.
+
+To verify a host before pointing it at your app, clone this repository and use the
+[checkout demo guide](docs/guides/demo.md). Its package is release-tested but is not yet publicly
+available on npm, so a published `npx` setup must not reference it.
 
 For local development, build the checkout and point your MCP host at the built CLI:
 
@@ -48,11 +58,11 @@ For local development, build the checkout and point your MCP host at the built C
 pnpm install
 pnpm build
 
-claude mcp add electron-stagewright --scope user -- \
+claude mcp add electron-stagewright -- \
   node /abs/path/to/electron-stagewright/packages/core/dist/cli.js
 ```
 
-Project `.mcp.json` shape:
+Shared project `.mcp.json` shape:
 
 ```json
 {
@@ -62,9 +72,11 @@ Project `.mcp.json` shape:
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core",
+        "@electron-stagewright/core@0.2.0",
         "--package",
-        "playwright",
+        "playwright@1.61.1",
+        "--package",
+        "electron@42.3.0",
         "electron-stagewright"
       ]
     }
@@ -111,6 +123,8 @@ The full tool list — every tool, its parameters, and operation type — is in
 
 - [Getting started](docs/guides/getting-started.md) — from a clean checkout to a complete driven
   session against the bundled example app.
+- [Try the packaged demo](docs/guides/demo.md) — verify a published MCP host setup against a local,
+  multi-window Electron task board without supplying your own app path.
 - [Connect your MCP client](docs/guides/connect-your-mcp-client.md) — wire the published package
   into Claude Desktop, Cursor, or any MCP host, and confirm it connected.
 - [Launch, attach, or inject](docs/guides/launch-or-attach.md) — getting a session against YOUR
@@ -121,6 +135,8 @@ The full tool list — every tool, its parameters, and operation type — is in
   typing path, `replace`, the auto-pairing caveat, and how to verify the text landed.
 - [Capture diagnostics](docs/guides/capture-diagnostics.md) — screenshots, console, dialogs, and
   session traces.
+- [Load, configure, and diagnose plugins](docs/guides/plugins.md) — explicitly load plugins, grant
+  their narrowest gates, and inspect enabled tools and safe config with `electron_plugins`.
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md) — tool-by-tool
   mapping and the conceptual shifts.
 - [Concepts](docs/guides/concepts.md) — the agent-native model and why the server is shaped the way
@@ -142,14 +158,24 @@ option; diagnostics go to stderr (stdout is reserved for the JSON-RPC protocol c
 | `--app-root <dir>`              | Confine host paths to within `<dir>`: `electron_launch`'s `main`, `executablePath`, and `cwd`, plus the files read by `electron_set_files` / `electron_drop_file`. Default unset (no confinement). Set it to your app/project root so a tool call cannot launch a binary from elsewhere on the host, nor read a file outside the project into the app under test.                                                                                                             |
 | `--screenshot-dir <dir>`        | Default directory `electron_screenshot` writes into when the call gives no explicit path. Default: the OS temp dir.                                                                                                                                                                                                                                                                                                                                                           |
 | `--operation-timeout-ms <n>`    | Per-dispatch backstop timeout (ms); a handler that never settles resolves as a retryable `OPERATION_TIMEOUT` instead of hanging the agent on a frozen app. Default 120000; `0` disables it.                                                                                                                                                                                                                                                                                   |
-| `--plugin <name\|path>`         | Load a plugin by package name or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin @electron-stagewright/plugin-trace`.                                                                                                                                                                                                                                                                                                                            |
-| `--plugin-config <name>=<json>` | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `--tool-profile <profile>`      | Select the core tool surface: `essential` (the focused launch/snapshot/interact/assert path), `testing` (broader test-driving tools), `debug` (attach/inspect/diagnostics), or `full`. Default: `full`, preserving the complete core catalog. Eval authorization and explicitly loaded plugins compose independently.                                                                                                                                                         |
+| `--demo`                        | Resolve a locally available `@electron-stagewright/demo` package and use its Electron entry when `electron_launch` omits `main` and `executablePath`. It is opt-in and never becomes a normal core dependency. The demo is currently available from a built checkout, not public npm. Cannot be combined with `--app-root`.                                                                                                                                                   |
+| `doctor [--json]`               | Run preflight checks without starting the MCP server: Node, Playwright, Electron, Linux display, configured paths, and eval policy. JSON mode reserves stdout for a machine-readable report and exits non-zero when a required check fails. This command is available from a built checkout; the pinned public core 0.2.0 package does not include it yet.                                                                                                                    |
+| `--plugin <name\|path>`         | Load a plugin by package name or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin @electron-stagewright/plugin-trace`. After loading one, call `electron_plugins` to inspect enabled or disabled tools and their gate requirements.                                                                                                                                                                                                               |
+| `--plugin-config <name>=<json>` | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name; invalid input reports its Zod field path and correction input. `electron_plugins` returns only fields the plugin explicitly marks safe.                                                                                                                                                                                                                                          |
 
 Security defaults worth knowing when wiring this into another project: arbitrary JS (the
 `--allow-eval` policy) and host-path launches (`--app-root`) are opt-in; `electron_launch` refuses
 runtime-altering env vars (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `LD_*`, `DYLD_*`); and
 user-supplied regex / text / key arguments are length- and complexity-bounded so a hostile tool call
 cannot wedge the server.
+
+Use `--tool-profile essential` when an agent needs the common launch, snapshot, interaction, wait,
+and assertion workflow with a smaller initial manifest. Choose `testing` for the broader interaction
+and read surface, or `debug` for attach, discovery, window, console, screenshot, and dialog work.
+`full` stays the default until the profile benchmark demonstrates equivalent task success with a
+material context saving. See [ADR-021](docs/adr/021-tool-profiles-and-manifest-budgets.md) for the
+measured budget policy.
 
 ## What each response looks like (the agent-UX detail)
 
@@ -198,7 +224,7 @@ Three transport implementations behind a single `ITransport` interface, so the p
 - **`CDPTransport`** — Chrome DevTools Protocol direct, no Playwright dependency; attaches to apps exposing a loopback debug endpoint and supports eval, read, observe, and interaction surfaces.
 - **`InjectorTransport`** — Node Inspector handshake into a running process; supports main-process eval, window discovery, and console capture when an app was not started with a CDP endpoint.
 
-Plugin model: a small core, with domain capabilities shipped as separate `@electron-stagewright/plugin-*` packages loaded explicitly via `--plugin` (the core never auto-scans). Shipped today: **`plugin-trace`** (session trace + deterministic replay + per-tool token budget), **`plugin-ipc`** (capture / invoke / stub Electron IPC, gated behind main eval: `--allow-eval=main`, or bare `--allow-eval`), **`plugin-production`** (validate a packaged `.app`: bundle structure, Info.plist identity fields, URL schemes, updater feed, crash reporter machinery, code signing, notarization, Gatekeeper), **`plugin-network`** (renderer request/response capture, bodies, and stubbing via the transport seam), **`plugin-clock`** (deterministic renderer virtual time via the Playwright clock seam), **`plugin-storage`** (read, seed, and assert cookies plus storage snapshots through the no-eval transport seam, and per-key `localStorage` / `sessionStorage` plus IndexedDB records through a renderer-eval gate; cookie values are redacted by default, IndexedDB values can be redacted with config), and **`plugin-native-ui`** (read, assert, and invoke the application menu — the macOS menu bar — capture the notifications the app shows including startup ones, and read system-tray state plus fire tray events via launch-time instrumentation, all via the transport native-UI seam, no eval).
+Plugin model: a small core, with domain capabilities shipped as separate `@electron-stagewright/plugin-*` packages loaded explicitly via `--plugin` (the core never auto-scans). Shipped today: **`plugin-a11y`** (surface-scoped axe-core audits with bounded violations and incomplete checks; a fixed engine, not agent JavaScript, so no `--allow-eval` grant), **`plugin-visual`** (BrowserWindow visual baselines with explicit update confirmation, environment metadata, confined artifact roots, and actual/diff evidence), **`plugin-trace`** (session trace + deterministic replay + per-tool token budget), **`plugin-ipc`** (capture / invoke / stub Electron IPC, gated behind main eval: `--allow-eval=main`, or bare `--allow-eval`), **`plugin-production`** (validate a packaged `.app`: bundle structure, Info.plist identity fields, URL schemes, updater feed, crash reporter machinery, code signing, notarization, Gatekeeper), **`plugin-network`** (renderer request/response capture, bodies, and stubbing via the transport seam), **`plugin-clock`** (deterministic renderer virtual time via the Playwright clock seam), **`plugin-storage`** (read, seed, and assert cookies plus storage snapshots through the no-eval transport seam, and per-key `localStorage` / `sessionStorage` plus IndexedDB records through a renderer-eval gate; cookie values are redacted by default, IndexedDB values can be redacted with config), and **`plugin-native-ui`** (read, assert, and invoke the application menu — the macOS menu bar — capture the notifications the app shows including startup ones, and read system-tray state plus fire tray events via launch-time instrumentation, all via the transport native-UI seam, no eval).
 
 ## Dogfooding targets
 

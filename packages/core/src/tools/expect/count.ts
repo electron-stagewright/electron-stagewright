@@ -24,7 +24,7 @@ import {
 } from '../../snapshot/index.js'
 import { assertCapability } from '../../transports/index.js'
 import { sessionIdField } from '../schema.js'
-import { buildWalkBody, loadInjectedWalker } from '../snapshot/inject.js'
+import { loadInjectedWalker, runWalk } from '../snapshot/inject.js'
 import { reconcileRetagAndStore } from '../snapshot/refs.js'
 import { handleTargetFailure } from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -195,12 +195,13 @@ async function pollRoleCount(
   const managed = ctx.sessions.resolve(sessionId)
   const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
   assertCapability(managed.transport, 'supportsRendererEval')
-  const body = buildWalkBody(loadBundle())
+  const surface = await managed.session.activeSurface()
+  const bundle = loadBundle()
   const startedAt = Date.now()
   for (;;) {
     let actual: number
     try {
-      const walked = await managed.session.evaluate<Snapshot>('renderer', body, {})
+      const walked = await runWalk<Snapshot>(managed.session, bundle, {})
       // The walker CLEARS and renumbers every data-sw-ref in document order. Without
       // reconciling and re-tagging (as snapshot/find do), the DOM tags would silently
       // diverge from the stored baseline, so a later click({ ref }) resolved against the
@@ -210,7 +211,8 @@ async function pollRoleCount(
         session: managed.session,
         store: ctx.snapshots,
         sessionId: managed.id,
-        prev: ctx.snapshots.get(managed.id),
+        surfaceId: surface.id,
+        prev: ctx.snapshots.get(managed.id, surface.id),
         walked,
       })
       actual = findEntries(curr, query).length

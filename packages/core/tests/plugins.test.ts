@@ -15,8 +15,10 @@ import { type ErrorResponse, makePluginError, makeSuccess } from '../src/errors/
 import { clearPluginErrorCodes, lookupErrorCodeDefinition } from '../src/errors/registry.js'
 import { loadPlugins } from '../src/plugins/loader.js'
 import type { StagewrightPlugin } from '../src/plugins/types.js'
+import { SessionManager } from '../src/server/session-manager.js'
 import { createServer } from '../src/server/server.js'
 import { defineTool } from '../src/tools/types.js'
+import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
 const CORE_VERSION = '0.0.0'
 const GREETING_REFUSED_DEF = {
@@ -61,6 +63,45 @@ function samplePlugin(
       }),
     ],
     ...hooks,
+  }
+}
+
+/** A plugin descriptor whose loader-created instances expose their own closure state. */
+function factoryPlugin(): StagewrightPlugin {
+  return {
+    name: 'factory',
+    version: '1.1.0',
+    coreVersionRange: '*',
+    createInstance: () => {
+      let label = 'unset'
+      let calls = 0
+      const ended: Array<{ session_id: string; reason: string }> = []
+      return {
+        name: 'factory',
+        version: '1.1.0',
+        coreVersionRange: '*',
+        configSchema: z.object({ label: z.string() }),
+        tools: [
+          defineTool({
+            name: 'state',
+            description: 'Return instance-local plugin state.',
+            inputSchema: z.object({}),
+            operationType: 'query',
+            handler: async (_args, ctx) =>
+              makeSuccess(
+                { label, calls: ++calls, ended },
+                { startedAt: ctx.startedAt, now: ctx.now },
+              ),
+          }),
+        ],
+        setup: (raw, context) => {
+          label = (raw as { label: string }).label
+          context?.onSessionEnd(({ sessionId, reason }) => {
+            ended.push({ session_id: sessionId, reason })
+          })
+        },
+      }
+    },
   }
 }
 
@@ -251,6 +292,72 @@ describe('loadPlugins', () => {
     expect(setup).not.toHaveBeenCalled()
     expect(teardown).not.toHaveBeenCalled()
   })
+
+  it('materializes factory plugins per server while preserving API 1.0 object plugins', async () => {
+    const descriptor = factoryPlugin()
+    const first = await createServer({
+      plugins: [descriptor],
+      pluginConfigs: { factory: { label: 'first' } },
+      tools: [],
+    })
+    const second = await createServer({
+      plugins: [descriptor],
+      pluginConfigs: { factory: { label: 'second' } },
+      tools: [],
+    })
+    try {
+      expect(await first.dispatcher.dispatch('factory_state', {})).toMatchObject({
+        ok: true,
+        label: 'first',
+        calls: 1,
+        ended: [],
+      })
+      expect(await second.dispatcher.dispatch('factory_state', {})).toMatchObject({
+        ok: true,
+        label: 'second',
+        calls: 1,
+        ended: [],
+      })
+
+      const session = new FakeSession({ id: 'factory-session' })
+      const transport = new FakeTransport({ session })
+      first.sessions.register(transport, session)
+      await first.sessions.remove(session.id)
+
+      expect(await first.dispatcher.dispatch('factory_state', {})).toMatchObject({
+        ok: true,
+        label: 'first',
+        calls: 2,
+        ended: [{ session_id: 'factory-session', reason: 'stop' }],
+      })
+      expect(await second.dispatcher.dispatch('factory_state', {})).toMatchObject({
+        ok: true,
+        label: 'second',
+        calls: 2,
+        ended: [],
+      })
+    } finally {
+      await first.close().catch(() => undefined)
+      await second.close().catch(() => undefined)
+    }
+  })
+
+  it('rejects a factory that changes its declared namespace', async () => {
+    const malformed: StagewrightPlugin = {
+      name: 'declared',
+      version: '1.1.0',
+      coreVersionRange: '*',
+      createInstance: () => ({
+        name: 'different',
+        version: '1.1.0',
+        coreVersionRange: '*',
+      }),
+    }
+
+    await expect(loadPlugins([malformed], { coreVersion: CORE_VERSION })).rejects.toThrow(
+      'createInstance must preserve the plugin namespace',
+    )
+  })
 })
 
 describe('createServer({ plugins })', () => {
@@ -284,5 +391,50 @@ describe('createServer({ plugins })', () => {
     await server.close().catch(() => undefined)
     expect(teardown).toHaveBeenCalledTimes(1)
     expect(lookupErrorCodeDefinition('sample.GREETING_REFUSED')).toBeUndefined()
+  })
+})
+
+describe('SessionManager plugin lifecycle', () => {
+  it('notifies release hooks for stop, force-kill, detach, and server close', async () => {
+    const sessions = new SessionManager()
+    const events: Array<{ sessionId: string; reason: string; remaining: readonly string[] }> = []
+    sessions.onSessionEnd(({ sessionId, reason, remainingSessionIds }) => {
+      events.push({ sessionId, reason, remaining: remainingSessionIds })
+    })
+
+    const add = (id: string) => {
+      const session = new FakeSession({ id })
+      sessions.register(new FakeTransport({ session }), session)
+    }
+
+    add('stop')
+    await sessions.remove('stop')
+    add('kill')
+    await sessions.remove('kill', { force: true })
+    add('detach')
+    await sessions.detach('detach')
+    add('close-a')
+    add('close-b')
+    await sessions.disposeAll()
+
+    expect(events).toEqual([
+      { sessionId: 'stop', reason: 'stop', remaining: [] },
+      { sessionId: 'kill', reason: 'force_kill', remaining: [] },
+      { sessionId: 'detach', reason: 'detach', remaining: [] },
+      { sessionId: 'close-a', reason: 'server_close', remaining: [] },
+      { sessionId: 'close-b', reason: 'server_close', remaining: [] },
+    ])
+  })
+
+  it('isolates a cleanup-listener failure from session release', async () => {
+    const sessions = new SessionManager()
+    sessions.onSessionEnd(() => {
+      throw new Error('cleanup failed')
+    })
+    const session = new FakeSession({ id: 'still-released' })
+    sessions.register(new FakeTransport({ session }), session)
+
+    await expect(sessions.remove(session.id)).resolves.toEqual({ escalated: false })
+    expect(sessions.has(session.id)).toBe(false)
   })
 })

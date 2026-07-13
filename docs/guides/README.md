@@ -6,7 +6,9 @@ situation matches:
 | You are…                                                         | Read                                                              |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------- |
 | New here and want a working session in minutes                   | [Getting started](./getting-started.md)                           |
+| Verifying a published MCP host setup with a real Electron app    | [Try the packaged demo](./demo.md)                                |
 | Wiring the server into Claude Desktop, Cursor, or another client | [Connect your MCP client](./connect-your-mcp-client.md)           |
+| Loading, configuring, or diagnosing a plugin                     | [Load, configure, and diagnose plugins](./plugins.md)             |
 | Deciding how to get a session against YOUR app                   | [Launch, attach, or inject](./launch-or-attach.md)                |
 | Writing assertions an agent can act on                           | [Assert UI state](./assert-ui-state.md)                           |
 | Driving a code editor (Monaco, CodeMirror, EditContext)          | [Type into code editors](./type-into-code-editors.md)             |
@@ -23,9 +25,11 @@ is _for_:
 - **Tutorial** — learning-oriented. [Getting started](./getting-started.md) walks a first session
   end to end.
 - **How-to** — task-oriented. [Connect your MCP client](./connect-your-mcp-client.md),
+  [Try the packaged demo](./demo.md),
   [Launch, attach, or inject](./launch-or-attach.md), [Assert UI state](./assert-ui-state.md),
   [Type into code editors](./type-into-code-editors.md),
-  [Capture diagnostics](./capture-diagnostics.md), and
+  [Capture diagnostics](./capture-diagnostics.md),
+  [Load, configure, and diagnose plugins](./plugins.md), and
   [Migrate from electron-driver](./migrate-from-electron-driver.md) each solve one job.
 - **Explanation** — understanding-oriented. [Concepts](./concepts.md) explains the agent-native
   model and why the server is shaped the way it is; the [Security model](./security-model.md)

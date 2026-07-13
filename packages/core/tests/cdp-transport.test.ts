@@ -14,10 +14,12 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { CDPTransport, type FetchJson } from '../src/transports/cdp.js'
 import type { ConsoleEntry } from '../src/transports/index.js'
+import { runWalk } from '../src/tools/snapshot/inject.js'
 import { FakeCdpServer, type Json } from './helpers/fake-cdp.js'
 
 const BROWSER_WS = 'ws://127.0.0.1:9222/devtools/browser/b1'
 const PAGE_T1_WS = 'ws://127.0.0.1:9222/devtools/page/T1'
+const PAGE_T2_WS = 'ws://127.0.0.1:9222/devtools/page/T2'
 
 interface SetupOptions {
   readonly targets?: readonly Json[]
@@ -124,6 +126,92 @@ describe('CDPTransport.attach', () => {
 })
 
 describe('CDP evaluation (pending map + awaitPromise + domain cache)', () => {
+  it('sends the full walker source only for the first marker miss', async () => {
+    const { server, transport } = setup()
+    let evaluations = 0
+    server.respond('Runtime.evaluate', () => {
+      evaluations += 1
+      return {
+        result: { value: evaluations === 1 ? null : { schemaVersion: 1, entries: [], meta: {} } },
+      }
+    })
+    const session = await transport.attach({ port: 9222 })
+    const bundle = `globalThis.__stagewrightWalk = () => ({ schemaVersion: 1, entries: [], meta: {} });\n/*${'x'.repeat(30_000)}*/`
+
+    for (let i = 0; i < 30; i++) {
+      await runWalk(session, bundle, {})
+    }
+
+    const expressions = server
+      .sentTo('page/T1', 'Runtime.evaluate')
+      .map((frame) => String(frame.params?.['expression']))
+    expect(expressions).toHaveLength(31)
+    expect(expressions[0]).not.toContain(bundle)
+    expect(expressions[1]).toContain(bundle)
+    expect(expressions.slice(2).every((expression) => !expression.includes(bundle))).toBe(true)
+
+    const sentBytes = expressions.reduce(
+      (total, expression) => total + Buffer.byteLength(expression),
+      0,
+    )
+    const fullEveryTimeBytes = Buffer.byteLength(expressions[1] ?? '') * 30
+    expect(sentBytes).toBeLessThanOrEqual(fullEveryTimeBytes * 0.2)
+  })
+
+  it('switches the active renderer target for following implicit calls', async () => {
+    const { server, transport } = setup({
+      targets: [
+        {
+          id: 'T1',
+          type: 'page',
+          title: 'Main',
+          url: 'app://main.html',
+          webSocketDebuggerUrl: PAGE_T1_WS,
+        },
+        {
+          id: 'T2',
+          type: 'page',
+          title: 'Preferences',
+          url: 'app://preferences.html',
+          webSocketDebuggerUrl: PAGE_T2_WS,
+        },
+      ],
+    })
+    server.respond('Runtime.evaluate', () => ({ result: { value: 'ok' } }))
+    const session = await transport.attach({ port: 9222 })
+
+    const switching = session.activateWindow({ kind: 'title', pattern: 'Preferences' })
+    // The renderer action deliberately starts before activation resolves. It
+    // must wait for the queued selection rather than race the old target.
+    const evaluating = session.evaluate('renderer', 'return "ok";')
+    await expect(switching).resolves.toMatchObject({
+      id: 'T2',
+      index: 1,
+      focused: true,
+    })
+    await expect(evaluating).resolves.toBe('ok')
+    expect(server.sentTo('page/T2', 'Runtime.evaluate')).toHaveLength(1)
+    expect(server.sentTo('page/T1', 'Runtime.evaluate')).toHaveLength(0)
+    await expect(session.windowsList()).resolves.toEqual([
+      {
+        id: 'T1',
+        index: 0,
+        title: 'Main',
+        url: 'app://main.html',
+        visible: true,
+        focused: false,
+      },
+      {
+        id: 'T2',
+        index: 1,
+        title: 'Preferences',
+        url: 'app://preferences.html',
+        visible: true,
+        focused: true,
+      },
+    ])
+  })
+
   it('evaluates in the renderer via Runtime.evaluate with awaitPromise + returnByValue', async () => {
     const { server, transport } = setup()
     server.respond('Runtime.evaluate', (params) => {
@@ -285,6 +373,16 @@ describe('CDP screenshot', () => {
 })
 
 describe('CDP stop / dispose lifecycle', () => {
+  it('detaches by closing sockets without sending Browser.close or killing the app', async () => {
+    const { server, transport, killed } = setup()
+    const session = await transport.attach({ port: 9222, pid: 4242 })
+
+    await expect(session.detach()).resolves.toBeUndefined()
+    expect(server.sentTo('browser/b1', 'Browser.close')).toHaveLength(0)
+    expect(killed).toEqual([])
+    await expect(session.consoleLogs()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+
   it('stops gracefully via Browser.close and releases the session', async () => {
     const { server, transport } = setup()
     server.respond('Browser.close', () => ({}))

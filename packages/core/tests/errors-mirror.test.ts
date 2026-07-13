@@ -175,6 +175,8 @@ describe('errors-mirror — every referenced code is registered (AST scan)', () 
     expect(plugin.declaredPluginKeys).toEqual(new Set(['EVAL_REQUIRED', 'INVOKE_FAILED']))
   })
 
+  // V8 instrumentation makes this whole-tree TypeScript AST traversal substantially slower on
+  // clean CI runners. Keep the production test strict while allowing the coverage job to finish.
   it('every core code literal in packages/core/src matches a registry key', async () => {
     const files = await collectSourceFiles(CORE_SRC)
     expect(files.length, 'source scan must find at least one .ts file').toBeGreaterThan(0)
@@ -193,7 +195,7 @@ describe('errors-mirror — every referenced code is registered (AST scan)', () 
       unregistered,
       `unregistered codes detected — add them to ERROR_CODES or fix the typo:\n${JSON.stringify(unregistered, null, 2)}`,
     ).toEqual([])
-  })
+  }, 20_000)
 
   it('every plugin package code reference is declared in that package errorCodes manifest', async () => {
     const roots = await collectPluginSrcRoots()

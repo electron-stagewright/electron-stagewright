@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 
+import storagePlugin from '../../plugin-storage/src/index.js'
 import type { Logger } from '../src/server/logger.js'
 
 import { type SuccessResponse } from '../src/errors/envelope.js'
@@ -159,13 +160,44 @@ describe('plugin config', () => {
     await result.teardownAll()
   })
 
+  it('passes setup an immutable config isolated from the caller input', async () => {
+    let received: { readonly nested: { readonly enabled: boolean } } | undefined
+    const plugin: StagewrightPlugin = {
+      name: 'immutable',
+      version: '1.0.0',
+      coreVersionRange: '*',
+      configSchema: z.object({ nested: z.object({ enabled: z.boolean() }) }),
+      setup: (config) => {
+        received = config as { readonly nested: { readonly enabled: boolean } }
+      },
+    }
+    const raw = { nested: { enabled: true } }
+    const result = await loadPlugins([plugin], {
+      coreVersion: '0.0.0',
+      configs: { immutable: raw },
+    })
+    raw.nested.enabled = false
+
+    expect(received).toEqual({ nested: { enabled: true } })
+    expect(Object.isFrozen(received)).toBe(true)
+    expect(Object.isFrozen(received?.nested)).toBe(true)
+    await result.teardownAll()
+  })
+
   it('rejects config that fails the schema (PLUGIN_CONFIG_INVALID)', async () => {
     await expect(
       loadPlugins([configurablePlugin({})], {
         coreVersion: '0.0.0',
         configs: { cfg: { greeting: 42 } },
       }),
-    ).rejects.toMatchObject({ code: 'PLUGIN_CONFIG_INVALID' })
+    ).rejects.toMatchObject({
+      code: 'PLUGIN_CONFIG_INVALID',
+      details: {
+        plugin: 'cfg',
+        issues: [{ path: '$.greeting' }],
+        remediation: expect.stringContaining('--plugin-config cfg=<json>'),
+      },
+    })
   })
 
   it('tears down codes when config validation fails', async () => {
@@ -188,6 +220,30 @@ describe('plugin config', () => {
 
     expect(lookupErrorCodeDefinition('leaky.BOOM')).toBeUndefined()
   })
+
+  it('rejects an unsafe config disclosure declaration before plugin setup', async () => {
+    const invalidDisclosure: StagewrightPlugin = {
+      name: 'unsafe',
+      version: '1.0.0',
+      coreVersionRange: '*',
+      introspection: { config: { safeFields: ['secret'] } },
+    }
+
+    await expect(loadPlugins([invalidDisclosure], { coreVersion: '0.0.0' })).rejects.toMatchObject({
+      code: 'PLUGIN_MANIFEST_INVALID',
+    })
+  })
+
+  it('fails closed when runtime plugin metadata has the wrong shape', async () => {
+    const malformed = {
+      ...toolPlugin('malformed'),
+      introspection: { requirements: { evalTargets: 'main' } },
+    } as unknown as StagewrightPlugin
+
+    await expect(loadPlugins([malformed], { coreVersion: '0.0.0' })).rejects.toMatchObject({
+      code: 'PLUGIN_MANIFEST_INVALID',
+    })
+  })
 })
 
 /** A plugin with one tool, for the introspection test. */
@@ -208,16 +264,61 @@ function toolPlugin(name = 'demo', version = '2.1.0'): StagewrightPlugin {
   }
 }
 
+/** A plugin that explicitly discloses one safe config field, for privacy regression coverage. */
+function introspectedPlugin(): StagewrightPlugin {
+  return {
+    name: 'safe',
+    version: '1.0.0',
+    coreVersionRange: '*',
+    configSchema: z.object({ publicLabel: z.string().default('default'), secret: z.string() }),
+    introspection: {
+      requirements: {
+        evalTargets: ['main'],
+        transportCapabilities: ['supportsMainEval', 'supportsSurfaceTargeting'],
+      },
+      config: { safeFields: ['publicLabel'] },
+    },
+    errorCodes: {
+      BLOCKED: { http: 403, retryable: false, hint: 'The operation is blocked.' },
+    },
+  }
+}
+
+interface IntrospectedPluginResponse {
+  readonly name: string
+  readonly version: string
+  readonly state: 'enabled'
+  readonly tools: readonly {
+    readonly name: string
+    readonly state: 'enabled' | 'disabled'
+    readonly disabledReason?: { readonly kind: string; readonly target: string }
+  }[]
+  readonly errorCodes: readonly string[]
+  readonly requirements?: {
+    readonly evalTargets?: readonly string[]
+    readonly transportCapabilities?: readonly string[]
+  }
+  readonly effectiveConfig?: Readonly<Record<string, unknown>>
+}
+
 describe('electron_plugins introspection tool', () => {
   it('is registered and lists loaded plugins when plugins are present', async () => {
     const server = await createServer({ plugins: [toolPlugin()], tools: [] })
     expect(server.dispatcher.has('electron_plugins')).toBe(true)
 
     const res = (await server.dispatcher.dispatch('electron_plugins', {})) as SuccessResponse<{
-      plugins: ReadonlyArray<{ name: string; version: string; tools: readonly string[] }>
+      plugins: ReadonlyArray<IntrospectedPluginResponse>
     }>
     expect(res.ok).toBe(true)
-    expect(res.plugins).toEqual([{ name: 'demo', version: '2.1.0', tools: ['demo_ping'] }])
+    expect(res.plugins).toEqual([
+      {
+        name: 'demo',
+        version: '2.1.0',
+        state: 'enabled',
+        tools: [{ name: 'demo_ping', state: 'enabled' }],
+        errorCodes: [],
+      },
+    ])
 
     await server.close().catch(() => undefined)
   })
@@ -228,22 +329,113 @@ describe('electron_plugins introspection tool', () => {
     await server.close().catch(() => undefined)
   })
 
+  it('discloses only allowlisted config and declared requirements', async () => {
+    const server = await createServer({
+      plugins: [introspectedPlugin()],
+      pluginConfigs: { safe: { publicLabel: 'visible', secret: 'must-not-leak' } },
+      tools: [],
+    })
+    const res = (await server.dispatcher.dispatch('electron_plugins', {})) as SuccessResponse<{
+      plugins: ReadonlyArray<IntrospectedPluginResponse>
+    }>
+
+    expect(res.plugins).toEqual([
+      {
+        name: 'safe',
+        version: '1.0.0',
+        state: 'enabled',
+        tools: [],
+        errorCodes: ['safe.BLOCKED'],
+        requirements: {
+          evalTargets: ['main'],
+          transportCapabilities: ['supportsMainEval', 'supportsSurfaceTargeting'],
+        },
+        effectiveConfig: { publicLabel: 'visible' },
+      },
+    ])
+    expect(JSON.stringify(res.plugins)).not.toContain('must-not-leak')
+
+    await server.close().catch(() => undefined)
+  })
+
+  it('reports eval-policy-hidden first-party tools as disabled with their remediation target', async () => {
+    const safe = await createServer({ plugins: [storagePlugin], tools: [] })
+    const enabled = await createServer({
+      plugins: [storagePlugin],
+      tools: [],
+      allowEval: { main: false, renderer: true },
+    })
+    try {
+      const safeRes = (await safe.dispatcher.dispatch('electron_plugins', {})) as SuccessResponse<{
+        plugins: ReadonlyArray<IntrospectedPluginResponse>
+      }>
+      const enabledRes = (await enabled.dispatcher.dispatch(
+        'electron_plugins',
+        {},
+      )) as SuccessResponse<{
+        plugins: ReadonlyArray<IntrospectedPluginResponse>
+      }>
+      const safeStorage = safeRes.plugins[0]
+      const enabledStorage = enabledRes.plugins[0]
+
+      expect(safeStorage).toMatchObject({
+        name: 'storage',
+        state: 'enabled',
+        errorCodes: expect.arrayContaining(['storage.EVAL_REQUIRED', 'storage.UNSUPPORTED']),
+        requirements: {
+          evalTargets: ['renderer'],
+          transportCapabilities: expect.arrayContaining([
+            'canAccessStorage',
+            'supportsRendererEval',
+          ]),
+        },
+        effectiveConfig: { redactValues: false, revealValues: false },
+      })
+      expect(safeStorage?.tools).toContainEqual({
+        name: 'storage_local_get',
+        state: 'disabled',
+        disabledReason: { kind: 'eval_policy_disabled', target: 'renderer' },
+      })
+      expect(safeStorage?.tools).toContainEqual({ name: 'storage_cookies', state: 'enabled' })
+      expect(enabledStorage?.tools).toContainEqual({ name: 'storage_local_get', state: 'enabled' })
+    } finally {
+      await safe.close().catch(() => undefined)
+      await enabled.close().catch(() => undefined)
+    }
+  })
+
   it('reports each server instance independently', async () => {
     const first = await createServer({ plugins: [toolPlugin('alpha', '1.0.0')], tools: [] })
     const second = await createServer({ plugins: [toolPlugin('beta', '2.0.0')], tools: [] })
 
     const firstRes = (await first.dispatcher.dispatch('electron_plugins', {})) as SuccessResponse<{
-      plugins: ReadonlyArray<{ name: string; version: string; tools: readonly string[] }>
+      plugins: ReadonlyArray<IntrospectedPluginResponse>
     }>
     const secondRes = (await second.dispatcher.dispatch(
       'electron_plugins',
       {},
     )) as SuccessResponse<{
-      plugins: ReadonlyArray<{ name: string; version: string; tools: readonly string[] }>
+      plugins: ReadonlyArray<IntrospectedPluginResponse>
     }>
 
-    expect(firstRes.plugins).toEqual([{ name: 'alpha', version: '1.0.0', tools: ['alpha_ping'] }])
-    expect(secondRes.plugins).toEqual([{ name: 'beta', version: '2.0.0', tools: ['beta_ping'] }])
+    expect(firstRes.plugins).toEqual([
+      {
+        name: 'alpha',
+        version: '1.0.0',
+        state: 'enabled',
+        tools: [{ name: 'alpha_ping', state: 'enabled' }],
+        errorCodes: [],
+      },
+    ])
+    expect(secondRes.plugins).toEqual([
+      {
+        name: 'beta',
+        version: '2.0.0',
+        state: 'enabled',
+        tools: [{ name: 'beta_ping', state: 'enabled' }],
+        errorCodes: [],
+      },
+    ])
 
     await first.close().catch(() => undefined)
     await second.close().catch(() => undefined)

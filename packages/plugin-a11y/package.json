@@ -1,0 +1,60 @@
+{
+  "name": "@electron-stagewright/plugin-a11y",
+  "version": "0.1.0",
+  "description": "Accessibility audit plugin for Electron Stagewright: surface-scoped axe-core checks with bounded, agent-actionable findings.",
+  "type": "module",
+  "license": "MIT",
+  "author": "johnny4young <johnny.iv.young@gmail.com>",
+  "homepage": "https://electron-stagewright.github.io/electron-stagewright/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electron-stagewright/electron-stagewright.git",
+    "directory": "packages/plugin-a11y"
+  },
+  "bugs": {
+    "url": "https://github.com/electron-stagewright/electron-stagewright/issues"
+  },
+  "keywords": [
+    "electron",
+    "mcp",
+    "stagewright",
+    "accessibility",
+    "a11y",
+    "axe-core",
+    "testing",
+    "ai-agent"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@electron-stagewright/core": "workspace:*",
+    "axe-core": "^4.12.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@electron-stagewright/testkit": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

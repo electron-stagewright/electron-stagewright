@@ -23,6 +23,7 @@ import type { OperationType } from '../errors/operation-type.js'
 import type { Logger } from '../server/logger.js'
 import type { SessionManager } from '../server/session-manager.js'
 import type { SnapshotStore } from '../server/snapshot-store.js'
+import type { ServerStatusReader } from '../server/status.js'
 import type { TransportRegistry } from '../server/transport-registry.js'
 
 /**
@@ -107,6 +108,11 @@ export interface ToolContext {
   readonly transports: TransportRegistry
   /** Per-session last-snapshot store, backing `electron_snapshot({ since: 'last' })`. */
   readonly snapshots: SnapshotStore
+  /**
+   * Read-only compact server state for orientation. It exposes uptime and the
+   * last stable error for a live session, never mutation or plugin-private state.
+   */
+  readonly status: ServerStatusReader
   /** Structured logger. Writes to stderr only (stdout is the MCP protocol channel). */
   readonly logger: Logger
   /**
@@ -146,6 +152,11 @@ export interface ToolContext {
    * confinement (launch paths may be anywhere).
    */
   readonly appRoot?: string | undefined
+  /**
+   * Server-supplied Electron entry used by `electron_launch` when the call omits both `main` and
+   * `executablePath`. It is explicit server configuration, never agent-provided input.
+   */
+  readonly launchDefaultMain?: string | undefined
   /**
    * Epoch-ms timestamp captured by the dispatcher when the call began. Pass it
    * (with {@link ToolContext.now}) to `makeSuccess` / `makeError` so the

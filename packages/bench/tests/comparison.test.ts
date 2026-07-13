@@ -8,8 +8,14 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { stagewrightAdapters } from '../src/adapters.js'
-import { computeContrast, runComparison } from '../src/comparison.js'
+import { electronDriverAdapters, stagewrightAdapters } from '../src/adapters.js'
+import {
+  computeContrast,
+  runComparison,
+  runComparisonSeries,
+  summarizeComparisonSeries,
+  summarizeDistribution,
+} from '../src/comparison.js'
 import { runAdapter, type ComparisonResult, type Envelope } from '../src/harness.js'
 
 /** A synthetic comparison row (latency/memory are irrelevant to the pure contrast). */
@@ -25,9 +31,15 @@ function row(
     task,
     toolCalls,
     estimatedTokens: measuredTokens,
+    requestTokens: 0,
     measuredTokens,
+    requestCharacters: 0,
+    responseCharacters: 0,
+    failedCalls: 0,
+    retries: 0,
     latencyMs: 0,
     memoryRssBytes: null,
+    manifest: null,
     ok,
   }
 }
@@ -46,6 +58,7 @@ describe('computeContrast (pure)', () => {
         target: 'rival',
         toolCallsVsBaseline: 2,
         estimatedTokensVsBaseline: 50,
+        requestTokensVsBaseline: 0,
         measuredTokensVsBaseline: 50,
       },
     ])
@@ -103,20 +116,26 @@ describe('computeContrast (pure)', () => {
  */
 function fakeClient(responses: Record<string, Envelope>): unknown {
   return {
-    callTool: async ({ name }: { name: string }) => ({
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            responses[name] ?? {
+    listTools: async () => ({ tools: [] }),
+    callTool: async ({
+      name,
+      arguments: args,
+    }: {
+      name: string
+      arguments?: Record<string, unknown>
+    }) => {
+      const response =
+        name === 'electron_get_text' || name === 'get_text'
+          ? args?.['selector'] === '#late'
+            ? { ok: true, text: 'Details loaded' }
+            : { ok: true, text: 'Hello, Ada Lovelace!' }
+          : (responses[name] ?? {
               ok: false,
               code: 'UNEXPECTED_TOOL',
               error: `unexpected tool: ${name}`,
-            },
-          ),
-        },
-      ],
-    }),
+            })
+      return { content: [{ type: 'text', text: JSON.stringify(response) }] }
+    },
     close: async () => undefined,
   }
 }
@@ -125,11 +144,17 @@ function fakeClient(responses: Record<string, Envelope>): unknown {
 const CANNED: Record<string, Envelope> = {
   electron_launch: { ok: true, session_id: 's1' },
   electron_type: { ok: true },
-  electron_find: { ok: true, matches: [{ ref: 1 }] },
   electron_click: { ok: true },
-  electron_expect_text: { ok: true },
+  electron_get_text: { ok: true },
+  electron_wait_for_selector: { ok: true },
   electron_eval_main: { ok: true, result: 4096 },
   electron_stop: { ok: true },
+  start_app: { ok: true },
+  type: { ok: true },
+  click: { ok: true },
+  get_text: { ok: true },
+  wait_for_selector: { ok: true },
+  stop_app: { ok: true },
 }
 
 describe('runAdapter / runComparison (fake client)', () => {
@@ -137,13 +162,13 @@ describe('runAdapter / runComparison (fake client)', () => {
     const greeting = stagewrightAdapters()[0]
     if (greeting === undefined) throw new Error('no stagewright adapters')
     const result = await runAdapter(greeting, async () => fakeClient(CANNED) as never)
-    // type + find + click + expect_text = 4 counted task calls (launch/stop/eval are not counted).
+    // type + click + get_text = 3 counted task calls (launch/stop/eval are not counted).
     expect(result).toMatchObject({
       target: 'stagewright',
       task: 'verify-greeting',
-      toolCalls: 4,
+      toolCalls: 3,
       ok: true,
-      memoryRssBytes: 4096,
+      memoryRssBytes: null,
     })
   })
 
@@ -156,6 +181,28 @@ describe('runAdapter / runComparison (fake client)', () => {
     expect(results.every((r) => r.ok)).toBe(true)
   })
 
+  it('runs the pinned electron-driver adapters without injecting Stagewright session arguments', async () => {
+    const calls: Array<{ name: string; args: Record<string, unknown> | undefined }> = []
+    const client = fakeClient(CANNED) as {
+      callTool(input: { name: string; arguments?: Record<string, unknown> }): Promise<unknown>
+    }
+    const original = client.callTool.bind(client)
+    client.callTool = async (input) => {
+      calls.push({ name: input.name, args: input.arguments })
+      return original(input)
+    }
+    const greeting = electronDriverAdapters()[0]
+    if (greeting === undefined) throw new Error('no electron-driver adapter')
+    const result = await runAdapter(greeting, async () => client as never)
+    expect(result).toMatchObject({
+      target: 'electron-driver',
+      task: 'verify-greeting',
+      toolCalls: 3,
+      ok: true,
+    })
+    expect(calls.find((call) => call.name === 'type')?.args).not.toHaveProperty('sessionId')
+  })
+
   it('records a connect (spawn) failure as an ok:false row instead of throwing', async () => {
     const greeting = stagewrightAdapters()[0]
     if (greeting === undefined) throw new Error('no stagewright adapters')
@@ -164,5 +211,38 @@ describe('runAdapter / runComparison (fake client)', () => {
     })
     expect(result).toMatchObject({ target: 'stagewright', ok: false })
     expect(result.error).toContain('spawn failed')
+  })
+})
+
+describe('repeated comparison summaries', () => {
+  it('uses exact medians and nearest-rank p95 values', () => {
+    expect(summarizeDistribution([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).toEqual({
+      samples: 10,
+      min: 1,
+      median: 5.5,
+      p95: 10,
+      max: 10,
+    })
+  })
+
+  it('retains warmups separately and excludes failed observations from distributions', async () => {
+    let runs = 0
+    const greeting = stagewrightAdapters()[0]
+    if (greeting === undefined) throw new Error('no stagewright adapter')
+    const series = await runComparisonSeries(
+      [greeting],
+      { warmupRuns: 1, iterations: 2 },
+      async () => {
+        runs += 1
+        const responses =
+          runs === 3 ? { ...CANNED, electron_click: { ok: false, code: 'BLOCKED' } } : CANNED
+        return fakeClient(responses) as never
+      },
+    )
+    const summary = summarizeComparisonSeries(series)[0]
+    expect(series.warmups).toHaveLength(1)
+    expect(series.samples).toHaveLength(2)
+    expect(summary).toMatchObject({ retainedRuns: 2, successfulRuns: 1, failedRuns: 1 })
+    expect(summary?.metrics?.toolCalls.samples).toBe(1)
   })
 })

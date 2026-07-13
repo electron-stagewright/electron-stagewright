@@ -12,9 +12,9 @@ that launch the server; everything else is the client's standard MCP configurati
 ## Before you start
 
 - **Node.js 24 or newer** (the server's floor — check with `node -v`).
-- **Playwright** for the default launch transport. The core package keeps Playwright as an optional
-  peer so non-launch flows can import it without the extra install; the `npx` and global examples
-  below install Playwright alongside the server.
+- **Playwright and Electron** for the default launch transport. The core package keeps both as
+  optional peers so non-launch flows can import it without the extra install; the `npx` and global
+  examples below install both alongside the server.
 - An **MCP-capable client** (Claude Desktop, Cursor, or any host that can spawn a stdio MCP server).
 - The Electron app you want to drive (the server launches or attaches to it; you do not embed
   anything in the app).
@@ -25,7 +25,9 @@ The client needs a `command` and `args` that start the stdio server. Three forms
 first:
 
 - **`npx` (no permanent install).** The client fetches and caches the server plus its Playwright
-  peer on first run.
+  and Electron peers on first run. The versions below are intentionally pinned: update them
+  together after testing a new release rather than asking every spawn for whichever package is
+  newest.
 
   ```json
   {
@@ -33,9 +35,11 @@ first:
     "args": [
       "-y",
       "--package",
-      "@electron-stagewright/core",
+      "@electron-stagewright/core@0.2.0",
       "--package",
-      "playwright",
+      "playwright@1.61.1",
+      "--package",
+      "electron@42.3.0",
       "electron-stagewright"
     ]
   }
@@ -47,7 +51,7 @@ first:
 - **Global install (explicit, fastest spawn).** Install once, then call the bin directly.
 
   ```sh
-  npm install -g @electron-stagewright/core playwright
+  npm install -g @electron-stagewright/core@0.2.0 playwright@1.61.1 electron@42.3.0
   ```
 
   ```json
@@ -84,9 +88,11 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core",
+        "@electron-stagewright/core@0.2.0",
         "--package",
-        "playwright",
+        "playwright@1.61.1",
+        "--package",
+        "electron@42.3.0",
         "electron-stagewright"
       ]
     }
@@ -107,9 +113,11 @@ reload:
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core",
+        "@electron-stagewright/core@0.2.0",
         "--package",
-        "playwright",
+        "playwright@1.61.1",
+        "--package",
+        "electron@42.3.0",
         "electron-stagewright"
       ]
     }
@@ -131,10 +139,22 @@ Append flags to `args` (after the package/CLI). The common ones:
   `electron_eval_renderer`), which are **off by default**. Grant the narrowest target with
   `--allow-eval=renderer` or `--allow-eval=main`. Read the [security model](./security-model.md)
   before enabling it.
+- `--tool-profile essential` starts with the focused launch/snapshot/interact/assert core surface.
+  `testing` adds the broader test-driving tools, `debug` adds attach and diagnostics, and `full`
+  remains the compatibility default. This flag does not enable eval or load plugins.
 - `--screenshot-dir <dir>` sets a stable location for captured screenshots.
+- `--demo` supplies a local Electron entry when an agent calls `electron_launch {}`. The demo
+  package is not yet public on npm, so use a built checkout for this verification flow; it cannot
+  be combined with `--app-root`. See [Try the demo from a checkout](./demo.md) for the exact host
+  configuration.
+- A built checkout provides `node packages/core/dist/cli.js doctor --json`, a standalone preflight
+  for Node, Playwright, Electron, display setup, configured paths, and eval policy. Do not append it
+  to MCP server arguments. The pinned public core 0.2.0 package does not include this command yet.
 - `--plugin <name>` loads an installed plugin (trace, network, storage, clock, and others). With
   `npx`, add that plugin package as another `--package` before the `electron-stagewright` bin; with
-  a global install, install the plugin package globally too.
+  a global install, install the plugin package globally too. Then call `electron_plugins` to see
+  exactly which namespaced tools are enabled and which gate (if any) keeps a tool hidden. See
+  [Load, configure, and diagnose plugins](./plugins.md).
 
 With `npx`, server flags follow the `electron-stagewright` bin name:
 
@@ -143,9 +163,11 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
   "args": [
     "-y",
     "--package",
-    "@electron-stagewright/core",
+    "@electron-stagewright/core@0.2.0",
     "--package",
-    "playwright",
+    "playwright@1.61.1",
+    "--package",
+    "electron@42.3.0",
     "electron-stagewright",
     "--allow-eval=renderer"
   ]
@@ -171,19 +193,21 @@ client over stdio without any host, which is a quick way to confirm the server i
 
 The failure modes are almost all about the stdio channel or the spawn command.
 
-| Symptom                                                    | Likely cause                                                                                                                 | Fix                                                                                                                                         |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Server shows "failed" / disconnects immediately            | Something wrote to **stdout** — for a stdio server, stdout _is_ the protocol channel, so any stray print corrupts the stream | The server sends all diagnostics to stderr by design. If you wrapped it in a shell script, make sure the wrapper prints nothing to stdout.  |
-| Client reports "server not found" / no tools               | Wrong `command`/`args`                                                                                                       | With `npx`, confirm the exact package name. With the local-checkout form, the path must be **absolute** and you must have run `pnpm build`. |
-| Server won't start; a version/engine error                 | Node below the version floor                                                                                                 | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                       |
-| `electron_launch` reports that Playwright is not installed | The core package was started without its optional Playwright peer                                                            | Use the `npx --package @electron-stagewright/core --package playwright electron-stagewright` form, or install both packages globally.       |
-| `electron_eval_main` / `electron_eval_renderer` missing    | Eval tools are gated off by default                                                                                          | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                  |
-| The app won't launch from `electron_launch`                | `main` is not an absolute path, or the app needs attach/inject                                                               | Pass an absolute `main`; see [Launch, attach, or inject](./launch-or-attach.md) for apps that are already running.                          |
+| Symptom                                                                | Likely cause                                                                                                                 | Fix                                                                                                                                         |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server shows "failed" / disconnects immediately                        | Something wrote to **stdout** — for a stdio server, stdout _is_ the protocol channel, so any stray print corrupts the stream | The server sends all diagnostics to stderr by design. If you wrapped it in a shell script, make sure the wrapper prints nothing to stdout.  |
+| Client reports "server not found" / no tools                           | Wrong `command`/`args`                                                                                                       | With `npx`, confirm the exact package name. With the local-checkout form, the path must be **absolute** and you must have run `pnpm build`. |
+| Server won't start; a version/engine error                             | Node below the version floor                                                                                                 | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                       |
+| `electron_launch` reports that Playwright or Electron is not installed | The core package was started without an optional launch peer                                                                 | Use the pinned `npx` form shown above, install all three packages globally, or pass `executablePath` to `electron_launch`.                  |
+| `electron_eval_main` / `electron_eval_renderer` missing                | Eval tools are gated off by default                                                                                          | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                  |
+| A known core tool is missing                                           | The selected core profile does not include it                                                                                | Restart with the profile named in the tool's recovery hint, or use `--tool-profile full`.                                                   |
+| The app won't launch from `electron_launch`                            | `main` is not an absolute path, or the app needs attach/inject                                                               | Pass an absolute `main`; see [Launch, attach, or inject](./launch-or-attach.md) for apps that are already running.                          |
 
 ## Where next
 
 - [Getting started](./getting-started.md) — drive the bundled example end to end, one call at a time.
 - [Launch, attach, or inject](./launch-or-attach.md) — get a session against **your** app.
 - [Security model](./security-model.md) — read before enabling `--allow-eval` or exposing the server.
+- [Load, configure, and diagnose plugins](./plugins.md) — load an extension and inspect its gates.
 - [Concepts](./concepts.md) — the agent-native model behind the tool surface.
 - [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) — every tool's parameters, return shape, and error codes.

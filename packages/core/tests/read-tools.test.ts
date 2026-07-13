@@ -23,6 +23,20 @@ vi.mock('../src/tools/snapshot/inject.js', () => ({
   buildWalkBody: () => 'WALK',
   buildRetagBody: () => 'RETAG',
   loadInjectedWalker: () => 'BUNDLE',
+  runProbe: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'PROBE', arg),
+  runWalk: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'WALK', arg),
 }))
 
 function snap(html: string): Snapshot {
@@ -40,6 +54,7 @@ const NO_RENDERER_EVAL_CAPS: TransportCapabilities = {
   supportsMainEval: true,
   supportsRendererEval: false,
   supportsInteraction: true,
+  supportsSurfaceTargeting: true,
 }
 
 function setup(
@@ -173,6 +188,18 @@ describe('inline read tools', () => {
     })) as ErrorResponse
     expect(res.code).toBe('SELECTOR_NO_MATCH')
     expect(res.similar_refs?.map((r) => r.name)).toContain('Save')
+    expect(res.hint).toContain('selector did not match')
+    expect(res.hint).not.toContain('stale because')
+  })
+
+  it('tells a selector miss with no snapshot to capture one before retrying', async () => {
+    const { dispatcher } = setup({ evaluate: canned({ found: false }) })
+    const res = (await dispatcher.dispatch('electron_get_text', {
+      selector: '#missing',
+    })) as ErrorResponse
+    expect(res.code).toBe('SELECTOR_NO_MATCH')
+    expect(res.hint).toContain('No snapshot is available')
+    expect(res.hint).toContain('electron_snapshot()')
   })
 })
 
@@ -284,6 +311,7 @@ describe('read-tool target + capability contract', () => {
     const res = (await dispatcher.dispatch('electron_get_text', { ref: 99 })) as ErrorResponse
     expect(res.code).toBe('REF_NOT_FOUND')
     expect(res.similar_refs?.map((r) => r.name)).toContain('Save')
+    expect(res.hint).toContain('ref is stale')
   })
 
   it('refuses a transport that cannot evaluate the renderer', async () => {

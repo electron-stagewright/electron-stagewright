@@ -195,6 +195,15 @@ describe('InjectorSession surface', () => {
     ])
   })
 
+  it('refuses active-window selection because it has no renderer target', async () => {
+    const { transport } = setup()
+    const session = await transport.inject({ pid: 4242 })
+
+    await expect(session.activateWindow({ kind: 'index', index: 0 })).rejects.toMatchObject({
+      code: 'TRANSPORT_UNSUPPORTED',
+    })
+  })
+
   it('buffers main-process console output', async () => {
     const { server, transport } = setup()
     const session = await transport.inject({ pid: 4242 })
@@ -225,6 +234,15 @@ describe('InjectorSession surface', () => {
     await session.dispose()
     await session.dispose()
 
+    expect(killed).toEqual([])
+    await expect(session.consoleLogs()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+  })
+
+  it('detach closes only the inspector session, not the injected app process', async () => {
+    const { transport, killed } = setup({ aliveSequence: [true] })
+    const session = await transport.inject({ pid: 4242 })
+
+    await expect(session.detach()).resolves.toBeUndefined()
     expect(killed).toEqual([])
     await expect(session.consoleLogs()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })

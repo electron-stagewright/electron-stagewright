@@ -5,15 +5,28 @@
  * @module
  */
 
-export { Dispatcher, type DispatcherOptions, type ToolManifestEntry } from './dispatcher.js'
+export {
+  Dispatcher,
+  type DispatcherOptions,
+  type McpToolManifestEntry,
+  type ToolManifestEntry,
+} from './dispatcher.js'
 
 export { anyEvalAllowed, normalizeEvalPolicy, type EvalPolicy } from './eval-policy.js'
 
-export { SessionManager, type ManagedSession } from './session-manager.js'
+export {
+  SessionManager,
+  type ManagedSession,
+  type SessionEndEvent,
+  type SessionEndListener,
+  type SessionEndReason,
+} from './session-manager.js'
 
 export { TransportRegistry, type TransportRegistryOptions } from './transport-registry.js'
 
 export { SnapshotStore } from './snapshot-store.js'
+
+export { ServerStatus, type LastSessionError, type ServerStatusReader } from './status.js'
 
 export {
   StderrLogger,

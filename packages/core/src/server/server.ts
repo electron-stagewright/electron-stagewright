@@ -15,8 +15,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { definePluginsInfoTool, loadPlugins } from '../plugins/index.js'
-import type { StagewrightPlugin } from '../plugins/index.js'
-import { DEFAULT_TOOLS } from '../tools/index.js'
+import type { LoadedPluginInfo, StagewrightPlugin } from '../plugins/index.js'
+import { registerAgentResources } from '../resources/index.js'
+import {
+  DEFAULT_TOOLS,
+  excludedCoreToolProfileHints,
+  resolveCoreToolProfile,
+  type ToolProfile,
+} from '../tools/index.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 import { VERSION } from '../version.js'
 import { Dispatcher } from './dispatcher.js'
@@ -51,6 +57,12 @@ export interface CreateServerOptions {
   /** Tools to register. Defaults to the full core tool surface exported by DEFAULT_TOOLS. */
   readonly tools?: Iterable<AnyToolDefinition>
   /**
+   * Explicit core-tool profile. Defaults to `full`, preserving the historical default tool surface.
+   * Eval-gated tools and explicitly loaded plugins compose with this profile independently. Cannot be
+   * combined with {@link CreateServerOptions.tools}, whose caller-supplied collection is authoritative.
+   */
+  readonly toolProfile?: ToolProfile
+  /**
    * First-party plugins to load (ADR-004). Each is validated, its tools registered under
    * `<plugin>_<tool>` and its error codes under `<plugin>.CODE`, its `setup` run, and its
    * `teardown` invoked on {@link StagewrightServer.close}. Plugins are passed explicitly —
@@ -71,6 +83,8 @@ export interface CreateServerOptions {
    * Unset means no confinement (paths may be anywhere). Resolved to an absolute path at startup.
    */
   readonly appRoot?: string
+  /** Optional Electron main entry used when `electron_launch` omits its own entry arguments. */
+  readonly launchDefaultMain?: string
   /** Clock injection for deterministic timing in tests. */
   readonly now?: () => number
   /**
@@ -110,6 +124,11 @@ export interface StagewrightServer {
  * yielding a half-initialised server.
  */
 export async function createServer(opts: CreateServerOptions = {}): Promise<StagewrightServer> {
+  if (opts.tools !== undefined && opts.toolProfile !== undefined) {
+    throw new Error('createServer options "tools" and "toolProfile" are mutually exclusive.')
+  }
+  const toolProfile = opts.toolProfile ?? 'full'
+  const coreTools = [...(opts.tools ?? resolveCoreToolProfile(DEFAULT_TOOLS, toolProfile))]
   const logger = opts.logger ?? new StderrLogger({ level: opts.logLevel ?? 'info' })
   const sessions = new SessionManager()
   const transports = opts.transports ?? new TransportRegistry()
@@ -122,9 +141,13 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     allowEval: opts.allowEval ?? false,
     ...(opts.screenshotDir !== undefined ? { screenshotDir: opts.screenshotDir } : {}),
     ...(opts.appRoot !== undefined ? { appRoot: opts.appRoot } : {}),
+    ...(opts.launchDefaultMain !== undefined ? { launchDefaultMain: opts.launchDefaultMain } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     ...(opts.operationTimeoutMs !== undefined
       ? { operationTimeoutMs: opts.operationTimeoutMs }
+      : {}),
+    ...(opts.tools === undefined
+      ? { excludedToolProfileHints: excludedCoreToolProfileHints(DEFAULT_TOOLS, toolProfile) }
       : {}),
   })
 
@@ -134,6 +157,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     ? await loadPlugins(opts.plugins, {
         coreVersion: SERVER_VERSION,
         ...(opts.pluginConfigs !== undefined ? { configs: opts.pluginConfigs } : {}),
+        context: {
+          onSessionEnd: (listener) => sessions.onSessionEnd(listener),
+        },
       })
     : undefined
 
@@ -150,23 +176,40 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     }
   }
 
-  // Register core tools, then plugin tools. When plugins are present, also register the
-  // plugins-introspection tool — only then, so a plugin-free server keeps its tool surface
-  // minimal. If registration throws after plugins loaded (e.g. a defensive duplicate-name
-  // guard), tear the plugins back down before failing.
+  // Register core tools, then plugin tools. We build introspection only AFTER plugin registration:
+  // a tool with requiresEvalFlag may be intentionally absent under the current policy, and the
+  // agent needs that actual state rather than the plugin's merely declared tool list. Register the
+  // introspection tool only when plugins are present, so a plugin-free server stays lean.
+  // If registration throws after plugins loaded (e.g. a defensive duplicate-name guard), tear the
+  // plugins back down before failing.
   try {
-    dispatcher.registerAll(opts.tools ?? DEFAULT_TOOLS)
+    dispatcher.registerAll(coreTools)
     if (pluginResult && pluginResult.loaded.length > 0) {
-      dispatcher.register(
-        definePluginsInfoTool(
-          pluginResult.loaded.map((plugin) => ({
-            name: plugin.name,
-            version: plugin.version,
-            tools: plugin.tools.map((tool) => tool.name),
-          })),
-        ),
-      )
       dispatcher.registerAll(pluginResult.tools)
+      const pluginsInfo: LoadedPluginInfo[] = pluginResult.loaded.map((plugin) => ({
+        name: plugin.name,
+        version: plugin.version,
+        state: 'enabled',
+        tools: plugin.tools.map((tool) => {
+          if (dispatcher.has(tool.name)) return { name: tool.name, state: 'enabled' }
+          return {
+            name: tool.name,
+            state: 'disabled',
+            disabledReason: {
+              kind: 'eval_policy_disabled',
+              target: tool.evalTarget ?? 'any',
+            },
+          }
+        }),
+        errorCodes: plugin.errorCodes,
+        ...(plugin.introspection?.requirements !== undefined
+          ? { requirements: plugin.introspection.requirements }
+          : {}),
+        ...(plugin.effectiveConfig !== undefined
+          ? { effectiveConfig: plugin.effectiveConfig }
+          : {}),
+      }))
+      dispatcher.register(definePluginsInfoTool(pluginsInfo))
     }
   } catch (err) {
     if (pluginResult) await pluginResult.teardownAll()
@@ -196,6 +239,11 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     },
   )
   dispatcher.bindToMcpServer(mcp)
+  registerAgentResources(mcp, {
+    activeProfile: opts.tools === undefined ? toolProfile : 'custom',
+    visibleCoreToolCount: coreTools.filter((tool) => dispatcher.has(tool.name)).length,
+    visibleToolCount: dispatcher.list().length,
+  })
 
   return {
     mcp,

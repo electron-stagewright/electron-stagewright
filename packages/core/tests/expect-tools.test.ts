@@ -27,6 +27,20 @@ vi.mock('../src/tools/snapshot/inject.js', () => ({
   buildWalkBody: () => 'WALK',
   buildRetagBody: () => 'RETAG',
   loadInjectedWalker: () => 'BUNDLE',
+  runProbe: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'PROBE', arg),
+  runWalk: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'WALK', arg),
 }))
 
 function snap(html: string): Snapshot {
@@ -44,6 +58,7 @@ const NO_RENDERER_EVAL_CAPS: TransportCapabilities = {
   supportsMainEval: true,
   supportsRendererEval: false,
   supportsInteraction: true,
+  supportsSurfaceTargeting: true,
 }
 
 function setup(

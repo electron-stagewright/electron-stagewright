@@ -11,7 +11,7 @@
 import { z } from 'zod'
 
 import { refField, selectorField, sessionIdField } from '../schema.js'
-import { buildProbeBody, loadInjectedWalker } from '../snapshot/inject.js'
+import { loadInjectedWalker, runProbe } from '../snapshot/inject.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { type ReadRaw, runTargetedRead } from './probe.js'
 
@@ -41,10 +41,13 @@ export function makeGetStateTool(deps: ReadProbeDeps = {}): AnyToolDefinition {
       runTargetedRead(
         ctx,
         args,
-        (selector) => ({
-          body: buildProbeBody(loadBundle()),
-          arg: { mode: 'element', selector },
-        }),
+        (selector) => {
+          const arg = { mode: 'element' as const, selector }
+          return {
+            arg,
+            run: (session) => runProbe(session, loadBundle(), arg),
+          }
+        },
         (raw: ReadRaw) => ({
           ref: raw['ref'] ?? null,
           role: raw['role'] ?? null,

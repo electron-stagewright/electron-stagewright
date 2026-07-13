@@ -26,7 +26,7 @@ import {
   type ToolMeta,
   handleTargetFailure,
   refFreshnessError,
-  refName,
+  refNameForActiveSurface,
   resolveOptionalTarget,
   resolveTarget,
 } from '../target.js'
@@ -86,7 +86,7 @@ export async function runTargetedInteraction(
       ctx,
       session: managed.session,
       meta,
-      nameHint: refName(ctx.snapshots.get(managed.id), args.ref),
+      nameHint: await refNameForActiveSurface(ctx, managed.session, managed.id, args.ref),
     })
   }
 }
@@ -127,7 +127,7 @@ export async function runDragInteraction(ctx: ToolContext, args: DragArgs): Prom
       ctx,
       session: managed.session,
       meta,
-      nameHint: refName(ctx.snapshots.get(managed.id), args.ref),
+      nameHint: await refNameForActiveSurface(ctx, managed.session, managed.id, args.ref),
     })
   }
 }

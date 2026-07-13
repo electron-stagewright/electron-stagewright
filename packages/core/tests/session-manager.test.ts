@@ -108,6 +108,28 @@ describe('SessionManager.resolve', () => {
 })
 
 describe('SessionManager teardown', () => {
+  it('detach releases the session without routing through stop or forceKill', async () => {
+    const { manager, transport } = setup()
+    const session = new FakeSession({ id: 'attached' })
+    manager.register(transport, session)
+
+    await manager.detach('attached')
+
+    expect(session.detachCount).toBe(1)
+    expect(transport.stopCount).toBe(0)
+    expect(transport.forceKillCount).toBe(0)
+    expect(manager.has('attached')).toBe(false)
+  })
+
+  it('restores the session when transport detach fails', async () => {
+    const { manager, transport } = setup()
+    const session = new FakeSession({ id: 'attached', detachError: new Error('socket lost') })
+    manager.register(transport, session)
+
+    await expect(manager.detach('attached')).rejects.toThrow('socket lost')
+    expect(manager.get('attached')?.session).toBe(session)
+  })
+
   it('remove stops the session through its transport and forgets it', async () => {
     const { manager, transport } = setup()
     const session = new FakeSession({ id: 'x' })

@@ -29,7 +29,14 @@ const WIN: WindowDescriptor = {
   focused: true,
 }
 
-function setup(opts: { fileExists?: boolean; transport?: FakeTransport; appRoot?: string } = {}) {
+function setup(
+  opts: {
+    fileExists?: boolean
+    transport?: FakeTransport
+    appRoot?: string
+    launchDefaultMain?: string
+  } = {},
+) {
   const sessions = new SessionManager()
   const transport =
     opts.transport ??
@@ -38,6 +45,7 @@ function setup(opts: { fileExists?: boolean; transport?: FakeTransport; appRoot?
     sessions,
     transports: new TransportRegistry({ transports: [transport] }),
     ...(opts.appRoot !== undefined ? { appRoot: opts.appRoot } : {}),
+    ...(opts.launchDefaultMain !== undefined ? { launchDefaultMain: opts.launchDefaultMain } : {}),
   })
   dispatcher.register(makeLaunchTool({ fileExists: () => opts.fileExists ?? true }))
   return { sessions, transport, dispatcher }
@@ -66,6 +74,23 @@ describe('electron_launch', () => {
     expect(transport.launchCount).toBe(1)
     expect(sessions.size).toBe(1)
     expect((res as SuccessResponse)._meta.session_id).toBe('launched')
+  })
+
+  it('uses a server-configured default entry when the call omits main and executablePath', async () => {
+    const { dispatcher, transport } = setup({ launchDefaultMain: '/demo/main.js' })
+    await expect(dispatcher.dispatch('electron_launch', {})).resolves.toMatchObject({ ok: true })
+    expect(transport.launchCount).toBe(1)
+  })
+
+  it('does not add the configured default entry to an explicit executable-only launch', async () => {
+    const { dispatcher, transport } = setup({ launchDefaultMain: '/demo/main.js' })
+    const res = (await dispatcher.dispatch('electron_launch', {
+      executablePath: '/abs/App.app/Contents/MacOS/App',
+      instrumentNative: true,
+    })) as ErrorResponse
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('instrumentNative requires main')
+    expect(transport.launchCount).toBe(0)
   })
 
   it('rejects a readyTimeoutMs above the dispatch backstop cap (BAD_ARGUMENT)', async () => {

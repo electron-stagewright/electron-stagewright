@@ -34,6 +34,10 @@ const META: ParsedTrace['meta'] = {
   overflowed: false,
 }
 
+function v1Trace(calls: readonly TraceCallRecord[], meta: ParsedTrace['meta'] = META): ParsedTrace {
+  return { formatVersion: 1, complete: true, ...(meta !== undefined ? { meta } : {}), calls }
+}
+
 describe('escapeHtml', () => {
   it('escapes the five HTML-significant characters', () => {
     expect(escapeHtml(`<a href="x" id='y'>&</a>`)).toBe(
@@ -48,7 +52,7 @@ describe('escapeHtml', () => {
 
 describe('renderTraceHtml', () => {
   it('produces a complete self-contained HTML document', () => {
-    const html = renderTraceHtml({ meta: META, calls: [call()] })
+    const html = renderTraceHtml(v1Trace([call()]))
     expect(html.startsWith('<!doctype html>')).toBe(true)
     expect(html).toContain('<title>Stagewright trace</title>')
     // Self-contained: inline style + script, no external asset references.
@@ -59,10 +63,12 @@ describe('renderTraceHtml', () => {
   })
 
   it('summarises calls and lists tool names', () => {
-    const html = renderTraceHtml({
-      meta: META,
-      calls: [call({ estimated_tokens: 4 }), call({ tool: 'electron_click', estimated_tokens: 6 })],
-    })
+    const html = renderTraceHtml(
+      v1Trace([
+        call({ estimated_tokens: 4 }),
+        call({ tool: 'electron_click', estimated_tokens: 6 }),
+      ]),
+    )
     expect(html).toContain('electron_click')
     expect(html).toContain('demo_echo')
     // Total estimated tokens (4 + 6) is surfaced.
@@ -70,19 +76,15 @@ describe('renderTraceHtml', () => {
   })
 
   it('stamps the injected generation time deterministically', () => {
-    const html = renderTraceHtml(
-      { meta: META, calls: [call()] },
-      { generatedAt: 1_700_000_000_000 },
-    )
+    const html = renderTraceHtml(v1Trace([call()]), { generatedAt: 1_700_000_000_000 })
     expect(html).toContain(new Date(1_700_000_000_000).toISOString())
   })
 
   it('HTML-escapes captured args and results so trace data cannot inject markup', () => {
     const xss = '<img src=x onerror=alert(1)>'
-    const html = renderTraceHtml({
-      meta: META,
-      calls: [call({ args: { payload: xss }, result: { note: '</script><b>boom</b>' } })],
-    })
+    const html = renderTraceHtml(
+      v1Trace([call({ args: { payload: xss }, result: { note: '</script><b>boom</b>' } })]),
+    )
     // The dangerous raw opening tags from trace data never appear unescaped...
     expect(html).not.toContain('<img')
     expect(html).not.toContain('<b>boom')
@@ -95,45 +97,54 @@ describe('renderTraceHtml', () => {
     // The tool name lands in a double-quoted attribute (data-tool="…") and in element text; a
     // crafted name must not break out of either. This guards the attribute-context escaping
     // specifically (quote + angle bracket).
-    const html = renderTraceHtml({
-      meta: META,
-      calls: [call({ tool: '"><img onerror=alert(1) x="' })],
-    })
+    const html = renderTraceHtml(v1Trace([call({ tool: '"><img onerror=alert(1) x="' })]))
     expect(html).not.toContain('<img')
     expect(html).toContain('&quot;&gt;&lt;img onerror=alert(1) x=&quot;')
   })
 
   it('renders a budget bar with the over-budget state when the trace is over budget', () => {
-    const html = renderTraceHtml({
-      meta: { ...META, budget: 1, warn_threshold: 0.8, spent: 50 },
-      calls: [call()],
-    })
+    const html = renderTraceHtml(
+      v1Trace([call()], { ...META, budget: 1, warn_threshold: 0.8, spent: 50 }),
+    )
     expect(html).toContain('Token budget')
     expect(html).toContain('bar-over')
     expect(html).toContain('over budget')
   })
 
   it('omits the budget bar when the trace carries no budget', () => {
-    const html = renderTraceHtml({ meta: META, calls: [call()] })
+    const html = renderTraceHtml(v1Trace([call()]))
     expect(html).not.toContain('Token budget')
   })
 
   it('flags an overflowed trace', () => {
-    const html = renderTraceHtml({ meta: { ...META, overflowed: true }, calls: [call()] })
+    const html = renderTraceHtml(v1Trace([call()], { ...META, overflowed: true }))
     expect(html).toContain('record cap')
   })
 
+  it('discloses that a v2 partial trace may be incomplete', () => {
+    const html = renderTraceHtml({
+      formatVersion: 2,
+      complete: false,
+      header: {
+        kind: 'header',
+        format: 'stagewright-trace',
+        version: 2,
+        started_at: 1_700_000_000_000,
+        core_version: '9.9.9',
+      },
+      calls: [call()],
+    })
+    expect(html).toContain('recoverable partial trace')
+  })
+
   it('renders an empty trace without throwing', () => {
-    const html = renderTraceHtml({ calls: [] })
+    const html = renderTraceHtml({ formatVersion: 1, complete: true, calls: [] })
     expect(html).toContain('No calls recorded.')
     expect(html.startsWith('<!doctype html>')).toBe(true)
   })
 
   it('marks error calls distinctly from ok calls', () => {
-    const html = renderTraceHtml({
-      meta: META,
-      calls: [call({ ok: false, code: 'electron.SELECTOR_NO_MATCH' })],
-    })
+    const html = renderTraceHtml(v1Trace([call({ ok: false, code: 'electron.SELECTOR_NO_MATCH' })]))
     expect(html).toContain('call-err')
     expect(html).toContain('electron.SELECTOR_NO_MATCH')
   })

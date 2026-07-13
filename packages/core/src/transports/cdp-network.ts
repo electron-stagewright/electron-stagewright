@@ -157,11 +157,9 @@ export function mergeExtraInfoHeaders(
 /** Body field objects (built by the transport from the decoded bytes) merged into the final event. */
 export interface BodyFields {
   readonly request?:
-    | Pick<NetworkEvent, 'requestBody' | 'requestBodyBytes' | 'requestBodyTruncated'>
-    | undefined
+    Pick<NetworkEvent, 'requestBody' | 'requestBodyBytes' | 'requestBodyTruncated'> | undefined
   readonly response?:
-    | Pick<NetworkEvent, 'responseBody' | 'responseBodyBytes' | 'responseBodyTruncated'>
-    | undefined
+    Pick<NetworkEvent, 'responseBody' | 'responseBodyBytes' | 'responseBodyTruncated'> | undefined
 }
 
 /** Duration in ms between two monotonic-second CDP timestamps, or undefined when not measurable. */

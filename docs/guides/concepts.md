@@ -16,6 +16,28 @@ from the result alone — no screen, no prior context beyond what the tool retur
 Every design choice below follows from that. The principles are recorded in
 [ADR-007](../adr/007-agent-native-ux-principles.md).
 
+<!-- stagewright-resource:begin -->
+
+## Agent quick reference: core model
+
+- A **session** owns one app connection. Launch, attach, or inject creates it; `electron_stop`
+  releases it.
+- A **snapshot** is the agent's accessibility-tree view of the selected renderer surface. It yields
+  stable refs for ordinary re-renders; refresh after a renderer reload or a stale-ref error.
+- **Refs** are preferred handles from snapshots. Use selectors only when their target is genuinely
+  stable and known.
+- Every tool result is an `{ ok, … }` envelope. Branch on the stable error `code`, then use
+  `retryable`, `hint`, and `next_actions` to recover.
+- `electron_expect_*` keeps polling inside one server call, reducing agent round-trips.
+- Eval and plugins are explicit opt-ins. A tool profile narrows core availability but never grants
+  eval or auto-loads a plugin.
+
+Use `tools/list` for live schemas and `stagewright://manifest/profile` for the active availability
+summary. Resources are optional host context: the server's instructions and tools remain complete
+when a client neither lists nor reads them.
+
+<!-- stagewright-resource:end -->
+
 ## The response envelope
 
 Every tool returns a JSON object discriminated by `ok`. On success it carries
@@ -113,3 +135,6 @@ Two pieces are deliberately kept behind explicit opt-ins:
 - **Transport** — the backend that produces a session (`PlaywrightElectronTransport`, `CDPTransport`, `InjectorTransport`) behind one `ITransport` interface, advertising its capabilities.
 - **Eval gate** — the per-target `--allow-eval` opt-in that must permit a target before its arbitrary-JS tool is registered.
 - **Plugin** — a `@electron-stagewright/plugin-*` package loaded with `--plugin`, adding namespaced tools.
+- **Tool profile** — an explicit core subset selected with `--tool-profile`. `full` is the
+  compatibility default; profiles never grant eval or load plugins. The budget and default-change
+  policy are recorded in [ADR-021](../adr/021-tool-profiles-and-manifest-budgets.md).

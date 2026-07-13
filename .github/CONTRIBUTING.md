@@ -1,13 +1,11 @@
 # Contributing to Electron Stagewright
 
-This project is pre-alpha. The core server can already launch and drive real
-Electron apps, and first-party plugin packages now cover traces, IPC, network
-capture, and production checks. The first npm release is still ahead.
-
-If you're reading this before the first release ships: thanks for stopping by. The
-most useful contribution right now is **opening a discussion** with use cases or
-pain points from your own Electron testing experience — that input shapes which
-capabilities and docs are prioritized before the first release.
+This project is pre-1.0. The core server can already launch and drive real
+Electron apps, and first-party plugin packages cover accessibility audits,
+visual baselines, traces, IPC, network capture, storage, virtual time, native UI,
+and production checks. Packages are
+published to npm; feedback through GitHub Discussions and Issues still shapes the
+next capabilities and documentation.
 
 ## How we work
 
@@ -40,6 +38,14 @@ corepack enable
 pnpm install
 pnpm verify  # lint + typecheck + test + build + format check
 ```
+
+## Dependency updates
+
+Renovate opens a weekly grouped pull request for non-breaking npm maintenance; updates are never
+automergeable and still require the normal review and CI gates. Major updates are separate, require
+Dependency Dashboard approval, and must not mix platform upgrades in one pull request. Before merging a
+major Electron, Playwright, TypeScript, or framework update, run `pnpm verify`, `pnpm matrix`,
+`STAGEWRIGHT_E2E=1 pnpm test`, and `pnpm package:smoke` against the proposed version.
 
 ## Project structure
 

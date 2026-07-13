@@ -17,6 +17,7 @@ import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { type Snapshot, walkAccessibilityTree } from '../src/snapshot/index.js'
+import type { SurfaceDescriptor, WindowDescriptor } from '../src/transports/index.js'
 import { OBSERVE_TOOLS } from '../src/tools/observe/index.js'
 import { FakeSession, FakeTransport, type FakeEvaluate } from './helpers/fake-transport.js'
 
@@ -25,6 +26,20 @@ vi.mock('../src/tools/snapshot/inject.js', () => ({
   buildWalkBody: () => 'WALK',
   buildRetagBody: () => 'RETAG',
   loadInjectedWalker: () => 'BUNDLE',
+  runProbe: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'PROBE', arg),
+  runWalk: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'WALK', arg),
 }))
 
 /** A minimal valid PNG header (signature + IHDR width/height) for dimension parsing. */
@@ -63,18 +78,32 @@ function snap(html: string): Snapshot {
 }
 
 const created: string[] = []
+const ACTIVE_WINDOW: WindowDescriptor = {
+  id: 'w0',
+  index: 0,
+  title: 'Main',
+  visible: true,
+  focused: true,
+}
 afterEach(async () => {
   await Promise.all(created.splice(0).map((p) => rm(p, { recursive: true, force: true })))
 })
 
 function setup(
-  opts: { readonly evaluate?: FakeEvaluate; readonly screenshotResult?: Buffer } = {},
+  opts: {
+    readonly evaluate?: FakeEvaluate
+    readonly screenshotResult?: Buffer
+    readonly windows?: readonly WindowDescriptor[]
+    readonly surfaces?: readonly SurfaceDescriptor[]
+  } = {},
 ) {
   const sessions = new SessionManager()
   const session = new FakeSession({
     id: 'sess',
     ...(opts.evaluate !== undefined ? { evaluate: opts.evaluate } : {}),
     ...(opts.screenshotResult !== undefined ? { screenshotResult: opts.screenshotResult } : {}),
+    windows: opts.windows ?? [ACTIVE_WINDOW],
+    ...(opts.surfaces !== undefined ? { surfaces: opts.surfaces } : {}),
   })
   const snapshots = new SnapshotStore()
   sessions.register(new FakeTransport(), session)
@@ -84,6 +113,34 @@ function setup(
 }
 
 describe('electron_screenshot', () => {
+  it('rejects element crops from a selected iframe instead of applying frame-local coordinates to its host window', async () => {
+    const { dispatcher, session } = setup({
+      surfaces: [
+        {
+          id: 'root',
+          kind: 'window',
+          active: true,
+          capabilities: { snapshot: true, interaction: true, rendererEval: true },
+        },
+        {
+          id: 'frame',
+          kind: 'frame',
+          parentId: 'root',
+          active: false,
+          capabilities: { snapshot: true, interaction: true, rendererEval: true },
+        },
+      ],
+    })
+    await session.activateSurface('frame')
+
+    const result = (await dispatcher.dispatch('electron_screenshot', {
+      selector: '#inside-frame',
+    })) as ErrorResponse
+
+    expect(result).toMatchObject({ ok: false, code: 'SURFACE_UNSUPPORTED' })
+    expect(session.screenshotCalls).toEqual([])
+  })
+
   it('captures a window to the given absolute path and reports path/bytes/format/dimensions', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sw-shot-'))
     created.push(dir)
@@ -103,8 +160,23 @@ describe('electron_screenshot', () => {
     expect(res.bytes).toBe(24)
     expect(await readFile(out)).toHaveLength(24)
     // Defaults to the active window; fullPage flows through.
-    expect(session.screenshotCalls[0]?.target).toEqual({ kind: 'index', index: 0 })
+    expect(session.screenshotCalls[0]?.target).toEqual({ kind: 'id', id: 'w0' })
     expect(session.screenshotCalls[0]?.opts).toMatchObject({ format: 'png', fullPage: true })
+  })
+
+  it('targets the selected active window when no window selector is supplied', async () => {
+    const { dispatcher, session } = setup({
+      screenshotResult: pngBuffer(10, 10),
+      windows: [
+        { id: 'w0', index: 0, title: 'Main', visible: true, focused: false },
+        { id: 'w1', index: 1, title: 'Preferences', visible: true, focused: true },
+      ],
+    })
+
+    await expect(dispatcher.dispatch('electron_screenshot', {})).resolves.toMatchObject({
+      ok: true,
+    })
+    expect(session.screenshotCalls[0]?.target).toEqual({ kind: 'id', id: 'w1' })
   })
 
   it('reads JPEG dimensions past a length-less standalone marker (L5)', async () => {
@@ -143,7 +215,11 @@ describe('electron_screenshot', () => {
     const sessions = new SessionManager()
     sessions.register(
       new FakeTransport(),
-      new FakeSession({ id: 'sess', screenshotResult: pngBuffer(10, 10) }),
+      new FakeSession({
+        id: 'sess',
+        screenshotResult: pngBuffer(10, 10),
+        windows: [ACTIVE_WINDOW],
+      }),
     )
     const dispatcher = new Dispatcher({
       sessions,
@@ -165,7 +241,11 @@ describe('electron_screenshot', () => {
     const sessions = new SessionManager()
     sessions.register(
       new FakeTransport(),
-      new FakeSession({ id: 'sess', screenshotResult: pngBuffer(10, 10) }),
+      new FakeSession({
+        id: 'sess',
+        screenshotResult: pngBuffer(10, 10),
+        windows: [ACTIVE_WINDOW],
+      }),
     )
     const dispatcher = new Dispatcher({
       sessions,
@@ -186,7 +266,11 @@ describe('electron_screenshot', () => {
     const sessions = new SessionManager()
     sessions.register(
       new FakeTransport(),
-      new FakeSession({ id: 'sess', screenshotResult: pngBuffer(10, 10) }),
+      new FakeSession({
+        id: 'sess',
+        screenshotResult: pngBuffer(10, 10),
+        windows: [ACTIVE_WINDOW],
+      }),
     )
     const dispatcher = new Dispatcher({
       sessions,

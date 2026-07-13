@@ -78,12 +78,14 @@ import type {
   StopResult,
   StorageCookie,
   StorageSnapshot,
+  SurfaceDescriptor,
   TransportCapabilities,
   TransportId,
   TransportSession,
   TrayEventName,
   TrayInvokeResult,
   WindowDescriptor,
+  WindowRef,
 } from './types.js'
 
 const TRANSPORT_ID: TransportId = 'injector'
@@ -313,6 +315,25 @@ class InjectorSession implements TransportSession {
     return Array.isArray(windows) ? windows : []
   }
 
+  activateWindow(_target: WindowRef): Promise<WindowDescriptor> {
+    // The Node inspector session can enumerate BrowserWindows from main, but it
+    // has no renderer target for interaction/evaluation, so selecting one would
+    // be a false-success.
+    return Promise.reject(unsupported('activateWindow', 'supportsRendererEval'))
+  }
+
+  surfacesList(): Promise<readonly SurfaceDescriptor[]> {
+    return Promise.reject(unsupported('surfacesList', 'supportsSurfaceTargeting'))
+  }
+
+  activeSurface(): Promise<SurfaceDescriptor> {
+    return Promise.reject(unsupported('activeSurface', 'supportsSurfaceTargeting'))
+  }
+
+  activateSurface(_surfaceId: string): Promise<SurfaceDescriptor> {
+    return Promise.reject(unsupported('activateSurface', 'supportsSurfaceTargeting'))
+  }
+
   screenshot(): Promise<Buffer> {
     return Promise.reject(notImplemented('screenshot'))
   }
@@ -507,6 +528,12 @@ class InjectorSession implements TransportSession {
     this.#conn.close()
   }
 
+  async detach(): Promise<void> {
+    // The Inspector session did not launch the process. Closing its socket is
+    // the documented process-preserving detach operation.
+    await this.dispose()
+  }
+
   async forceKill(): Promise<void> {
     await this.stopGracefully({ force: true })
   }
@@ -543,6 +570,7 @@ export class InjectorTransport implements ITransport {
     supportsMainEval: true,
     supportsRendererEval: false,
     supportsInteraction: false,
+    supportsSurfaceTargeting: false,
   }
 
   readonly #wsFactory: WebSocketFactory | undefined

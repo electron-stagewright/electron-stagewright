@@ -154,6 +154,17 @@ describe('makeError', () => {
     expect(env.hint).toBe(ERROR_CODES.BAD_ARGUMENT.hint)
   })
 
+  it('overrides the recovery hint without changing the stable code or error message', () => {
+    const env = makeError('REF_NOT_FOUND', {
+      hint: 'Refresh the current renderer snapshot before selecting a new ref.',
+      now: () => FIXED_NOW,
+      startedAt: FIXED_NOW,
+    })
+    expect(env.code).toBe('REF_NOT_FOUND')
+    expect(env.error).toBe(ERROR_CODES.REF_NOT_FOUND.hint)
+    expect(env.hint).toBe('Refresh the current renderer snapshot before selecting a new ref.')
+  })
+
   it('reports deterministic elapsed_ms from injected now()', () => {
     let tick = FIXED_NOW
     const now = () => tick

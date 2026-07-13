@@ -180,3 +180,64 @@ because a trace is a _portable_ record — the viewer should be as portable as t
 
 New references: `packages/plugin-trace/src/viewer.ts` (`renderTraceHtml` / `escapeHtml`); the
 `trace_view` tool in `packages/plugin-trace/src/index.ts`.
+
+## Status Update (2026-07-13) — streaming JSONL v2 and crash recovery
+
+The original v1 buffer-on-stop tradeoff is replaced for new recordings. Version 2 keeps JSONL's
+human-readable, dependency-free format while making trace capture recoverable after a process or
+host failure:
+
+- **Lifecycle.** `trace_start` first creates `<path>.partial` and writes a `header` record
+  (`format: "stagewright-trace", version: 2`). Each dispatch appends a sequenced `call` record.
+  A clean `trace_stop` drains the writer, appends a `footer` with `complete:true`, the persisted
+  call count, overflow state, and exact budget spend, then atomically renames the partial file to
+  the requested path. An optional `fsync` plugin setting syncs before that rename when an operator
+  prefers durability over stop-time throughput.
+- **Recovery and compatibility.** A v2 reader accepts a `.partial` file without a footer and
+  returns `complete:false`; it also ignores only a final, unterminated JSON fragment, the expected
+  shape if execution ended during an append. It rejects malformed ordering, duplicate or skipped
+  sequence numbers, and lying footers. The v1 `meta`/`call` reader remains separate so a v2 file is
+  never presented as v1-compatible.
+- **Bounded observer path.** Dispatches redact and enqueue one record without awaiting disk I/O.
+  The queue is bounded by the configured persisted-record cap, preserves write order, and retains
+  only aggregate token data plus a bounded largest-response set for live reporting. A write error
+  leaves the partial artifact available, surfaces `trace.ARTIFACT_WRITE_FAILED`, and never reports
+  a false successful final artifact.
+- **Consumers.** Replay, token reporting, and the offline viewer consume the shared parsed v1/v2
+  projection. They can inspect partial evidence; only a footer-complete v2 artifact is published
+  at the requested final path.
+
+New references: `packages/plugin-trace/src/recorder.ts` (streaming writer, v1/v2 readers);
+`packages/plugin-trace/src/index.ts` (start/stop lifecycle); `packages/plugin-trace/src/viewer.ts`
+(partial-artifact disclosure).
+
+## Status Update (2026-07-13) — promoted replay specifications
+
+Raw replay intentionally remains a diagnostic comparison of stable `ok`/error-code outcomes. A
+new `trace_promote` path turns selected trace calls into a compact `stagewright-replay` v1 JSON
+specification for review and eventual automation:
+
+- Promotion retains only call args and explicit `ok` checkpoints; it does not copy arbitrary
+  response payloads into a committed contract. Recorded session ids become deterministic
+  placeholders that a runner resolves from the fresh launch result.
+- Promotion redacts password, token, authorization, and cookie argument fields by default and
+  accepts additional scoped `args.*` redactions before it writes the spec. The same configured
+  result redactions are applied to mismatch reports.
+- The pure spec engine supports intentional result checks (`exact`, `subset`, `regex`, `ignore`)
+  and numeric tolerance. Session ids, timestamps, and absolute paths can be normalized so they do
+  not create false positives. Regex checks reject oversize or nested-quantifier sources before
+  execution and cap their input.
+
+New references: `packages/plugin-trace/src/spec.ts` (schema, promotion, oracle engine) and the
+`trace_promote` tool in `packages/plugin-trace/src/index.ts`.
+
+## Status Update (2026-07-13) — headless replay runner
+
+`@electron-stagewright/plugin-trace` now publishes an `electron-stagewright-replay` executable for
+CI. It reads one promoted spec, starts a fresh core server with the requested plugin/eval/profile
+configuration, runs the existing dispatcher path, and emits either a compact human report or one
+machine-readable JSON object. Exit codes distinguish checkpoint mismatch, malformed spec, failed
+app launch, infrastructure, and CLI usage. Filters preserve the session creator of a selected
+dependent step, so narrowing a run never leaves a stale placeholder. The package smoke packs the
+plugin, installs it outside the monorepo beside core, and proves the published bin against a real
+Electron app.

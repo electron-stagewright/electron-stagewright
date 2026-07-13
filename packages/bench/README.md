@@ -17,6 +17,10 @@ pnpm build        # builds packages/core/dist/cli.js, which the harness spawns
 pnpm bench        # human table to stderr, JSON report to stdout
 pnpm bench --json report.json   # also write the JSON report to a file
 pnpm bench:check  # same run, but exit non-zero on a deterministic-metric regression
+STAGEWRIGHT_BENCH_PHASE_TIMEOUT_MS=45000 pnpm bench --json output/benchmark.json
+pnpm manifest:check # verify the host-visible manifest budget baseline
+pnpm manifest:report -- --json output/manifest.json # write manifest measurements
+pnpm bench:profiles -- --json output/profile-benchmark.json # full vs essential tasks
 ```
 
 or scoped: `pnpm --filter @electron-stagewright/bench bench`.
@@ -24,6 +28,26 @@ or scoped: `pnpm --filter @electron-stagewright/bench bench`.
 `pnpm bench > report.json` captures the machine report while the human table stays
 visible (the table is on stderr). You need a desktop session (a display): each scenario
 launches a real Electron window.
+
+## Manifest budgets and core profiles
+
+`pnpm manifest:check` captures the actual `{ tools }` object returned by MCP `tools/list`, not the
+richer internal documentation manifest. It reports Unicode characters, UTF-8 bytes, GPT-class BPE
+tokens, canonical tool ordering, and the ten most expensive tools for full core, every named core
+profile, each first-party plugin, and all first-party plugins together, with and without eval.
+
+The committed baseline permits no unreviewed BPE growth over 3%. Update it only after reviewing the
+change and supplying a reason:
+
+```sh
+pnpm --filter @electron-stagewright/bench manifest:update -- \
+  --reason "Explain the schema or capability change"
+```
+
+`full` remains the compatibility default. `pnpm bench:profiles` drives twelve real Electron tasks
+against `full` and the opt-in `essential` profile, reporting task success, calls, explicit retries,
+manifest BPE, response BPE, and total BPE. A smaller profile is not eligible to become the default
+until it reaches at least 95% of full's task success rate and saves material context.
 
 ## Scenarios
 
@@ -91,7 +115,10 @@ pnpm bench:check   # exits 1 if a tool-call count drifts or a saving collapses b
 Savings are floors, not exact targets — a better run never trips, and the token floor sits a
 margin below the observed baseline so normal jitter does not false-trip while a real collapse
 does. `checkThresholds` is a pure function, so it also runs as a fast unit test in `pnpm test`
-(no Electron) — that test is the CI-side guard; `--check` is the real-run guard.
+(no Electron). A separate Linux/Xvfb diagnostic job runs the first-party harness without `--check`,
+records a bounded connect/launch/scenario/memory/stop timeline for every scenario, and uploads the
+JSON report without blocking a pull request. `--check` remains the real-run guard for a reviewed
+local or release validation after the diagnostic evidence has proved stable.
 
 When the bench app or a response shape legitimately changes, re-baseline with
 `pnpm bench --update-thresholds`: it prints a fresh spec derived from the current run (to stderr,
@@ -99,57 +126,52 @@ alongside the table — this mode writes no JSON report to stdout) for you to pa
 `DEFAULT_THRESHOLDS`. In a normal run the machine JSON report carries the threshold outcome under
 `thresholds` (`{ passed, violations }`), versioned by `schema_version`.
 
-## Comparing against other MCP servers
+## Reproducible competitive comparison
 
-`pnpm bench --compare` runs a set of **fair shared tasks** (in `src/adapters.ts`) against every
-registered server target and prints a per-target contrast — tool calls and real (BPE) tokens, with
-each target's delta versus our server. The shared tasks are expressed only through generic
-interactions (type, click, find, assert text), so a competing Electron MCP server can do the same
-task through its own tools. Only the BPE token count is contrasted across servers; the server-side
-`estimated_tokens` heuristic is not comparable between different servers.
+`pnpm bench --compare --json artifacts/comparison.json` runs the same two observable UI tasks against
+the built Stagewright server and the lockfile-pinned `electron-driver@0.3.1` adapter. Each target
+launches the same fixture entry point directly through Playwright/Electron; neither receives a CDP
+port, a privileged sidecar, or setup unavailable to the other.
 
-Out of the box only our own server (`stagewright`) is registered, so `--compare` reports a single
-target. To compare against another server you write one **adapter** — the seam that maps the shared
-task to that server's tools:
+The shared tasks use primitive type/click/wait/read interactions and one exact-text success oracle per
+task. A row passes only when the expected visible text matches exactly, so both targets are held to the
+same semantic outcome rather than merely completing a click.
 
-```ts
-import { type TaskAdapter } from './harness.js'
-import { GREETING_TASK } from './adapters.js'
+The default protocol is two discarded warmups followed by ten retained fresh-process runs. It records
+per task and target:
 
-const rivalAdapter: TaskAdapter = {
-  target: { name: 'rival', command: 'npx', args: ['some-electron-mcp-server'] },
-  task: GREETING_TASK,
-  launch: async (client) => {
-    /* call the rival's launch tool; return its session id */
-  },
-  run: async (driver) => {
-    /* drive the same task via the rival's type/click/assert tools, using `call(driver, ...)` */
-  },
-  stop: async (client, sessionId) => {
-    /* call the rival's stop/close tool */
-  },
-  // sampleMemory is optional — omit it when the server can't report memory.
-}
+- calls, retries, failed calls, request-argument BPE, and response BPE;
+- `tools/list` characters/BPE and cold spawn + initialize + manifest latency;
+- median, nearest-rank p95, min, and max for every retained numeric measure;
+- every raw warmup and retained row (including failures), plus fixture/harness SHA-256s, checkout
+  commit/dirty state, host environment, executable command and entry SHA-256, pinned package
+  provenance, explicit child-environment names (never values), and a target's self-reported server
+  version when it differs from its package version.
+
+Use a short run only as a local smoke:
+
+```sh
+pnpm bench --compare --compare-warmup 0 --compare-iterations 1
 ```
 
-Add the adapter to the list `--compare` runs (alongside `stagewrightAdapters()`), then
-`pnpm bench --compare`. The real competitor run is on-demand (you supply the competitor binary),
-just like the other real-Electron smokes — the comparison framework, our adapters, and the contrast
-math are exercised by `pnpm test`; the cross-server numbers are produced when you wire a competitor.
-`--compare-target name=command,arg,arg` overrides the spawn of a registered adapter by name (e.g. to
-point an adapter at a specific install path) without editing code. The `--compare` machine report
-(stdout / `--json`) carries a `comparison` block under its own `schema_version`.
+That artifact is explicitly labelled `exploratory`. A `reviewable` local artifact requires at least ten
+retained successful runs and one warmup; it still is **not** a published performance claim. Publish or
+repeat a comparison only from a saved artifact that names the fixture, environment, target version, npm
+tarball hash, and source commit. Do not substitute an arbitrary executable at the command line: add a
+pinned adapter with its provenance and shared oracle instead.
 
 ## Scope and limitations
 
-- **Local only.** Like the other real-Electron smokes in this repo, the benchmark runs on
-  demand on a machine with a display; it is not wired into CI.
-- **Competitor comparison is a framework, not bundled data.** `pnpm bench --compare` ships with our
-  server as the only registered target; producing cross-server numbers needs a competitor server
-  installed and an adapter for it (see above). The contrast math + our adapters are gate-tested; the
-  real competitor run is on-demand.
+- **First-party CI diagnostics are non-blocking.** A Linux/Xvfb job runs `pnpm bench` with a bounded
+  phase timeout and uploads its JSON report. It does not run `--check` or a competitor command, so
+  observed startup failures remain evidence to fix rather than a pull-request veto.
+- **Competitive results are local evidence, not release copy.** The repository ships a pinned
+  `electron-driver@0.3.1` adapter and test coverage for the protocol, but no numeric claim or checked-in
+  benchmark result. Run it on demand, inspect the JSON artifact, and reproduce it before communicating
+  a conclusion.
 - **Regression thresholds enforce the deterministic metrics only** (tool-call counts +
   contrast savings) — see above. Latency and memory are never asserted. Enforcement against a
-  real run is local/on-demand (`pnpm bench:check`); the pure checker runs in CI via `pnpm test`.
+  real run is deliberate (`pnpm bench:check`); the diagnostic CI run reports those thresholds without
+  enforcing them, and the pure checker runs in CI via `pnpm test`.
 - The estimated-token figure uses core's char/4 heuristic, not a model tokenizer; treat
   it as a comparable proxy across scenarios, not an absolute token cost.

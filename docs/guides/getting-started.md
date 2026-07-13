@@ -6,6 +6,28 @@ read the UI, interact, assert, capture, stop. The walkthrough drives the bundled
 shown below is the same flow its scripted scenario automates, and a gated repository test
 executes this exact sequence against real Electron so the tutorial stays runnable.
 
+<!-- stagewright-resource:begin -->
+
+## Agent quick reference: first Electron session
+
+1. Start a session with `electron_launch` (or `electron_attach` for an existing app) and retain
+   its `session_id`.
+2. Read the UI with `electron_snapshot`; use `electron_find` with role/name when you need a
+   specific element. Prefer returned refs to guessed selectors.
+3. Interact through granular tools such as `electron_click`, `electron_type`, and
+   `electron_select_option`.
+4. Assert the result with an `electron_expect_*` tool rather than a client-side polling loop.
+5. On an error, branch on its stable `code`; follow `hint`, `next_actions`, and `similar_refs`
+   instead of parsing error prose.
+6. Call `electron_stop` on every completion and failure path.
+
+The default server exposes no arbitrary JavaScript execution. Enable only the narrow eval target
+your flow needs (`--allow-eval=renderer` or `--allow-eval=main`) after reading the security guide.
+`tools/list` is the exact live schema; this resource is a workflow summary, not a substitute for
+tool contracts.
+
+<!-- stagewright-resource:end -->
+
 ## Prerequisites
 
 - Node.js 24 or newer (see `engines` in `package.json`; the server has no native dependencies).
@@ -43,6 +65,10 @@ Useful server flags (append to `args`): `--screenshot-dir <dir>` for a stable sc
 `--allow-eval` to register the JavaScript-evaluation tools (off by default; grant the narrowest
 target with `--allow-eval=renderer` or `--allow-eval=main`), `--plugin <name>` to load a plugin. The
 full list is in the [tool reference](../../TOOL-REFERENCE.md).
+
+The built checkout also provides `node packages/core/dist/cli.js doctor --json` for a standalone
+preflight of Node, Playwright, Electron, display, paths, and eval policy. Do not append it to an MCP
+host's server arguments. The pinned public core 0.2.0 package does not include this command yet.
 
 That `node …/dist/cli.js` form points at this cloned checkout, which is what runs the bundled
 example. To wire the **published** package into your client and drive **your own** app instead — with

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Preferences window</title>
+  </head>
+  <body>
+    <h1>Preferences window</h1>
+    <button
+      id="preferences-action"
+      onclick="document.querySelector('#preferences-status').textContent = 'Preferences clicked'"
+    >
+      Preferences action
+    </button>
+    <button id="reload-preferences" onclick="window.location.reload()">Reload preferences</button>
+    <button id="close-preferences" onclick="window.close()">Close preferences</button>
+    <p id="preferences-status">Waiting</p>
+    <p id="reload-count"></p>
+    <script>
+      const count = Number(sessionStorage.getItem('reload-count') ?? '0') + 1
+      sessionStorage.setItem('reload-count', String(count))
+      document.querySelector('#reload-count').textContent = `Reload ${count}`
+    </script>
+  </body>
+</html>

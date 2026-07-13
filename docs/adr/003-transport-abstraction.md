@@ -476,3 +476,39 @@ flag. Both observe-capable transports already advertise it: the **Playwright** t
 `page.evaluate`, the **CDP** transport via `Runtime.evaluate` against a page target; the **injector**
 keeps `supportsRendererEval: false`, so the per-key tools return `storage.UNSUPPORTED` there — the same
 two-implementers-plus-injector shape the storage seam itself has.
+
+## Status Update — 2026-07-10: active window selection and process-preserving detach
+
+`TransportSession` now carries two lifecycle operations that make multi-window
+sessions explicit without coupling tools to a concrete transport:
+
+```ts
+activateWindow(target: WindowRef): Promise<WindowDescriptor>
+detach(): Promise<void>
+```
+
+- **Active-window selection is a Stagewright target, not an OS-focus promise.**
+  `electron_switch_window` resolves a `WindowRef` through the common selector
+  precedence, then subsequent renderer-implicit reads and interactions use that
+  selected window. Playwright stores the selected `Page`; CDP stores the selected
+  page target. If that target closes, both deterministically fall back to the
+  first live window. Console, dialog, and network buffers continue to preserve
+  each event's source `windowId`, so changing the active target never rewrites
+  event attribution.
+- **No new capability flag is needed.** The method itself is the narrow seam:
+  Playwright and CDP implement it, while Injector rejects it with the existing
+  `TRANSPORT_UNSUPPORTED` signal because it has no renderer interaction target.
+  This avoids advertising a broad capability that is meaningful only to one
+  lifecycle command.
+- **Detach is ownership-aware.** CDP and Injector sessions were attached to a
+  running process, so their `detach()` closes transport sockets through their
+  existing idempotent `dispose()` paths and never sends `Browser.close`,
+  Electron quit, or SIGKILL. A Playwright launch session rejects detach with
+  `TRANSPORT_UNSUPPORTED`: its application handle owns the process and closing
+  it is indistinguishable from stopping it. The session manager deletes a
+  successfully detached session and restores it if the transport disconnect
+  fails.
+
+The real-Electron suite covers switching a two-window Playwright fixture,
+deterministic recovery after the selected window closes, and CDP attach followed
+by detach while the Electron process remains alive.

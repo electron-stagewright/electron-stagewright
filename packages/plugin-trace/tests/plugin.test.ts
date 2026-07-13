@@ -9,10 +9,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { createServer, defineTool, makeSuccess } from '@electron-stagewright/core'
+import { connectMcpTestClient } from '@electron-stagewright/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
@@ -72,7 +71,8 @@ describe('trace plugin (in-process)', () => {
       })
       await server.dispatcher.dispatch('demo_echo', { value: 'a' })
       await server.dispatcher.dispatch('demo_echo', { value: 'b' })
-      // Live token report (artifact is not written until stop). trace_* calls are not counted.
+      // Live token report is aggregated while calls stream to the partial artifact. trace_* calls
+      // are not counted.
       expect(await server.dispatcher.dispatch('trace_tokens', {})).toMatchObject({
         ok: true,
         calls: 2,
@@ -168,27 +168,42 @@ describe('trace plugin (in-process)', () => {
     }
   })
 
-  it('keeps the active recording retryable when stop fails to write', async () => {
+  it('promotes a trace into a redacted, reviewable replay spec', async () => {
+    const file = await tmpFile()
+    const out = file.replace(/\.jsonl$/, '.replay.json')
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file })
+      await server.dispatcher.dispatch('demo_echo', { value: 'secret-to-remove' })
+      await server.dispatcher.dispatch('trace_stop', {})
+      expect(
+        await server.dispatcher.dispatch('trace_promote', {
+          path: file,
+          redactions: ['args.value'],
+        }),
+      ).toMatchObject({ ok: true, path: out, source: file, steps: 1 })
+      const spec = await readFile(out, 'utf8')
+      expect(spec).toContain('stagewright-replay')
+      expect(spec).toContain('[redacted]')
+      expect(spec).not.toContain('secret-to-remove')
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('reports an invalid output target when starting without leaving a fake active recording', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sw-trace-stop-fails-'))
     created.push(dir)
     const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
     try {
-      await server.dispatcher.dispatch('trace_start', { path: dir })
-      await server.dispatcher.dispatch('demo_echo', { value: 'a' })
-      expect(await server.dispatcher.dispatch('trace_stop', {})).toMatchObject({
+      expect(await server.dispatcher.dispatch('trace_start', { path: dir })).toMatchObject({
         ok: false,
         code: 'trace.ARTIFACT_WRITE_FAILED',
         retryable: true,
       })
       expect(await server.dispatcher.dispatch('trace_status', {})).toMatchObject({
         ok: true,
-        recording: true,
-        records: 1,
-      })
-      await server.dispatcher.dispatch('demo_echo', { value: 'b' })
-      expect(await server.dispatcher.dispatch('trace_status', {})).toMatchObject({
-        ok: true,
-        records: 2,
+        recording: false,
       })
     } finally {
       await server.close().catch(() => undefined)
@@ -479,11 +494,9 @@ describe('trace plugin (over the MCP protocol)', () => {
   it('loads via the plugin model and captures a tools/call session', async () => {
     const file = await tmpFile()
     const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: 'trace-test', version: '0.0.0' })
+    const connection = await connectMcpTestClient(server)
+    const { client } = connection
     try {
-      await Promise.all([server.mcp.connect(serverTransport), client.connect(clientTransport)])
-
       const tools = (await client.listTools()).tools.map((t) => t.name)
       expect(tools).toEqual(expect.arrayContaining(['trace_start', 'trace_stop', 'trace_tokens']))
 
@@ -496,7 +509,7 @@ describe('trace plugin (over the MCP protocol)', () => {
       expect(calls).toHaveLength(1)
       expect(calls[0]?.tool).toBe('demo_echo')
     } finally {
-      await client.close().catch(() => undefined)
+      await connection.close()
       await server.close().catch(() => undefined)
     }
   })

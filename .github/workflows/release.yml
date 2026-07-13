@@ -1,0 +1,111 @@
+name: Publish packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'all, or comma-separated public @electron-stagewright package names'
+        required: true
+        default: all
+        type: string
+      publish:
+        description: 'Publish after validation (false performs a safe dry run)'
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Validate and publish npm packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: npm-publish
+    env:
+      ELECTRON_DISABLE_SANDBOX: '1'
+      RELEASE_PACKAGES: ${{ inputs.packages || 'all' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install the npm CLI required for trusted publishing
+        run: |
+          npm install --global npm@11.5.1
+          npm --version
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve locked Electron version
+        id: electron
+        run: |
+          version="$(grep -oE 'electron@[0-9]+\.[0-9]+\.[0-9]+' pnpm-lock.yaml | head -1 | cut -d@ -f2)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Electron release zip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: electron-binary-${{ runner.os }}-${{ steps.electron.outputs.version }}
+
+      - name: Ensure the Electron binary is present
+        shell: bash
+        env:
+          ELECTRON_VERSION: ${{ steps.electron.outputs.version }}
+        run: |
+          electron_dir="$(node -p "require('path').dirname(require.resolve('electron/package.json'))")"
+          if node -e "require('electron')" 2>/dev/null; then
+            echo "Electron binary already present."
+          else
+            zip="electron-v${ELECTRON_VERSION}-linux-x64.zip"
+            cache_zip="${HOME}/.cache/electron/${zip}"
+            if [ ! -s "${cache_zip}" ]; then
+              mkdir -p "${HOME}/.cache/electron"
+              curl -fsSL --retry 3 --retry-all-errors \
+                "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/${zip}" \
+                -o "${cache_zip}"
+            fi
+            rm -rf "${electron_dir}/dist" "${electron_dir}/path.txt"
+            mkdir -p "${electron_dir}/dist"
+            unzip -q "${cache_zip}" -d "${electron_dir}/dist"
+            printf 'electron' > "${electron_dir}/path.txt"
+          fi
+          node -e "console.log('Electron resolved to:', require('electron'))"
+        working-directory: packages/core
+
+      - name: Validate source and package tarballs
+        run: |
+          pnpm verify
+          xvfb-run --auto-servernum pnpm package:smoke
+
+      - name: Pack and dry-run every unpublished selected package
+        run: node scripts/release-publish.mjs --packages "$RELEASE_PACKAGES"
+
+      - name: Publish with npm trusted publishing
+        if: github.event_name == 'release' || inputs.publish
+        run: node scripts/release-publish.mjs --packages "$RELEASE_PACKAGES" --publish
+
+      - name: Preserve the release summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-release-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/release/release-summary.json
+          if-no-files-found: warn
+          retention-days: 90

@@ -12,7 +12,7 @@ import { snapshotTool } from './snapshot.js'
 
 export { snapshotTool, makeSnapshotTool, type SnapshotToolDeps } from './snapshot.js'
 export { findTool, makeFindTool, type FindToolDeps } from './find.js'
-export { loadInjectedWalker, buildWalkBody } from './inject.js'
+export { loadInjectedWalker, runWalk, runProbe } from './inject.js'
 
 /** The snapshot tools registered with the dispatcher by default. */
 export const SNAPSHOT_TOOLS: readonly AnyToolDefinition[] = [snapshotTool, findTool]

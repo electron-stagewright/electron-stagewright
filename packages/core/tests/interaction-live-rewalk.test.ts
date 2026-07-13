@@ -19,6 +19,13 @@ vi.mock('../src/tools/snapshot/inject.js', () => ({
   buildRetagBody: () => 'RETAG',
   buildWalkBody: () => 'WALK',
   loadInjectedWalker: () => 'BUNDLE',
+  runWalk: <T>(
+    session: {
+      evaluate<U>(target: 'renderer' | 'main', body: string, arg: unknown): Promise<U>
+    },
+    _bundle: string,
+    arg: unknown,
+  ) => session.evaluate<T>('renderer', 'WALK', arg),
 }))
 
 function snap(html: string): Snapshot {

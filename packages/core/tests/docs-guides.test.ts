@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createServer } from '../src/server/server.js'
 import { NOOP_LOGGER } from '../src/server/logger.js'
+import a11yPlugin from '../../plugin-a11y/src/index.js'
 import clockPlugin from '../../plugin-clock/src/index.js'
 import ipcPlugin from '../../plugin-ipc/src/index.js'
 import nativeUiPlugin from '../../plugin-native-ui/src/index.js'
@@ -30,6 +31,7 @@ import networkPlugin from '../../plugin-network/src/index.js'
 import productionPlugin from '../../plugin-production/src/index.js'
 import storagePlugin from '../../plugin-storage/src/index.js'
 import tracePlugin from '../../plugin-trace/src/index.js'
+import visualPlugin from '../../plugin-visual/src/index.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..')
@@ -37,6 +39,7 @@ const GUIDES_DIR = path.join(REPO_ROOT, 'docs', 'guides')
 const ADR_DIR = path.join(REPO_ROOT, 'docs', 'adr')
 const GITHUB_DIR = path.join(REPO_ROOT, '.github')
 const FIRST_PARTY_PLUGINS = [
+  a11yPlugin,
   tracePlugin,
   productionPlugin,
   ipcPlugin,
@@ -44,6 +47,7 @@ const FIRST_PARTY_PLUGINS = [
   clockPlugin,
   storagePlugin,
   nativeUiPlugin,
+  visualPlugin,
 ] as const
 
 /** One markdown document loaded for scanning. */
@@ -102,7 +106,7 @@ async function loadLinkCheckedDocs(): Promise<MarkdownDoc[]> {
  * `electron_expect_*`) survives the match and is validated as a prefix.
  */
 const TOOL_MENTION =
-  /\b(?:electron|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
+  /\b(?:electron|a11y|visual|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
 
 /** The full set of real tool names: the live core manifest plus every first-party plugin. */
 async function collectKnownToolNames(): Promise<ReadonlySet<string>> {
@@ -112,6 +116,19 @@ async function collectKnownToolNames(): Promise<ReadonlySet<string>> {
     for (const entry of server.dispatcher.listManifest()) known.add(entry.name)
   } finally {
     await server.close().catch(() => undefined)
+  }
+  // `electron_plugins` is deliberately absent from a lean plugin-free core, so include the
+  // conditional surface through one real loaded plugin rather than treating its docs mention as
+  // an unverified string literal.
+  const pluginServer = await createServer({
+    allowEval: true,
+    logger: NOOP_LOGGER,
+    plugins: [tracePlugin],
+  })
+  try {
+    for (const entry of pluginServer.dispatcher.listManifest()) known.add(entry.name)
+  } finally {
+    await pluginServer.close().catch(() => undefined)
   }
   // The loader registers plugin tools as `<plugin>_<tool>` (ADR-004).
   for (const plugin of FIRST_PARTY_PLUGINS) {

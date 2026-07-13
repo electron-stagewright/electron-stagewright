@@ -35,6 +35,19 @@
 import { StagewrightError } from '../errors/registry.js'
 import type { ITransport, SessionId, StopResult, TransportSession } from '../transports/types.js'
 
+/** Why a session was released from this manager. */
+export type SessionEndReason = 'stop' | 'force_kill' | 'detach' | 'server_close'
+
+/** A post-release lifecycle notification for server-owned integrations. */
+export interface SessionEndEvent {
+  readonly sessionId: SessionId
+  readonly reason: SessionEndReason
+  readonly remainingSessionIds: readonly SessionId[]
+}
+
+/** An asynchronous observer that may discard state associated with a released session. */
+export type SessionEndListener = (event: SessionEndEvent) => void | Promise<void>
+
 /** A live session plus the transport that owns its lifecycle. */
 export interface ManagedSession {
   readonly id: SessionId
@@ -48,6 +61,7 @@ export interface ManagedSession {
  */
 export class SessionManager {
   readonly #sessions = new Map<SessionId, ManagedSession>()
+  readonly #endListeners = new Set<SessionEndListener>()
 
   /**
    * Record a freshly launched/attached/injected session. Returns the managed
@@ -93,6 +107,17 @@ export class SessionManager {
   /** Snapshot of all live sessions, in insertion order. */
   list(): readonly ManagedSession[] {
     return [...this.#sessions.values()]
+  }
+
+  /**
+   * Observe successful removal of a session from this server. Listeners are best-effort:
+   * a plugin cleanup failure must not turn a completed stop/detach into a protocol error.
+   */
+  onSessionEnd(listener: SessionEndListener): () => void {
+    this.#endListeners.add(listener)
+    return () => {
+      this.#endListeners.delete(listener)
+    }
   }
 
   /**
@@ -154,14 +179,46 @@ export class SessionManager {
     // transport's stop escalates to SIGKILL on timeout, so releasing the id up
     // front can no longer orphan a process without a handle.
     this.#sessions.delete(id)
-    if (opts.force === true) {
-      await managed.transport.forceKill(managed.session)
-      return { escalated: false }
+    try {
+      if (opts.force === true) {
+        await managed.transport.forceKill(managed.session)
+        return { escalated: false }
+      }
+      return await managed.transport.stop(
+        managed.session,
+        opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : undefined,
+      )
+    } finally {
+      await this.#notifySessionEnd(id, opts.force === true ? 'force_kill' : 'stop')
     }
-    return managed.transport.stop(
-      managed.session,
-      opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : undefined,
-    )
+  }
+
+  /**
+   * Release an attached/injected session without asking its app to stop. The
+   * session is removed before awaiting the transport disconnect so concurrent
+   * callers cannot act through a handle that is being detached. If the
+   * disconnect itself fails, the original managed entry is restored unless a
+   * new session claimed the id in the meantime.
+   */
+  async detach(id: SessionId): Promise<void> {
+    const managed = this.#sessions.get(id)
+    if (managed === undefined) {
+      throw new StagewrightError(
+        'NOT_RUNNING',
+        `No session with id "${id}". It may have been stopped.`,
+        {
+          sessionId: id,
+        },
+      )
+    }
+    this.#sessions.delete(id)
+    try {
+      await managed.session.detach()
+    } catch (cause) {
+      if (!this.#sessions.has(id)) this.#sessions.set(id, managed)
+      throw cause
+    }
+    await this.#notifySessionEnd(id, 'detach')
   }
 
   /**
@@ -174,9 +231,23 @@ export class SessionManager {
     const all = [...this.#sessions.values()]
     this.#sessions.clear()
     await Promise.allSettled(all.map((m) => m.transport.stop(m.session)))
+    await Promise.all(all.map((managed) => this.#notifySessionEnd(managed.id, 'server_close')))
   }
 
   #ids(): readonly string[] {
     return [...this.#sessions.keys()]
+  }
+
+  async #notifySessionEnd(sessionId: SessionId, reason: SessionEndReason): Promise<void> {
+    const event: SessionEndEvent = {
+      sessionId,
+      reason,
+      remainingSessionIds: this.#ids(),
+    }
+    await Promise.allSettled(
+      [...this.#endListeners].map(async (listener) => {
+        await listener(event)
+      }),
+    )
   }
 }

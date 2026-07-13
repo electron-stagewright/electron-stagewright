@@ -26,6 +26,8 @@
  *   launch-time tray read + event invocation) via the transport-owned native-UI seam (ADR-019/020).
  * - `supportsMainEval: true` — `electronApp.evaluate()`.
  * - `supportsRendererEval: true` — `page.evaluate()`.
+ * - `supportsSurfaceTargeting: true` — roots and nested renderer frames can be
+ *   discovered and selected with opaque session-lifetime ids.
  *
  * @module
  */
@@ -48,6 +50,8 @@ import type {
   PWDialog,
   PWElectron,
   PWElectronApp,
+  PWCdpSession,
+  PWFrame,
   PWModule,
   PWPage,
   PWRequest,
@@ -109,6 +113,8 @@ import type {
   TransportCapabilities,
   TransportId,
   TransportSession,
+  SurfaceDescriptor,
+  SurfaceKind,
   TrayEventName,
   TrayInvokeResult,
   WindowDescriptor,
@@ -116,6 +122,80 @@ import type {
 } from './types.js'
 
 const TRANSPORT_ID: TransportId = 'playwright-electron'
+
+type RendererTarget = PWPage | PWFrame
+type RendererCapability = keyof SurfaceDescriptor['capabilities']
+
+interface RootSurfaceMetadata {
+  readonly webContentsId?: number
+  readonly kind: SurfaceKind
+  readonly parentWebContentsId?: number
+  readonly title?: string
+  readonly url?: string
+}
+
+interface KnownSurface {
+  readonly id: string
+  readonly target: RendererTarget
+  readonly rootPage: PWPage
+  readonly kind: SurfaceKind
+  readonly parentId?: string
+  readonly title?: string
+  readonly url?: string
+  readonly originRelation?: 'same-origin' | 'cross-origin' | 'opaque'
+  readonly capabilities: SurfaceDescriptor['capabilities']
+  closed: boolean
+}
+
+const SURFACE_CAPABILITIES: SurfaceDescriptor['capabilities'] = {
+  snapshot: true,
+  interaction: true,
+  rendererEval: true,
+}
+
+/**
+ * Resolve one CDP target id through Electron main-process metadata. BrowserWindow and
+ * WebContentsView both report `getType() === 'window'`, so ownership is determined by
+ * traversing each native window's `contentView` tree rather than guessing from URL/title.
+ */
+const ROOT_SURFACE_METADATA_BODY = `
+const targetId = arg.targetId;
+const webContents = electronApp.webContents;
+const BrowserWindow = electronApp.BrowserWindow;
+const target = webContents.fromDevToolsTargetId(targetId);
+if (!target) return { kind: 'other' };
+const windows = BrowserWindow.getAllWindows();
+const browserWindow = windows.find((window) => window.webContents.id === target.id);
+function findViewParent(view, parentWebContentsId) {
+  const children = Array.isArray(view.children) ? view.children : [];
+  for (const child of children) {
+    const childWebContents = child.webContents;
+    if (childWebContents) {
+      if (childWebContents.id === target.id) return parentWebContentsId;
+      const nested = findViewParent(child, childWebContents.id);
+      if (nested !== undefined) return nested;
+    } else {
+      const nested = findViewParent(child, parentWebContentsId);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}
+let viewParent;
+for (const window of windows) {
+  viewParent = findViewParent(window.contentView, window.webContents.id);
+  if (viewParent !== undefined) break;
+}
+const type = target.getType();
+return {
+  webContentsId: target.id,
+  kind: browserWindow ? 'window' : type === 'webview' ? 'webview' : viewParent !== undefined ? 'webcontents_view' : 'other',
+  ...(type === 'webview' && target.hostWebContents ? { parentWebContentsId: target.hostWebContents.id } : {}),
+  ...(viewParent !== undefined ? { parentWebContentsId: viewParent } : {}),
+  ...(target.getTitle() ? { title: target.getTitle() } : {}),
+  ...(target.getURL() ? { url: target.getURL() } : {}),
+};
+`
 
 /**
  * Default budget for a graceful `stop` before escalating to SIGKILL. A hung app
@@ -363,6 +443,10 @@ export function buildPlaywrightLaunchOptions(opts: LaunchOptions): PlaywrightLau
   }
 }
 
+function isMissingElectronRuntime(message: string): boolean {
+  return /cannot find (?:module|package) ['"]electron['"]/i.test(message)
+}
+
 class PlaywrightSession implements TransportSession {
   public readonly id: string
   public readonly transport: TransportId = TRANSPORT_ID
@@ -373,6 +457,15 @@ class PlaywrightSession implements TransportSession {
   private disposed = false
   private readonly windowIds = new WeakMap<PWPage, string>()
   private nextWindowId = 0
+  /** Opaque ids for page roots and frames; never derived from mutable renderer metadata. */
+  private readonly surfaceIds = new WeakMap<object, string>()
+  private readonly surfaces = new Map<string, KnownSurface>()
+  private nextSurfaceId = 0
+  private activeSurfaceId: string | undefined
+  /** Session-selected renderer target; undefined means the first live page. */
+  private activeWindowId: string | undefined
+  /** Serializes switches so two agents cannot interleave their target updates. */
+  private windowSwitch = Promise.resolve()
   /** True when this session was launched with `instrumentNative` (the tray hook is in place). */
   private readonly instrumented: boolean
   /** Temp dir holding the launch shim, removed on dispose; undefined when not instrumented. */
@@ -440,7 +533,11 @@ class PlaywrightSession implements TransportSession {
     // to attach is non-fatal — the buffers simply stay empty. When the caller
     // already resolved the first window (launch does), reuse it so we make no
     // extra firstWindow() call.
-    if (initialPage !== undefined) this.attachCaptureTo(initialPage)
+    if (initialPage !== undefined) {
+      this.activeWindowId = this.idForWindow(initialPage)
+      this.activeSurfaceId = this.idForSurface(initialPage)
+      this.attachCaptureTo(initialPage)
+    }
     try {
       for (const page of app.windows()) this.attachCaptureTo(page)
       app.on?.('window', (page) => this.attachCaptureTo(page))
@@ -1150,8 +1247,7 @@ class PlaywrightSession implements TransportSession {
           }
         }
         const state = g[key] as
-          | { needle?: unknown; active?: boolean; nextSeq?: number; armedSeq?: number }
-          | undefined
+          { needle?: unknown; active?: boolean; nextSeq?: number; armedSeq?: number } | undefined
         if (state !== undefined) {
           state.needle = typeof arg?.titleContains === 'string' ? arg.titleContains : undefined
           state.active = true
@@ -1168,8 +1264,7 @@ class PlaywrightSession implements TransportSession {
       (_electron, payload) => {
         const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
         const state = (globalThis as unknown as Record<string, unknown>)[key] as
-          | { buffer?: unknown; needle?: unknown; armedSeq?: unknown }
-          | undefined
+          { buffer?: unknown; needle?: unknown; armedSeq?: unknown } | undefined
         const buffer = state?.buffer
         if (!Array.isArray(buffer)) return []
         // The hook records UNFILTERED; apply `titleContains` here so pre-arm (t=0) and post-arm records
@@ -1215,8 +1310,7 @@ class PlaywrightSession implements TransportSession {
         const key = (payload?.arg as { key?: string } | undefined)?.key ?? ''
         const g = globalThis as unknown as Record<string, unknown>
         const state = g[key] as
-          | { origShow?: unknown; patchedShow?: unknown; active?: boolean }
-          | undefined
+          { origShow?: unknown; patchedShow?: unknown; active?: boolean } | undefined
         if (state === undefined) return
         state.active = false
         // Restore the original show only when it is still OUR patch (never clobber a later app patch
@@ -1372,8 +1466,8 @@ class PlaywrightSession implements TransportSession {
         payload,
       )
     }
-    const page = await this.activePage()
-    return page.evaluate<T>(
+    const { target: renderer } = await this.activeRenderer()
+    return renderer.evaluate<T>(
       (input) =>
         Function('arg', `"use strict"; return (async () => { ${input.body} })()`)(input.arg),
       payload,
@@ -1393,7 +1487,15 @@ class PlaywrightSession implements TransportSession {
 
   async windowsList(): Promise<readonly WindowDescriptor[]> {
     const app = this.requireRunning()
-    const pages = app.windows()
+    const pages = this.openPages(app)
+    const fallback = pages[0]
+    if (
+      fallback !== undefined &&
+      !pages.some((page) => this.idForWindow(page) === this.activeWindowId)
+    ) {
+      this.activeWindowId = this.idForWindow(fallback)
+      this.activeSurfaceId = this.idForSurface(fallback)
+    }
     const descriptors: WindowDescriptor[] = []
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i]
@@ -1406,10 +1508,195 @@ class PlaywrightSession implements TransportSession {
         title,
         ...(url ? { url } : {}),
         visible: true,
-        focused: i === 0,
+        focused: this.idForWindow(page) === this.activeWindowId,
       })
     }
     return descriptors
+  }
+
+  async activateWindow(target: WindowRef): Promise<WindowDescriptor> {
+    const run = this.windowSwitch.then(async () => {
+      const app = this.requireRunning()
+      const page = await this.resolveWindow(app, target)
+      const id = this.idForWindow(page)
+      this.activeWindowId = id
+      this.activeSurfaceId = this.idForSurface(page)
+      const windows = await this.windowsList()
+      const active = windows.find((window) => window.id === id)
+      if (active === undefined) {
+        throw new StagewrightError(
+          'REF_NOT_FOUND',
+          'Selected Electron window closed during activation.',
+          {
+            transport: TRANSPORT_ID,
+            ref: target,
+          },
+        )
+      }
+      return active
+    })
+    this.windowSwitch = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  async surfacesList(): Promise<readonly SurfaceDescriptor[]> {
+    const app = this.requireRunning()
+    const pages = this.openPages(app)
+    const drafts = await Promise.all(pages.map((page) => this.describeRootSurface(page)))
+    const rootIdByWebContents = new Map<number, string>()
+    for (const draft of drafts) {
+      if (draft.metadata.webContentsId !== undefined) {
+        rootIdByWebContents.set(draft.metadata.webContentsId, draft.id)
+      }
+    }
+
+    const pending = [...drafts]
+    const orderedRoots: typeof drafts = []
+    while (pending.length > 0) {
+      const next = pending.find((draft) => {
+        const parentId =
+          draft.metadata.parentWebContentsId === undefined
+            ? undefined
+            : rootIdByWebContents.get(draft.metadata.parentWebContentsId)
+        return parentId === undefined || !pending.some((candidate) => candidate.id === parentId)
+      })
+      // A malformed/native ownership cycle should not block discovery. Returning it as a root is
+      // honest (without invented parentage) and preserves the rest of the live surface tree.
+      const chosen = next ?? pending[0]
+      if (chosen === undefined) break
+      pending.splice(pending.indexOf(chosen), 1)
+      orderedRoots.push(chosen)
+    }
+
+    const live = new Set<string>()
+    const descriptors: SurfaceDescriptor[] = []
+    for (const root of orderedRoots) {
+      const parentId =
+        root.metadata.parentWebContentsId === undefined
+          ? undefined
+          : rootIdByWebContents.get(root.metadata.parentWebContentsId)
+      const record: KnownSurface = {
+        id: root.id,
+        target: root.page,
+        rootPage: root.page,
+        kind: root.metadata.kind,
+        ...(parentId !== undefined ? { parentId } : {}),
+        ...(root.metadata.title !== undefined ? { title: root.metadata.title } : {}),
+        ...(root.metadata.url !== undefined ? { url: root.metadata.url } : {}),
+        // CDP metadata is necessary for an honest Electron ownership label, not for the generic
+        // Playwright Page seam itself. Keep an unclassified root driveable: the transport still
+        // owns a live Page and can snapshot/evaluate/interact with it without guessing whether it
+        // came from a BrowserWindow, WebContentsView, or another Electron primitive.
+        capabilities: SURFACE_CAPABILITIES,
+        closed: false,
+      }
+      this.surfaces.set(record.id, record)
+      live.add(record.id)
+      descriptors.push(this.surfaceDescriptor(record))
+      this.appendFrameSurfaces(root.page, record, live, descriptors)
+    }
+    for (const [id, surface] of this.surfaces) {
+      if (!live.has(id)) surface.closed = true
+    }
+    if (this.activeSurfaceId === undefined && descriptors[0] !== undefined) {
+      this.activeSurfaceId = descriptors[0].id
+    }
+    return descriptors.map((descriptor) => ({
+      ...descriptor,
+      active: descriptor.id === this.activeSurfaceId,
+    }))
+  }
+
+  async activeSurface(): Promise<SurfaceDescriptor> {
+    await this.windowSwitch
+    let id = this.activeSurfaceId
+    if (id === undefined) {
+      const page = await this.resolveActivePage()
+      id = this.idForSurface(page)
+      this.activeSurfaceId = id
+    }
+    let surface = this.surfaces.get(id)
+    if (surface === undefined) {
+      await this.surfacesList()
+      surface = this.surfaces.get(id)
+    }
+    if (surface === undefined) {
+      throw new StagewrightError(
+        'SURFACE_NOT_FOUND',
+        `Surface "${id}" was not observed in this session.`,
+        {
+          transport: TRANSPORT_ID,
+          surfaceId: id,
+        },
+      )
+    }
+    if (surface.closed || !this.surfaceIsLive(surface)) {
+      surface.closed = true
+      throw new StagewrightError('SURFACE_CLOSED', `Surface "${id}" is no longer live.`, {
+        transport: TRANSPORT_ID,
+        surfaceId: id,
+      })
+    }
+    return this.surfaceDescriptor(surface)
+  }
+
+  async activateSurface(surfaceId: string): Promise<SurfaceDescriptor> {
+    const run = this.windowSwitch.then(async () => {
+      const surfaces = await this.surfacesList()
+      const selected = surfaces.find((surface) => surface.id === surfaceId)
+      if (selected === undefined) {
+        const known = this.surfaces.get(surfaceId)
+        if (known !== undefined) {
+          known.closed = true
+          throw new StagewrightError(
+            'SURFACE_CLOSED',
+            `Surface "${surfaceId}" is no longer live.`,
+            {
+              transport: TRANSPORT_ID,
+              surfaceId,
+            },
+          )
+        }
+        throw new StagewrightError(
+          'SURFACE_NOT_FOUND',
+          `Surface "${surfaceId}" was not observed in this session.`,
+          {
+            transport: TRANSPORT_ID,
+            surfaceId,
+          },
+        )
+      }
+      if (
+        !selected.capabilities.snapshot ||
+        !selected.capabilities.interaction ||
+        !selected.capabilities.rendererEval
+      ) {
+        throw new StagewrightError(
+          'SURFACE_UNSUPPORTED',
+          `Surface "${surfaceId}" cannot be driven through the Playwright transport.`,
+          { transport: TRANSPORT_ID, surfaceId },
+        )
+      }
+      const known = this.surfaces.get(surfaceId)
+      if (known === undefined || known.closed || !this.surfaceIsLive(known)) {
+        if (known !== undefined) known.closed = true
+        throw new StagewrightError('SURFACE_CLOSED', `Surface "${surfaceId}" is no longer live.`, {
+          transport: TRANSPORT_ID,
+          surfaceId,
+        })
+      }
+      this.activeWindowId = this.idForWindow(known.rootPage)
+      this.activeSurfaceId = surfaceId
+      return this.surfaceDescriptor(known)
+    })
+    this.windowSwitch = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
   }
 
   /** Default window-recovery budget (see {@link activePage}). */
@@ -1435,9 +1722,24 @@ class PlaywrightSession implements TransportSession {
    * registered code instead of hanging.
    */
   private async activePage(): Promise<PWPage> {
+    // A call that starts after switch_window must observe that selected target,
+    // not race a title/index lookup and use the previous page. Activation itself
+    // uses resolveActivePage directly to avoid waiting on its own queue entry.
+    await this.windowSwitch
+    return this.resolveActivePage()
+  }
+
+  private async resolveActivePage(): Promise<PWPage> {
     const app = this.requireRunning()
-    const known = this.openPages(app)[0]
-    if (known !== undefined) return known
+    const pages = this.openPages(app)
+    const selected = pages.find((page) => this.idForWindow(page) === this.activeWindowId)
+    if (selected !== undefined) return selected
+    const known = pages[0]
+    if (known !== undefined) {
+      this.activeWindowId = this.idForWindow(known)
+      this.activeSurfaceId = this.idForSurface(known)
+      return known
+    }
     const deadline = Date.now() + this.windowRecoveryBudgetMs
     for (;;) {
       const remaining = deadline - Date.now()
@@ -1447,7 +1749,11 @@ class PlaywrightSession implements TransportSession {
         const page = await app.firstWindow({
           timeout: Math.min(remaining, PlaywrightSession.#WINDOW_RECOVERY_SLICE_MS),
         })
-        if (page.isClosed === undefined || !page.isClosed()) return page
+        if (page.isClosed === undefined || !page.isClosed()) {
+          this.activeWindowId = this.idForWindow(page)
+          this.activeSurfaceId = this.idForSurface(page)
+          return page
+        }
       } catch {
         // Slice elapsed (or firstWindow rejected outright) — re-check the known
         // list below. Pause briefly when the rejection was immediate so a
@@ -1457,7 +1763,11 @@ class PlaywrightSession implements TransportSession {
         }
       }
       const reappeared = this.openPages(app)[0]
-      if (reappeared !== undefined) return reappeared
+      if (reappeared !== undefined) {
+        this.activeWindowId = this.idForWindow(reappeared)
+        this.activeSurfaceId = this.idForSurface(reappeared)
+        return reappeared
+      }
     }
     throw new StagewrightError(
       'REF_NOT_FOUND',
@@ -1467,40 +1777,44 @@ class PlaywrightSession implements TransportSession {
   }
 
   async click(selector: string, opts: ClickOptions = {}): Promise<void> {
-    await (await this.activePage()).click(selector, toClickOptions(opts))
+    await (await this.activeRenderer('interaction')).target.click(selector, toClickOptions(opts))
   }
 
   async fill(selector: string, value: string, opts: InteractionOptions = {}): Promise<void> {
     const before = await this.readEditableSignature(selector, 0)
-    await (await this.activePage()).fill(selector, value, toActionOptions(opts))
+    await (
+      await this.activeRenderer('interaction')
+    ).target.fill(selector, value, toActionOptions(opts))
     await this.assertTyped(selector, value, before)
   }
 
   async hover(selector: string, opts: InteractionOptions = {}): Promise<void> {
-    await (await this.activePage()).hover(selector, toActionOptions(opts))
+    await (await this.activeRenderer('interaction')).target.hover(selector, toActionOptions(opts))
   }
 
   async press(key: string, opts: PressOptions = {}): Promise<void> {
-    const page = await this.activePage()
+    const { target, rootPage } = await this.activeRenderer('interaction')
     if (opts.selector === undefined) {
-      await page.keyboard.press(key)
+      if (target !== rootPage) await target.evaluate(() => window.focus())
+      await rootPage.keyboard.press(key)
       return
     }
     if (opts.force === true) {
       // Editor-aware path: focus the (possibly offscreen / aria-hidden) selector — focus
       // tolerates non-visible elements — then emit the key globally so editors like Monaco
       // receive it. Avoids page.press' visibility actionability (ELEMENT_NOT_VISIBLE).
-      await page.focus(opts.selector, toTimeoutOptions(opts))
-      await page.keyboard.press(key)
+      await target.focus(opts.selector, toTimeoutOptions(opts))
+      await rootPage.keyboard.press(key)
       return
     }
-    await page.press(opts.selector, key, toTimeoutOptions(opts))
+    await target.press(opts.selector, key, toTimeoutOptions(opts))
   }
 
   async typeText(text: string, opts: PressOptions = {}): Promise<void> {
-    const page = await this.activePage()
+    const { target, rootPage } = await this.activeRenderer('interaction')
     if (opts.selector === undefined) {
-      await page.keyboard.type(text)
+      if (target !== rootPage) await target.evaluate(() => window.focus())
+      await rootPage.keyboard.type(text)
       return
     }
     if (opts.force === true) {
@@ -1509,14 +1823,14 @@ class PlaywrightSession implements TransportSession {
       // is an EditContext element) silently swallows the keystrokes — so verify the content
       // actually changed and surface TYPE_NO_EFFECT instead of a false success.
       const before = await this.readEditableSignature(opts.selector, 0)
-      await page.focus(opts.selector, toTimeoutOptions(opts))
-      await page.keyboard.type(text)
+      await target.focus(opts.selector, toTimeoutOptions(opts))
+      await rootPage.keyboard.type(text)
       await this.assertTyped(opts.selector, text, before)
       return
     }
     // page.type focuses the selector and emits a real keystroke per character.
     const before = await this.readEditableSignature(opts.selector, 0)
-    await page.type(opts.selector, text, toTimeoutOptions(opts))
+    await target.type(opts.selector, text, toTimeoutOptions(opts))
     await this.assertTyped(opts.selector, text, before)
   }
 
@@ -1561,7 +1875,11 @@ class PlaywrightSession implements TransportSession {
     values: readonly string[],
     opts: InteractionOptions = {},
   ): Promise<readonly string[]> {
-    return (await this.activePage()).selectOption(selector, values, toActionOptions(opts))
+    return (await this.activeRenderer('interaction')).target.selectOption(
+      selector,
+      values,
+      toActionOptions(opts),
+    )
   }
 
   async setChecked(
@@ -1569,11 +1887,11 @@ class PlaywrightSession implements TransportSession {
     checked: boolean,
     opts: InteractionOptions = {},
   ): Promise<void> {
-    const page = await this.activePage()
+    const { target } = await this.activeRenderer('interaction')
     if (checked) {
-      await page.check(selector, toActionOptions(opts))
+      await target.check(selector, toActionOptions(opts))
     } else {
-      await page.uncheck(selector, toActionOptions(opts))
+      await target.uncheck(selector, toActionOptions(opts))
     }
   }
 
@@ -1582,15 +1900,19 @@ class PlaywrightSession implements TransportSession {
     paths: readonly string[],
     opts: InteractionOptions = {},
   ): Promise<void> {
-    await (await this.activePage()).setInputFiles(selector, paths, toTimeoutOptions(opts))
+    await (
+      await this.activeRenderer('interaction')
+    ).target.setInputFiles(selector, paths, toTimeoutOptions(opts))
   }
 
   async dragTo(source: string, target: string, opts: InteractionOptions = {}): Promise<void> {
-    await (await this.activePage()).dragAndDrop(source, target, toActionOptions(opts))
+    await (
+      await this.activeRenderer('interaction')
+    ).target.dragAndDrop(source, target, toActionOptions(opts))
   }
 
   async scroll(opts: ScrollOptions = {}): Promise<void> {
-    const page = await this.activePage()
+    const { target, rootPage } = await this.activeRenderer('interaction')
     if (opts.selector !== undefined) {
       // Scroll the element into view via the renderer; avoids needing a separate
       // Playwright locator API in the minimal page surface. The body reports
@@ -1598,7 +1920,7 @@ class PlaywrightSession implements TransportSession {
       // instead of resolving silently — every other interaction method rejects on
       // a missing target, and scroll must not diverge or the tool layer would
       // report a phantom success it cannot diagnose.
-      const found = await page.evaluate<boolean>(
+      const found = await target.evaluate<boolean>(
         (input) =>
           Function('arg', `"use strict"; return (async () => { ${input.body} })()`)(input.arg),
         {
@@ -1615,20 +1937,37 @@ class PlaywrightSession implements TransportSession {
       }
       return
     }
-    await page.mouse.wheel(opts.dx ?? 0, opts.dy ?? 0)
+    if (target === rootPage) {
+      await rootPage.mouse.wheel(opts.dx ?? 0, opts.dy ?? 0)
+      return
+    }
+    await target.evaluate<void>(
+      (input) =>
+        Function('arg', `"use strict"; return window.scrollBy(arg.dx, arg.dy);`)(input.arg),
+      { body: '', arg: { dx: opts.dx ?? 0, dy: opts.dy ?? 0 } },
+    )
+  }
+
+  async detach(): Promise<void> {
+    this.requireRunning()
+    throw new StagewrightError(
+      'TRANSPORT_UNSUPPORTED',
+      'This Playwright launch session owns the Electron process and cannot detach without stopping it.',
+      { transport: TRANSPORT_ID, capability: 'detach' },
+    )
   }
 
   private async resolveWindow(app: PWElectronApp, ref: WindowRef): Promise<PWPage> {
-    let pages = app.windows()
+    let pages = this.openPages(app)
     if (pages.length === 0) {
       // A modal swap / navigation can momentarily empty the known list — give the
       // window-recovery path a chance before concluding none exist.
       try {
-        await this.activePage()
+        await this.resolveActivePage()
       } catch {
         // Fall through to the precise REF_NOT_FOUND below.
       }
-      pages = app.windows()
+      pages = this.openPages(app)
     }
     if (pages.length === 0) {
       throw new StagewrightError('REF_NOT_FOUND', 'No windows are open in the Electron app.', {
@@ -1672,12 +2011,157 @@ class PlaywrightSession implements TransportSession {
     )
   }
 
+  /** Resolve the selected surface to the actual Playwright page or frame. */
+  private async activeRenderer(
+    capability: RendererCapability = 'rendererEval',
+  ): Promise<{ readonly target: RendererTarget; readonly rootPage: PWPage }> {
+    // Preserve the mature window-recovery behaviour before looking up a selected frame/page. If the
+    // root disappeared, activePage deterministically selects a live replacement and resets the active
+    // surface to that root; a still-live selected frame keeps its root selected unchanged.
+    await this.activePage()
+    const descriptor = await this.activeSurface()
+    const surface = this.surfaces.get(descriptor.id)
+    if (surface === undefined || surface.closed || !this.surfaceIsLive(surface)) {
+      if (surface !== undefined) surface.closed = true
+      throw new StagewrightError(
+        'SURFACE_CLOSED',
+        `Surface "${descriptor.id}" is no longer live.`,
+        {
+          transport: TRANSPORT_ID,
+          surfaceId: descriptor.id,
+        },
+      )
+    }
+    if (!surface.capabilities[capability]) {
+      throw new StagewrightError(
+        'SURFACE_UNSUPPORTED',
+        `Surface "${descriptor.id}" does not support ${capability}.`,
+        { transport: TRANSPORT_ID, surfaceId: descriptor.id, capability },
+      )
+    }
+    return { target: surface.target, rootPage: surface.rootPage }
+  }
+
+  /** Gather stable Electron ownership metadata for one Playwright page root. */
+  private async describeRootSurface(page: PWPage): Promise<{
+    readonly id: string
+    readonly page: PWPage
+    readonly metadata: RootSurfaceMetadata
+  }> {
+    const fallbackTitle = await page.title().catch(() => '')
+    const fallbackUrl = page.url()
+    let metadata: RootSurfaceMetadata = {
+      kind: 'other',
+      ...(fallbackTitle ? { title: fallbackTitle } : {}),
+      ...(fallbackUrl ? { url: fallbackUrl } : {}),
+    }
+    let cdp: PWCdpSession | undefined
+    try {
+      const context = page.context()
+      if (context.newCDPSession === undefined)
+        return { id: this.idForSurface(page), page, metadata }
+      cdp = await context.newCDPSession(page)
+      const targetInfo = await cdp.send<{ readonly targetInfo?: { readonly targetId?: unknown } }>(
+        'Target.getTargetInfo',
+      )
+      const targetId = targetInfo.targetInfo?.targetId
+      if (typeof targetId === 'string') {
+        const resolved = await this.evaluate<RootSurfaceMetadata>(
+          'main',
+          ROOT_SURFACE_METADATA_BODY,
+          { targetId },
+        )
+        metadata = {
+          ...resolved,
+          ...(resolved.title === undefined && fallbackTitle ? { title: fallbackTitle } : {}),
+          ...(resolved.url === undefined && fallbackUrl ? { url: fallbackUrl } : {}),
+        }
+      }
+    } catch {
+      // A live page without a CDP identity cannot be labelled honestly. Keep it visible as `other`
+      // rather than guessing ownership from its mutable URL or title; it remains driveable through
+      // the generic Playwright Page seam.
+    } finally {
+      if (cdp !== undefined) await cdp.detach().catch(() => undefined)
+    }
+    return { id: this.idForSurface(page), page, metadata }
+  }
+
+  /** Append every child iframe below a root page in parent-first order. */
+  private appendFrameSurfaces(
+    page: PWPage,
+    root: KnownSurface,
+    live: Set<string>,
+    descriptors: SurfaceDescriptor[],
+  ): void {
+    const visit = (frame: PWFrame, parent: KnownSurface): void => {
+      for (const child of frame.childFrames()) {
+        const url = child.url()
+        const record: KnownSurface = {
+          id: this.idForSurface(child),
+          target: child,
+          rootPage: page,
+          kind: 'frame',
+          parentId: parent.id,
+          ...(url ? { url } : {}),
+          ...(url ? { originRelation: originRelation(parent.url, url) } : {}),
+          // Electron's webview host exposes a transient child `about:blank` frame before the
+          // guest commits its real document. Keep it observable for hierarchy diagnostics, but do
+          // not let an agent snapshot or interact with that unstable placeholder.
+          capabilities:
+            url === 'about:blank'
+              ? { snapshot: false, interaction: false, rendererEval: false }
+              : SURFACE_CAPABILITIES,
+          closed: false,
+        }
+        this.surfaces.set(record.id, record)
+        live.add(record.id)
+        descriptors.push(this.surfaceDescriptor(record))
+        visit(child, record)
+      }
+    }
+    try {
+      const mainFrame = page.mainFrame?.()
+      if (mainFrame !== undefined) visit(mainFrame, root)
+    } catch {
+      // A page can close while enumerating its frame tree. The next list call will retain a tombstone
+      // for any already-observed descendants; discovery itself remains usable for the other roots.
+    }
+  }
+
+  private surfaceDescriptor(surface: KnownSurface): SurfaceDescriptor {
+    return {
+      id: surface.id,
+      kind: surface.kind,
+      ...(surface.parentId !== undefined ? { parentId: surface.parentId } : {}),
+      ...(surface.title !== undefined ? { title: surface.title } : {}),
+      ...(surface.url !== undefined ? { url: surface.url } : {}),
+      active: surface.id === this.activeSurfaceId,
+      capabilities: surface.capabilities,
+      ...(surface.originRelation !== undefined ? { originRelation: surface.originRelation } : {}),
+    }
+  }
+
+  private surfaceIsLive(surface: KnownSurface): boolean {
+    if (surface.rootPage.isClosed?.() === true) return false
+    return surface.target === surface.rootPage || !(surface.target as PWFrame).isDetached()
+  }
+
   private idForWindow(page: PWPage): string {
     const existing = this.windowIds.get(page)
     if (existing !== undefined) return existing
     const id = `${this.id}-window-${this.nextWindowId}`
     this.nextWindowId += 1
     this.windowIds.set(page, id)
+    return id
+  }
+
+  private idForSurface(target: object): string {
+    const existing = this.surfaceIds.get(target)
+    if (existing !== undefined) return existing
+    const id = `${this.id}-surface-${this.nextSurfaceId}`
+    this.nextSurfaceId += 1
+    this.surfaceIds.set(target, id)
     return id
   }
 
@@ -1747,6 +2231,22 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** Describe a child frame's origin relative to its immediate parent without treating file/data as same-origin. */
+function originRelation(
+  parentUrl: string | undefined,
+  childUrl: string,
+): 'same-origin' | 'cross-origin' | 'opaque' {
+  if (parentUrl === undefined) return 'opaque'
+  try {
+    const parent = new URL(parentUrl)
+    const child = new URL(childUrl)
+    if (parent.origin === 'null' || child.origin === 'null') return 'opaque'
+    return parent.origin === child.origin ? 'same-origin' : 'cross-origin'
+  } catch {
+    return 'opaque'
+  }
+}
+
 export class PlaywrightElectronTransport implements ITransport {
   public readonly id: TransportId = TRANSPORT_ID
   private readonly loadElectron: () => Promise<PWElectron>
@@ -1774,6 +2274,7 @@ export class PlaywrightElectronTransport implements ITransport {
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,
+    supportsSurfaceTargeting: true,
   }
 
   async launch(opts: LaunchOptions): Promise<TransportSession> {
@@ -1815,6 +2316,13 @@ export class PlaywrightElectronTransport implements ITransport {
     } catch (cause) {
       await removeShimDir(shimDir)
       const message = cause instanceof Error ? cause.message : String(cause)
+      if (opts.executablePath === undefined && isMissingElectronRuntime(message)) {
+        throw new StagewrightError(
+          'TRANSPORT_UNSUPPORTED',
+          'Electron runtime is not installed for the server process. Install electron beside the server, run npx with --package electron, or pass executablePath to electron_launch.',
+          { transport: TRANSPORT_ID, appPath: opts.appPath ?? '' },
+        )
+      }
       const isTimeout = /timeout/i.test(message)
       throw new StagewrightError(
         isTimeout ? 'LAUNCH_TIMEOUT' : 'INTERNAL_ERROR',

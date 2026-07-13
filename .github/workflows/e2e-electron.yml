@@ -1,11 +1,5 @@
 # Real-Electron smokes on a headless Linux runner (Xvfb).
 #
-# Best-effort by design: the Electron binary download inside CI runners has
-# failed before (the pnpm store cache skipped the postinstall, and pnpm
-# install / rebuild / install.js all no-op'd), so this workflow is separate
-# from ci.yml and marked continue-on-error — a red run here must never block
-# the main gate while the cache + explicit-install path below proves itself.
-#
 # The root failure: electron's packaged postinstall (node install.js) is
 # unreliable here. On a binary-cache miss it no-ops in well under a second
 # without downloading the binary or writing path.txt, yet exits 0 — whether run
@@ -41,7 +35,6 @@ jobs:
   e2e-linux:
     name: Real-Electron smokes (ubuntu, Xvfb)
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 30
     env:
       ELECTRON_DISABLE_SANDBOX: '1'
@@ -107,9 +100,83 @@ jobs:
         run: xvfb-run --auto-servernum pnpm test
         env:
           STAGEWRIGHT_E2E: '1'
-      # NOTE: gating `pnpm bench:check` here is a deferred follow-up. The in-process vitest smokes
-      # above launch Electron fine, but the bench spawns a standalone stdio MCP server subprocess
-      # that then launches the bench app — and that path hangs under Xvfb in CI (every scenario's
-      # electron_launch times out at the 60s MCP client budget). Wiring bench into CI needs that
-      # launch reliability sorted first (likely sandbox/env propagation through the spawned server),
-      # which is its own focused change rather than a mechanical CI add.
+
+      - name: Verify the packed CLI from an isolated install
+        run: xvfb-run --auto-servernum pnpm package:smoke
+
+  # This stays non-blocking while the artifact establishes a reliable first-party baseline. It runs
+  # no competitor command and deliberately omits --check: only deterministic own-server metrics may
+  # become a required gate after repeated stable diagnostic evidence.
+  benchmark-diagnostics:
+    name: Benchmark diagnostics (ubuntu, Xvfb)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    env:
+      ELECTRON_DISABLE_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Resolve locked Electron version
+        id: electron
+        run: |
+          version="$(grep -oE 'electron@[0-9]+\.[0-9]+\.[0-9]+' pnpm-lock.yaml | head -1 | cut -d@ -f2)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Locked Electron version: ${version}"
+
+      - name: Cache the Electron release zip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: electron-binary-${{ runner.os }}-${{ steps.electron.outputs.version }}
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Ensure the Electron binary is present
+        shell: bash
+        env:
+          ELECTRON_VERSION: ${{ steps.electron.outputs.version }}
+        run: |
+          electron_dir="$(node -p "require('path').dirname(require.resolve('electron/package.json'))")"
+          if node -e "require('electron')" 2>/dev/null; then
+            echo "Electron binary already present."
+          else
+            zip="electron-v${ELECTRON_VERSION}-linux-x64.zip"
+            cache_zip="${HOME}/.cache/electron/${zip}"
+            echo "Electron binary missing — installing ${zip} directly from the official release."
+            if [ ! -s "${cache_zip}" ]; then
+              mkdir -p "${HOME}/.cache/electron"
+              curl -fsSL --retry 3 --retry-all-errors \
+                "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/${zip}" \
+                -o "${cache_zip}"
+            fi
+            rm -rf "${electron_dir}/dist" "${electron_dir}/path.txt"
+            mkdir -p "${electron_dir}/dist"
+            unzip -q "${cache_zip}" -d "${electron_dir}/dist"
+            printf 'electron' > "${electron_dir}/path.txt"
+          fi
+          node -e "console.log('Electron resolved to:', require('electron'))"
+        working-directory: packages/core
+
+      - run: pnpm build
+
+      - name: Run first-party benchmark diagnostics under Xvfb
+        run: |
+          mkdir -p output
+          xvfb-run --auto-servernum pnpm bench --json output/benchmark.json > /dev/null
+        env:
+          STAGEWRIGHT_BENCH_PHASE_TIMEOUT_MS: '45000'
+
+      - name: Upload benchmark diagnostic
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/benchmark.json
+          if-no-files-found: warn
+          retention-days: 14

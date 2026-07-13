@@ -43,10 +43,16 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./plugin-sdk": {
+      "types": "./dist/plugin-sdk/index.d.ts",
+      "import": "./dist/plugin-sdk/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && pnpm build:renderer",
+    "build": "pnpm build:resources && tsc -p tsconfig.json && pnpm build:renderer",
+    "build:resources": "node scripts/build-agent-resources.mjs",
+    "check:resources": "node scripts/build-agent-resources.mjs --check",
     "build:renderer": "node scripts/build-renderer-bundle.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
@@ -57,18 +63,23 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron-stagewright/demo": "workspace:*",
     "electron": "^42.3.0",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.1",
     "highlight.js": "^11.11.1",
     "jsdom": "^29.1.1",
-    "marked": "^18.0.5",
+    "marked": "^18.0.6",
     "marked-highlight": "^2.2.4",
-    "playwright": "^1.60.0"
+    "playwright": "^1.61.1"
   },
   "peerDependencies": {
+    "electron": ">=12.2.0",
     "playwright": ">=1.49.0"
   },
   "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    },
     "playwright": {
       "optional": true
     }
