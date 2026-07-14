@@ -23,6 +23,7 @@ import type {
   DialogPolicy,
   ITransport,
   InteractionOptions,
+  LaunchOptions,
   MenuInvokeResult,
   NativeMenu,
   NativeNotification,
@@ -550,7 +551,7 @@ export class FakeTransport implements ITransport {
     if (opts.launchError !== undefined) this.#launchError = opts.launchError
   }
 
-  async launch(): Promise<TransportSession> {
+  async launch(_opts?: LaunchOptions): Promise<TransportSession> {
     this.launchCount += 1
     if (this.#launchError !== undefined) throw this.#launchError
     return this.session

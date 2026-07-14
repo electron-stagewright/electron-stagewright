@@ -208,7 +208,7 @@ Type text as real per-character keystrokes (fires keydown/keypress/input/keyup p
 
 **Launch Electron app**
 
-Launch an Electron app and start a driving session. Provide main (absolute path to the main-process entry) or executablePath. A server started with --demo supplies its packaged demo entry when both are omitted. Returns: { ok, session_id, transport, windows, renderer_ready }. Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed in time (the session is still usable — retry the read, or wait_for_selector on an expected element). By default refuses a second launch while a session is live (pass allowMultiple: true to override). Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not retryable), BAD_ARGUMENT (neither main nor executablePath given; a runtime-altering env var like NODE_OPTIONS; instrumentNative without main; or, when the server set --app-root, a main/executablePath/cwd outside that root), SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable), LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).
+Launch an Electron app and start a driving session. Provide main (absolute path to the main-process entry) or executablePath. Set runtime:"project" to resolve Electron only from the operator-configured --app-root (requires main when resolving that runtime); explicit executablePath takes precedence. A server started with --demo supplies its packaged demo entry when both are omitted. Returns: { ok, session_id, transport, windows, renderer_ready, runtime_source }. Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed in time (the session is still usable — retry the read, or wait_for_selector on an expected element). By default refuses a second launch while a session is live (pass allowMultiple: true to override). Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not retryable), BAD_ARGUMENT (neither main nor executablePath given; runtime:"project" without main when no executablePath is given, or without --app-root when resolving that runtime; a runtime-altering env var like NODE_OPTIONS; instrumentNative without main; or, when the server set --app-root, a main/executablePath/cwd outside that root), SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable), LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).
 
 - Operation: `command`
 
@@ -216,6 +216,7 @@ Launch an Electron app and start a driving session. Provide main (absolute path 
 | --- | --- | --- | --- |
 | `main` | string | no | Absolute path to the app main-process JS entry. Required unless executablePath is given or the server configured a default demo entry. |
 | `executablePath` | string | no | Absolute path to an Electron/app binary. Defaults to the bundled Electron. |
+| `runtime` | string | no | Use Electron resolved from the operator-configured --app-root. Resolving that runtime requires main; an explicit executablePath takes precedence. Default: the launch transport runtime. |
 | `args` | string[] | no | Extra CLI args appended after the entry. |
 | `env` | object | no | Environment variables for the spawned process. |
 | `cwd` | string | no | Working directory for the spawned process. |
@@ -506,7 +507,7 @@ Scan the conventional CDP debug ports (9222-9225 by default) for already-running
 
 **Diagnose Electron Stagewright environment**
 
-Run non-mutating preflight checks without starting an Electron session: Node version, Playwright, Electron, Linux display, configured app root and screenshot directory, and eval policy. Returns: { ok, doctor_ok, checks }. Inspect failed checks and their hints before electron_launch. Errors: none.
+Run non-mutating preflight checks without starting an Electron session: Node version, Playwright, Electron, Linux display, configured app root and screenshot directory, eval policy, and project Electron runtime alignment. Returns: { ok, doctor_ok, checks, runtime }, where runtime includes server and, with --app-root, target Electron/Node/V8/ABI facts plus a bounded native-addon inventory. Inspect failed checks and warnings before electron_launch. Errors: none.
 
 - Operation: `query`
 

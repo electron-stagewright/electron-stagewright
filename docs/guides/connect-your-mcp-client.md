@@ -143,12 +143,17 @@ Append flags to `args` (after the package/CLI). The common ones:
   `testing` adds the broader test-driving tools, `debug` adds attach and diagnostics, and `full`
   remains the compatibility default. This flag does not enable eval or load plugins.
 - `--screenshot-dir <dir>` sets a stable location for captured screenshots.
+- `--app-root <dir>` confines launch/file paths to a project you control. It also enables
+  `electron_launch({ main, runtime: "project" })`, which resolves Electron only from that root so
+  the target app can use its own native-addon-compatible runtime. The root is server configuration,
+  never an agent argument; an explicit `executablePath` still takes precedence.
 - `--demo` supplies an installed demo Electron entry when an agent calls `electron_launch {}`. Add
   `@electron-stagewright/demo@0.1.0` beside core, Playwright, and Electron in an `npx` setup, or
   install it globally with them. It cannot be combined with `--app-root`. See
   [Try the demo](./demo.md) for the exact host configuration.
 - `electron-stagewright doctor --json` runs a standalone preflight for Node, Playwright, Electron,
-  display setup, configured paths, and eval policy. Do not append it to MCP server arguments.
+  display setup, configured paths, eval policy, and (with `--app-root`) target runtime facts plus a
+  bounded potential-native-addon inventory. Do not append it to MCP server arguments.
 - `--plugin <name>` loads an installed plugin (trace, network, storage, clock, and others). With
   `npx`, add that plugin package as another `--package` before the `electron-stagewright` bin; with
   a global install, install the plugin package globally too. Then call `electron_plugins` to see
@@ -192,15 +197,16 @@ client over stdio without any host, which is a quick way to confirm the server i
 
 The failure modes are almost all about the stdio channel or the spawn command.
 
-| Symptom                                                                | Likely cause                                                                                                                 | Fix                                                                                                                                         |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Server shows "failed" / disconnects immediately                        | Something wrote to **stdout** — for a stdio server, stdout _is_ the protocol channel, so any stray print corrupts the stream | The server sends all diagnostics to stderr by design. If you wrapped it in a shell script, make sure the wrapper prints nothing to stdout.  |
-| Client reports "server not found" / no tools                           | Wrong `command`/`args`                                                                                                       | With `npx`, confirm the exact package name. With the local-checkout form, the path must be **absolute** and you must have run `pnpm build`. |
-| Server won't start; a version/engine error                             | Node below the version floor                                                                                                 | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                       |
-| `electron_launch` reports that Playwright or Electron is not installed | The core package was started without an optional launch peer                                                                 | Use the pinned `npx` form shown above, install all three packages globally, or pass `executablePath` to `electron_launch`.                  |
-| `electron_eval_main` / `electron_eval_renderer` missing                | Eval tools are gated off by default                                                                                          | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                  |
-| A known core tool is missing                                           | The selected core profile does not include it                                                                                | Restart with the profile named in the tool's recovery hint, or use `--tool-profile full`.                                                   |
-| The app won't launch from `electron_launch`                            | `main` is not an absolute path, or the app needs attach/inject                                                               | Pass an absolute `main`; see [Launch, attach, or inject](./launch-or-attach.md) for apps that are already running.                          |
+| Symptom                                                                | Likely cause                                                                                                                 | Fix                                                                                                                                             |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server shows "failed" / disconnects immediately                        | Something wrote to **stdout** — for a stdio server, stdout _is_ the protocol channel, so any stray print corrupts the stream | The server sends all diagnostics to stderr by design. If you wrapped it in a shell script, make sure the wrapper prints nothing to stdout.      |
+| Client reports "server not found" / no tools                           | Wrong `command`/`args`                                                                                                       | With `npx`, confirm the exact package name. With the local-checkout form, the path must be **absolute** and you must have run `pnpm build`.     |
+| Server won't start; a version/engine error                             | Node below the version floor                                                                                                 | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                           |
+| `electron_launch` reports that Playwright or Electron is not installed | The core package was started without an optional launch peer                                                                 | Use the pinned `npx` form shown above, install all three packages globally, or pass `executablePath` to `electron_launch`.                      |
+| `project_runtime` warns about ABI or a native addon                    | The server's default Electron differs from the app's runtime, or inventory is incomplete                                     | Start the server with `--app-root <project>`, run `electron-stagewright doctor --json`, then launch with `runtime: "project"` when appropriate. |
+| `electron_eval_main` / `electron_eval_renderer` missing                | Eval tools are gated off by default                                                                                          | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                      |
+| A known core tool is missing                                           | The selected core profile does not include it                                                                                | Restart with the profile named in the tool's recovery hint, or use `--tool-profile full`.                                                       |
+| The app won't launch from `electron_launch`                            | `main` is not an absolute path, or the app needs attach/inject                                                               | Pass an absolute `main`; see [Launch, attach, or inject](./launch-or-attach.md) for apps that are already running.                              |
 
 ## Where next
 

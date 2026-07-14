@@ -17,6 +17,10 @@ import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import { StagewrightError } from '../../errors/registry.js'
+import {
+  resolveProjectElectron,
+  type ProjectElectronResolution,
+} from '../../runtime/project-electron.js'
 import type { LaunchOptions, TransportSession } from '../../transports/index.js'
 import { isWithinRoot } from '../app-root.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -132,6 +136,12 @@ const inputSchema = z.object({
     .string()
     .optional()
     .describe('Absolute path to an Electron/app binary. Defaults to the bundled Electron.'),
+  runtime: z
+    .enum(['project'])
+    .optional()
+    .describe(
+      'Use Electron resolved from the operator-configured --app-root. Resolving that runtime requires main; an explicit executablePath takes precedence. Default: the launch transport runtime.',
+    ),
   args: z.array(z.string()).optional().describe('Extra CLI args appended after the entry.'),
   env: z
     .record(z.string(), z.string())
@@ -162,17 +172,21 @@ const inputSchema = z.object({
 
 const DESCRIPTION = [
   'Launch an Electron app and start a driving session. Provide main (absolute path to the',
-  'main-process entry) or executablePath. A server started with --demo supplies its packaged demo',
-  'entry when both are omitted. Returns: { ok, session_id, transport, windows, renderer_ready }.',
+  'main-process entry) or executablePath. Set runtime:"project" to resolve Electron only from the',
+  'operator-configured --app-root (requires main when resolving that runtime); explicit executablePath',
+  'takes precedence. A server',
+  'started with --demo supplies its packaged demo entry when both are omitted. Returns: { ok, session_id,',
+  'transport, windows, renderer_ready, runtime_source }.',
   'Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a',
   'snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed',
   'in time (the session is still usable — retry the read, or wait_for_selector on an expected element).',
   'By default refuses a second launch while a session is live (pass allowMultiple: true to override).',
   'Errors: ALREADY_RUNNING (a session is live, or the concurrent-session cap is reached — stop one',
   'or pass allowMultiple; not retryable), ABSOLUTE_PATH_REQUIRED / FILE_NOT_FOUND (preflight; not',
-  'retryable), BAD_ARGUMENT (neither main nor executablePath given; a runtime-altering env var like',
-  'NODE_OPTIONS; instrumentNative without main; or, when the server set --app-root, a',
-  'main/executablePath/cwd outside that root),',
+  'retryable), BAD_ARGUMENT (neither main nor executablePath given; runtime:"project" without main',
+  'when no executablePath is given, or without --app-root when resolving that runtime; a',
+  'runtime-altering env var like NODE_OPTIONS; instrumentNative without main; or,',
+  'when the server set --app-root, a main/executablePath/cwd outside that root),',
   'SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable),',
   'LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).',
 ].join(' ')
@@ -181,6 +195,8 @@ const DESCRIPTION = [
 export interface LaunchToolDeps {
   /** Existence check for preflight. Defaults to `fs.existsSync`. */
   readonly fileExists?: (path: string) => boolean
+  /** App-root Electron resolver. Injected by tests; defaults to the constrained filesystem resolver. */
+  readonly resolveProjectElectron?: (appRoot: string) => Promise<ProjectElectronResolution>
 }
 
 /** Throws a {@link StagewrightError} when a supplied path is relative or missing. */
@@ -230,6 +246,7 @@ function toLaunchOptions(args: z.infer<typeof inputSchema>): LaunchOptions {
  */
 export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
   const fileExists = deps.fileExists ?? existsSync
+  const resolveFromProject = deps.resolveProjectElectron ?? resolveProjectElectron
   return defineTool({
     name: 'electron_launch',
     title: 'Launch Electron app',
@@ -253,12 +270,54 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           next_actions: ['electron_stop({ sessionId })'],
         })
       }
-      // A configured default is only an ergonomic fallback for an otherwise empty launch call.
-      // An explicit executable-only launch keeps its established semantics rather than gaining an
-      // unrelated app entry as a positional argument.
+      if (
+        args.runtime === 'project' &&
+        args.main === undefined &&
+        args.executablePath === undefined
+      ) {
+        return makeError('BAD_ARGUMENT', {
+          ...meta,
+          message: 'runtime:"project" requires main (the target app entry).',
+          next_actions: [
+            'electron_launch({ main: "/absolute/path/to/main.js", runtime: "project" })',
+          ],
+        })
+      }
+
+      // A configured default is only an ergonomic fallback for an otherwise empty default-runtime
+      // launch. Explicit executables and project runtimes require the caller's app entry instead.
       const main =
-        args.main ?? (args.executablePath === undefined ? ctx.launchDefaultMain : undefined)
-      if (main === undefined && args.executablePath === undefined) {
+        args.main ??
+        (args.executablePath === undefined && args.runtime !== 'project'
+          ? ctx.launchDefaultMain
+          : undefined)
+      let executablePath = args.executablePath
+      let runtimeSource: 'default' | 'project' | 'explicit' =
+        executablePath === undefined ? 'default' : 'explicit'
+      if (executablePath === undefined && args.runtime === 'project') {
+        if (ctx.appRoot === undefined) {
+          return makeError('BAD_ARGUMENT', {
+            ...meta,
+            message:
+              'runtime:"project" requires the server to start with --app-root <project-root>.',
+            next_actions: [
+              'Restart the server with --app-root <project-root>, then retry the launch.',
+            ],
+          })
+        }
+        const resolution = await resolveFromProject(ctx.appRoot)
+        if (!resolution.ok) {
+          return makeError('BAD_ARGUMENT', {
+            ...meta,
+            message: resolution.message,
+            details: { app_root: ctx.appRoot, runtime: 'project' },
+            next_actions: ['Run electron_doctor to inspect the configured project runtime.'],
+          })
+        }
+        executablePath = resolution.electron.executablePath
+        runtimeSource = 'project'
+      }
+      if (main === undefined && executablePath === undefined) {
         return makeError('BAD_ARGUMENT', {
           ...meta,
           message:
@@ -283,7 +342,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         }
       }
       // Preflight throws a registered error the dispatcher maps to an envelope.
-      preflight(main, args.executablePath, fileExists)
+      preflight(main, executablePath, fileExists)
 
       // When the operator configured --app-root, confine the launch surface to it: main and
       // executablePath both run code (a main.js as the Electron main process, or an arbitrary
@@ -292,7 +351,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
       if (ctx.appRoot !== undefined) {
         for (const [label, value] of [
           ['main', main],
-          ['executablePath', args.executablePath],
+          ['executablePath', executablePath],
           ['cwd', args.cwd],
         ] as const) {
           if (value !== undefined && !isWithinRoot(ctx.appRoot, value)) {
@@ -309,7 +368,11 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
       let session
       try {
         session = await transport.launch(
-          toLaunchOptions({ ...args, ...(main !== undefined ? { main } : {}) }),
+          toLaunchOptions({
+            ...args,
+            ...(main !== undefined ? { main } : {}),
+            ...(executablePath !== undefined ? { executablePath } : {}),
+          }),
         )
       } catch (err) {
         throw diagnoseLaunchError(err)
@@ -326,7 +389,13 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         args.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
       )
       return makeSuccess(
-        { session_id: managed.id, transport: transport.id, windows, renderer_ready },
+        {
+          session_id: managed.id,
+          transport: transport.id,
+          windows,
+          renderer_ready,
+          runtime_source: runtimeSource,
+        },
         { ...meta, session_id: managed.id },
       )
     },

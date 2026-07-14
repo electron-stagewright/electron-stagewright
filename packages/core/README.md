@@ -40,8 +40,12 @@ Useful CLI flags:
   loaded plugins compose independently.
 - `--screenshot-dir <path>` changes where screenshots are written when a tool
   call does not pass an explicit path.
+- `--app-root <path>` confines launch/file paths and enables
+  `electron_launch({ main, runtime: "project" })` to use the Electron package
+  installed inside that project. The server, not the agent, chooses this root.
 - `doctor --json` runs a machine-readable preflight for Node, Playwright, Electron,
-  display setup, configured paths, and eval policy. Run it as
+  display setup, configured paths, eval policy, and (with `--app-root`) target
+  Electron/Node/V8/ABI facts plus a bounded potential-native-addon inventory. Run it as
   `electron-stagewright doctor --json`, never as an MCP server argument.
 
 ## Use with Claude Code
