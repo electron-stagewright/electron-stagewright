@@ -13,7 +13,9 @@ describe('trusted npm publishing release guard', () => {
   it('uses a protected OIDC workflow without a long-lived publish credential', async () => {
     const workflow = (await readFile(WORKFLOW, 'utf8')).replaceAll('\r\n', '\n')
 
-    expect(workflow).toContain('release:\n    types: [published]')
+    // Publishing is manual (see .github/RELEASING.md); the workflow is dispatch-only so cutting a
+    // GitHub release never fires a publish that would fail without configured trusted publishers.
+    expect(workflow).not.toContain('release:\n    types: [published]')
     expect(workflow).toContain('workflow_dispatch:')
     expect(workflow).toContain('id-token: write')
     expect(workflow).toContain('environment: npm-publish')

@@ -1,0 +1,45 @@
+name: Publish to MCP Registry
+
+# Publishes the root server.json to the official MCP Registry
+# (https://registry.modelcontextprotocol.io) under io.github.electron-stagewright/core.
+#
+# Manual (workflow_dispatch) by design: the registry validates that server.json's version already
+# exists on npm, and npm publishing is a manual maintainer step (see .github/RELEASING.md). Run this
+# AFTER the matching npm version is live.
+#
+# Authentication is GitHub OIDC. A local `mcp-publisher login github` device flow only authorizes a
+# maintainer's personal io.github.<user>/* namespace; the org namespace is authorized only by an OIDC
+# token minted inside this org's own repository, which is what `login github-oidc` uses here. No
+# secret is required.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: mcp-registry-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # Required for OIDC authentication to the registry.
+
+jobs:
+  publish:
+    name: Publish server.json via GitHub OIDC
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Validate server.json
+        run: ./mcp-publisher validate
+
+      - name: Authenticate to the MCP Registry via GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json
+        run: ./mcp-publisher publish
