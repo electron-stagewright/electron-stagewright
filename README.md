@@ -37,6 +37,15 @@ Microsoft's official Playwright MCP team [explicitly declined](https://github.co
 The default launch transport uses Playwright and an Electron runtime. For a private setup in the
 current project, keep the server local to that project and pin the release-tested package set:
 
+Before configuring an MCP host, run the same package set once in a terminal to prime a fresh `npx`
+cache. Electron may print binary-download progress to stdout during this first install, which would
+corrupt an MCP stdio session; the terminal bootstrap completes the install before the host starts it.
+
+```bash
+npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \
+  --package electron@42.3.0 electron-stagewright doctor --json
+```
+
 ```bash
 claude mcp add electron-stagewright -- \
   npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \

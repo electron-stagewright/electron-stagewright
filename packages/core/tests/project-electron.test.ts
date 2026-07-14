@@ -47,9 +47,11 @@ afterEach(async () => {
 describe('project Electron resolution', () => {
   it('resolves only the Electron package owned by the configured app root', async () => {
     const { root, executable } = await temporaryProject()
+    const canonicalRoot = await realpath(root)
 
     await expect(resolveProjectElectron(root)).resolves.toMatchObject({
       ok: true,
+      rootPath: canonicalRoot,
       electron: { executablePath: executable, version: '42.3.0' },
     })
     await expect(readDeclaredElectronVersion(root)).resolves.toBe('42.3.0')

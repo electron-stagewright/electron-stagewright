@@ -153,6 +153,36 @@ describe('electron_launch', () => {
     })
   })
 
+  it('accepts the canonical project binary when the configured root uses a filesystem alias', async () => {
+    const configuredRoot = path.resolve('sw-project-runtime-alias')
+    const canonicalRoot = path.resolve('sw-project-runtime-canonical')
+    const transport = new CapturingTransport({
+      session: new FakeSession({ id: 'project-alias', windows: [WIN] }),
+    })
+    const { dispatcher } = setup({
+      appRoot: configuredRoot,
+      transport,
+      resolveProjectElectron: async () => ({
+        ok: true,
+        rootPath: canonicalRoot,
+        electron: {
+          executablePath: path.join(canonicalRoot, 'node_modules', 'electron', 'dist', 'electron'),
+          packageJsonPath: path.join(canonicalRoot, 'node_modules', 'electron', 'package.json'),
+        },
+      }),
+    })
+
+    const res = await dispatcher.dispatch('electron_launch', {
+      main: path.join(configuredRoot, 'main.js'),
+      runtime: 'project',
+    })
+
+    expect(res).toMatchObject({ ok: true, runtime_source: 'project' })
+    expect(transport.lastLaunchOptions?.executablePath).toBe(
+      path.join(canonicalRoot, 'node_modules', 'electron', 'dist', 'electron'),
+    )
+  })
+
   it('keeps an explicit executable authoritative over the requested project runtime', async () => {
     let resolverCalled = false
     const { dispatcher, transport } = setup({

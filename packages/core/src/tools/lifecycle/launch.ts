@@ -292,6 +292,10 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           ? ctx.launchDefaultMain
           : undefined)
       let executablePath = args.executablePath
+      // The app-root string preserves the operator's spelling for main/cwd input checks. Project
+      // resolution also returns its canonical root so a legitimate macOS /var -> /private/var alias
+      // does not make the canonical Electron binary appear to escape that same root.
+      let resolvedProjectRoot: string | undefined
       let runtimeSource: 'default' | 'project' | 'explicit' =
         executablePath === undefined ? 'default' : 'explicit'
       if (executablePath === undefined && args.runtime === 'project') {
@@ -315,6 +319,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           })
         }
         executablePath = resolution.electron.executablePath
+        resolvedProjectRoot = resolution.rootPath
         runtimeSource = 'project'
       }
       if (main === undefined && executablePath === undefined) {
@@ -354,7 +359,11 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           ['executablePath', executablePath],
           ['cwd', args.cwd],
         ] as const) {
-          if (value !== undefined && !isWithinRoot(ctx.appRoot, value)) {
+          const boundary =
+            label === 'executablePath' && resolvedProjectRoot !== undefined
+              ? resolvedProjectRoot
+              : ctx.appRoot
+          if (value !== undefined && !isWithinRoot(boundary, value)) {
             return makeError('BAD_ARGUMENT', {
               ...meta,
               message: `${label} must resolve within the configured --app-root (${ctx.appRoot}); "${value}" is outside it.`,

@@ -10,7 +10,16 @@ Drive Electron desktop applications from AI agents via the Model Context Protoco
 ## Use the published package
 
 The default launch transport uses Playwright and an Electron runtime. Start the CLI with all three
-packages available:
+packages available. Before handing this command to an MCP host, run it once in a terminal with
+`doctor --json`: Electron can print binary-download progress to stdout during its first install,
+which would corrupt the host's stdio protocol. That terminal bootstrap primes the `npx` cache.
+
+```bash
+npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \
+  --package electron@42.3.0 electron-stagewright doctor --json
+```
+
+Then configure or run the normal server command:
 
 ```bash
 npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \

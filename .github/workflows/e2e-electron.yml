@@ -59,6 +59,12 @@ jobs:
           path: ~/.cache/electron
           key: electron-binary-${{ runner.os }}-${{ steps.electron.outputs.version }}
 
+      - name: Cache native addon fixture inputs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron-stagewright/native-addon-fixture
+          key: native-addon-fixture-${{ runner.os }}-41.7.1
+
       - run: pnpm install --frozen-lockfile
 
       # require('electron') throws when the package's path.txt is absent, so it doubles as the
@@ -93,6 +99,9 @@ jobs:
           # here with a clear error rather than as opaque LAUNCH_TIMEOUTs across every smoke below.
           node -e "console.log('Electron resolved to:', require('electron'))"
         working-directory: packages/core
+
+      - name: Prepare native addon fixture inputs
+        run: node scripts/prepare-native-addon-fixture.mjs >> "$GITHUB_ENV"
 
       - run: pnpm build
 

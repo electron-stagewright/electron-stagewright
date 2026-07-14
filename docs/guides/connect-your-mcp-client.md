@@ -25,9 +25,8 @@ The client needs a `command` and `args` that start the stdio server. Three forms
 first:
 
 - **`npx` (no permanent install).** The client fetches and caches the server plus its Playwright
-  and Electron peers on first run. The versions below are intentionally pinned: update them
-  together after testing a new release rather than asking every spawn for whichever package is
-  newest.
+  and Electron peers. The versions below are intentionally pinned: update them together after
+  testing a new release rather than asking every spawn for whichever package is newest.
 
   ```json
   {
@@ -45,8 +44,19 @@ first:
   }
   ```
 
-  The first spawn downloads the package, so it is slower; if your client times out waiting for the
-  server to start, use the global install below instead.
+  Before adding that configuration to a host, prime the exact same `--package` list once from a
+  terminal:
+
+  ```sh
+  npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \
+    --package electron@42.3.0 electron-stagewright doctor --json
+  ```
+
+  Electron can print a binary-download progress line to stdout during this first install. That is
+  harmless in a terminal, but stdout is MCP protocol data after the host starts the server. The
+  completed bootstrap leaves the cached command clean for the host. Repeat it after clearing the
+  `npx` cache or changing any pinned package version. When you add a demo or plugin package, include
+  that same extra `--package` in the bootstrap command before `electron-stagewright doctor --json`.
 
 - **Global install (explicit, fastest spawn).** Install once, then call the bin directly.
 

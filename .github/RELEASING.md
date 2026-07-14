@@ -60,9 +60,11 @@ Follow this top to bottom. It publishes to npm by hand and to the MCP Registry f
    `server.json`. Only an in-org Actions run can publish the `io.github.electron-stagewright/*`
    namespace — see [MCP Registry details](#mcp-registry-details).
 7. **Verify.**
-   - npm: each package page shows the new version, and from a scratch directory
-     `npx --package @electron-stagewright/core --package playwright --package electron electron-stagewright --version`
-     prints it.
+   - npm: each package page shows the new version, then run `pnpm published:npx:smoke` from the
+     release checkout. It uses a fresh temporary npm and Electron cache, intentionally absorbs the
+     first Electron postinstall's stdout outside MCP, then verifies that the warmed pinned `npx`
+     command returns one valid `doctor --json` document. The `Published npx smoke` workflow repeats
+     this check whenever a GitHub release is published.
    - Registry: `curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=electron-stagewright"`
      lists the new `core` version.
 

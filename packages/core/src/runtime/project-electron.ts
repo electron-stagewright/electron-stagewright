@@ -36,7 +36,12 @@ export interface ResolvedProjectElectron {
 }
 
 export type ProjectElectronResolution =
-  | { readonly ok: true; readonly electron: ResolvedProjectElectron }
+  | {
+      readonly ok: true
+      /** Canonical root used to verify the project-owned Electron paths. */
+      readonly rootPath?: string
+      readonly electron: ResolvedProjectElectron
+    }
   | { readonly ok: false; readonly message: string }
 
 export interface ProjectElectronDeps {
@@ -132,7 +137,7 @@ export async function resolveProjectElectron(
           'The app-root Electron package resolved outside the configured --app-root and was refused.',
       }
     }
-    return { ok: true, electron }
+    return { ok: true, rootPath: canonicalRoot, electron }
   } catch (cause) {
     return {
       ok: false,
