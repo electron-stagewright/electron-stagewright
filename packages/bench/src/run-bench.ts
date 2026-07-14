@@ -17,6 +17,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { comparisonAdapters } from './adapters.js'
 import {
@@ -49,6 +50,86 @@ const REPORT_SCHEMA_VERSION = 4
 
 /** Schema version of the `--compare` JSON report (its own shape, versioned independently). */
 const COMPARISON_SCHEMA_VERSION = 3
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+
+type BenchCommand = 'benchmark' | 'compare' | 'help'
+
+export interface ParsedBenchArguments {
+  readonly command: BenchCommand
+  readonly check: boolean
+  readonly updateThresholds: boolean
+}
+
+/** Render safe CLI guidance without launching a benchmark or spawning Electron. */
+export function formatBenchHelp(): string {
+  return [
+    'Usage: pnpm bench [options]',
+    '',
+    'Runs the first-party scenario benchmark by default. Use --compare for the pinned cross-server protocol.',
+    '',
+    'Options:',
+    '  --compare                       Run the sequential fresh-process comparison.',
+    '  --compare-warmup <count>        Discarded comparison warmup runs (default: 2).',
+    '  --compare-iterations <count>    Retained comparison runs (default: 10).',
+    '  --check                         Fail on first-party deterministic threshold regressions.',
+    '  --update-thresholds             Print a first-party threshold proposal and exit.',
+    '  --json <path>                   Also write the machine-readable report to a file.',
+    '  --help, -h                      Print this help without launching Electron.',
+    '',
+    'Examples:',
+    '  pnpm bench --check',
+    '  pnpm bench --compare --compare-warmup 0 --compare-iterations 1',
+  ].join('\n')
+}
+
+/**
+ * Validate flags before a real benchmark has side effects. Value validation stays with the mode
+ * helpers so their current diagnostic wording is preserved.
+ */
+export function parseBenchArguments(argv: readonly string[]): ParsedBenchArguments {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    return { command: 'help', check: false, updateThresholds: false }
+  }
+  let compare = false
+  let check = false
+  let updateThresholds = false
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]
+    if (argument === undefined) continue
+    switch (argument) {
+      case '--compare':
+        compare = true
+        break
+      case '--check':
+        check = true
+        break
+      case '--update-thresholds':
+        updateThresholds = true
+        break
+      case '--json':
+      case '--compare-warmup':
+      case '--compare-iterations': {
+        const value = argv[index + 1]
+        if (value !== undefined && !value.startsWith('--')) index += 1
+        break
+      }
+      default:
+        if (argument.startsWith('--')) throw new Error(`Unknown option: ${argument}`)
+        throw new Error(`Unexpected argument: ${argument}`)
+    }
+  }
+  if (compare && check) throw new Error('--check is only valid for the first-party benchmark')
+  if (compare && updateThresholds) {
+    throw new Error('--update-thresholds is only valid for the first-party benchmark')
+  }
+  if (!compare && (argv.includes('--compare-warmup') || argv.includes('--compare-iterations'))) {
+    throw new Error('--compare-warmup and --compare-iterations require --compare')
+  }
+  if (check && updateThresholds) {
+    throw new Error('--check and --update-thresholds cannot be used together')
+  }
+  return { command: compare ? 'compare' : 'benchmark', check, updateThresholds }
+}
 
 /** The machine-readable report written to stdout / the --json file. */
 interface BenchReport {
@@ -68,6 +149,11 @@ function log(line: string): void {
   process.stderr.write(`${line}\n`)
 }
 
+/** Resolve a benchmark artifact path from the repository root, regardless of pnpm's package script cwd. */
+export function resolveBenchOutputPath(outputPath: string): string {
+  return path.resolve(REPO_ROOT, outputPath)
+}
+
 /** Resolve a `--json <path>` argument. Warns (and ignores) if the path is missing. */
 function jsonOutPath(argv: readonly string[]): string | undefined {
   const i = argv.indexOf('--json')
@@ -77,7 +163,7 @@ function jsonOutPath(argv: readonly string[]): string | undefined {
     log('warning: --json was given without a file path; the JSON report goes to stdout only.')
     return undefined
   }
-  return next
+  return resolveBenchOutputPath(next)
 }
 
 function mib(bytes: number | null): string {
@@ -309,7 +395,7 @@ async function runCompareMode(argv: readonly string[]): Promise<void> {
   process.stdout.write(`${json}\n`)
   const outPath = jsonOutPath(argv)
   if (outPath !== undefined) {
-    await mkdir(path.dirname(path.resolve(outPath)), { recursive: true })
+    await mkdir(path.dirname(outPath), { recursive: true })
     await writeFile(outPath, `${json}\n`, 'utf8')
     log(`\nWrote machine-readable comparison report to ${outPath}`)
   }
@@ -323,14 +409,18 @@ async function runCompareMode(argv: readonly string[]): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  const argv = process.argv.slice(2)
-  if (argv.includes('--compare')) {
+/** Run one parsed benchmark command. Exported for side-effect-free CLI testing. */
+export async function runBench(argv: readonly string[]): Promise<void> {
+  const parsed = parseBenchArguments(argv)
+  if (parsed.command === 'help') {
+    process.stdout.write(`${formatBenchHelp()}\n`)
+    return
+  }
+  if (parsed.command === 'compare') {
     await runCompareMode(argv)
     return
   }
-  const check = argv.includes('--check')
-  const updateThresholds = argv.includes('--update-thresholds')
+  const { check, updateThresholds } = parsed
 
   log(`Running the benchmark (${SCENARIOS.length} scenarios)...`)
   const results: ScenarioResult[] = []
@@ -374,7 +464,7 @@ async function main(): Promise<void> {
   const outPath = jsonOutPath(argv)
   if (outPath !== undefined) {
     // Create the parent directory so `--json some/new/dir/report.json` does not ENOENT.
-    await mkdir(path.dirname(path.resolve(outPath)), { recursive: true })
+    await mkdir(path.dirname(outPath), { recursive: true })
     await writeFile(outPath, `${json}\n`, 'utf8')
     log(`\nWrote machine-readable report to ${outPath}`)
   }
@@ -391,7 +481,10 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  log(`Benchmark runner crashed: ${err instanceof Error ? err.message : String(err)}`)
-  process.exitCode = 1
-})
+const entrypoint = process.argv[1]
+if (entrypoint !== undefined && path.resolve(entrypoint) === fileURLToPath(import.meta.url)) {
+  runBench(process.argv.slice(2)).catch((err: unknown) => {
+    log(`Benchmark runner crashed: ${err instanceof Error ? err.message : String(err)}`)
+    process.exitCode = 1
+  })
+}

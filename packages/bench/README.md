@@ -14,6 +14,7 @@ From the repository root:
 ```sh
 pnpm install
 pnpm build        # builds packages/core/dist/cli.js, which the harness spawns
+pnpm bench --help  # list modes and options without launching Electron
 pnpm bench        # human table to stderr, JSON report to stdout
 pnpm bench --json report.json   # also write the JSON report to a file
 pnpm bench:check  # same run, but exit non-zero on a deterministic-metric regression
@@ -27,7 +28,8 @@ or scoped: `pnpm --filter @electron-stagewright/bench bench`.
 
 `pnpm bench > report.json` captures the machine report while the human table stays
 visible (the table is on stderr). You need a desktop session (a display): each scenario
-launches a real Electron window.
+launches a real Electron window. A relative `--json` path resolves from the repository root,
+including when pnpm runs the filtered bench package from its own directory.
 
 ## Manifest budgets and core profiles
 
