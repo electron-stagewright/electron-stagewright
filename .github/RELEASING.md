@@ -61,10 +61,15 @@ Follow this top to bottom. It publishes to npm by hand and to the MCP Registry f
    namespace — see [MCP Registry details](#mcp-registry-details).
 7. **Verify.**
    - npm: each package page shows the new version, then run `pnpm published:npx:smoke` from the
-     release checkout. It uses a fresh temporary npm and Electron cache, intentionally absorbs the
-     first Electron postinstall's stdout outside MCP, then verifies that the warmed pinned `npx`
-     command returns one valid `doctor --json` document. The `Published npx smoke` workflow repeats
-     this check whenever a GitHub release is published.
+     release checkout. It uses a fresh temporary npm and Electron cache, absorbs the first Electron
+     install's stdout outside MCP, and then asserts what the published package owns: the warmed
+     pinned `npx` command emits **exactly one valid `doctor --json` document** on stdout (an MCP host
+     could not parse a polluted stream) and passes the `node`, `playwright`, and `eval_policy`
+     checks. It deliberately does **not** require the `electron` check to pass — npm/npx provisions
+     Electron's binary non-deterministically, so a bare sandbox may hold the JS wrapper with no
+     binary. Real-Electron behaviour is covered by the e2e job, which installs the binary
+     deterministically. The `Published npx smoke` workflow repeats this whenever a GitHub release is
+     published.
    - Registry: `curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=electron-stagewright"`
      lists the new `core` version.
 
@@ -102,14 +107,15 @@ inside the `electron-stagewright` org's own repository.
 
 ## Troubleshooting
 
-| Symptom                                                                     | Cause                                                                             | Fix                                                                                                                                   |
-| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm publish` asks for an OTP / `EOTP`                                      | the account is on `auth-and-writes` 2FA                                           | pass `--otp <fresh code>`; on a long run, re-run the same command with a new code — skipped packages are already published            |
-| `pnpm publish` refuses (working tree not clean / not on the publish branch) | pnpm's default git checks                                                         | add `--no-git-checks`                                                                                                                 |
-| `git push` rejected; a `release-workflow` test failed first                 | the pre-push hook runs `pnpm verify`, and a guard pins the release-workflow shape | update the guard test to match the intended workflow change, then push                                                                |
-| MCP Registry `403 ... permission to publish: io.github.<you>/*`             | you authenticated as yourself (personal namespace), not the org                   | publish from Actions: `gh workflow run mcp-registry.yml`. A local device-flow login can never publish the org namespace               |
-| A shell command with `!` errors `zsh: event not found`                      | zsh history-expands a bare `!`                                                    | avoid `!` (e.g. `if (x) continue` instead of `if (!x)`), or `set +H` first                                                            |
-| `npm trust github` returns `E400`                                           | the trust write needs an upfront OTP the command does not accept                  | not needed for the default flow; configure trusted publishers in the npm web UI instead (only relevant to the optional OIDC npm path) |
+| Symptom                                                                     | Cause                                                                                                                               | Fix                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm publish` asks for an OTP / `EOTP`                                      | the account is on `auth-and-writes` 2FA                                                                                             | pass `--otp <fresh code>`; on a long run, re-run the same command with a new code — skipped packages are already published                                                                                |
+| `pnpm publish` refuses (working tree not clean / not on the publish branch) | pnpm's default git checks                                                                                                           | add `--no-git-checks`                                                                                                                                                                                     |
+| `git push` rejected; a `release-workflow` test failed first                 | the pre-push hook runs `pnpm verify`, and a guard pins the release-workflow shape                                                   | update the guard test to match the intended workflow change, then push                                                                                                                                    |
+| MCP Registry `403 ... permission to publish: io.github.<you>/*`             | you authenticated as yourself (personal namespace), not the org                                                                     | publish from Actions: `gh workflow run mcp-registry.yml`. A local device-flow login can never publish the org namespace                                                                                   |
+| A shell command with `!` errors `zsh: event not found`                      | zsh history-expands a bare `!`                                                                                                      | avoid `!` (e.g. `if (x) continue` instead of `if (!x)`), or `set +H` first                                                                                                                                |
+| `npm trust github` returns `E400`                                           | the trust write needs an upfront OTP the command does not accept                                                                    | not needed for the default flow; configure trusted publishers in the npm web UI instead (only relevant to the optional OIDC npm path)                                                                     |
+| `electron_launch` reports the Electron runtime is not installed             | npm/npx provisions Electron's binary non-deterministically, so `--package electron` can yield the JS wrapper with `path.txt` absent | install Electron in the app project and launch it with `--app-root` plus `runtime: "project"` (ADR-024), or pass an explicit `executablePath`. `electron_doctor` names this as a failing `electron` check |
 
 ## If something is wrong post-publish
 
