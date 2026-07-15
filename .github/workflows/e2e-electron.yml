@@ -113,6 +113,39 @@ jobs:
       - name: Verify the packed CLI from an isolated install
         run: xvfb-run --auto-servernum pnpm package:smoke
 
+  # The Linux job above owns the Xvfb setup and Linux-only native-addon fixture.
+  # macOS runs the same complete suite natively, proving the launch, CDP, surface,
+  # plugin, and packed-install paths against Apple's process/window environment.
+  e2e-macos:
+    name: Real-Electron smokes (macos)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Fail at a direct, actionable binary probe rather than allowing every
+      # smoke to fail later as an opaque launch timeout.
+      - name: Ensure the Electron binary is present
+        run: node -e "console.log('Electron resolved to:', require('electron'))"
+        working-directory: packages/core
+
+      - run: pnpm build
+
+      - name: Run the gated real-Electron smokes
+        run: pnpm test
+        env:
+          STAGEWRIGHT_E2E: '1'
+
+      - name: Verify the packed CLI from an isolated install
+        run: pnpm package:smoke
+
   # This stays non-blocking while the artifact establishes a reliable first-party baseline. It runs
   # no competitor command and deliberately omits --check: only deterministic own-server metrics may
   # become a required gate after repeated stable diagnostic evidence.
