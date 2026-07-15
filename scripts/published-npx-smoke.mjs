@@ -13,13 +13,13 @@ const COMMAND_TIMEOUT_MS = 5 * 60_000
 const EVIDENCE_LIMIT = 2000
 
 /**
- * Checks this smoke owns. They prove the published CLI resolved its own dependencies and produced a
- * report. `electron` is deliberately absent: provisioning Electron's binary through npm/npx is
- * cache-dependent and non-deterministic (see the header of .github/workflows/e2e-electron.yml), so a
- * bare npx sandbox may hold the JS wrapper with no binary. Real-Electron behaviour is covered by the
- * e2e job, which installs the binary deterministically before driving an app.
+ * Checks this smoke owns. Together they prove the documented quickstart provisions a runtime a host
+ * can actually launch: the CLI resolved its own dependencies, and `electron` resolves to a real
+ * binary. `electron` is included deliberately — an earlier core reported it as failing on a working
+ * install because it required Electron's optional `path.txt`, and this smoke is what must catch a
+ * regression of that kind against the published package.
  */
-const REQUIRED_PASSING_CHECKS = ['node', 'playwright', 'eval_policy']
+const REQUIRED_PASSING_CHECKS = ['node', 'playwright', 'electron', 'eval_policy']
 
 function exactVersion(value, packageName) {
   if (typeof value !== 'string' || !/^\^?\d+\.\d+\.\d+$/.test(value)) {
@@ -61,8 +61,8 @@ async function runPublishedDoctor(packages, options) {
 
 /**
  * Assert the contract this smoke owns: the published CLI emits exactly one valid doctor JSON
- * document on stdout (an MCP host would otherwise fail to parse the stream), and the checks that do
- * not depend on a downloaded Electron binary pass. Returns the parsed report for reporting.
+ * document on stdout (an MCP host would otherwise fail to parse the stream) and every check in
+ * {@link REQUIRED_PASSING_CHECKS} passes. Returns the parsed report for reporting.
  */
 export function assertDoctorReport(outcome) {
   const { stdout, stderr, code } = outcome
@@ -102,13 +102,7 @@ function summarize(report, packages) {
   return [
     `published npx smoke passed after a clean-cache bootstrap: ${packages.join(', ')}`,
     `  doctor.ok=${report.ok} node=${status('node')} playwright=${status('playwright')} electron=${status('electron')}`,
-    status('electron') === 'pass'
-      ? ''
-      : '  note: this sandbox has no Electron binary, which npm/npx provisions non-deterministically.\n' +
-        '  That is expected here and is covered by the real-Electron e2e job, not by this smoke.',
-  ]
-    .filter((line) => line !== '')
-    .join('\n')
+  ].join('\n')
 }
 
 async function main() {

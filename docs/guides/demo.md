@@ -15,7 +15,7 @@ binary download can print progress to stdout, so the bootstrap must finish outsi
 
 ```sh
 npx -y \
-  --package @electron-stagewright/core@0.4.0 \
+  --package @electron-stagewright/core@0.4.1 \
   --package @electron-stagewright/demo@0.1.0 \
   --package playwright@1.61.1 \
   --package electron@42.3.0 \
@@ -47,7 +47,7 @@ Add this entry to `claude_desktop_config.json`, then fully restart Claude Deskto
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.4.0",
+        "@electron-stagewright/core@0.4.1",
         "--package",
         "@electron-stagewright/demo@0.1.0",
         "--package",

@@ -76,3 +76,22 @@ cannot safely be an unbounded filesystem crawl.
 - [ADR-007](./007-agent-native-ux-principles.md) — explicit recovery and honest diagnostic state.
 - [ADR-014](./014-security-posture-and-threat-model.md) — app-root and privileged-local-tool posture.
 - [Launch, attach, or inject](../guides/launch-or-attach.md) — operator workflow and recovery steps.
+
+## Status Update — 2026-07-15: `path.txt` is a hint, not the source of truth
+
+Decision 2 described resolution as reading Electron's `path.txt` to identify the installed binary,
+and the first implementation required that file. Measurement showed the requirement was wrong.
+
+`path.txt` is written by Electron's install script. An install can legitimately skip that script and
+still lay the binary down at its conventional `dist/` location, and Playwright launches such an
+install without complaint. Requiring the file therefore reported a working runtime as missing: in one
+`electron_doctor` session the `electron` check failed with `ENOENT ... path.txt` while
+`electron_launch` in that same session succeeded, and `electron_info` showed the app running from
+`node_modules/electron/dist/`. The published `npx` quickstart provisions exactly that shape, so the
+diagnostic contradicted the very path the documentation recommends.
+
+Resolution now consults `path.txt` first and falls back to the platform's conventional `dist/`
+executable when it is absent. Every property this record relies on is unchanged: resolution stays
+metadata-only (the package entry is still never imported), the candidate must still resolve inside
+`dist/`, project resolution still confines it to the app root, and a package with neither a recorded
+nor a conventional binary still fails honestly.
