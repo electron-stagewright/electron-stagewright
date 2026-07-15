@@ -15,21 +15,21 @@ packages available. Before handing this command to an MCP host, run it once in a
 which would corrupt the host's stdio protocol. That terminal bootstrap primes the `npx` cache.
 
 ```bash
-npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
+npx -y --package @electron-stagewright/core@0.4.1 --package playwright@1.61.1 \
   --package electron@42.3.0 electron-stagewright doctor --json
 ```
 
 Then configure or run the normal server command:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
+npx -y --package @electron-stagewright/core@0.4.1 --package playwright@1.61.1 \
   --package electron@42.3.0 electron-stagewright
 ```
 
 Or install all three once and run the bin directly:
 
 ```bash
-npm install -g @electron-stagewright/core@0.4.0 playwright@1.61.1 electron@42.3.0
+npm install -g @electron-stagewright/core@0.4.1 playwright@1.61.1 electron@42.3.0
 electron-stagewright
 ```
 
@@ -61,7 +61,7 @@ Useful CLI flags:
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
+  npx -y --package @electron-stagewright/core@0.4.1 --package playwright@1.61.1 \
   --package electron@42.3.0 electron-stagewright
 ```
 

@@ -46,14 +46,18 @@ describe('published npx smoke assertions', () => {
     expect(assertDoctorReport(outcome(report())).ok).toBe(true)
   })
 
-  it('accepts a sandbox without an Electron binary, which npx provisions non-deterministically', () => {
-    // doctor exits 1 here: a failing check is a report about the environment, not a crash. The
-    // real-Electron e2e job owns binary coverage, so this smoke must not fail on it.
+  it('rejects a published package that reports no usable Electron runtime', () => {
+    // This is the regression the smoke exists to catch: core 0.4.0 required Electron's optional
+    // path.txt and so reported a launchable install as broken.
     const stdout = report([{ id: 'electron', status: 'fail' }])
-    const parsed = assertDoctorReport(outcome(stdout, 1))
 
-    expect(parsed.ok).toBe(false)
-    expect(parsed.checks.find((check) => check.id === 'electron')?.status).toBe('fail')
+    expect(() => assertDoctorReport(outcome(stdout, 1))).toThrow(/did not pass the electron check/)
+  })
+
+  it('still reads a report from a non-zero exit, since a failing check is a report not a crash', () => {
+    const parsed = assertDoctorReport(outcome(report([{ id: 'app_root', status: 'skip' }]), 1))
+
+    expect(parsed.checks.some((check) => check.id === 'electron')).toBe(true)
   })
 
   it('rejects stdout polluted by an installer, which would break an MCP host', () => {

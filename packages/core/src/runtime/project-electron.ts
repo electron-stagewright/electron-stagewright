@@ -71,11 +71,27 @@ function parsePackageManifest(text: string): PackageManifest | undefined {
 }
 
 /**
+ * The executable each platform's Electron package installs under `dist/`. `path.txt` records the
+ * same relative path, but it is only written by Electron's install script — an install that skipped
+ * that script still lays the binary down here, so the convention is the reliable fallback.
+ */
+const DIST_EXECUTABLE_BY_PLATFORM: Readonly<Partial<Record<NodeJS.Platform, string>>> = {
+  darwin: 'Electron.app/Contents/MacOS/Electron',
+  linux: 'electron',
+  win32: 'electron.exe',
+}
+
+/**
  * Resolve Electron's binary from its package metadata without evaluating the package entry point.
  *
  * Electron's `index.js` may download a missing runtime when imported. The server only needs the
- * installed binary path, which the package records in `path.txt`; reading those files avoids
- * executing target-project dependency code during a diagnostic or launch preflight.
+ * installed binary path, so this reads metadata instead of executing target-project dependency code.
+ *
+ * `path.txt` is a hint, not the source of truth. It is written by Electron's install script, which
+ * an install can legitimately skip while still placing the binary at its conventional `dist/`
+ * location — Playwright launches such an install fine. Requiring the file made a working runtime
+ * report as missing, so it is consulted first and the platform convention is used when it is absent.
+ * Either way the candidate must resolve inside `dist/` and exist on disk.
  */
 export async function resolveElectronExecutableFromPackageManifest(
   packageJsonPath: string,
@@ -86,13 +102,18 @@ export async function resolveElectronExecutableFromPackageManifest(
   const canonicalPackageJson = await canonicalRealpath(packageJsonPath)
   const packageDirectory = dirname(canonicalPackageJson)
   const distributionDirectory = join(packageDirectory, 'dist')
-  const executableRelativePath = (await read(join(packageDirectory, 'path.txt'), 'utf8')).trim()
+  const recordedPath = await read(join(packageDirectory, 'path.txt'), 'utf8').then(
+    (text) => text.trim(),
+    () => '',
+  )
+  const executableRelativePath =
+    recordedPath === '' ? (DIST_EXECUTABLE_BY_PLATFORM[process.platform] ?? '') : recordedPath
   if (
     executableRelativePath.length === 0 ||
     isAbsolute(executableRelativePath) ||
     !isWithinRoot(distributionDirectory, join(distributionDirectory, executableRelativePath))
   ) {
-    throw new Error('Electron path.txt does not name an executable inside its dist directory.')
+    throw new Error('Electron does not name an executable inside its dist directory.')
   }
   const [canonicalExecutable, manifest] = await Promise.all([
     canonicalRealpath(join(distributionDirectory, executableRelativePath)),

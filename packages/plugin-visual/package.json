@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/plugin-visual",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Visual baseline plugin for Electron Stagewright: safe, surface-aware screenshot capture and pixel comparison with bounded diagnostic artifacts.",
   "type": "module",
   "license": "MIT",

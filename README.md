@@ -42,13 +42,13 @@ cache. Electron may print binary-download progress to stdout during this first i
 corrupt an MCP stdio session; the terminal bootstrap completes the install before the host starts it.
 
 ```bash
-npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
+npx -y --package @electron-stagewright/core@0.4.1 --package playwright@1.61.1 \
   --package electron@42.3.0 electron-stagewright doctor --json
 ```
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
+  npx -y --package @electron-stagewright/core@0.4.1 --package playwright@1.61.1 \
   --package electron@42.3.0 electron-stagewright
 ```
 
@@ -81,7 +81,7 @@ Shared project `.mcp.json` shape:
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.4.0",
+        "@electron-stagewright/core@0.4.1",
         "--package",
         "playwright@1.61.1",
         "--package",

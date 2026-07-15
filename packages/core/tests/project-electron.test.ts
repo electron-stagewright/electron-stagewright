@@ -13,6 +13,13 @@ import {
 
 const temporaryRoots: string[] = []
 
+/** The executable each platform's Electron install lays down under `dist/`; path.txt only records it. */
+function conventionalDistExecutable(): string {
+  if (process.platform === 'darwin')
+    return path.join('Electron.app', 'Contents', 'MacOS', 'Electron')
+  return process.platform === 'win32' ? 'electron.exe' : 'electron'
+}
+
 async function temporaryProject(): Promise<{ readonly root: string; readonly executable: string }> {
   const root = await mkdtemp(path.join(tmpdir(), 'stagewright-project-electron-'))
   temporaryRoots.push(root)
@@ -67,6 +74,32 @@ describe('project Electron resolution', () => {
       ok: false,
       message: expect.stringContaining('outside'),
     })
+  })
+
+  it('resolves an Electron install whose install script never wrote path.txt', async () => {
+    // path.txt is written by Electron's install script. An install can skip that script and still lay
+    // the binary at its conventional dist/ location — Playwright launches such an install fine, so
+    // requiring the file reported a working runtime as missing.
+    const { root } = await temporaryProject()
+    const electronDirectory = path.join(root, 'node_modules', 'electron')
+    await rm(path.join(electronDirectory, 'path.txt'))
+    const conventional = path.join(electronDirectory, 'dist', conventionalDistExecutable())
+    await mkdir(path.dirname(conventional), { recursive: true })
+    await writeFile(conventional, '')
+
+    await expect(resolveProjectElectron(root)).resolves.toMatchObject({
+      ok: true,
+      electron: { executablePath: await realpath(conventional), version: '42.3.0' },
+    })
+  })
+
+  it('refuses when neither path.txt nor the conventional binary is present', async () => {
+    const { root } = await temporaryProject()
+    const electronDirectory = path.join(root, 'node_modules', 'electron')
+    await rm(path.join(electronDirectory, 'path.txt'))
+    await rm(path.join(electronDirectory, 'dist'), { force: true, recursive: true })
+
+    await expect(resolveProjectElectron(root)).resolves.toMatchObject({ ok: false })
   })
 
   it('refuses an Electron path.txt that attempts to escape the package distribution', async () => {
