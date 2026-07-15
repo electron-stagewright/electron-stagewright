@@ -32,6 +32,15 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 // sits next to dist/index.js.
 const CORE_ENTRY = fileURLToPath(import.meta.resolve('@electron-stagewright/core'))
 const CLI_PATH = path.join(path.dirname(CORE_ENTRY), 'cli.js')
+/**
+ * Resolve plugins from this package, which declares them, and hand the server an absolute entry.
+ * A bare specifier would instead be resolved by the spawned server from the core package's own
+ * directory, where a plugin is never a dependency: that only works when the package manager happens
+ * to hoist the plugin somewhere core can reach, which a workspace install must not be relied on to do.
+ */
+const STORAGE_PLUGIN_ENTRY = fileURLToPath(
+  import.meta.resolve('@electron-stagewright/plugin-storage'),
+)
 /** Absolute entry of the small, deterministic Electron fixture used by every comparison target. */
 export const BENCH_APP_MAIN = path.join(HERE, '..', 'app', 'main.js')
 
@@ -307,7 +316,7 @@ export const STAGEWRIGHT_TARGET: ServerTarget = {
 export const STAGEWRIGHT_STORAGE_TARGET: ServerTarget = {
   name: 'stagewright-storage',
   command: 'node',
-  args: [CLI_PATH, '--allow-eval', '--plugin', '@electron-stagewright/plugin-storage'],
+  args: [CLI_PATH, '--allow-eval', '--plugin', STORAGE_PLUGIN_ENTRY],
   env: STAGEWRIGHT_CHILD_ENVIRONMENT,
   supportsMemory: true,
   provenance: STAGEWRIGHT_TARGET.provenance,

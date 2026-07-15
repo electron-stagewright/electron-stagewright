@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs'
+import path from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import { SCENARIOS } from '../src/scenarios.js'
@@ -41,7 +44,14 @@ describe('storage benchmark scenarios', () => {
   it('uses a storage-plugin target and proves the same one-value assertion through both paths', async () => {
     const snapshot = scenario('assert-storage-snapshot')
     const targeted = scenario('assert-storage-local-get')
-    expect(snapshot.target?.args).toContain('@electron-stagewright/plugin-storage')
+    // The plugin must reach the spawned server as an absolute entry this package resolved. A bare
+    // specifier would be resolved by that server from the core package's directory, where a plugin is
+    // never a dependency, so it only loads when the install happens to hoist it within core's reach.
+    const pluginArgument = snapshot.target?.args[snapshot.target.args.indexOf('--plugin') + 1]
+    expect(pluginArgument).toBeDefined()
+    expect(path.isAbsolute(pluginArgument as string)).toBe(true)
+    expect(existsSync(pluginArgument as string)).toBe(true)
+    expect(pluginArgument).toContain('plugin-storage')
     expect(targeted.target).toBe(snapshot.target)
 
     const snapshotDriver = driver({
