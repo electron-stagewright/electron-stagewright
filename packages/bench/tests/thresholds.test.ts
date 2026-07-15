@@ -46,6 +46,8 @@ function baselineResults(): ScenarioResult[] {
     res('multi-turn-diff-30', 62, 70_000),
     res('assert-storage-snapshot', 1, 929),
     res('assert-storage-local-get', 1, 27),
+    res('assert-idb-keys', 2, 150),
+    res('assert-idb-get', 2, 57),
     res('error-recovery', 6, 3395),
   ]
 }
@@ -81,6 +83,15 @@ describe('checkThresholds', () => {
     const violations = checkThresholds(results, DEFAULT_CONTRASTS, DEFAULT_THRESHOLDS)
     expect(violations.map((v) => v.kind)).toContain('token_saving')
     expect(violations.find((v) => v.kind === 'token_saving')?.target).toContain('storage snapshot')
+  })
+
+  it('flags a collapsed token saving on the targeted IndexedDB contrast', () => {
+    const results = baselineResults().map((r) =>
+      r.name === 'assert-idb-get' ? res(r.name, r.toolCalls, 100) : r,
+    )
+    const violations = checkThresholds(results, DEFAULT_CONTRASTS, DEFAULT_THRESHOLDS)
+    expect(violations.map((v) => v.kind)).toContain('token_saving')
+    expect(violations.find((v) => v.kind === 'token_saving')?.target).toContain('IndexedDB')
   })
 
   it('flags a collapsed tool-call saving on the verify contrast', () => {

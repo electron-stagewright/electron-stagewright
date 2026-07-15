@@ -19,6 +19,9 @@ const NAME = 'Ada Lovelace'
 const GREETING = `Hello, ${NAME}`
 const STORAGE_ASSERTION_KEY = 'bench.assertion.status'
 const STORAGE_ASSERTION_VALUE = 'ready'
+const IDB_ASSERTION_DATABASE = 'bench-db'
+const IDB_ASSERTION_STORE = 'records'
+const IDB_ASSERTION_KEY = 'bench.assertion.record'
 
 /**
  * Turns in the long-running act-then-observe contrast. 30 mirrors a realistic
@@ -81,6 +84,48 @@ function expectTargetedStorageValue(env: Envelope): void {
     throw new Error(
       `storage_local_get expected a loopback HTTP origin, got ${String(env['origin'])}`,
     )
+  }
+}
+
+/** Assert a storage-plugin response came from the loopback fixture rather than an opaque file origin. */
+function expectLoopbackOrigin(env: Envelope, step: string): void {
+  if (typeof env['origin'] !== 'string' || !env['origin'].startsWith('http://127.0.0.1:')) {
+    throw new Error(`${step} expected a loopback HTTP origin, got ${String(env['origin'])}`)
+  }
+}
+
+/** Wait until the fixture has committed its asynchronous IndexedDB seed. */
+async function waitForIndexedDbSeed(driver: Parameters<Scenario['run']>[0]): Promise<void> {
+  expectOk(
+    await call(driver, 'electron_expect_text', {
+      selector: '#storage-ready',
+      contains: 'Storage ready',
+    }),
+    'wait for IndexedDB fixture seed',
+  )
+}
+
+/** Assert the broad IndexedDB list proves that the known assertion record exists. */
+function expectIndexedDbKey(env: Envelope): void {
+  expectOk(env, 'IndexedDB keys')
+  expectLoopbackOrigin(env, 'IndexedDB keys')
+  if (!Array.isArray(env['keys']) || !env['keys'].includes(IDB_ASSERTION_KEY)) {
+    throw new Error(`IndexedDB keys did not contain ${IDB_ASSERTION_KEY}`)
+  }
+}
+
+/** Assert the targeted IndexedDB read proves the same record exists without inspecting its value. */
+function expectIndexedDbRecord(env: Envelope): void {
+  expectOk(env, 'IndexedDB get')
+  expectLoopbackOrigin(env, 'IndexedDB get')
+  const record = env['record']
+  if (
+    typeof record !== 'object' ||
+    record === null ||
+    !('key' in record) ||
+    record['key'] !== IDB_ASSERTION_KEY
+  ) {
+    throw new Error(`IndexedDB get did not return ${IDB_ASSERTION_KEY}`)
   }
 }
 
@@ -194,6 +239,36 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
     run: async (driver) => {
       expectTargetedStorageValue(
         await call(driver, 'storage_local_get', { key: STORAGE_ASSERTION_KEY }),
+      )
+    },
+  },
+  {
+    name: 'assert-idb-keys',
+    description:
+      'Assert a known IndexedDB record exists by returning every key from the fixture object store.',
+    target: STAGEWRIGHT_STORAGE_TARGET,
+    run: async (driver) => {
+      await waitForIndexedDbSeed(driver)
+      expectIndexedDbKey(
+        await call(driver, 'storage_idb_keys', {
+          database: IDB_ASSERTION_DATABASE,
+          store: IDB_ASSERTION_STORE,
+        }),
+      )
+    },
+  },
+  {
+    name: 'assert-idb-get',
+    description: 'Assert the same known IndexedDB record exists with a targeted primary-key read.',
+    target: STAGEWRIGHT_STORAGE_TARGET,
+    run: async (driver) => {
+      await waitForIndexedDbSeed(driver)
+      expectIndexedDbRecord(
+        await call(driver, 'storage_idb_get', {
+          database: IDB_ASSERTION_DATABASE,
+          store: IDB_ASSERTION_STORE,
+          key: IDB_ASSERTION_KEY,
+        }),
       )
     },
   },

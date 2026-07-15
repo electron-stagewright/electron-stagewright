@@ -76,6 +76,12 @@ export const DEFAULT_CONTRASTS: ReadonlyArray<Contrast> = [
     baseline: 'assert-storage-snapshot',
     optimized: 'assert-storage-local-get',
   },
+  {
+    label:
+      'assert one persisted record exists — full IndexedDB key list vs targeted primary-key read',
+    baseline: 'assert-idb-keys',
+    optimized: 'assert-idb-get',
+  },
 ]
 
 /** The full regression spec: per-scenario tool-call counts + per-contrast saving floors. */
@@ -102,8 +108,8 @@ export interface ThresholdViolation {
  * Default thresholds, derived from an observed baseline run. Tool-call counts are the
  * exact observed values; token-saving floors sit below observed real-run results so the gate guards
  * against collapse, not normal jitter. The verify contrast's lever is round-trips (≈2 calls), not
- * tokens, so its token floor is 0. The storage floor comes from the loopback fixture's complete
- * snapshot versus a single renderer-eval-gated localStorage read.
+ * tokens, so its token floor is 0. The storage floors come from the loopback fixture's complete
+ * localStorage snapshot and broad IndexedDB key list versus their targeted reads.
  */
 export const DEFAULT_THRESHOLDS: BenchThresholds = {
   scenarios: {
@@ -115,6 +121,8 @@ export const DEFAULT_THRESHOLDS: BenchThresholds = {
     'multi-turn-diff-30': { toolCalls: 62 },
     'assert-storage-snapshot': { toolCalls: 1 },
     'assert-storage-local-get': { toolCalls: 1 },
+    'assert-idb-keys': { toolCalls: 2 },
+    'assert-idb-get': { toolCalls: 2 },
     'error-recovery': { toolCalls: 6 },
   },
   contrasts: {
@@ -133,6 +141,10 @@ export const DEFAULT_THRESHOLDS: BenchThresholds = {
     'assert one persisted value — full storage snapshot vs targeted localStorage read': {
       minToolCallsSaved: 0,
       minTokenSavingRatio: 0.92,
+    },
+    'assert one persisted record exists — full IndexedDB key list vs targeted primary-key read': {
+      minToolCallsSaved: 0,
+      minTokenSavingRatio: 0.57,
     },
   },
 }

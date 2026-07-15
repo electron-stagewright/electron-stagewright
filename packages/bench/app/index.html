@@ -15,6 +15,10 @@
     <button id="load" type="button">Load details</button>
     <div id="details-slot"></div>
 
+    <!-- The IndexedDB benchmark waits for this fixture-owned state instead of racing the async
+         IndexedDB seed after launch. -->
+    <p id="storage-ready">Preparing storage</p>
+
     <!-- A sizable list: makes a full snapshot genuinely large, so the snapshot-diff
          contrast (full re-scan vs only-what-changed) shows a real token difference.
          Refresh relabels one item, producing a one-entry diff. -->
@@ -44,6 +48,40 @@
       for (let i = 1; i <= 24; i += 1) {
         const suffix = String(i).padStart(2, '0')
         localStorage.setItem(`bench.bulk.${suffix}`, `fixture-state-${suffix}-${'x'.repeat(96)}`)
+      }
+
+      // IndexedDB is asynchronous, unlike localStorage. Seed one known record plus bulk records, then
+      // expose a deterministic readiness marker so each benchmark path begins from the same app state.
+      const storageReady = document.getElementById('storage-ready')
+      const request = indexedDB.open('bench-db', 1)
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('records')) {
+          request.result.createObjectStore('records')
+        }
+      }
+      request.onerror = () => {
+        storageReady.textContent = 'Storage setup failed'
+      }
+      request.onsuccess = () => {
+        const database = request.result
+        const transaction = database.transaction('records', 'readwrite')
+        const records = transaction.objectStore('records')
+        records.put({ fixture: 'assertion' }, 'bench.assertion.record')
+        for (let i = 1; i <= 24; i += 1) {
+          const suffix = String(i).padStart(2, '0')
+          records.put(
+            { fixture: `bulk-${suffix}`, payload: 'x'.repeat(96) },
+            `bench.bulk.${suffix}`,
+          )
+        }
+        transaction.oncomplete = () => {
+          database.close()
+          storageReady.textContent = 'Storage ready'
+        }
+        transaction.onabort = () => {
+          database.close()
+          storageReady.textContent = 'Storage setup failed'
+        }
       }
 
       // Build a list of 24 buttons so the accessibility snapshot has real bulk.

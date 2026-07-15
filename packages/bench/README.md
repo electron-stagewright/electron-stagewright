@@ -5,8 +5,8 @@ primitive chain versus the `expect_*` family should differ measurably in round-t
 tokens. The harness drives scenarios over the **real MCP protocol** (an `Client` over
 stdio spawning the built `cli.js`, the same path a real agent host uses) against a tiny
 bench app served only at an ephemeral `127.0.0.1` HTTP origin. The real origin is deliberate:
-it lets Playwright's `storageState()` capture localStorage for the storage contrast without
-opening the fixture to the network. Each scenario records tool-call count, summed estimated
+it lets Playwright's `storageState()` capture localStorage and gives IndexedDB a real origin for
+the storage contrasts without opening the fixture to the network. Each scenario records tool-call count, summed estimated
 tokens, wall-clock latency, and main-process memory.
 
 ## Run it
@@ -78,6 +78,11 @@ Token lever (saves payload tokens):
   `storage_local_get` tool. The app deliberately seeds additional non-secret fixture state, so this
   compares a real complete-snapshot payload against a targeted key read rather than an empty `file://`
   snapshot.
+- **assert-idb-keys** — assert that a known IndexedDB record exists by returning every primary key
+  from the fixture's populated object store.
+- **assert-idb-get** — prove that exact same record exists with the renderer-eval-gated
+  `storage_idb_get` primary-key read. Both paths wait for the fixture's asynchronous IndexedDB seed,
+  so the contrast measures response scope rather than a launch race.
 
 Resilience:
 

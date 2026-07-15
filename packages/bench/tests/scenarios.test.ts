@@ -23,10 +23,13 @@ function scenario(name: string): Scenario {
   return found
 }
 
-function driver(response: Envelope): Driver {
+function driver(response: Envelope, toolNames?: string[]): Driver {
   return {
     client: {
-      callTool: async () => ({ content: [{ type: 'text', text: JSON.stringify(response) }] }),
+      callTool: async (request: { name: string }) => {
+        toolNames?.push(request.name)
+        return { content: [{ type: 'text', text: JSON.stringify(response) }] }
+      },
     } as unknown as Driver['client'],
     sessionId: 'storage-session',
     sessionArgs: { sessionId: 'storage-session' },
@@ -70,5 +73,45 @@ describe('storage benchmark scenarios', () => {
     await expect(
       scenario('assert-storage-snapshot').run(driver({ ok: true, origins: [] })),
     ).rejects.toThrow('storage snapshot did not contain bench.assertion.status=ready')
+  })
+
+  it('proves the same known IndexedDB record through broad key discovery and a targeted primary-key read', async () => {
+    const keys = scenario('assert-idb-keys')
+    const targeted = scenario('assert-idb-get')
+    expect(keys.target).toBe(targeted.target)
+
+    const keysToolNames: string[] = []
+    const keysDriver = driver(
+      {
+        ok: true,
+        origin: 'http://127.0.0.1:54321',
+        keys: ['bench.bulk.01', 'bench.assertion.record'],
+      },
+      keysToolNames,
+    )
+    await expect(keys.run(keysDriver)).resolves.toBeUndefined()
+    expect(keysDriver.metrics.toolCalls).toBe(2)
+    expect(keysToolNames).toEqual(['electron_expect_text', 'storage_idb_keys'])
+
+    const targetedToolNames: string[] = []
+    const targetedDriver = driver(
+      {
+        ok: true,
+        origin: 'http://127.0.0.1:54321',
+        record: { key: 'bench.assertion.record', value: { fixture: 'assertion' } },
+      },
+      targetedToolNames,
+    )
+    await expect(targeted.run(targetedDriver)).resolves.toBeUndefined()
+    expect(targetedDriver.metrics.toolCalls).toBe(2)
+    expect(targetedToolNames).toEqual(['electron_expect_text', 'storage_idb_get'])
+  })
+
+  it('rejects a targeted IndexedDB response that does not prove the known record exists', async () => {
+    await expect(
+      scenario('assert-idb-get').run(
+        driver({ ok: true, origin: 'http://127.0.0.1:54321', record: null }),
+      ),
+    ).rejects.toThrow('IndexedDB get did not return bench.assertion.record')
   })
 })
