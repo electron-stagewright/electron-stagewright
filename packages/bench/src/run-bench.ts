@@ -46,7 +46,7 @@ import {
 } from './thresholds.js'
 
 /** Schema version of the scenario JSON report; bump when the shape changes (for regression tooling). */
-const REPORT_SCHEMA_VERSION = 4
+const REPORT_SCHEMA_VERSION = 5
 
 /** Schema version of the `--compare` JSON report (its own shape, versioned independently). */
 const COMPARISON_SCHEMA_VERSION = 3

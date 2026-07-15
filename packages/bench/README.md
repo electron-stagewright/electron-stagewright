@@ -4,8 +4,10 @@ Quantifies the token-economy thesis (ADR-007): the same agent task done with the
 primitive chain versus the `expect_*` family should differ measurably in round-trips and
 tokens. The harness drives scenarios over the **real MCP protocol** (an `Client` over
 stdio spawning the built `cli.js`, the same path a real agent host uses) against a tiny
-bench app, and records per scenario: tool-call count, summed estimated tokens, wall-clock
-latency, and main-process memory.
+bench app served only at an ephemeral `127.0.0.1` HTTP origin. The real origin is deliberate:
+it lets Playwright's `storageState()` capture localStorage for the storage contrast without
+opening the fixture to the network. Each scenario records tool-call count, summed estimated
+tokens, wall-clock latency, and main-process memory.
 
 ## Run it
 
@@ -70,6 +72,12 @@ Token lever (saves payload tokens):
 - **observe-change-diff** — see the same change with `snapshot({ since: 'last' })`, which
   returns only the delta (one large payload + a tiny one). On a real, larger UI this lever
   dominates — re-scanning a big tree every turn is where naive drivers burn tokens.
+- **assert-storage-snapshot** — assert one non-secret persisted fixture value by returning every
+  localStorage entry at the loopback origin.
+- **assert-storage-local-get** — assert that identical value via the renderer-eval-gated
+  `storage_local_get` tool. The app deliberately seeds additional non-secret fixture state, so this
+  compares a real complete-snapshot payload against a targeted key read rather than an empty `file://`
+  snapshot.
 
 Resilience:
 

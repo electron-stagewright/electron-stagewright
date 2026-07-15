@@ -243,6 +243,8 @@ export interface CallOptions {
 export interface Scenario {
   readonly name: string
   readonly description: string
+  /** An optional server configuration required by a narrow capability-specific benchmark. */
+  readonly target?: ServerTarget
   readonly run: (driver: Driver) => Promise<void>
 }
 
@@ -296,6 +298,19 @@ export const STAGEWRIGHT_TARGET: ServerTarget = {
     source: 'workspace',
     package: { name: '@electron-stagewright/core', version: '0.2.0' },
   },
+}
+
+/**
+ * The storage contrast loads only the storage plugin. It needs renderer eval for the per-key read and
+ * main eval for the benchmark-only RSS sample, so the normal benchmark instrumentation flag enables both.
+ */
+export const STAGEWRIGHT_STORAGE_TARGET: ServerTarget = {
+  name: 'stagewright-storage',
+  command: 'node',
+  args: [CLI_PATH, '--allow-eval', '--plugin', '@electron-stagewright/plugin-storage'],
+  env: STAGEWRIGHT_CHILD_ENVIRONMENT,
+  supportsMemory: true,
+  provenance: STAGEWRIGHT_TARGET.provenance,
 }
 
 /**
@@ -464,7 +479,7 @@ async function sampleMemory(client: Client, sessionId: string): Promise<number |
  */
 export async function runScenario(
   scenario: Scenario,
-  target: ServerTarget = STAGEWRIGHT_TARGET,
+  target: ServerTarget = scenario.target ?? STAGEWRIGHT_TARGET,
 ): Promise<ScenarioResult> {
   const metrics: ScenarioMetrics = {
     toolCalls: 0,

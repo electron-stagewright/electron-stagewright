@@ -36,6 +36,16 @@
         }, 400)
       })
 
+      // Seed one assertion value plus bulk state at the loopback origin. The storage benchmark
+      // verifies the assertion status either by requesting this single key or by returning the
+      // full storage snapshot. These values are deliberately non-secret fixture data.
+      localStorage.clear()
+      localStorage.setItem('bench.assertion.status', 'ready')
+      for (let i = 1; i <= 24; i += 1) {
+        const suffix = String(i).padStart(2, '0')
+        localStorage.setItem(`bench.bulk.${suffix}`, `fixture-state-${suffix}-${'x'.repeat(96)}`)
+      }
+
       // Build a list of 24 buttons so the accessibility snapshot has real bulk.
       const list = document.getElementById('item-list')
       for (let i = 1; i <= 24; i += 1) {

@@ -7,10 +7,18 @@
  * @module
  */
 
-import { call, findRef, type Envelope, type Scenario } from './harness.js'
+import {
+  call,
+  findRef,
+  STAGEWRIGHT_STORAGE_TARGET,
+  type Envelope,
+  type Scenario,
+} from './harness.js'
 
 const NAME = 'Ada Lovelace'
 const GREETING = `Hello, ${NAME}`
+const STORAGE_ASSERTION_KEY = 'bench.assertion.status'
+const STORAGE_ASSERTION_VALUE = 'ready'
 
 /**
  * Turns in the long-running act-then-observe contrast. 30 mirrors a realistic
@@ -32,6 +40,47 @@ function expectTextContains(env: Envelope, expected: string, step: string): void
   expectOk(env, step)
   if (typeof env['text'] !== 'string' || !env['text'].includes(expected)) {
     throw new Error(`${step} expected text containing ${expected}, got ${String(env['text'])}`)
+  }
+}
+
+/** Assert that a storage snapshot contains the same one-value assertion as the targeted read. */
+function expectSnapshotStorageValue(env: Envelope): void {
+  expectOk(env, 'storage snapshot')
+  const origins = env['origins']
+  if (!Array.isArray(origins)) throw new Error('storage snapshot returned no origins array')
+  const found = origins.some((origin) => {
+    if (typeof origin !== 'object' || origin === null) return false
+    const localStorage = origin['localStorage']
+    return (
+      Array.isArray(localStorage) &&
+      localStorage.some(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          item['name'] === STORAGE_ASSERTION_KEY &&
+          item['value'] === STORAGE_ASSERTION_VALUE,
+      )
+    )
+  })
+  if (!found) {
+    throw new Error(
+      `storage snapshot did not contain ${STORAGE_ASSERTION_KEY}=${STORAGE_ASSERTION_VALUE}`,
+    )
+  }
+}
+
+/** Assert the targeted Web Storage tool proves the fixture's single non-secret assertion value. */
+function expectTargetedStorageValue(env: Envelope): void {
+  expectOk(env, 'storage local get')
+  if (env['value'] !== STORAGE_ASSERTION_VALUE) {
+    throw new Error(
+      `storage_local_get expected ${STORAGE_ASSERTION_VALUE}, got ${String(env['value'])}`,
+    )
+  }
+  if (typeof env['origin'] !== 'string' || !env['origin'].startsWith('http://127.0.0.1:')) {
+    throw new Error(
+      `storage_local_get expected a loopback HTTP origin, got ${String(env['origin'])}`,
+    )
   }
 }
 
@@ -126,6 +175,26 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
         expectOk(await call(driver, 'electron_click', { ref: refreshRef }), `turn ${turn} click`)
         expectOk(await call(driver, 'electron_snapshot', { since: 'last' }), `turn ${turn} delta`)
       }
+    },
+  },
+  {
+    name: 'assert-storage-snapshot',
+    description:
+      'Assert one persisted value by returning the full storage snapshot for the loopback origin.',
+    target: STAGEWRIGHT_STORAGE_TARGET,
+    run: async (driver) => {
+      expectSnapshotStorageValue(await call(driver, 'storage_snapshot'))
+    },
+  },
+  {
+    name: 'assert-storage-local-get',
+    description:
+      'Assert the same persisted value with one renderer-eval-gated localStorage key read.',
+    target: STAGEWRIGHT_STORAGE_TARGET,
+    run: async (driver) => {
+      expectTargetedStorageValue(
+        await call(driver, 'storage_local_get', { key: STORAGE_ASSERTION_KEY }),
+      )
     },
   },
   {

@@ -44,6 +44,8 @@ function baselineResults(): ScenarioResult[] {
     res('observe-change-diff', 4, 3843),
     res('multi-turn-rescan-30', 62, 180_000),
     res('multi-turn-diff-30', 62, 70_000),
+    res('assert-storage-snapshot', 1, 929),
+    res('assert-storage-local-get', 1, 27),
     res('error-recovery', 6, 3395),
   ]
 }
@@ -70,6 +72,15 @@ describe('checkThresholds', () => {
     const violations = checkThresholds(results, DEFAULT_CONTRASTS, DEFAULT_THRESHOLDS)
     expect(violations.map((v) => v.kind)).toContain('token_saving')
     expect(violations.find((v) => v.kind === 'token_saving')?.target).toContain('snapshot diff')
+  })
+
+  it('flags a collapsed token saving on the targeted storage contrast', () => {
+    const results = baselineResults().map((r) =>
+      r.name === 'assert-storage-local-get' ? res(r.name, r.toolCalls, 100) : r,
+    )
+    const violations = checkThresholds(results, DEFAULT_CONTRASTS, DEFAULT_THRESHOLDS)
+    expect(violations.map((v) => v.kind)).toContain('token_saving')
+    expect(violations.find((v) => v.kind === 'token_saving')?.target).toContain('storage snapshot')
   })
 
   it('flags a collapsed tool-call saving on the verify contrast', () => {
