@@ -125,10 +125,10 @@ pnpm bench:check   # exits 1 if a tool-call count drifts or a saving collapses b
 Savings are floors, not exact targets — a better run never trips, and the token floor sits a
 margin below the observed baseline so normal jitter does not false-trip while a real collapse
 does. `checkThresholds` is a pure function, so it also runs as a fast unit test in `pnpm test`
-(no Electron). A separate Linux/Xvfb diagnostic job runs the first-party harness without `--check`,
-records a bounded connect/launch/scenario/memory/stop timeline for every scenario, and uploads the
-JSON report without blocking a pull request. `--check` remains the real-run guard for a reviewed
-local or release validation after the diagnostic evidence has proved stable.
+(no Electron). A blocking Linux/Xvfb workflow runs the first-party harness with `--check`, records
+a bounded connect/launch/scenario/memory/stop timeline for every scenario, and uploads the JSON
+report even when the deterministic gate fails. Only tool-call counts and token-saving floors can
+fail the job; latency and memory remain observed artifact data.
 
 When the bench app or a response shape legitimately changes, re-baseline with
 `pnpm bench --update-thresholds`: it prints a fresh spec derived from the current run (to stderr,
@@ -172,16 +172,15 @@ pinned adapter with its provenance and shared oracle instead.
 
 ## Scope and limitations
 
-- **First-party CI diagnostics are non-blocking.** A Linux/Xvfb job runs `pnpm bench` with a bounded
-  phase timeout and uploads its JSON report. It does not run `--check` or a competitor command, so
-  observed startup failures remain evidence to fix rather than a pull-request veto.
+- **First-party CI guards deterministic regressions.** A Linux/Xvfb job runs `pnpm bench --check` with
+  a bounded phase timeout and uploads its JSON report even on failure. It runs no competitor command;
+  latency and memory remain observed evidence rather than pull-request veto inputs.
 - **Competitive results are local evidence, not release copy.** The repository ships a pinned
   `electron-driver@0.3.1` adapter and test coverage for the protocol, but no numeric claim or checked-in
   benchmark result. Run it on demand, inspect the JSON artifact, and reproduce it before communicating
   a conclusion.
 - **Regression thresholds enforce the deterministic metrics only** (tool-call counts +
-  contrast savings) — see above. Latency and memory are never asserted. Enforcement against a
-  real run is deliberate (`pnpm bench:check`); the diagnostic CI run reports those thresholds without
-  enforcing them, and the pure checker runs in CI via `pnpm test`.
+  contrast savings) — see above. Latency and memory are never asserted. The blocking real-Electron
+  job runs `pnpm bench:check`, while the pure checker also runs in CI via `pnpm test`.
 - The estimated-token figure uses core's char/4 heuristic, not a model tokenizer; treat
   it as a comparable proxy across scenarios, not an absolute token cost.

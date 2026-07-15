@@ -146,13 +146,13 @@ jobs:
       - name: Verify the packed CLI from an isolated install
         run: pnpm package:smoke
 
-  # This stays non-blocking while the artifact establishes a reliable first-party baseline. It runs
-  # no competitor command and deliberately omits --check: only deterministic own-server metrics may
-  # become a required gate after repeated stable diagnostic evidence.
+  # Four consecutive hosted diagnostics passed before this was promoted. It checks only deterministic
+  # first-party metrics; latency and memory remain observed artifact data, never pass/fail inputs.
+  # Keep the established job and artifact names so existing branch protection and artifact consumers
+  # retain their contract; removing continue-on-error makes this diagnostic lane blocking.
   benchmark-diagnostics:
     name: Benchmark diagnostics (ubuntu, Xvfb)
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     env:
       ELECTRON_DISABLE_SANDBOX: '1'
@@ -207,14 +207,14 @@ jobs:
 
       - run: pnpm build
 
-      - name: Run first-party benchmark diagnostics under Xvfb
+      - name: Run first-party benchmark regression gate under Xvfb
         run: |
           mkdir -p output
-          xvfb-run --auto-servernum pnpm bench --json output/benchmark.json > /dev/null
+          xvfb-run --auto-servernum pnpm bench --check --json output/benchmark.json > /dev/null
         env:
           STAGEWRIGHT_BENCH_PHASE_TIMEOUT_MS: '45000'
 
-      - name: Upload benchmark diagnostic
+      - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v7
         with:
