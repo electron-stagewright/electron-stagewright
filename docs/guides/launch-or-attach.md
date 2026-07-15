@@ -38,6 +38,39 @@ pass `allowMultiple: true` to run several), `LAUNCH_TIMEOUT` (no window within `
 retryable). When the server was started with `--app-root <dir>`, launch paths outside that root
 are refused — useful when the operator wants to confine what an agent can start.
 
+### Use the target project's Electron runtime
+
+An app that loads native addons can require the Electron ABI it was built against. Start the server
+with an operator-chosen app root, then ask the launch tool to use that project's Electron package:
+
+```sh
+electron-stagewright --app-root /absolute/path/to/your-app --tool-profile essential
+```
+
+```json
+electron_launch {
+  "main": "/absolute/path/to/your-app/dist/main.js",
+  "runtime": "project"
+}
+```
+
+`runtime: "project"` requires `main` and resolves Electron only below `--app-root`; it never accepts
+a root from a tool call. The resolver reads Electron package metadata rather than evaluating the
+target app or Electron package entry point, and rejects a package or binary that resolves outside the
+configured root. An explicit `executablePath` is still authoritative, so do not set both unless you
+deliberately want that explicit binary.
+
+Run a non-mutating comparison before launch when native modules are involved:
+
+```sh
+electron-stagewright doctor --json --app-root /absolute/path/to/your-app
+```
+
+The `runtime.server` and `runtime.project` fields report the core, Playwright, Electron, Node, V8,
+and `NODE_MODULE_VERSION` facts used for the comparison, plus a bounded inventory of potential native
+addons. A project-runtime warning is diagnostic: it does not prevent launch, but it tells you to use
+the app-local runtime or repair the project installation.
+
 ## Attach — the app is running with a debug endpoint
 
 Start your app with a CDP port (during development, usually a script flag):
@@ -96,6 +129,7 @@ it. For attached sessions, escalation needs the `pid` you optionally passed at a
 
 ---
 
-_Design background: the three-transport model and its capability matrix are ADR-003; launch
-preflight, ready-wait, and stop escalation semantics follow the agent-native principles in
-ADR-007. The model behind sessions, transports, and capabilities: [Concepts](./concepts.md)._
+_Design background: the three-transport model and its capability matrix are ADR-003; target-runtime
+selection is ADR-024; launch preflight, ready-wait, and stop escalation semantics follow the
+agent-native principles in ADR-007. The model behind sessions, transports, and capabilities:
+[Concepts](./concepts.md)._

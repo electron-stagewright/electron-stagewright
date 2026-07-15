@@ -512,3 +512,15 @@ detach(): Promise<void>
 The real-Electron suite covers switching a two-window Playwright fixture,
 deterministic recovery after the selected window closes, and CDP attach followed
 by detach while the Electron process remains alive.
+
+## Status Update — 2026-07-14: target-owned Electron runtime selection
+
+Launch now accepts an operator-bounded `runtime: "project"` mode (ADR-024). The lifecycle tool
+resolves the target Electron binary from the server's configured `--app-root`, then passes its
+canonical absolute path through the existing `LaunchOptions.executablePath` field to the Playwright
+transport. This is deliberately a **tool-layer selection policy**, not a new transport capability:
+the transport still receives one already-authorized executable and owns the same launch mechanics.
+
+`executablePath` remains authoritative when the caller explicitly provides it, preserving the
+existing packaged-app path and avoiding a surprise runtime override. CDP and Injector are unchanged:
+they attach to existing processes and do not select a launch binary.

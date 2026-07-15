@@ -4,8 +4,10 @@ Quantifies the token-economy thesis (ADR-007): the same agent task done with the
 primitive chain versus the `expect_*` family should differ measurably in round-trips and
 tokens. The harness drives scenarios over the **real MCP protocol** (an `Client` over
 stdio spawning the built `cli.js`, the same path a real agent host uses) against a tiny
-bench app, and records per scenario: tool-call count, summed estimated tokens, wall-clock
-latency, and main-process memory.
+bench app served only at an ephemeral `127.0.0.1` HTTP origin. The real origin is deliberate:
+it lets Playwright's `storageState()` capture localStorage and gives IndexedDB a real origin for
+the storage contrasts without opening the fixture to the network. Each scenario records tool-call count, summed estimated
+tokens, wall-clock latency, and main-process memory.
 
 ## Run it
 
@@ -14,6 +16,7 @@ From the repository root:
 ```sh
 pnpm install
 pnpm build        # builds packages/core/dist/cli.js, which the harness spawns
+pnpm bench --help  # list modes and options without launching Electron
 pnpm bench        # human table to stderr, JSON report to stdout
 pnpm bench --json report.json   # also write the JSON report to a file
 pnpm bench:check  # same run, but exit non-zero on a deterministic-metric regression
@@ -27,7 +30,8 @@ or scoped: `pnpm --filter @electron-stagewright/bench bench`.
 
 `pnpm bench > report.json` captures the machine report while the human table stays
 visible (the table is on stderr). You need a desktop session (a display): each scenario
-launches a real Electron window.
+launches a real Electron window. A relative `--json` path resolves from the repository root,
+including when pnpm runs the filtered bench package from its own directory.
 
 ## Manifest budgets and core profiles
 
@@ -68,6 +72,17 @@ Token lever (saves payload tokens):
 - **observe-change-diff** — see the same change with `snapshot({ since: 'last' })`, which
   returns only the delta (one large payload + a tiny one). On a real, larger UI this lever
   dominates — re-scanning a big tree every turn is where naive drivers burn tokens.
+- **assert-storage-snapshot** — assert one non-secret persisted fixture value by returning every
+  localStorage entry at the loopback origin.
+- **assert-storage-local-get** — assert that identical value via the renderer-eval-gated
+  `storage_local_get` tool. The app deliberately seeds additional non-secret fixture state, so this
+  compares a real complete-snapshot payload against a targeted key read rather than an empty `file://`
+  snapshot.
+- **assert-idb-keys** — assert that a known IndexedDB record exists by returning every primary key
+  from the fixture's populated object store.
+- **assert-idb-get** — prove that exact same record exists with the renderer-eval-gated
+  `storage_idb_get` primary-key read. Both paths wait for the fixture's asynchronous IndexedDB seed,
+  so the contrast measures response scope rather than a launch race.
 
 Resilience:
 
@@ -115,10 +130,10 @@ pnpm bench:check   # exits 1 if a tool-call count drifts or a saving collapses b
 Savings are floors, not exact targets — a better run never trips, and the token floor sits a
 margin below the observed baseline so normal jitter does not false-trip while a real collapse
 does. `checkThresholds` is a pure function, so it also runs as a fast unit test in `pnpm test`
-(no Electron). A separate Linux/Xvfb diagnostic job runs the first-party harness without `--check`,
-records a bounded connect/launch/scenario/memory/stop timeline for every scenario, and uploads the
-JSON report without blocking a pull request. `--check` remains the real-run guard for a reviewed
-local or release validation after the diagnostic evidence has proved stable.
+(no Electron). A blocking Linux/Xvfb workflow runs the first-party harness with `--check`, records
+a bounded connect/launch/scenario/memory/stop timeline for every scenario, and uploads the JSON
+report even when the deterministic gate fails. Only tool-call counts and token-saving floors can
+fail the job; latency and memory remain observed artifact data.
 
 When the bench app or a response shape legitimately changes, re-baseline with
 `pnpm bench --update-thresholds`: it prints a fresh spec derived from the current run (to stderr,
@@ -162,16 +177,15 @@ pinned adapter with its provenance and shared oracle instead.
 
 ## Scope and limitations
 
-- **First-party CI diagnostics are non-blocking.** A Linux/Xvfb job runs `pnpm bench` with a bounded
-  phase timeout and uploads its JSON report. It does not run `--check` or a competitor command, so
-  observed startup failures remain evidence to fix rather than a pull-request veto.
+- **First-party CI guards deterministic regressions.** A Linux/Xvfb job runs `pnpm bench --check` with
+  a bounded phase timeout and uploads its JSON report even on failure. It runs no competitor command;
+  latency and memory remain observed evidence rather than pull-request veto inputs.
 - **Competitive results are local evidence, not release copy.** The repository ships a pinned
   `electron-driver@0.3.1` adapter and test coverage for the protocol, but no numeric claim or checked-in
   benchmark result. Run it on demand, inspect the JSON artifact, and reproduce it before communicating
   a conclusion.
 - **Regression thresholds enforce the deterministic metrics only** (tool-call counts +
-  contrast savings) — see above. Latency and memory are never asserted. Enforcement against a
-  real run is deliberate (`pnpm bench:check`); the diagnostic CI run reports those thresholds without
-  enforcing them, and the pure checker runs in CI via `pnpm test`.
+  contrast savings) — see above. Latency and memory are never asserted. The blocking real-Electron
+  job runs `pnpm bench:check`, while the pure checker also runs in CI via `pnpm test`.
 - The estimated-token figure uses core's char/4 heuristic, not a model tokenizer; treat
   it as a comparable proxy across scenarios, not an absolute token cost.

@@ -2,20 +2,67 @@
 // Checks inspect only the server process and configured filesystem paths: they
 // never launch an app, load plugin code, or create a caller-owned directory.
 
-import { access, stat } from 'node:fs/promises'
+import { access, readFile, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
+import { createRequire } from 'node:module'
+
+import {
+  inventoryNativeAddons,
+  probeElectronRuntime,
+  readDeclaredElectronVersion,
+  resolveElectronExecutableFromPackageManifest,
+  resolveProjectElectron,
+  type ElectronRuntimeVersions,
+  type NativeAddonInventory,
+  type ProjectElectronResolution,
+  type ResolvedProjectElectron,
+} from './runtime/project-electron.js'
+import { VERSION } from './version.js'
 
 export interface DoctorCheck {
   readonly id:
-    'node' | 'playwright' | 'electron' | 'display' | 'app_root' | 'screenshot_dir' | 'eval_policy'
-  readonly status: 'pass' | 'fail' | 'skip'
+    | 'node'
+    | 'playwright'
+    | 'electron'
+    | 'display'
+    | 'app_root'
+    | 'screenshot_dir'
+    | 'eval_policy'
+    | 'project_runtime'
+  readonly status: 'pass' | 'fail' | 'skip' | 'warn'
   readonly message: string
   readonly hint?: string
+}
+
+/** Exact facts about the Node process hosting the MCP server. */
+export interface ServerRuntimeDetails {
+  readonly core: string
+  readonly node: string
+  readonly v8?: string
+  readonly nodeModuleVersion?: string
+  readonly playwright?: string
+  readonly electron?: string
+  /** Runtime facts for the server-resolvable Electron binary used by a default launch. */
+  readonly electronRuntime?: ElectronRuntimeVersions
+}
+
+/** Bounded, machine-readable facts about an app-root Electron runtime. */
+export interface ProjectRuntimeDetails {
+  readonly declaredElectron?: string
+  readonly installedElectron?: string
+  readonly target?: ElectronRuntimeVersions
+  readonly nativeAddons: NativeAddonInventory
+  /** Present when the bounded addon inventory could not complete. */
+  readonly nativeAddonInventoryError?: string
 }
 
 export interface DoctorReport {
   readonly ok: boolean
   readonly checks: readonly DoctorCheck[]
+  readonly runtime: {
+    readonly server: ServerRuntimeDetails
+    readonly project?: ProjectRuntimeDetails
+  }
 }
 
 export interface DoctorOptions {
@@ -36,12 +83,76 @@ export interface DoctorDeps {
     path: string,
     requireWritable: boolean,
   ) => Promise<'accessible' | 'not_directory' | 'missing'>
+  readonly serverRuntime?: () => Promise<ServerRuntimeDetails>
+  readonly resolveProjectElectron?: (appRoot: string) => Promise<ProjectElectronResolution>
+  readonly readDeclaredElectronVersion?: (appRoot: string) => Promise<string | undefined>
+  readonly probeElectronRuntime?: (executablePath: string) => Promise<ElectronRuntimeVersions>
+  readonly inventoryNativeAddons?: (appRoot: string) => Promise<NativeAddonInventory>
 }
 
 const NODE_FLOOR = 24
 
 async function resolvePackage(name: 'playwright' | 'electron'): Promise<void> {
-  await import(name)
+  // Doctor only needs to establish that the optional peer can be resolved. Importing Electron's
+  // package entry may download a missing binary and print progress to stdout, which would corrupt
+  // the documented machine-readable `doctor --json` channel.
+  const requireFromHere = createRequire(import.meta.url)
+  const packageJsonPath = requireFromHere.resolve(`${name}/package.json`)
+  if (name === 'electron') {
+    // A resolvable package without its dist binary cannot launch an app. Validate that binary by
+    // reading Electron's metadata instead of importing the package entry and triggering a download.
+    await resolveElectronExecutableFromPackageManifest(packageJsonPath, {})
+  }
+}
+
+async function packageVersion(name: 'playwright' | 'electron'): Promise<string | undefined> {
+  try {
+    const requireFromHere = createRequire(import.meta.url)
+    const packageJsonPath = requireFromHere.resolve(`${name}/package.json`)
+    const manifest = JSON.parse(await readFile(packageJsonPath, 'utf8')) as { version?: unknown }
+    return typeof manifest.version === 'string' ? manifest.version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function resolveServerElectron(): Promise<ResolvedProjectElectron | undefined> {
+  try {
+    const requireFromHere = createRequire(import.meta.url)
+    return await resolveElectronExecutableFromPackageManifest(
+      requireFromHere.resolve('electron/package.json'),
+      {},
+    )
+  } catch {
+    return undefined
+  }
+}
+
+async function serverRuntimeDetails(): Promise<ServerRuntimeDetails> {
+  const [playwright, installedElectron] = await Promise.all([
+    packageVersion('playwright'),
+    resolveServerElectron(),
+  ])
+  let electronRuntime: ElectronRuntimeVersions | undefined
+  if (installedElectron !== undefined) {
+    try {
+      electronRuntime = await probeElectronRuntime(installedElectron.executablePath)
+    } catch {
+      // The doctor report still exposes the package version. The project check turns an unavailable
+      // default-runtime ABI comparison into an actionable warning when native addons are present.
+    }
+  }
+  return {
+    core: VERSION,
+    node: process.version,
+    ...(process.versions.v8 !== undefined ? { v8: process.versions.v8 } : {}),
+    ...(process.versions.modules !== undefined
+      ? { nodeModuleVersion: process.versions.modules }
+      : {}),
+    ...(playwright !== undefined ? { playwright } : {}),
+    ...(installedElectron?.version !== undefined ? { electron: installedElectron.version } : {}),
+    ...(electronRuntime !== undefined ? { electronRuntime } : {}),
+  }
 }
 
 async function inspectDirectory(
@@ -177,6 +288,182 @@ function evalPolicyCheck(opts: DoctorOptions): DoctorCheck {
   }
 }
 
+function projectRuntimeCheck(
+  appRoot: string | undefined,
+  server: ServerRuntimeDetails,
+  project: ProjectRuntimeDetails | undefined,
+  resolution: ProjectElectronResolution | undefined,
+  probeError: string | undefined,
+): DoctorCheck {
+  if (appRoot === undefined) {
+    return {
+      id: 'project_runtime',
+      status: 'skip',
+      message: 'No app-root is configured; target Electron runtime alignment was not inspected.',
+    }
+  }
+  if (resolution === undefined || !resolution.ok) {
+    return {
+      id: 'project_runtime',
+      status: 'warn',
+      message:
+        resolution?.ok === false
+          ? resolution.message
+          : 'Target Electron runtime could not be resolved from the configured --app-root.',
+      hint: 'Install Electron inside the app root, or pass executablePath explicitly when launching.',
+    }
+  }
+  if (probeError !== undefined) {
+    return {
+      id: 'project_runtime',
+      status: 'warn',
+      message: `Resolved project Electron but its fixed runtime probe failed: ${probeError}`,
+      hint: 'Check that the app-root Electron binary is executable, then retry doctor.',
+    }
+  }
+  const targetModules = project?.target?.nodeModuleVersion
+  const sourceModules = server.electronRuntime?.nodeModuleVersion
+  const hasNativeAddons = (project?.nativeAddons.paths.length ?? 0) > 0
+  const warnings: string[] = []
+  const hints: string[] = []
+  const declared = project?.declaredElectron
+  const installed = project?.installedElectron
+  if (isExactVersion(declared) && installed !== undefined && declared !== installed) {
+    warnings.push(
+      `package.json declares Electron ${declared}, but the app root has ${installed} installed.`,
+    )
+    hints.push('Reinstall the declared Electron version or align the project manifest.')
+  }
+  if (
+    project?.target?.electron !== undefined &&
+    installed !== undefined &&
+    project.target.electron !== installed
+  ) {
+    warnings.push(
+      `The Electron binary reports ${project.target.electron}, but its package manifest reports ${installed}.`,
+    )
+    hints.push('Repair the Electron installation inside the configured app root.')
+  }
+  if (hasNativeAddons && targetModules !== undefined && sourceModules === undefined) {
+    warnings.push(
+      'The default server Electron ABI could not be inspected while native addons are present.',
+    )
+    hints.push('Launch with runtime:"project" to use the app-local Electron binary.')
+  }
+  if (
+    targetModules !== undefined &&
+    sourceModules !== undefined &&
+    targetModules !== sourceModules &&
+    hasNativeAddons
+  ) {
+    warnings.push(
+      'The default and target Electron runtimes use different NODE_MODULE_VERSION values while native addons are present.',
+    )
+    hints.push('Launch with runtime:"project" so Playwright uses the app-local Electron binary.')
+  }
+  if (project?.nativeAddonInventoryError !== undefined) {
+    warnings.push(`Native-addon inventory failed: ${project.nativeAddonInventoryError}`)
+    hints.push('Correct app-root permissions, then rerun doctor.')
+  }
+  if (warnings.length > 0) {
+    return {
+      id: 'project_runtime',
+      status: 'warn',
+      message: warnings.join(' '),
+      hint: hints.join(' '),
+    }
+  }
+  const inventorySuffix =
+    project?.nativeAddons.truncated === true
+      ? ' Native-addon inventory reached its safety limit.'
+      : ''
+  return {
+    id: 'project_runtime',
+    status: 'pass',
+    message: `Project Electron ${project?.installedElectron ?? 'unknown'} resolved from --app-root; ${project?.nativeAddons.paths.length ?? 0} native addon(s) found.${inventorySuffix}`,
+  }
+}
+
+function isExactVersion(value: string | undefined): value is string {
+  return value !== undefined && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value)
+}
+
+function failureMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
+async function inspectProjectRuntime(
+  appRoot: string | undefined,
+  server: ServerRuntimeDetails,
+  deps: DoctorDeps,
+): Promise<{ readonly check: DoctorCheck; readonly details?: ProjectRuntimeDetails }> {
+  if (appRoot === undefined) {
+    return { check: projectRuntimeCheck(undefined, server, undefined, undefined, undefined) }
+  }
+  const resolveTarget = deps.resolveProjectElectron ?? resolveProjectElectron
+  const declaredElectron = deps.readDeclaredElectronVersion ?? readDeclaredElectronVersion
+  const probeTarget = deps.probeElectronRuntime ?? probeElectronRuntime
+  const inventory = deps.inventoryNativeAddons ?? inventoryNativeAddons
+  const [resolutionResult, declaredResult, nativeAddonsResult] = await Promise.allSettled([
+    resolveTarget(appRoot),
+    declaredElectron(appRoot),
+    inventory(appRoot),
+  ])
+  const resolution: ProjectElectronResolution =
+    resolutionResult.status === 'fulfilled'
+      ? resolutionResult.value
+      : {
+          ok: false,
+          message: `Could not resolve Electron from the configured --app-root: ${failureMessage(resolutionResult.reason)}`,
+        }
+  const declared = declaredResult.status === 'fulfilled' ? declaredResult.value : undefined
+  const nativeAddonInventoryError =
+    nativeAddonsResult.status === 'rejected' ? failureMessage(nativeAddonsResult.reason) : undefined
+  const nativeAddons: NativeAddonInventory =
+    nativeAddonsResult.status === 'fulfilled'
+      ? nativeAddonsResult.value
+      : { paths: [], truncated: true }
+  if (!resolution.ok) {
+    return {
+      check: projectRuntimeCheck(appRoot, server, undefined, resolution, undefined),
+      details: {
+        ...(declared !== undefined ? { declaredElectron: declared } : {}),
+        nativeAddons,
+        ...(nativeAddonInventoryError !== undefined ? { nativeAddonInventoryError } : {}),
+      },
+    }
+  }
+  try {
+    const target = await probeTarget(resolution.electron.executablePath)
+    const details: ProjectRuntimeDetails = {
+      ...(declared !== undefined ? { declaredElectron: declared } : {}),
+      ...(resolution.electron.version !== undefined
+        ? { installedElectron: resolution.electron.version }
+        : {}),
+      target,
+      nativeAddons,
+      ...(nativeAddonInventoryError !== undefined ? { nativeAddonInventoryError } : {}),
+    }
+    return {
+      check: projectRuntimeCheck(appRoot, server, details, resolution, undefined),
+      details,
+    }
+  } catch (cause) {
+    const details: ProjectRuntimeDetails = {
+      ...(declared !== undefined ? { declaredElectron: declared } : {}),
+      ...(resolution.electron.version !== undefined
+        ? { installedElectron: resolution.electron.version }
+        : {}),
+      nativeAddons,
+      ...(nativeAddonInventoryError !== undefined ? { nativeAddonInventoryError } : {}),
+    }
+    return {
+      check: projectRuntimeCheck(appRoot, server, details, resolution, failureMessage(cause)),
+      details,
+    }
+  }
+}
+
 // Run all preflights in stable output order.
 export async function runDoctorChecks(
   opts: DoctorOptions,
@@ -186,6 +473,8 @@ export async function runDoctorChecks(
   const inspect = deps.inspectDirectory ?? inspectDirectory
   const platform = deps.platform ?? process.platform
   const env = deps.env ?? process.env
+  const serverRuntime = await (deps.serverRuntime ?? serverRuntimeDetails)()
+  const projectRuntime = await inspectProjectRuntime(opts.appRoot, serverRuntime, deps)
   const checks = [
     nodeCheck(deps.nodeVersion ?? process.version),
     await packageCheck('playwright', resolve),
@@ -194,9 +483,14 @@ export async function runDoctorChecks(
     await directoryCheck('app_root', opts.appRoot, inspect),
     await directoryCheck('screenshot_dir', opts.screenshotDir, inspect),
     evalPolicyCheck(opts),
+    projectRuntime.check,
   ]
   return {
     ok: checks.every((check) => check.status !== 'fail'),
     checks,
+    runtime: {
+      server: serverRuntime,
+      ...(projectRuntime.details !== undefined ? { project: projectRuntime.details } : {}),
+    },
   }
 }

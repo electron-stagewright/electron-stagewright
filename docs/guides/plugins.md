@@ -10,12 +10,24 @@ every plugin with `--plugin` (or pass it to `createServer`).
 ## Install and load a plugin
 
 Install the core, its launch peers, and the plugin together. For example, load trace support through
-`npx`:
+`npx`. First prime the exact package list in a terminal, so Electron's initial binary-download output
+cannot corrupt an MCP stdio session:
 
 ```sh
 npx -y \
-  --package @electron-stagewright/core@0.3.0 \
-  --package @electron-stagewright/plugin-trace@0.2.0 \
+  --package @electron-stagewright/core@0.4.0 \
+  --package @electron-stagewright/plugin-trace@0.2.1 \
+  --package playwright@1.61.1 \
+  --package electron@42.3.0 \
+  electron-stagewright doctor --json
+```
+
+Then use the same packages with the plugin flag:
+
+```sh
+npx -y \
+  --package @electron-stagewright/core@0.4.0 \
+  --package @electron-stagewright/plugin-trace@0.2.1 \
   --package playwright@1.61.1 \
   --package electron@42.3.0 \
   electron-stagewright --plugin @electron-stagewright/plugin-trace
@@ -27,9 +39,9 @@ For an MCP client, preserve the same package and flag order in its `args`:
 [
   "-y",
   "--package",
-  "@electron-stagewright/core@0.3.0",
+  "@electron-stagewright/core@0.4.0",
   "--package",
-  "@electron-stagewright/plugin-trace@0.2.0",
+  "@electron-stagewright/plugin-trace@0.2.1",
   "--package",
   "playwright@1.61.1",
   "--package",

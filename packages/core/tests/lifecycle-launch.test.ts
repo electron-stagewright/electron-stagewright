@@ -12,12 +12,13 @@ import { describe, expect, it } from 'vitest'
 
 import { type ErrorResponse, type SuccessResponse } from '../src/errors/envelope.js'
 import { StagewrightError } from '../src/errors/registry.js'
+import type { ProjectElectronResolution } from '../src/runtime/project-electron.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { diagnoseLaunchError } from '../src/tools/lifecycle/diagnose.js'
 import { makeLaunchTool } from '../src/tools/lifecycle/launch.js'
-import type { WindowDescriptor } from '../src/transports/index.js'
+import type { LaunchOptions, WindowDescriptor } from '../src/transports/index.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
 const WIN: WindowDescriptor = {
@@ -35,6 +36,7 @@ function setup(
     transport?: FakeTransport
     appRoot?: string
     launchDefaultMain?: string
+    resolveProjectElectron?: (appRoot: string) => Promise<ProjectElectronResolution>
   } = {},
 ) {
   const sessions = new SessionManager()
@@ -47,8 +49,24 @@ function setup(
     ...(opts.appRoot !== undefined ? { appRoot: opts.appRoot } : {}),
     ...(opts.launchDefaultMain !== undefined ? { launchDefaultMain: opts.launchDefaultMain } : {}),
   })
-  dispatcher.register(makeLaunchTool({ fileExists: () => opts.fileExists ?? true }))
+  dispatcher.register(
+    makeLaunchTool({
+      fileExists: () => opts.fileExists ?? true,
+      ...(opts.resolveProjectElectron !== undefined
+        ? { resolveProjectElectron: opts.resolveProjectElectron }
+        : {}),
+    }),
+  )
   return { sessions, transport, dispatcher }
+}
+
+class CapturingTransport extends FakeTransport {
+  lastLaunchOptions: LaunchOptions | undefined
+
+  override async launch(opts?: LaunchOptions) {
+    this.lastLaunchOptions = opts
+    return super.launch(opts)
+  }
 }
 
 /** Execute the renderer-ready body in a browser-like document after JSDOM completes parse. */
@@ -90,6 +108,115 @@ describe('electron_launch', () => {
     })) as ErrorResponse
     expect(res.code).toBe('BAD_ARGUMENT')
     expect(res.error).toContain('instrumentNative requires main')
+    expect(transport.launchCount).toBe(0)
+  })
+
+  it('requires an operator-configured app root before selecting the project runtime', async () => {
+    const { dispatcher, transport } = setup()
+    const res = (await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      runtime: 'project',
+    })) as ErrorResponse
+
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('--app-root')
+    expect(transport.launchCount).toBe(0)
+  })
+
+  it('resolves and forwards the app-root Electron runtime', async () => {
+    const root = path.resolve('sw-project-runtime-fixture')
+    const transport = new CapturingTransport({
+      session: new FakeSession({ id: 'project-runtime', windows: [WIN] }),
+    })
+    const resolveProjectElectron = async (appRoot: string): Promise<ProjectElectronResolution> => {
+      expect(appRoot).toBe(root)
+      return {
+        ok: true,
+        electron: {
+          executablePath: path.join(root, 'node_modules', 'electron', 'dist', 'electron'),
+          packageJsonPath: path.join(root, 'node_modules', 'electron', 'package.json'),
+          version: '42.3.0',
+        },
+      }
+    }
+    const { dispatcher } = setup({ appRoot: root, transport, resolveProjectElectron })
+
+    const res = await dispatcher.dispatch('electron_launch', {
+      main: path.join(root, 'app', 'main.js'),
+      runtime: 'project',
+    })
+
+    expect(res).toMatchObject({ ok: true, runtime_source: 'project' })
+    expect(transport.lastLaunchOptions).toMatchObject({
+      appPath: path.join(root, 'app', 'main.js'),
+      executablePath: path.join(root, 'node_modules', 'electron', 'dist', 'electron'),
+    })
+  })
+
+  it('accepts the canonical project binary when the configured root uses a filesystem alias', async () => {
+    const configuredRoot = path.resolve('sw-project-runtime-alias')
+    const canonicalRoot = path.resolve('sw-project-runtime-canonical')
+    const transport = new CapturingTransport({
+      session: new FakeSession({ id: 'project-alias', windows: [WIN] }),
+    })
+    const { dispatcher } = setup({
+      appRoot: configuredRoot,
+      transport,
+      resolveProjectElectron: async () => ({
+        ok: true,
+        rootPath: canonicalRoot,
+        electron: {
+          executablePath: path.join(canonicalRoot, 'node_modules', 'electron', 'dist', 'electron'),
+          packageJsonPath: path.join(canonicalRoot, 'node_modules', 'electron', 'package.json'),
+        },
+      }),
+    })
+
+    const res = await dispatcher.dispatch('electron_launch', {
+      main: path.join(configuredRoot, 'main.js'),
+      runtime: 'project',
+    })
+
+    expect(res).toMatchObject({ ok: true, runtime_source: 'project' })
+    expect(transport.lastLaunchOptions?.executablePath).toBe(
+      path.join(canonicalRoot, 'node_modules', 'electron', 'dist', 'electron'),
+    )
+  })
+
+  it('keeps an explicit executable authoritative over the requested project runtime', async () => {
+    let resolverCalled = false
+    const { dispatcher, transport } = setup({
+      resolveProjectElectron: async () => {
+        resolverCalled = true
+        return { ok: false, message: 'must not run' }
+      },
+    })
+    const res = await dispatcher.dispatch('electron_launch', {
+      executablePath: '/abs/explicit-electron',
+      runtime: 'project',
+    })
+
+    expect(res).toMatchObject({ ok: true, runtime_source: 'explicit' })
+    expect(resolverCalled).toBe(false)
+    expect(transport.launchCount).toBe(1)
+  })
+
+  it('requires main before resolving a project runtime', async () => {
+    let resolverCalled = false
+    const { dispatcher, transport } = setup({
+      appRoot: path.resolve('sw-project-runtime-fixture'),
+      resolveProjectElectron: async () => {
+        resolverCalled = true
+        return { ok: false, message: 'must not run' }
+      },
+    })
+    const res = (await dispatcher.dispatch('electron_launch', {
+      runtime: 'project',
+    })) as ErrorResponse
+
+    expect(res.code).toBe('BAD_ARGUMENT')
+    expect(res.error).toContain('requires main')
+    expect(resolverCalled).toBe(false)
     expect(transport.launchCount).toBe(0)
   })
 

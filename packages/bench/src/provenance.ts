@@ -107,6 +107,7 @@ export async function collectComparisonProvenance(
     fixture: await Promise.all([
       fingerprint(BENCH_APP_MAIN),
       fingerprint(path.join(path.dirname(BENCH_APP_MAIN), 'index.html')),
+      fingerprint(path.join(path.dirname(BENCH_APP_MAIN), 'server.js')),
       fingerprint(path.join(HERE, 'adapters.ts')),
       fingerprint(path.join(HERE, 'comparison.ts')),
       fingerprint(path.join(HERE, 'harness.ts')),

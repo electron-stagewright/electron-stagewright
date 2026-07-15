@@ -10,17 +10,26 @@ Drive Electron desktop applications from AI agents via the Model Context Protoco
 ## Use the published package
 
 The default launch transport uses Playwright and an Electron runtime. Start the CLI with all three
-packages available:
+packages available. Before handing this command to an MCP host, run it once in a terminal with
+`doctor --json`: Electron can print binary-download progress to stdout during its first install,
+which would corrupt the host's stdio protocol. That terminal bootstrap primes the `npx` cache.
 
 ```bash
-npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \
+npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
+  --package electron@42.3.0 electron-stagewright doctor --json
+```
+
+Then configure or run the normal server command:
+
+```bash
+npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
   --package electron@42.3.0 electron-stagewright
 ```
 
 Or install all three once and run the bin directly:
 
 ```bash
-npm install -g @electron-stagewright/core@0.3.0 playwright@1.61.1 electron@42.3.0
+npm install -g @electron-stagewright/core@0.4.0 playwright@1.61.1 electron@42.3.0
 electron-stagewright
 ```
 
@@ -40,15 +49,19 @@ Useful CLI flags:
   loaded plugins compose independently.
 - `--screenshot-dir <path>` changes where screenshots are written when a tool
   call does not pass an explicit path.
+- `--app-root <path>` confines launch/file paths and enables
+  `electron_launch({ main, runtime: "project" })` to use the Electron package
+  installed inside that project. The server, not the agent, chooses this root.
 - `doctor --json` runs a machine-readable preflight for Node, Playwright, Electron,
-  display setup, configured paths, and eval policy. Run it as
+  display setup, configured paths, eval policy, and (with `--app-root`) target
+  Electron/Node/V8/ABI facts plus a bounded potential-native-addon inventory. Run it as
   `electron-stagewright doctor --json`, never as an MCP server argument.
 
 ## Use with Claude Code
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \
+  npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
   --package electron@42.3.0 electron-stagewright
 ```
 

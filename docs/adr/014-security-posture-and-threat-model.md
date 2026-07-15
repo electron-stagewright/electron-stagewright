@@ -193,3 +193,18 @@ per-key `localStorage` / `sessionStorage` tools (ADR-018 Status Update).
   values are returned verbatim by default, with an opt-in `redactValues` config; non-JSON
   structured-clone values (Blob/ArrayBuffer/circular) are returned as a typed placeholder. The security
   model gains an IndexedDB row alongside the Web Storage one.
+
+## Status Update — 2026-07-14: bounded target-runtime selection
+
+The launch path now has an optional `runtime: "project"` mode (ADR-024) for apps whose native addons
+need their own Electron ABI. The root remains a server-startup `--app-root` setting, not a tool
+argument, and both the Electron package metadata and executable are canonicalized and rejected if
+they escape that root. Resolution reads Electron's `package.json` and `path.txt`; it does not import
+the target app or Electron package entry point, which could otherwise execute dependency code or
+attempt a runtime download during preflight.
+
+`doctor` additionally runs a fixed, no-input Electron version probe with a narrow inherited
+environment and bounded timeout/output. It reports the server and target runtime facts plus a bounded
+potential-native-addon inventory. Alignment findings are warnings rather than an authorization bypass:
+the operator can choose the target runtime, repair the installation, or use an explicitly reviewed
+executable without giving an agent a broader filesystem root.

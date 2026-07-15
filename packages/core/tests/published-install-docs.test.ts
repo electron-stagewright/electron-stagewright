@@ -80,4 +80,23 @@ describe('published-install documentation', () => {
     }
     expect(demoGuide).not.toMatch(/not yet published to\s+npm/)
   })
+
+  it('primes each npx package set outside an MCP stdio session', async () => {
+    const [readme, coreReadme, connectionGuide, demoGuide, pluginsGuide] = await Promise.all([
+      readRepoFile('README.md'),
+      readRepoFile('packages', 'core', 'README.md'),
+      readRepoFile('docs', 'guides', 'connect-your-mcp-client.md'),
+      readRepoFile('docs', 'guides', 'demo.md'),
+      readRepoFile('docs', 'guides', 'plugins.md'),
+    ])
+
+    for (const doc of [readme, coreReadme, connectionGuide, demoGuide, pluginsGuide]) {
+      expect(doc).toContain('electron-stagewright doctor --json')
+    }
+    expect([readme, coreReadme, connectionGuide, demoGuide, pluginsGuide].join('\n')).toMatch(
+      /binary-download.*stdout|stdout.*binary-download/is,
+    )
+    expect(demoGuide).toContain(`${DEMO_PACKAGE.name}@${DEMO_PACKAGE.version}`)
+    expect(pluginsGuide).toContain(`${TRACE_PACKAGE.name}@${TRACE_PACKAGE.version}`)
+  })
 })

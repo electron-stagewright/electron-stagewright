@@ -1,0 +1,26 @@
+name: Published npx smoke
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  published-npx:
+    name: Clean-cache npx doctor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      # This intentionally installs no workspace dependencies. The helper runs a discardable first
+      # npx command to absorb Electron's postinstall stdout, then proves a second host command emits
+      # a single valid doctor JSON document from an otherwise empty npm/Electron cache.
+      - run: node scripts/published-npx-smoke.mjs

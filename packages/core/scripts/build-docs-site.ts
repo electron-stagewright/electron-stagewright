@@ -227,6 +227,7 @@ function renderNav(
           { target: 'guides/assert-ui-state.html', label: 'Assert UI state' },
           { target: 'guides/type-into-code-editors.html', label: 'Type into code editors' },
           { target: 'guides/capture-diagnostics.html', label: 'Capture diagnostics' },
+          { target: 'guides/plugins.html', label: 'Load, configure, and diagnose plugins' },
           {
             target: 'guides/migrate-from-electron-driver.html',
             label: 'Migrate from electron-driver',
@@ -237,6 +238,10 @@ function renderNav(
         heading: 'Explanation',
         items: [
           { target: 'guides/concepts.html', label: 'Concepts' },
+          {
+            target: 'guides/choosing-an-electron-mcp-server.html',
+            label: 'Choose an Electron MCP server',
+          },
           { target: 'guides/security-model.html', label: 'Security model' },
         ],
       },

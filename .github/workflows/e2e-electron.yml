@@ -59,6 +59,12 @@ jobs:
           path: ~/.cache/electron
           key: electron-binary-${{ runner.os }}-${{ steps.electron.outputs.version }}
 
+      - name: Cache native addon fixture inputs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron-stagewright/native-addon-fixture
+          key: native-addon-fixture-${{ runner.os }}-41.7.1
+
       - run: pnpm install --frozen-lockfile
 
       # require('electron') throws when the package's path.txt is absent, so it doubles as the
@@ -94,6 +100,9 @@ jobs:
           node -e "console.log('Electron resolved to:', require('electron'))"
         working-directory: packages/core
 
+      - name: Prepare native addon fixture inputs
+        run: node scripts/prepare-native-addon-fixture.mjs >> "$GITHUB_ENV"
+
       - run: pnpm build
 
       - name: Run the gated real-Electron smokes under Xvfb
@@ -104,13 +113,46 @@ jobs:
       - name: Verify the packed CLI from an isolated install
         run: xvfb-run --auto-servernum pnpm package:smoke
 
-  # This stays non-blocking while the artifact establishes a reliable first-party baseline. It runs
-  # no competitor command and deliberately omits --check: only deterministic own-server metrics may
-  # become a required gate after repeated stable diagnostic evidence.
+  # The Linux job above owns the Xvfb setup and Linux-only native-addon fixture.
+  # macOS runs the same complete suite natively, proving the launch, CDP, surface,
+  # plugin, and packed-install paths against Apple's process/window environment.
+  e2e-macos:
+    name: Real-Electron smokes (macos)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Fail at a direct, actionable binary probe rather than allowing every
+      # smoke to fail later as an opaque launch timeout.
+      - name: Ensure the Electron binary is present
+        run: node -e "console.log('Electron resolved to:', require('electron'))"
+        working-directory: packages/core
+
+      - run: pnpm build
+
+      - name: Run the gated real-Electron smokes
+        run: pnpm test
+        env:
+          STAGEWRIGHT_E2E: '1'
+
+      - name: Verify the packed CLI from an isolated install
+        run: pnpm package:smoke
+
+  # Four consecutive hosted diagnostics passed before this was promoted. It checks only deterministic
+  # first-party metrics; latency and memory remain observed artifact data, never pass/fail inputs.
+  # Keep the established job and artifact names so existing branch protection and artifact consumers
+  # retain their contract; removing continue-on-error makes this diagnostic lane blocking.
   benchmark-diagnostics:
     name: Benchmark diagnostics (ubuntu, Xvfb)
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     env:
       ELECTRON_DISABLE_SANDBOX: '1'
@@ -165,14 +207,14 @@ jobs:
 
       - run: pnpm build
 
-      - name: Run first-party benchmark diagnostics under Xvfb
+      - name: Run first-party benchmark regression gate under Xvfb
         run: |
           mkdir -p output
-          xvfb-run --auto-servernum pnpm bench --json output/benchmark.json > /dev/null
+          xvfb-run --auto-servernum pnpm bench --check --json output/benchmark.json > /dev/null
         env:
           STAGEWRIGHT_BENCH_PHASE_TIMEOUT_MS: '45000'
 
-      - name: Upload benchmark diagnostic
+      - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v7
         with:
