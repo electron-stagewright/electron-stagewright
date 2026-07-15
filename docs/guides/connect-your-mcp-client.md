@@ -34,7 +34,7 @@ first:
     "args": [
       "-y",
       "--package",
-      "@electron-stagewright/core@0.3.0",
+      "@electron-stagewright/core@0.4.0",
       "--package",
       "playwright@1.61.1",
       "--package",
@@ -48,7 +48,7 @@ first:
   terminal:
 
   ```sh
-  npx -y --package @electron-stagewright/core@0.3.0 --package playwright@1.61.1 \
+  npx -y --package @electron-stagewright/core@0.4.0 --package playwright@1.61.1 \
     --package electron@42.3.0 electron-stagewright doctor --json
   ```
 
@@ -61,7 +61,7 @@ first:
 - **Global install (explicit, fastest spawn).** Install once, then call the bin directly.
 
   ```sh
-  npm install -g @electron-stagewright/core@0.3.0 playwright@1.61.1 electron@42.3.0
+  npm install -g @electron-stagewright/core@0.4.0 playwright@1.61.1 electron@42.3.0
   ```
 
   ```json
@@ -98,7 +98,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.3.0",
+        "@electron-stagewright/core@0.4.0",
         "--package",
         "playwright@1.61.1",
         "--package",
@@ -123,7 +123,7 @@ reload:
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.3.0",
+        "@electron-stagewright/core@0.4.0",
         "--package",
         "playwright@1.61.1",
         "--package",
@@ -177,7 +177,7 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
   "args": [
     "-y",
     "--package",
-    "@electron-stagewright/core@0.3.0",
+    "@electron-stagewright/core@0.4.0",
     "--package",
     "playwright@1.61.1",
     "--package",

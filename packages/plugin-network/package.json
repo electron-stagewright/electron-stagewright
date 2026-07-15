@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/plugin-network",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Network plugin for Electron Stagewright: capture and stub an Electron app's renderer request/response traffic by URL for agent-driven testing.",
   "type": "module",
   "license": "MIT",
