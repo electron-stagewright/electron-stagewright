@@ -159,6 +159,7 @@ describe('buildDocsSite (full build against the real docs)', () => {
     for (const rel of [
       'index.html',
       'guides/concepts.html',
+      'guides/choosing-an-electron-mcp-server.html',
       'adr/index.html',
       'tool-reference.html',
       'sitemap.xml',
@@ -170,6 +171,8 @@ describe('buildDocsSite (full build against the real docs)', () => {
     const home = await readFile(path.join(outDir, 'index.html'), 'utf8')
     expect(home).toContain('class="sidebar"')
     expect(home).toContain('id="what-each-response-looks-like-the-agent-ux-detail"')
+    expect(home).toContain('Load, configure, and diagnose plugins')
+    expect(home).toContain('Choose an Electron MCP server')
     // No unresolved RELATIVE `.md` href survives (GitHub-blob `.md` URLs start with https and are ok).
     expect(home).not.toMatch(/href="(?!https?:\/\/)[^"]*\.md"/)
 

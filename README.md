@@ -148,6 +148,8 @@ The full tool list — every tool, its parameters, and operation type — is in
   their narrowest gates, and inspect enabled tools and safe config with `electron_plugins`.
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md) — tool-by-tool
   mapping and the conceptual shifts.
+- [Choose an Electron MCP server](docs/guides/choosing-an-electron-mcp-server.md) — compare
+  Electron automation workflows by capability, trust boundary, recovery evidence, and your own app.
 - [Concepts](docs/guides/concepts.md) — the agent-native model and why the server is shaped the way
   it is: the response envelope, refs, snapshots, retrying assertions, sessions, and the eval/plugin
   trust model, each linked to the decision that set it.
