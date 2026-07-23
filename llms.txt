@@ -17,9 +17,10 @@
 - [Load, configure, and diagnose plugins](docs/guides/plugins.md): explicit plugin loading, narrow gates, and effective configuration
 - [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md): tool-by-tool mapping
 - [Choose an Electron MCP server](docs/guides/choosing-an-electron-mcp-server.md): capability-first workflow comparison and a reproducible evaluation checklist
+- [Compatibility](docs/guides/compatibility.md): verified runtime, platform, and transport combinations plus explicit limits
 - [Concepts](docs/guides/concepts.md): the agent-native model and why -- envelope, refs, snapshots, retrying assertions, sessions/transports, eval and plugins -- each linked to its ADR
 - [Security model](docs/guides/security-model.md): trust boundaries, the controls behind --allow-eval, residual risks, and a deployment checklist
-- [Architecture decisions](docs/adr/README.md): the design record (ADR-001 through ADR-015)
+- [Architecture decisions](docs/adr/README.md): the design record (ADR-001 through ADR-025)
 
 ## Optional
 

@@ -150,6 +150,8 @@ The full tool list — every tool, its parameters, and operation type — is in
   mapping and the conceptual shifts.
 - [Choose an Electron MCP server](docs/guides/choosing-an-electron-mcp-server.md) — compare
   Electron automation workflows by capability, trust boundary, recovery evidence, and your own app.
+- [Compatibility](docs/guides/compatibility.md) — see which Node, Electron, operating-system, and
+  transport combinations are verified by unit tests or real-runtime CI.
 - [Concepts](docs/guides/concepts.md) — the agent-native model and why the server is shaped the way
   it is: the response envelope, refs, snapshots, retrying assertions, sessions, and the eval/plugin
   trust model, each linked to the decision that set it.

@@ -242,6 +242,7 @@ function renderNav(
             target: 'guides/choosing-an-electron-mcp-server.html',
             label: 'Choose an Electron MCP server',
           },
+          { target: 'guides/compatibility.html', label: 'Compatibility' },
           { target: 'guides/security-model.html', label: 'Security model' },
         ],
       },

@@ -160,6 +160,7 @@ describe('buildDocsSite (full build against the real docs)', () => {
       'index.html',
       'guides/concepts.html',
       'guides/choosing-an-electron-mcp-server.html',
+      'guides/compatibility.html',
       'adr/index.html',
       'tool-reference.html',
       'sitemap.xml',
@@ -173,6 +174,7 @@ describe('buildDocsSite (full build against the real docs)', () => {
     expect(home).toContain('id="what-each-response-looks-like-the-agent-ux-detail"')
     expect(home).toContain('Load, configure, and diagnose plugins')
     expect(home).toContain('Choose an Electron MCP server')
+    expect(home).toContain('Compatibility')
     // No unresolved RELATIVE `.md` href survives (GitHub-blob `.md` URLs start with https and are ok).
     expect(home).not.toMatch(/href="(?!https?:\/\/)[^"]*\.md"/)
 
