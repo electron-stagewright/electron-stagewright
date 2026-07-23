@@ -3,11 +3,13 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:f
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
+import { execPackageCommand } from './package-command.mjs'
+
 const execFile = promisify(execFileCallback)
-const ROOT = process.cwd()
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CORE_DIR = path.join(ROOT, 'packages', 'core')
 const requireFromCore = createRequire(pathToFileURL(path.join(CORE_DIR, 'package.json')))
 
@@ -31,10 +33,11 @@ async function configureScratchElectronRuntime(scratchDir, relativeExecutable) {
 
 const APP_MAIN = `
 import { BrowserWindow, app } from 'electron'
+import { fileURLToPath } from 'node:url'
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: true, webPreferences: { contextIsolation: true } })
-  await win.loadFile(new URL('./index.html', import.meta.url).pathname)
+  await win.loadFile(fileURLToPath(new URL('./index.html', import.meta.url)))
 })
 app.on('window-all-closed', () => app.quit())
 `
@@ -61,12 +64,7 @@ if (!sessionIdField.sessionId.safeParse('session-1').success) {
 `
 const MCP_RUNTIME_ENV_HELPER = `
 function runtimeEnv(electronDistPath) {
-  const env = { ELECTRON_OVERRIDE_DIST_PATH: electronDistPath }
-  for (const name of ['DISPLAY', 'XAUTHORITY', 'ELECTRON_DISABLE_SANDBOX']) {
-    const value = process.env[name]
-    if (value !== undefined) env[name] = value
-  }
-  return env
+  return { ...process.env, ELECTRON_OVERRIDE_DIST_PATH: electronDistPath }
 }
 `
 const CLIENT_SMOKE = `
@@ -311,7 +309,7 @@ async function packageVersion(name) {
 }
 
 async function packTracePlugin(packDir) {
-  await execFile(
+  await execPackageCommand(
     'pnpm',
     ['--filter', '@electron-stagewright/plugin-trace', 'pack', '--pack-destination', packDir],
     { cwd: ROOT, maxBuffer: 8 * 1024 * 1024 },
@@ -324,7 +322,7 @@ async function packTracePlugin(packDir) {
 }
 
 async function packA11yPlugin(packDir) {
-  await execFile(
+  await execPackageCommand(
     'pnpm',
     ['--filter', '@electron-stagewright/plugin-a11y', 'pack', '--pack-destination', packDir],
     { cwd: ROOT, maxBuffer: 8 * 1024 * 1024 },
@@ -337,7 +335,7 @@ async function packA11yPlugin(packDir) {
 }
 
 async function packVisualPlugin(packDir) {
-  await execFile(
+  await execPackageCommand(
     'pnpm',
     ['--filter', '@electron-stagewright/plugin-visual', 'pack', '--pack-destination', packDir],
     { cwd: ROOT, maxBuffer: 8 * 1024 * 1024 },
@@ -350,7 +348,7 @@ async function packVisualPlugin(packDir) {
 }
 
 async function packDemo(packDir) {
-  await execFile(
+  await execPackageCommand(
     'pnpm',
     ['--filter', '@electron-stagewright/demo', 'pack', '--pack-destination', packDir],
     { cwd: ROOT, maxBuffer: 8 * 1024 * 1024 },
@@ -379,10 +377,14 @@ async function main() {
       mkdir(demoPackDir),
       mkdir(scratchDir),
     ])
-    const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', packDir], {
-      cwd: CORE_DIR,
-      maxBuffer: 1024 * 1024,
-    })
+    const { stdout } = await execPackageCommand(
+      'npm',
+      ['pack', '--json', '--pack-destination', packDir],
+      {
+        cwd: CORE_DIR,
+        maxBuffer: 1024 * 1024,
+      },
+    )
     const packed = JSON.parse(stdout)
     const filename = packed[0]?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not report a tarball filename')
@@ -406,7 +408,7 @@ async function main() {
     ])
     const electronRuntime = await workspaceElectronRuntime()
 
-    await execFile(
+    await execPackageCommand(
       'npm',
       [
         'install',
@@ -584,7 +586,7 @@ async function main() {
       },
     )
     const replayBin = path.join(scratchDir, 'node_modules', '.bin', 'electron-stagewright-replay')
-    const { stdout: replayOutput } = await execFile(
+    const { stdout: replayOutput } = await execPackageCommand(
       replayBin,
       [path.join(scratchDir, 'replay.json'), '--json'],
       {

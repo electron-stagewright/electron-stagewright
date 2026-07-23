@@ -1,14 +1,12 @@
-import { execFile as execFileCallback } from 'node:child_process'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 
-const execFile = promisify(execFileCallback)
+import { execPackageCommand } from './package-command.mjs'
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CORE_PACKAGE_PATH = path.join(ROOT, 'packages', 'core', 'package.json')
-const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx'
 const COMMAND_TIMEOUT_MS = 5 * 60_000
 const EVIDENCE_LIMIT = 2000
 
@@ -56,7 +54,7 @@ function evidence(label, value) {
  */
 async function runPublishedDoctor(packages, options) {
   try {
-    const { stdout, stderr } = await execFile(NPX, npxArguments(packages), options)
+    const { stdout, stderr } = await execPackageCommand('npx', npxArguments(packages), options)
     return { stdout, stderr, code: 0 }
   } catch (error) {
     return { stdout: error?.stdout ?? '', stderr: error?.stderr ?? '', code: error?.code ?? 1 }

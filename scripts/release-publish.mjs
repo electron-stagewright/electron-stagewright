@@ -1,10 +1,10 @@
-import { execFile as execFileCallback } from 'node:child_process'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 
-const execFile = promisify(execFileCallback)
-const ROOT = process.cwd()
+import { execPackageCommand } from './package-command.mjs'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const PACKAGES_DIR = path.join(ROOT, 'packages')
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org/'
 const MINIMUM_NPM_VERSION = [11, 5, 1]
@@ -146,7 +146,7 @@ async function publishedMetadata(registry, name, version) {
 }
 
 async function run(command, args, options = {}) {
-  const result = await execFile(command, args, {
+  const result = await execPackageCommand(command, args, {
     cwd: ROOT,
     maxBuffer: 8 * 1024 * 1024,
     ...options,
@@ -157,7 +157,7 @@ async function run(command, args, options = {}) {
 }
 
 async function assertTrustedPublishingNpm() {
-  const { stdout } = await execFile('npm', ['--version'], { cwd: ROOT })
+  const { stdout } = await execPackageCommand('npm', ['--version'], { cwd: ROOT })
   const version = stdout.trim()
   if (!isSupportedNpmVersion(version)) {
     throw new Error(
@@ -281,10 +281,9 @@ async function main() {
   }
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === new URL(`file://${process.argv[1]}`).href
-) {
+const invokedDirectly =
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : error)
     process.exitCode = 1
