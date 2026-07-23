@@ -17,6 +17,7 @@ situation matches:
 | Deciding whether and how to expose the server                    | [Security model](./security-model.md)                                 |
 | Trying to understand how it works, and why                       | [Concepts](./concepts.md)                                             |
 | Comparing Electron MCP workflows before adopting one             | [Choose an Electron MCP server](./choosing-an-electron-mcp-server.md) |
+| Checking supported runtimes, platforms, and transports           | [Compatibility](./compatibility.md)                                   |
 
 ## The four kinds of docs here
 
@@ -34,8 +35,10 @@ is _for_:
   [Migrate from electron-driver](./migrate-from-electron-driver.md) each solve one job.
 - **Explanation** — understanding-oriented. [Concepts](./concepts.md) explains the agent-native
   model and why the server is shaped the way it is; the [Security model](./security-model.md)
-  explains the trust boundaries; [Choose an Electron MCP server](./choosing-an-electron-mcp-server.md)
-  frames a capability-first evaluation against the surrounding ecosystem.
+  explains the trust boundaries;
+  [Choose an Electron MCP server](./choosing-an-electron-mcp-server.md) frames a capability-first
+  evaluation against the surrounding ecosystem; [Compatibility](./compatibility.md) separates
+  package ranges from combinations verified in CI.
 - **Reference** — information-oriented. [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) lists every
   tool (parameters, return shapes, error codes) generated from the live manifest, and the
   [Architecture Decision Records](../adr/README.md) record why each decision was made.
