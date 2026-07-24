@@ -12,6 +12,7 @@
     "manifest:report": "tsx src/run-manifest.ts",
     "manifest:update": "tsx src/run-manifest.ts --update-manifest-baseline",
     "bench:profiles": "tsx src/run-profile-bench.ts",
+    "bench:startup": "tsx src/run-startup.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

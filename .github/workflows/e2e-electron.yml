@@ -39,9 +39,9 @@ jobs:
     env:
       ELECTRON_DISABLE_SANDBOX: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -54,13 +54,13 @@ jobs:
           echo "Locked Electron version: ${version}"
 
       - name: Cache the Electron release zip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/electron
           key: electron-binary-${{ runner.os }}-${{ steps.electron.outputs.version }}
 
       - name: Cache native addon fixture inputs
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/electron-stagewright/native-addon-fixture
           key: native-addon-fixture-${{ runner.os }}-41.7.1
@@ -121,9 +121,9 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -155,9 +155,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -191,9 +191,9 @@ jobs:
     env:
       ELECTRON_DISABLE_SANDBOX: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -206,7 +206,7 @@ jobs:
           echo "Locked Electron version: ${version}"
 
       - name: Cache the Electron release zip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/electron
           key: electron-binary-${{ runner.os }}-${{ steps.electron.outputs.version }}

@@ -13,20 +13,57 @@ that launch the server; everything else is the client's standard MCP configurati
 
 - **Node.js 24 or newer** (the server's floor — check with `node -v`).
 - **Playwright and Electron** for the default launch transport. The core package keeps both as
-  optional peers so non-launch flows can import it without the extra install; the `npx` and global
-  examples below install both alongside the server.
+  optional peers so non-launch flows can import it without the extra install; the examples below
+  install both alongside the server.
 - An **MCP-capable client** (Claude Desktop, Cursor, or any host that can spawn a stdio MCP server).
 - The Electron app you want to drive (the server launches or attaches to it; you do not embed
   anything in the app).
 
 ## Pick how the client launches the server
 
-The client needs a `command` and `args` that start the stdio server. Three forms, fastest to set up
-first:
+The client needs a `command` and `args` that start the stdio server. Prefer a pinned, project-local
+install: it avoids registry work during normal client startup, travels with the project's lockfile,
+and gives `--app-root` a stable security boundary.
 
-- **`npx` (no permanent install).** The client fetches and caches the server plus its Playwright
-  and Electron peers. The versions below are intentionally pinned: update them together after
-  testing a new release rather than asking every spawn for whichever package is newest.
+- **Project-local install (recommended).** Add the tested stack to the Electron app you want to
+  drive. `--save-exact` prevents an unrelated package-manager refresh from changing the automation
+  runtime:
+
+  ```sh
+  cd /absolute/path/to/your-electron-app
+  pnpm add --save-dev --save-exact @electron-stagewright/core@0.4.1 playwright@1.61.1
+  # Only when the project does not already pin a compatible Electron:
+  pnpm add --save-dev --save-exact electron@42.3.0
+  pnpm exec electron-stagewright doctor --json --app-root "$PWD"
+  ```
+
+  If the app already pins a compatible Electron version, keep the app's version instead of changing
+  it solely for Stagewright. Configure the host to execute the local bin from that project:
+
+  ```json
+  {
+    "command": "node",
+    "args": [
+      "/absolute/path/to/your-electron-app/node_modules/@electron-stagewright/core/dist/cli.js",
+      "--tool-profile",
+      "essential",
+      "--app-root",
+      "/absolute/path/to/your-electron-app"
+    ]
+  }
+  ```
+
+  Replace both absolute paths with the same project directory. On Windows, use an absolute path
+  such as `C:\\code\\your-electron-app\\node_modules\\@electron-stagewright\\core\\dist\\cli.js`.
+  Calling the JavaScript entry with Node avoids package-manager `.cmd` shim differences across MCP
+  hosts. `essential` is the focused launch/snapshot/interact/assert surface; use `full` only when an
+  existing workflow needs the compatibility catalog.
+
+- **`npx` (pinned fallback, no permanent install).** The client fetches and caches the server plus
+  its Playwright and Electron peers. This is convenient for evaluation but slower and more sensitive
+  to an empty package cache than the project-local form. The versions below are intentionally
+  pinned: update them together after testing a new release rather than asking every spawn for
+  whichever package is newest. This direct `npx` configuration is for macOS/Linux hosts:
 
   ```json
   {
@@ -39,7 +76,37 @@ first:
       "playwright@1.61.1",
       "--package",
       "electron@42.3.0",
-      "electron-stagewright"
+      "electron-stagewright",
+      "--tool-profile",
+      "essential",
+      "--app-root",
+      "/absolute/path/to/your-electron-app"
+    ]
+  }
+  ```
+
+  On Windows, package bins are `.cmd` shims. Route the same arguments through the command processor
+  unless your MCP host explicitly handles `.cmd` files:
+
+  ```json
+  {
+    "command": "cmd.exe",
+    "args": [
+      "/d",
+      "/c",
+      "npx.cmd",
+      "-y",
+      "--package",
+      "@electron-stagewright/core@0.4.1",
+      "--package",
+      "playwright@1.61.1",
+      "--package",
+      "electron@42.3.0",
+      "electron-stagewright",
+      "--tool-profile",
+      "essential",
+      "--app-root",
+      "C:\\code\\your-electron-app"
     ]
   }
   ```
@@ -49,7 +116,8 @@ first:
 
   ```sh
   npx -y --package @electron-stagewright/core@0.4.1 --package playwright@1.61.1 \
-    --package electron@42.3.0 electron-stagewright doctor --json
+    --package electron@42.3.0 electron-stagewright doctor --json \
+    --app-root /absolute/path/to/your-electron-app
   ```
 
   Electron can print a binary-download progress line to stdout during this first install. That is
@@ -58,15 +126,24 @@ first:
   `npx` cache or changing any pinned package version. When you add a demo or plugin package, include
   that same extra `--package` in the bootstrap command before `electron-stagewright doctor --json`.
 
-- **Global install (explicit, fastest spawn).** Install once, then call the bin directly.
+- **Global install (fast spawn, not project-pinned).** Install once, then call the bin directly.
+  This is useful for a single operator, but a project-local dependency is easier for a team to
+  reproduce and upgrade together.
 
   ```sh
-  npm install -g @electron-stagewright/core@0.4.1 playwright@1.61.1 electron@42.3.0
+  pnpm add --global --save-exact @electron-stagewright/core@0.4.1 \
+    playwright@1.61.1 electron@42.3.0
   ```
 
   ```json
-  { "command": "electron-stagewright", "args": [] }
+  {
+    "command": "electron-stagewright",
+    "args": ["--tool-profile", "essential", "--app-root", "/absolute/path/to/your-electron-app"]
+  }
   ```
+
+  On Windows, use `cmd.exe` with
+  `["/d", "/c", "electron-stagewright.cmd", "--tool-profile", "essential", "--app-root", "C:\\code\\your-electron-app"]`.
 
 - **Local checkout (contributing, or to drive the bundled example).** Build the repo, then run the
   CLI with Node. This is the form [Getting started](./getting-started.md) uses.
@@ -74,7 +151,13 @@ first:
   ```json
   {
     "command": "node",
-    "args": ["/absolute/path/to/electron-stagewright/packages/core/dist/cli.js"]
+    "args": [
+      "/absolute/path/to/electron-stagewright/packages/core/dist/cli.js",
+      "--tool-profile",
+      "essential",
+      "--app-root",
+      "/absolute/path/to/your-electron-app"
+    ]
   }
   ```
 
@@ -94,16 +177,13 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 {
   "mcpServers": {
     "electron-stagewright": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "--package",
-        "@electron-stagewright/core@0.4.1",
-        "--package",
-        "playwright@1.61.1",
-        "--package",
-        "electron@42.3.0",
-        "electron-stagewright"
+        "/absolute/path/to/your-electron-app/node_modules/@electron-stagewright/core/dist/cli.js",
+        "--tool-profile",
+        "essential",
+        "--app-root",
+        "/absolute/path/to/your-electron-app"
       ]
     }
   }
@@ -119,16 +199,13 @@ reload:
 {
   "mcpServers": {
     "electron-stagewright": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "--package",
-        "@electron-stagewright/core@0.4.1",
-        "--package",
-        "playwright@1.61.1",
-        "--package",
-        "electron@42.3.0",
-        "electron-stagewright"
+        "/absolute/path/to/your-electron-app/node_modules/@electron-stagewright/core/dist/cli.js",
+        "--tool-profile",
+        "essential",
+        "--app-root",
+        "/absolute/path/to/your-electron-app"
       ]
     }
   }
@@ -183,6 +260,10 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
     "--package",
     "electron@42.3.0",
     "electron-stagewright",
+    "--tool-profile",
+    "essential",
+    "--app-root",
+    "/absolute/path/to/your-electron-app",
     "--allow-eval=renderer"
   ]
 }

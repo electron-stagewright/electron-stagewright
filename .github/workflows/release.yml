@@ -36,7 +36,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -57,7 +57,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Cache the Electron release zip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/electron
           key: electron-binary-${{ runner.os }}-${{ steps.electron.outputs.version }}
