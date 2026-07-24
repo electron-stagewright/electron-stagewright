@@ -195,7 +195,7 @@ OS/architecture/Node/npm/pnpm facts, checkout state, cache-mode labels, per-phas
 explicit child-environment **names** (never values), and SHA-256 fingerprints of the harness inputs.
 When `--json` is set, a sibling `*-progress.ndjson` journal checkpoints every completed sample and
 the direct-install outcome, so a later process or job interruption does not erase earlier raw
-evidence.
+evidence. The output path must be repository-relative and cannot escape the checkout.
 
 Run a small local observation after a build:
 
@@ -208,8 +208,9 @@ pnpm bench:startup --cold-runs 1 --warm-runs 3 --direct-runs 3 \
 Cold package installation can be noisy or fail before the MCP handshake on a specific host. That raw
 failure is useful bootstrap evidence, so the command records it instead of inventing a zero or turning
 latency into a pass/fail gate. The workflow **Published startup benchmark** runs the same observational
-protocol manually on Ubuntu, macOS, and Windows and uploads one JSON artifact per host. No startup
-number is a release threshold or a public performance claim.
+protocol manually on Ubuntu, macOS, and Windows and uploads one artifact bundle per host containing
+the final JSON report and its incremental NDJSON journal. No startup number is a release threshold or
+a public performance claim.
 
 ## Scope and limitations
 

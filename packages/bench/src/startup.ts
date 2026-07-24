@@ -31,6 +31,7 @@ export interface StartupTarget {
   readonly initializeTimeoutMs: number
   readonly toolsListTimeoutMs: number
   readonly cwd?: string
+  /** Overrides merged over the SDK's safe `getDefaultEnvironment()` baseline before spawn. */
   readonly env?: Readonly<Record<string, string>>
   /** Local scratch paths replaced in raw failure evidence before it enters the artifact. */
   readonly redactPaths?: readonly string[]

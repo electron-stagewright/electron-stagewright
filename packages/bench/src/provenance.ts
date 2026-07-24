@@ -227,6 +227,8 @@ export async function collectStartupProvenance(
       directCli: normalizeEnvironmentPolicy(input.childEnvironment.directCli),
     },
     harness: await Promise.all([
+      fingerprint(path.join(REPOSITORY_ROOT, 'pnpm-lock.yaml')),
+      fingerprint(path.join(REPOSITORY_ROOT, 'packages/bench/package.json')),
       fingerprint(path.join(REPOSITORY_ROOT, 'packages/core/package.json')),
       fingerprint(path.join(REPOSITORY_ROOT, 'scripts/package-command.mjs')),
       fingerprint(path.join(HERE, 'comparison.ts')),

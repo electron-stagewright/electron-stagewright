@@ -8,7 +8,7 @@ const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url))
 const REPOSITORY_ROOT = path.resolve(TEST_DIRECTORY, '../../..')
 const WORKFLOWS_DIRECTORY = path.join(REPOSITORY_ROOT, '.github', 'workflows')
 
-const NODE_24_ACTION_MAJORS = new Map([
+const NODE_24_ACTION_REFS = new Map([
   ['actions/cache', 'v5'],
   ['actions/checkout', 'v6'],
   ['actions/deploy-pages', 'v5'],
@@ -20,12 +20,12 @@ const NODE_24_ACTION_MAJORS = new Map([
 
 function actionReferences(workflow: string): ReadonlyArray<{
   readonly action: string
-  readonly major: string
+  readonly ref: string
 }> {
-  return [...workflow.matchAll(/uses:\s*["']?([^@"'\s]+)@(v\d+)["']?/g)].flatMap((match) => {
+  return [...workflow.matchAll(/uses:\s*["']?([^@"'\s]+)@([^"'#\s]+)["']?/g)].flatMap((match) => {
     const action = match[1]
-    const major = match[2]
-    return action === undefined || major === undefined ? [] : [{ action, major }]
+    const ref = match[2]
+    return action === undefined || ref === undefined ? [] : [{ action, ref }]
   })
 }
 
@@ -38,20 +38,20 @@ describe('GitHub Actions runtime policy', () => {
 
     for (const file of workflowFiles) {
       const workflow = await readFile(path.join(WORKFLOWS_DIRECTORY, file), 'utf8')
-      for (const { action, major } of actionReferences(workflow)) {
+      for (const { action, ref } of actionReferences(workflow)) {
         if (!action.startsWith('actions/') && action !== 'pnpm/action-setup') continue
         expect(
-          NODE_24_ACTION_MAJORS.has(action),
+          NODE_24_ACTION_REFS.has(action),
           `${file} must register ${action} in the audited Node runtime allowlist`,
         ).toBe(true)
         observed.add(action)
-        expect(major, `${file} must use ${action}@${NODE_24_ACTION_MAJORS.get(action)}`).toBe(
-          NODE_24_ACTION_MAJORS.get(action),
+        expect(ref, `${file} must use ${action}@${NODE_24_ACTION_REFS.get(action)}`).toBe(
+          NODE_24_ACTION_REFS.get(action),
         )
       }
     }
 
-    expect(observed).toEqual(new Set(NODE_24_ACTION_MAJORS.keys()))
+    expect(observed).toEqual(new Set(NODE_24_ACTION_REFS.keys()))
   })
 
   it('audits quoted action declarations instead of silently skipping them', () => {
@@ -60,8 +60,24 @@ describe('GitHub Actions runtime policy', () => {
         ['- uses: "actions/checkout@v4"', "- uses: 'pnpm/action-setup@v3'"].join('\n'),
       ),
     ).toEqual([
-      { action: 'actions/checkout', major: 'v4' },
-      { action: 'pnpm/action-setup', major: 'v3' },
+      { action: 'actions/checkout', ref: 'v4' },
+      { action: 'pnpm/action-setup', ref: 'v3' },
+    ])
+  })
+
+  it('captures complete action refs so semver, branches, and SHAs cannot masquerade as majors', () => {
+    expect(
+      actionReferences(
+        [
+          '- uses: actions/checkout@v6.0.0',
+          '- uses: actions/setup-node@main',
+          '- uses: actions/cache@0123456789abcdef',
+        ].join('\n'),
+      ),
+    ).toEqual([
+      { action: 'actions/checkout', ref: 'v6.0.0' },
+      { action: 'actions/setup-node', ref: 'main' },
+      { action: 'actions/cache', ref: '0123456789abcdef' },
     ])
   })
 

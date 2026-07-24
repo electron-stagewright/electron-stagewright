@@ -87,9 +87,12 @@ describe('comparison provenance', () => {
       platform: process.platform,
       arch: process.arch,
     })
-    expect(provenance.harness).toHaveLength(6)
+    expect(provenance.harness).toHaveLength(8)
     expect(provenance.harness.every((file) => !path.isAbsolute(file.path))).toBe(true)
     expect(provenance.harness.every((file) => /^[a-f0-9]{64}$/.test(file.sha256))).toBe(true)
+    expect(provenance.harness.map((file) => file.path)).toEqual(
+      expect.arrayContaining(['pnpm-lock.yaml', 'packages/bench/package.json']),
+    )
     expect(provenance.environment).toMatchObject({ npm: '11.16.0', pnpm: '11.3.0' })
     expect(provenance.childEnvironment).toEqual({
       publishedNpx: {

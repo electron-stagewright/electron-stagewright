@@ -7,9 +7,14 @@ import { promisify } from 'node:util'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  createDirectInstalledTarget,
+  createPublishedNpxTarget,
+  directExecutionEnvironment,
   directRetainedProfileOrder,
   formatStartupHelp,
   forwardedNetworkEnvironment,
+  normalizePackageCommandFailure,
+  packageExecutionEnvironment,
   parseStartupArguments,
   resolveStartupOutputPath,
   resolveStartupProgressPath,
@@ -61,6 +66,15 @@ describe('published startup protocol', () => {
         devDependencies: { playwright: '^1.61.1', electron: '^42.3.0' },
       }),
     ).toThrow('Expected an exact release version for core')
+    expect(() => publishedPackageSpecs(null)).toThrow(
+      'Expected an @electron-stagewright/core package manifest object',
+    )
+    expect(() =>
+      publishedPackageSpecs({
+        name: '@electron-stagewright/not-core',
+        version: '0.4.1',
+      }),
+    ).toThrow('Expected the @electron-stagewright/core package manifest')
   })
 
   it('builds a pinned npx command before server flags', () => {
@@ -81,6 +95,24 @@ describe('published startup protocol', () => {
       '--app-root',
       '/project',
     ])
+    expect(() => publishedNpxServerArguments([], [])).toThrow(
+      'At least one published package is required',
+    )
+  })
+
+  it('turns probe-construction errors into setup failures without starting a sample', async () => {
+    await expect(
+      measureStartupTarget(target({ redactPaths: ['/private/scratch'] }), {
+        createProbe: () => {
+          throw new Error('could not spawn /private/scratch/server')
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      failure_phase: 'setup',
+      server_ready_ms: null,
+      error: 'could not spawn <scratch>/server',
+    })
   })
 
   it('times MCP initialize and tools/list as separate phases and always closes the probe', async () => {
@@ -264,6 +296,30 @@ describe('startup benchmark CLI', () => {
     expect(resolveStartupProgressPath('output/startup.json')).toBe(
       path.join(REPOSITORY_ROOT, 'output', 'startup-progress.ndjson'),
     )
+    expect(parseStartupArguments(['--help'])).toEqual({
+      command: 'help',
+      coldRuns: 1,
+      warmRuns: 3,
+      directRuns: 3,
+    })
+  })
+
+  it('rejects absolute and escaping output paths before creating benchmark state', () => {
+    expect(() =>
+      parseStartupArguments(['--json', path.join(REPOSITORY_ROOT, 'output', 'startup.json')]),
+    ).toThrow('--json must be a repository-relative path')
+    expect(() => parseStartupArguments(['--json', '../startup.json'])).toThrow(
+      '--json must stay within the repository',
+    )
+    expect(() => parseStartupArguments(['--json', '.'])).toThrow(
+      '--json must identify a file within the repository',
+    )
+    expect(() => parseStartupArguments(['--json', 'output/'])).toThrow(
+      '--json must identify a file within the repository',
+    )
+    expect(() => resolveStartupProgressPath('../startup.json')).toThrow(
+      '--json must stay within the repository',
+    )
   })
 
   it('warms both direct profiles, then alternates the retained execution order', () => {
@@ -288,6 +344,118 @@ describe('startup benchmark CLI', () => {
       HTTPS_PROXY: 'https://proxy.example',
       NODE_EXTRA_CA_CERTS: '/certs/company.pem',
     })
+  })
+
+  it('builds explicit safe child environments for package and direct startup', () => {
+    const root = path.join(REPOSITORY_ROOT, 'output', 'startup-environment-test')
+    const inherited = {
+      PATH: '/safe/bin',
+      SYSTEMROOT: 'C:\\Windows',
+    }
+
+    expect(
+      packageExecutionEnvironment(
+        root,
+        {
+          HTTPS_PROXY: 'https://proxy.example',
+          PRIVATE_TOKEN: 'do-not-forward',
+        },
+        inherited,
+      ),
+    ).toEqual({
+      ...inherited,
+      HTTPS_PROXY: 'https://proxy.example',
+      HOME: path.join(root, 'home'),
+      USERPROFILE: path.join(root, 'home'),
+      XDG_CACHE_HOME: path.join(root, 'xdg-cache'),
+      ELECTRON_CACHE: path.join(root, 'electron-cache'),
+      NPM_CONFIG_CACHE: path.join(root, 'npm-cache'),
+      npm_config_cache: path.join(root, 'npm-cache'),
+      NPM_CONFIG_AUDIT: 'false',
+      NPM_CONFIG_FUND: 'false',
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+      NO_COLOR: '1',
+    })
+    expect(directExecutionEnvironment(inherited)).toEqual({
+      ...inherited,
+      NO_COLOR: '1',
+    })
+  })
+
+  it('builds published and direct targets with explicit execution boundaries', () => {
+    const scratch = path.join(REPOSITORY_ROOT, 'output', 'startup-target-test')
+    const appRoot = path.join(scratch, 'app')
+    const publishedRoot = path.join(scratch, 'published')
+    const installRoot = path.join(scratch, 'installed')
+    const published = createPublishedNpxTarget({
+      root: publishedRoot,
+      appRoot,
+      packages: ['@electron-stagewright/core@0.4.1'],
+      mode: 'published-npx-warm',
+      cacheState: 'reused',
+      iteration: 2,
+      scratch,
+    })
+    const direct = createDirectInstalledTarget({
+      installRoot,
+      appRoot,
+      profile: 'essential',
+      iteration: 1,
+      scratch,
+    })
+
+    expect(published).toMatchObject({
+      mode: 'published-npx-warm',
+      profile: 'full',
+      cacheState: 'reused',
+      iteration: 2,
+      cwd: publishedRoot,
+      redactPaths: [scratch],
+    })
+    expect(published.args).toEqual(
+      expect.arrayContaining([
+        '@electron-stagewright/core@0.4.1',
+        '--tool-profile',
+        'full',
+        '--app-root',
+        appRoot,
+      ]),
+    )
+    expect(published.env).toMatchObject({
+      NO_COLOR: '1',
+      HOME: path.join(publishedRoot, 'home'),
+    })
+    expect(direct).toMatchObject({
+      mode: 'direct-installed',
+      profile: 'essential',
+      cacheState: 'installed',
+      iteration: 1,
+      cwd: installRoot,
+      redactPaths: [scratch],
+    })
+    expect(direct.args).toEqual(
+      expect.arrayContaining(['--tool-profile', 'essential', '--app-root', appRoot]),
+    )
+    expect(direct.env).toMatchObject({ NO_COLOR: '1' })
+  })
+
+  it('retains bounded package-manager diagnostics for direct-install failures', () => {
+    const noisy = Object.assign(new Error('install failed'), {
+      stdout: `stdout:${'x'.repeat(3_000)}`,
+      stderr: 'stderr:permission denied',
+    })
+    const normalized = normalizePackageCommandFailure(noisy)
+
+    expect(normalized.message).toContain('install failed')
+    expect(normalized.message).toContain('stderr:permission denied')
+    expect(normalized.message).toContain('stdout:')
+    expect(normalized.message).toContain('…')
+
+    const quiet = new Error('quiet failure')
+    expect(normalizePackageCommandFailure(quiet)).toBe(quiet)
+    expect(normalizePackageCommandFailure('non-error failure')).toEqual(
+      new Error('non-error failure'),
+    )
   })
 
   it('rejects unknown, duplicate, missing, and excessive options before package work', () => {

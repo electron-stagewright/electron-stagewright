@@ -176,6 +176,7 @@ export function parseStartupArguments(argv: readonly string[]): ParsedStartupArg
   }
 
   const jsonPath = values.get('--json')
+  if (jsonPath !== undefined) resolveStartupOutputPath(jsonPath)
   return {
     command: 'benchmark',
     coldRuns: parseRunCount(values.get('--cold-runs'), '--cold-runs', 1, MAX_COLD_RUNS),
@@ -187,7 +188,30 @@ export function parseStartupArguments(argv: readonly string[]): ParsedStartupArg
 
 /** Resolve report paths consistently regardless of the package script's current directory. */
 export function resolveStartupOutputPath(outputPath: string): string {
-  return path.resolve(REPOSITORY_ROOT, outputPath)
+  if (path.isAbsolute(outputPath)) {
+    throw new Error('--json must be a repository-relative path')
+  }
+  const basename = path.basename(outputPath)
+  if (
+    basename === '' ||
+    basename === '.' ||
+    basename === '..' ||
+    outputPath.endsWith('/') ||
+    outputPath.endsWith('\\')
+  ) {
+    throw new Error('--json must identify a file within the repository')
+  }
+  const resolved = path.resolve(REPOSITORY_ROOT, outputPath)
+  const relative = path.relative(REPOSITORY_ROOT, resolved)
+  if (
+    relative === '' ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error('--json must stay within the repository')
+  }
+  return resolved
 }
 
 /** Keep an incremental sibling journal available when a run is interrupted before final JSON. */
@@ -240,25 +264,41 @@ export function forwardedNetworkEnvironment(
   )
 }
 
-function packageEnvironmentOverrides(root: string): Record<string, string> {
+function packageEnvironmentOverrides(
+  root: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
   return {
-    ...forwardedNetworkEnvironment(process.env),
+    ...forwardedNetworkEnvironment(environment),
     ...cacheEnvironment(root),
   }
 }
 
-function packageExecutionEnvironment(root: string): Record<string, string> {
+/** Build the explicit safe baseline used by package-manager and npx child processes. */
+export function packageExecutionEnvironment(
+  root: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  inheritedEnvironment: Readonly<Record<string, string>> = getDefaultEnvironment(),
+): Record<string, string> {
   return {
-    ...getDefaultEnvironment(),
-    ...packageEnvironmentOverrides(root),
+    ...inheritedEnvironment,
+    ...packageEnvironmentOverrides(root, environment),
   }
+}
+
+/** Keep direct CLI spawn semantics explicit instead of relying only on the SDK's internal merge. */
+export function directExecutionEnvironment(
+  inheritedEnvironment: Readonly<Record<string, string>> = getDefaultEnvironment(),
+): Record<string, string> {
+  return { ...inheritedEnvironment, NO_COLOR: '1' }
 }
 
 function serverArguments(profile: 'essential' | 'full', appRoot: string): readonly string[] {
   return ['--tool-profile', profile, '--app-root', appRoot]
 }
 
-function npxTarget(input: {
+/** Build one published npx target with explicit cache and safe child-environment policy. */
+export function createPublishedNpxTarget(input: {
   readonly root: string
   readonly appRoot: string
   readonly packages: readonly string[]
@@ -279,7 +319,7 @@ function npxTarget(input: {
     command: invocation.file,
     args: invocation.args,
     cwd: input.root,
-    env: packageEnvironmentOverrides(input.root),
+    env: packageExecutionEnvironment(input.root),
     initializeTimeoutMs:
       input.mode === 'published-npx-cold' ? COLD_INITIALIZE_TIMEOUT_MS : WARM_INITIALIZE_TIMEOUT_MS,
     toolsListTimeoutMs: TOOLS_LIST_TIMEOUT_MS,
@@ -287,7 +327,8 @@ function npxTarget(input: {
   }
 }
 
-function directTarget(input: {
+/** Build one direct-installed CLI target for a retained or warmup profile observation. */
+export function createDirectInstalledTarget(input: {
   readonly installRoot: string
   readonly appRoot: string
   readonly profile: 'essential' | 'full'
@@ -304,7 +345,7 @@ function directTarget(input: {
     command: invocation.file,
     args: invocation.args,
     cwd: input.installRoot,
-    env: { NO_COLOR: '1' },
+    env: directExecutionEnvironment(),
     initializeTimeoutMs: DIRECT_INITIALIZE_TIMEOUT_MS,
     toolsListTimeoutMs: TOOLS_LIST_TIMEOUT_MS,
     redactPaths: [input.scratch],
@@ -315,10 +356,13 @@ function series(samples: readonly StartupSample[]): SeriesReport {
   return { samples, summary: summarizeStartupSamples(samples) }
 }
 
-function commandFailure(error: unknown): Error {
+/** Preserve bounded package-manager stdout/stderr when an install command fails. */
+export function normalizePackageCommandFailure(error: unknown): Error {
   if (!(error instanceof Error)) return new Error(String(error))
   const record = error as Error & { stdout?: unknown; stderr?: unknown }
-  const output = [record.stdout, record.stderr]
+  // Package managers usually put the decisive failure on stderr; keep it ahead of noisy progress
+  // stdout so the shared evidence bound cannot erase the actionable diagnostic.
+  const output = [record.stderr, record.stdout]
     .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
     .join('\n')
   if (output === '') return error
@@ -454,7 +498,7 @@ async function runStartupBenchmark(options: ParsedStartupArguments): Promise<voi
 
     const coldSamples = await runStartupSeries(
       coldRoots.map((root, index) =>
-        npxTarget({
+        createPublishedNpxTarget({
           root,
           appRoot,
           packages,
@@ -468,7 +512,7 @@ async function runStartupBenchmark(options: ParsedStartupArguments): Promise<voi
     )
     const warmSamples = await runStartupSeries(
       Array.from({ length: options.warmRuns }, (_, index) =>
-        npxTarget({
+        createPublishedNpxTarget({
           root: warmRoot,
           appRoot,
           packages,
@@ -482,7 +526,7 @@ async function runStartupBenchmark(options: ParsedStartupArguments): Promise<voi
     )
 
     const directWarmupTargets = (['essential', 'full'] as const).map((profile) =>
-      directTarget({ installRoot, appRoot, profile, iteration: 0, scratch }),
+      createDirectInstalledTarget({ installRoot, appRoot, profile, iteration: 0, scratch }),
     )
     const directFailureTarget = directWarmupTargets[0]
     if (directFailureTarget === undefined) {
@@ -495,13 +539,13 @@ async function runStartupBenchmark(options: ParsedStartupArguments): Promise<voi
     const directTargets = directRetainedProfileOrder(options.directRuns).map((profile) => {
       const iteration = (directIterations.get(profile) ?? 0) + 1
       directIterations.set(profile, iteration)
-      return directTarget({ installRoot, appRoot, profile, iteration, scratch })
+      return createDirectInstalledTarget({ installRoot, appRoot, profile, iteration, scratch })
     })
     let installError: Error | undefined
     try {
       await materializeDirectInstall(installRoot, packages, packageExecutionEnvironment(warmRoot))
     } catch (error) {
-      installError = commandFailure(error)
+      installError = normalizePackageCommandFailure(error)
     }
     await journal.append({
       type: 'direct_materialization',
