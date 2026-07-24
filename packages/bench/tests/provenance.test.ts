@@ -2,7 +2,11 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { collectComparisonProvenance, collectStartupProvenance } from '../src/provenance.js'
+import {
+  collectComparisonProvenance,
+  collectStartupProvenance,
+  normalizeRepositoryPath,
+} from '../src/provenance.js'
 import type { ServerTarget } from '../src/harness.js'
 
 function target(
@@ -24,6 +28,15 @@ function target(
 }
 
 describe('comparison provenance', () => {
+  it('normalizes serialized repository labels independently of the host platform', () => {
+    expect(normalizeRepositoryPath('packages\\bench\\package.json')).toBe(
+      'packages/bench/package.json',
+    )
+    expect(normalizeRepositoryPath('packages/bench/package.json')).toBe(
+      'packages/bench/package.json',
+    )
+  })
+
   it('records reproducible facts without retaining child environment values', async () => {
     const provenance = await collectComparisonProvenance([
       target('workspace', [path.resolve('packages/bench/src/harness.ts')], {
@@ -40,6 +53,7 @@ describe('comparison provenance', () => {
     })
     expect(provenance.fixture).toHaveLength(9)
     expect(provenance.fixture.every((file) => !path.isAbsolute(file.path))).toBe(true)
+    expect(provenance.fixture.every((file) => !file.path.includes('\\'))).toBe(true)
     expect(provenance.fixture.every((file) => /^[a-f0-9]{64}$/.test(file.sha256))).toBe(true)
     expect(provenance.targets).toEqual([
       expect.objectContaining({
@@ -89,6 +103,7 @@ describe('comparison provenance', () => {
     })
     expect(provenance.harness).toHaveLength(8)
     expect(provenance.harness.every((file) => !path.isAbsolute(file.path))).toBe(true)
+    expect(provenance.harness.every((file) => !file.path.includes('\\'))).toBe(true)
     expect(provenance.harness.every((file) => /^[a-f0-9]{64}$/.test(file.sha256))).toBe(true)
     expect(provenance.harness.map((file) => file.path)).toEqual(
       expect.arrayContaining(['pnpm-lock.yaml', 'packages/bench/package.json']),

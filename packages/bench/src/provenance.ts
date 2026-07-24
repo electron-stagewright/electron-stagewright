@@ -87,11 +87,16 @@ export interface StartupEnvironmentPolicy {
   readonly overrides: readonly string[]
 }
 
+/** Serialize repository labels with one separator so artifacts compare cleanly across host OSes. */
+export function normalizeRepositoryPath(relativePath: string): string {
+  return relativePath.replaceAll('\\', '/')
+}
+
 /** SHA-256 a benchmark-defining file, returning a repo-relative label for stable artifacts. */
 async function fingerprint(file: string): Promise<FileFingerprint> {
   const content = await readFile(file)
   return {
-    path: path.relative(REPOSITORY_ROOT, file),
+    path: normalizeRepositoryPath(path.relative(REPOSITORY_ROOT, file)),
     sha256: createHash('sha256').update(content).digest('hex'),
   }
 }
