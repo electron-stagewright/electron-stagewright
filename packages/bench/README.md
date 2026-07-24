@@ -175,6 +175,42 @@ repeat a comparison only from a saved artifact that names the fixture, environme
 tarball hash, and source commit. Do not substitute an arbitrary executable at the command line: add a
 pinned adapter with its provenance and shared oracle instead.
 
+## Published startup observations
+
+`pnpm bench:startup` measures the published package path without redefining the comparison harness's
+historical combined `coldStartMs` metric. It installs the exact core, Playwright, and Electron versions
+from `packages/core/package.json`, then records four independent series:
+
+- empty-cache `npx` spawn through a completed MCP initialize handshake;
+- repeated `npx` initialize using that same package cache;
+- direct installed-CLI initialize with the `essential` tool profile;
+- direct installed-CLI initialize with the `full` compatibility profile.
+
+Every initialize observation is followed by a separately timed `tools/list`; manifest work is never
+folded into server-ready time. Direct package installation is untimed. Both direct profiles receive one
+discarded warmup, then retained profile order alternates to avoid attributing a fixed filesystem/module
+cache order to one profile. The report retains those warmups, every retained success and failure,
+median/min/max summaries over available observations, tool counts, the exact package stack,
+OS/architecture/Node/npm/pnpm facts, checkout state, cache-mode labels, per-phase inherited and
+explicit child-environment **names** (never values), and SHA-256 fingerprints of the harness inputs.
+When `--json` is set, a sibling `*-progress.ndjson` journal checkpoints every completed sample and
+the direct-install outcome, so a later process or job interruption does not erase earlier raw
+evidence.
+
+Run a small local observation after a build:
+
+```sh
+pnpm build
+pnpm bench:startup --cold-runs 1 --warm-runs 3 --direct-runs 3 \
+  --json output/startup-local.json
+```
+
+Cold package installation can be noisy or fail before the MCP handshake on a specific host. That raw
+failure is useful bootstrap evidence, so the command records it instead of inventing a zero or turning
+latency into a pass/fail gate. The workflow **Published startup benchmark** runs the same observational
+protocol manually on Ubuntu, macOS, and Windows and uploads one JSON artifact per host. No startup
+number is a release threshold or a public performance claim.
+
 ## Scope and limitations
 
 - **First-party CI guards deterministic regressions.** A Linux/Xvfb job runs `pnpm bench --check` with

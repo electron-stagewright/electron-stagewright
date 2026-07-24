@@ -1,0 +1,68 @@
+name: Published startup benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      cold_runs:
+        description: Empty-cache npx runs
+        required: true
+        default: '1'
+        type: choice
+        options: ['1', '2']
+      warm_runs:
+        description: Reused-cache npx runs
+        required: true
+        default: '3'
+        type: choice
+        options: ['1', '2', '3', '4', '5']
+      direct_runs:
+        description: Installed CLI runs per tool profile
+        required: true
+        default: '3'
+        type: choice
+        options: ['1', '2', '3', '4', '5']
+
+permissions:
+  contents: read
+
+jobs:
+  startup:
+    name: Startup observations (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Measure published startup
+        shell: bash
+        env:
+          COLD_RUNS: ${{ inputs.cold_runs }}
+          WARM_RUNS: ${{ inputs.warm_runs }}
+          DIRECT_RUNS: ${{ inputs.direct_runs }}
+        run: >-
+          pnpm bench:startup
+          --cold-runs "$COLD_RUNS"
+          --warm-runs "$WARM_RUNS"
+          --direct-runs "$DIRECT_RUNS"
+          --json "output/startup-${{ runner.os }}-${{ runner.arch }}.json"
+
+      - name: Upload raw startup observations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: startup-${{ runner.os }}-${{ runner.arch }}
+          path: output/startup-*
+          if-no-files-found: warn
+          retention-days: 14
