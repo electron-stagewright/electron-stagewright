@@ -17,6 +17,12 @@ import { pathToFileURL } from 'node:url'
 import { StagewrightError } from '../errors/index.js'
 import type { StagewrightPlugin } from './types.js'
 
+/** Dynamic-module loader seam used to keep package-resolution tests hermetic. */
+type PluginModuleLoader = (target: string) => Promise<Record<string, unknown>>
+
+const dynamicImport: PluginModuleLoader = async (target) =>
+  (await import(target)) as Record<string, unknown>
+
 /**
  * Stable short names for the first-party packages shipped from this monorepo. The CLI still
  * requires an explicit `--plugin`; this is an ergonomic package-name expansion, never discovery.
@@ -72,14 +78,17 @@ export function resolvePluginSpecifier(spec: string): string {
  * the plugin on the command line; community-plugin sandboxing is out of scope (see
  * ADR-004). Never call `importPlugin` with an untrusted or remotely-sourced path.
  */
-export async function importPlugin(spec: string): Promise<StagewrightPlugin> {
+export async function importPlugin(
+  spec: string,
+  loadModule: PluginModuleLoader = dynamicImport,
+): Promise<StagewrightPlugin> {
   const resolvedSpec = resolvePluginSpecifier(spec)
   const target = isPathSpec(resolvedSpec)
     ? pathToFileURL(path.resolve(resolvedSpec)).href
     : resolvedSpec
   let mod: Record<string, unknown>
   try {
-    mod = (await import(target)) as Record<string, unknown>
+    mod = await loadModule(target)
   } catch (cause) {
     throw new StagewrightError(
       'PLUGIN_LOAD_FAILED',

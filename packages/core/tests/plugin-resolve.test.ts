@@ -55,8 +55,19 @@ describe('importPlugin', () => {
     expect(resolvePluginSpecifier('./local-plugin.mjs')).toBe('./local-plugin.mjs')
   })
 
-  it('imports a first-party plugin by short name', async () => {
-    const plugin = await importPlugin('production')
+  it('passes an expanded first-party short name to the module loader', async () => {
+    let importedTarget: string | undefined
+    const plugin = await importPlugin('production', async (target) => {
+      importedTarget = target
+      return {
+        default: {
+          name: 'production',
+          version: '0.0.0-test',
+        },
+      }
+    })
+
+    expect(importedTarget).toBe('@electron-stagewright/plugin-production')
     expect(plugin.name).toBe('production')
   })
 
