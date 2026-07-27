@@ -10,6 +10,9 @@
  * `STAGEWRIGHT_E2E`-gated `cdp-attach-smoke.test.ts`.
  */
 
+import { type ChildProcess } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { CDPTransport, type FetchJson } from '../src/transports/cdp.js'
@@ -20,6 +23,29 @@ import { FakeCdpServer, type Json } from './helpers/fake-cdp.js'
 const BROWSER_WS = 'ws://127.0.0.1:9222/devtools/browser/b1'
 const PAGE_T1_WS = 'ws://127.0.0.1:9222/devtools/page/T1'
 const PAGE_T2_WS = 'ws://127.0.0.1:9222/devtools/page/T2'
+
+class FakeChildProcess extends EventEmitter {
+  readonly pid = 4242
+  exitCode: number | null = null
+  signalCode: NodeJS.Signals | null = null
+  readonly killSignals: NodeJS.Signals[] = []
+
+  kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    this.killSignals.push(signal)
+    this.signalCode = signal
+    this.emit('exit', null, signal)
+    return true
+  }
+
+  exit(code = 0): void {
+    this.exitCode = code
+    this.emit('exit', code, null)
+  }
+
+  asChildProcess(): ChildProcess {
+    return this as unknown as ChildProcess
+  }
+}
 
 interface SetupOptions {
   readonly targets?: readonly Json[]
@@ -89,6 +115,28 @@ describe('CDPTransport.attach', () => {
     ])
   })
 
+  it('exposes the selected page as the default renderer surface without claiming hierarchy targeting', async () => {
+    const { transport } = setup()
+    const session = await transport.attach({ port: 9222 })
+
+    await expect(session.activeSurface()).resolves.toEqual({
+      id: 'T1',
+      kind: 'other',
+      title: 'Main',
+      url: 'app://index.html',
+      active: true,
+      capabilities: {
+        snapshot: true,
+        interaction: true,
+        rendererEval: true,
+      },
+    })
+    await expect(session.surfacesList()).rejects.toMatchObject({
+      code: 'TRANSPORT_UNSUPPORTED',
+    })
+    expect(transport.capabilities.supportsSurfaceTargeting).toBe(false)
+  })
+
   it('formats IPv6 loopback hosts correctly for port-based discovery', async () => {
     const { transport, fetchCalls } = setup()
     await transport.attach({ port: 9222, host: '::1' })
@@ -122,6 +170,373 @@ describe('CDPTransport.attach', () => {
     })
     await expect(failing.attach({ port: 1 })).rejects.toMatchObject({ code: 'CDP_DISCONNECTED' })
     void transport
+  })
+})
+
+describe('CDPTransport.launch', () => {
+  it('owns a packaged macOS launch, applies safe automation switches, and rejects detach', async () => {
+    const server = new FakeCdpServer()
+    const child = new FakeChildProcess()
+    const spawnCalls: Array<{
+      readonly command: string
+      readonly args: readonly string[]
+      readonly options: unknown
+    }> = []
+    const fetchJson: FetchJson = async (url) => {
+      if (url.endsWith('/json/version')) return { webSocketDebuggerUrl: BROWSER_WS }
+      if (url.endsWith('/json/list')) {
+        return [
+          {
+            id: 'T1',
+            type: 'page',
+            title: 'Packaged',
+            url: 'app://packaged.html',
+            webSocketDebuggerUrl: PAGE_T1_WS,
+          },
+        ]
+      }
+      throw new Error(`unexpected discovery url ${url}`)
+    }
+    const transport = new CDPTransport({
+      wsFactory: server.factory,
+      fetchJson,
+      platform: 'darwin',
+      reserveLoopbackPort: async () => 9333,
+      spawnProcess: (command, args, options) => {
+        spawnCalls.push({ command, args, options })
+        return child.asChildProcess()
+      },
+      killProcess: () => {
+        child.kill('SIGKILL')
+      },
+      defaultMethodTimeoutMs: 250,
+    })
+    server.respond('Browser.close', () => {
+      queueMicrotask(() => child.exit(0))
+      return {}
+    })
+
+    const session = await transport.launch({
+      executablePath: '/Applications/Packaged.app/Contents/MacOS/Packaged',
+      args: ['--app-mode=test'],
+      env: { APP_ENV: 'test' },
+      credentialStore: 'testing',
+    })
+
+    expect(spawnCalls).toHaveLength(1)
+    expect(spawnCalls[0]).toMatchObject({
+      command: '/Applications/Packaged.app/Contents/MacOS/Packaged',
+      args: [
+        '--remote-debugging-address=127.0.0.1',
+        '--remote-debugging-port=9333',
+        '--use-mock-keychain',
+        '--app-mode=test',
+      ],
+      options: {
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: expect.objectContaining({ APP_ENV: 'test' }),
+      },
+    })
+    await expect(session.windowsList()).resolves.toEqual([
+      {
+        id: 'T1',
+        index: 0,
+        title: 'Packaged',
+        url: 'app://packaged.html',
+        visible: true,
+        focused: true,
+      },
+    ])
+    await expect(session.detach()).rejects.toMatchObject({
+      code: 'TRANSPORT_UNSUPPORTED',
+    })
+    await expect(transport.stop(session, { timeoutMs: 100 })).resolves.toEqual({
+      escalated: false,
+    })
+    expect(child.killSignals).toEqual([])
+  })
+
+  it('adds the Linux basic store by default, respects an explicit store, and supports system mode', async () => {
+    const launches: readonly {
+      readonly options: Parameters<CDPTransport['launch']>[0]
+      readonly expectedStoreArg: string | undefined
+    }[] = [
+      {
+        options: { executablePath: '/opt/App/app' },
+        expectedStoreArg: '--password-store=basic',
+      },
+      {
+        options: {
+          executablePath: '/opt/App/app',
+          args: ['--password-store=gnome-libsecret'],
+        },
+        expectedStoreArg: '--password-store=gnome-libsecret',
+      },
+      {
+        options: {
+          executablePath: '/opt/App/app',
+          credentialStore: 'system',
+        },
+        expectedStoreArg: undefined,
+      },
+    ]
+
+    for (const scenario of launches) {
+      const server = new FakeCdpServer()
+      const child = new FakeChildProcess()
+      let spawnedArgs: readonly string[] = []
+      const transport = new CDPTransport({
+        wsFactory: server.factory,
+        platform: 'linux',
+        reserveLoopbackPort: async () => 9333,
+        spawnProcess: (_command, args) => {
+          spawnedArgs = args
+          return child.asChildProcess()
+        },
+        fetchJson: async (url) =>
+          url.endsWith('/json/version')
+            ? { webSocketDebuggerUrl: BROWSER_WS }
+            : [
+                {
+                  id: 'T1',
+                  type: 'page',
+                  title: 'Packaged',
+                  url: 'app://packaged.html',
+                  webSocketDebuggerUrl: PAGE_T1_WS,
+                },
+              ],
+      })
+      const session = await transport.launch(scenario.options)
+      const storeArgs = spawnedArgs.filter((arg) => arg.startsWith('--password-store='))
+      expect(storeArgs).toEqual(
+        scenario.expectedStoreArg === undefined ? [] : [scenario.expectedStoreArg],
+      )
+      child.exit(0)
+      await session.dispose()
+    }
+  })
+
+  it('adds no credential-store switch on Windows', async () => {
+    const server = new FakeCdpServer()
+    const child = new FakeChildProcess()
+    let spawnedArgs: readonly string[] = []
+    const transport = new CDPTransport({
+      wsFactory: server.factory,
+      platform: 'win32',
+      reserveLoopbackPort: async () => 9333,
+      spawnProcess: (_command, args) => {
+        spawnedArgs = args
+        return child.asChildProcess()
+      },
+      fetchJson: async (url) =>
+        url.endsWith('/json/version')
+          ? { webSocketDebuggerUrl: BROWSER_WS }
+          : [
+              {
+                id: 'T1',
+                type: 'page',
+                title: 'Packaged',
+                url: 'app://packaged.html',
+                webSocketDebuggerUrl: PAGE_T1_WS,
+              },
+            ],
+    })
+
+    const session = await transport.launch({ executablePath: 'C:\\Program Files\\App\\App.exe' })
+    expect(spawnedArgs.some((arg) => arg.startsWith('--password-store'))).toBe(false)
+    expect(spawnedArgs).not.toContain('--use-mock-keychain')
+    child.exit(0)
+    await session.dispose()
+  })
+
+  it('rejects caller-supplied remote-debugging switches before spawning', async () => {
+    let spawned = false
+    const transport = new CDPTransport({
+      reserveLoopbackPort: async () => 9333,
+      spawnProcess: () => {
+        spawned = true
+        return new FakeChildProcess().asChildProcess()
+      },
+    })
+
+    await expect(
+      transport.launch({
+        executablePath: '/opt/App/app',
+        args: ['--remote-debugging-port=9222'],
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_ARGUMENT' })
+    expect(spawned).toBe(false)
+  })
+
+  it('reports LAUNCH_FAILED when a loopback debugging port cannot be reserved', async () => {
+    let spawned = false
+    const transport = new CDPTransport({
+      reserveLoopbackPort: async () => {
+        throw new Error('address unavailable')
+      },
+      spawnProcess: () => {
+        spawned = true
+        return new FakeChildProcess().asChildProcess()
+      },
+    })
+
+    await expect(transport.launch({ executablePath: '/opt/App/app' })).rejects.toMatchObject({
+      code: 'LAUNCH_FAILED',
+    })
+    expect(spawned).toBe(false)
+  })
+
+  it('kills a packaged process when no CDP page appears before the bounded timeout', async () => {
+    const child = new FakeChildProcess()
+    const transport = new CDPTransport({
+      reserveLoopbackPort: async () => 9333,
+      spawnProcess: () => child.asChildProcess(),
+      fetchJson: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+      launchPollIntervalMs: 1,
+    })
+
+    await expect(
+      transport.launch({ executablePath: '/opt/App/app', timeoutMs: 10 }),
+    ).rejects.toMatchObject({ code: 'LAUNCH_TIMEOUT' })
+    expect(child.signalCode).toBe('SIGKILL')
+  })
+
+  it('recomputes the remaining launch budget between sequential discovery probes', async () => {
+    const child = new FakeChildProcess()
+    const probeBudgets: number[] = []
+    let now = 1_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const transport = new CDPTransport({
+        reserveLoopbackPort: async () => 9333,
+        spawnProcess: () => child.asChildProcess(),
+        fetchJson: async (url, timeoutMs) => {
+          probeBudgets.push(timeoutMs)
+          if (url.endsWith('/json/version')) {
+            now += 7
+            return { webSocketDebuggerUrl: BROWSER_WS }
+          }
+          now += 4
+          return []
+        },
+      })
+
+      await expect(
+        transport.launch({ executablePath: '/opt/App/app', timeoutMs: 10 }),
+      ).rejects.toMatchObject({
+        code: 'LAUNCH_TIMEOUT',
+        details: expect.objectContaining({ timeout_ms: 10 }),
+      })
+      expect(probeBudgets).toEqual([10, 3])
+      expect(child.signalCode).toBe('SIGKILL')
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('reports LAUNCH_FAILED when the packaged process exits before CDP is ready', async () => {
+    const child = new FakeChildProcess()
+    const transport = new CDPTransport({
+      reserveLoopbackPort: async () => 9333,
+      spawnProcess: () => {
+        queueMicrotask(() => child.exit(7))
+        return child.asChildProcess()
+      },
+      fetchJson: async () => {
+        throw new Error('not ready')
+      },
+      launchPollIntervalMs: 1,
+    })
+
+    await expect(
+      transport.launch({ executablePath: '/opt/App/app', timeoutMs: 100 }),
+    ).rejects.toMatchObject({
+      code: 'LAUNCH_FAILED',
+      details: expect.objectContaining({ exit_code: 7 }),
+    })
+  })
+
+  it('reports an asynchronous spawn error and reaps the failed child handle', async () => {
+    const child = new FakeChildProcess()
+    const transport = new CDPTransport({
+      reserveLoopbackPort: async () => 9333,
+      spawnProcess: () => {
+        queueMicrotask(() => child.emit('error', new Error('spawn EACCES')))
+        return child.asChildProcess()
+      },
+      fetchJson: async () => {
+        throw new Error('not ready')
+      },
+      launchPollIntervalMs: 1,
+    })
+
+    await expect(
+      transport.launch({ executablePath: '/opt/App/app', timeoutMs: 100 }),
+    ).rejects.toMatchObject({
+      code: 'LAUNCH_FAILED',
+      message: expect.stringContaining('spawn EACCES'),
+    })
+    expect(child.signalCode).toBe('SIGKILL')
+  })
+
+  it('escalates when Browser.close replies but the owned packaged process does not exit', async () => {
+    const server = new FakeCdpServer()
+    const child = new FakeChildProcess()
+    const transport = new CDPTransport({
+      wsFactory: server.factory,
+      reserveLoopbackPort: async () => 9333,
+      spawnProcess: () => child.asChildProcess(),
+      fetchJson: async (url) =>
+        url.endsWith('/json/version')
+          ? { webSocketDebuggerUrl: BROWSER_WS }
+          : [
+              {
+                id: 'T1',
+                type: 'page',
+                title: 'Packaged',
+                url: 'app://packaged.html',
+                webSocketDebuggerUrl: PAGE_T1_WS,
+              },
+            ],
+    })
+    server.respond('Browser.close', () => ({}))
+    const session = await transport.launch({ executablePath: '/opt/App/app' })
+
+    await expect(transport.stop(session, { timeoutMs: 10 })).resolves.toEqual({
+      escalated: true,
+    })
+    expect(child.signalCode).toBe('SIGKILL')
+  })
+
+  it('force-kills and reaps an owned packaged process without a graceful close', async () => {
+    const server = new FakeCdpServer()
+    const child = new FakeChildProcess()
+    const transport = new CDPTransport({
+      wsFactory: server.factory,
+      reserveLoopbackPort: async () => 9333,
+      spawnProcess: () => child.asChildProcess(),
+      fetchJson: async (url) =>
+        url.endsWith('/json/version')
+          ? { webSocketDebuggerUrl: BROWSER_WS }
+          : [
+              {
+                id: 'T1',
+                type: 'page',
+                title: 'Packaged',
+                url: 'app://packaged.html',
+                webSocketDebuggerUrl: PAGE_T1_WS,
+              },
+            ],
+    })
+    const session = await transport.launch({ executablePath: '/opt/App/app' })
+
+    await expect(transport.forceKill(session)).resolves.toBeUndefined()
+    expect(child.signalCode).toBe('SIGKILL')
+    expect(server.sentTo('browser/b1', 'Browser.close')).toHaveLength(0)
   })
 })
 

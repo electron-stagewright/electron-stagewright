@@ -72,6 +72,23 @@ export class TransportRegistry {
     return found
   }
 
+  /**
+   * Require one concrete transport and capability. Lifecycle policy uses this when the launch shape
+   * determines the protocol (for example, executable-only packaged apps require CDP rather than
+   * Playwright's Node-inspector channel).
+   */
+  requireById(id: TransportId, capability: keyof TransportCapabilities): ITransport {
+    const found = this.byId(id)
+    if (found === undefined || !found.capabilities[capability]) {
+      throw new StagewrightError(
+        'TRANSPORT_UNSUPPORTED',
+        `Transport "${id}" is unavailable or does not support "${capability}".`,
+        { transport: id, capability },
+      )
+    }
+    return found
+  }
+
   /** The transport with the given id, or `undefined`. */
   byId(id: TransportId): ITransport | undefined {
     return this.#transports.find((transport) => transport.id === id)

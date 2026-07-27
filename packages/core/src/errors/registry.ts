@@ -43,10 +43,15 @@ export const ERROR_CODES = {
     retryable: true,
     hint: 'Check main process startup time.',
   },
+  LAUNCH_FAILED: {
+    http: 500,
+    retryable: false,
+    hint: 'The packaged app could not be started or exited before a driveable Electron window became available; inspect its path, startup configuration, and logs.',
+  },
   FUSES_BLOCK_LAUNCH: {
     http: 409,
     retryable: false,
-    hint: 'Use electron_attach with a CDP-enabled running app, or launch a development build whose Node CLI inspect fuse is enabled.',
+    hint: 'Launch the packaged executable without a main entry so Stagewright can use CDP, attach to a CDP-enabled running app, or use a development build whose Node CLI inspect fuse is enabled.',
   },
   SINGLE_INSTANCE_LOCK: {
     http: 409,

@@ -43,8 +43,8 @@ operations, not arbitrary JavaScript; they should not inherit the eval threat mo
 ### 2. Gated by `canAccessStorage`, NOT `--allow-eval` gated, cookie values redacted by default
 
 - **`canAccessStorage`** — the storage tools resolve the session and refuse a transport whose
-  `canAccessStorage` is unset (`storage.UNSUPPORTED`, naming the Playwright launch and CDP attach
-  transports). Playwright and CDP declare `true`; the injector declares `false`.
+  `canAccessStorage` is unset (`storage.UNSUPPORTED`, naming the Playwright and CDP transports).
+  Playwright and CDP declare `true`; the injector declares `false`.
 - **NOT `--allow-eval` gated** — storage access runs no app JavaScript, so it does not require the eval
   opt-in. Like the network and clock plugins, unlike the IPC plugin.
 - **Cookie values are a secret surface.** A cookie value can carry an auth/session token, so on every
@@ -89,10 +89,10 @@ plugin.
   `NOT_IMPLEMENTED` on the injector (and the test fake records them + holds a cookie store).
   `canAccessStorage` gains its first consumers (amends ADR-003): Playwright and CDP flip `false → true`,
   the injector stays `false`.
-- **CDP `localStorage` is best-effort.** On a CDP attach session, cookies are full; the `localStorage`
-  half of the snapshot rides the `DOMStorage` domain for the active origin and returns an empty list when
-  it cannot derive an origin or the domain is unavailable — the cookies still return. The Playwright
-  launch transport gives a complete `localStorage` snapshot.
+- **CDP `localStorage` is best-effort.** On packaged-launch and attached CDP sessions, cookies are
+  full; the `localStorage` half of the snapshot rides the `DOMStorage` domain for the active origin
+  and returns an empty list when it cannot derive an origin or the domain is unavailable — the
+  cookies still return. The Playwright launch transport gives a complete `localStorage` snapshot.
 - **Honest capability.** `canAccessStorage: true` means the whole seam works on that transport; a
   transport that cannot satisfy it declares `false` rather than advertising methods that reject at
   runtime. CDP's best-effort `localStorage` is a documented partial within a fully-wired seam, not a

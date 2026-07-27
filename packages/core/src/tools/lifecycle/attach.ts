@@ -46,8 +46,9 @@ export const attachTool: AnyToolDefinition = defineTool({
     'electron_discover_running to find one, or start the app with --remote-debugging-port).',
     'Provide port (+ optional loopback host) or a loopback cdpUrl; pid alone is not attachable over',
     'CDP but, when supplied alongside, lets stop escalate to SIGKILL. The CDP transport supports',
-    'eval/read/observe and core interaction surfaces against the attached app.',
-    'Returns: { ok, session_id, transport, windows }.',
+    'eval/read/observe and core interaction surfaces against the attached app. The selected CDP page',
+    'is also the default snapshot/find surface; explicit iframe/webview surface targeting remains',
+    'unavailable. Returns: { ok, session_id, transport, windows, capabilities }.',
     'Errors: TRANSPORT_UNSUPPORTED (no attach-capable transport), CDP_DISCONNECTED (endpoint',
     'unreachable or dropped; retryable), CDP_TIMEOUT (handshake/method timeout; retryable),',
     'BAD_ARGUMENT (missing target selector or non-loopback endpoint).',
@@ -77,7 +78,12 @@ export const attachTool: AnyToolDefinition = defineTool({
     const session = await transport.attach(opts)
     const { managed, windows } = await registerWithWindows(ctx, transport, session)
     return makeSuccess(
-      { session_id: managed.id, transport: transport.id, windows },
+      {
+        session_id: managed.id,
+        transport: transport.id,
+        windows,
+        capabilities: transport.capabilities,
+      },
       { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
     )
   },
@@ -99,7 +105,7 @@ export const injectTool: AnyToolDefinition = defineTool({
   title: 'Inject into running Electron app',
   description: [
     'Attach to a running Electron process that was NOT started with a debug flag, by injecting',
-    'the Node inspector. Provide pid. Returns: { ok, session_id, transport, windows }.',
+    'the Node inspector. Provide pid. Returns: { ok, session_id, transport, windows, capabilities }.',
     'Errors: INJECT_FAILED (handshake failed or inspector belongs to another process; retryable —',
     'try electron_attach when the app already exposes a debug endpoint), TRANSPORT_UNSUPPORTED,',
     'BAD_ARGUMENT.',
@@ -115,7 +121,12 @@ export const injectTool: AnyToolDefinition = defineTool({
     const session = await transport.inject(opts)
     const { managed, windows } = await registerWithWindows(ctx, transport, session)
     return makeSuccess(
-      { session_id: managed.id, transport: transport.id, windows },
+      {
+        session_id: managed.id,
+        transport: transport.id,
+        windows,
+        capabilities: transport.capabilities,
+      },
       { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
     )
   },

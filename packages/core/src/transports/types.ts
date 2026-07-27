@@ -149,6 +149,13 @@ export interface LaunchOptions {
   /** Maximum time to wait for the first window to appear. */
   readonly timeoutMs?: number
   /**
+   * Credential-store policy for executable-only packaged launches. `testing` (the default) avoids
+   * blocking OS credential prompts by adding `--use-mock-keychain` on macOS or
+   * `--password-store=basic` on Linux. `system` adds neither switch so genuine `safeStorage`
+   * behavior can be verified.
+   */
+  readonly credentialStore?: 'testing' | 'system'
+  /**
    * Opt in to launch-time native instrumentation (default off). When `true`, the transport wraps the
    * app's main entry with a fixed, transport-owned hook installed BEFORE the app's own main runs, so
    * native UI created at startup (e.g. the system `Tray`) is observable from t=0 — which a hook armed

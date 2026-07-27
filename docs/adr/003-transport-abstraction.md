@@ -107,7 +107,7 @@ A single implementation locks the project to one vendor's roadmap. The Playwrigh
 
 ### Why a capability matrix instead of dynamic feature detection
 
-Boot-time matrix inspection is cheap (a property read) and lets the dispatcher refuse-when-unsupported at the first opportunity. Dynamic feature detection (try the call, catch the error, fall back) burns at least one round-trip per failure and surfaces transport-specific exceptions to tools. The matrix is also self-documenting: a contributor reading `CDPTransport` sees `canLaunch: false` in the constructor and immediately understands why `launch()` rejects.
+Boot-time matrix inspection is cheap (a property read) and lets the dispatcher refuse-when-unsupported at the first opportunity. Dynamic feature detection (try the call, catch the error, fall back) burns at least one round-trip per failure and surfaces transport-specific exceptions to tools. The matrix is also self-documenting: a contributor reading a transport sees its declared lifecycle and operation support before following any method body.
 
 ### Why dynamic `await import('playwright')`
 
@@ -522,20 +522,50 @@ transport. This is deliberately a **tool-layer selection policy**, not a new tra
 the transport still receives one already-authorized executable and owns the same launch mechanics.
 
 `executablePath` remains authoritative when the caller explicitly provides it, preserving the
-existing packaged-app path and avoiding a surprise runtime override. CDP and Injector are unchanged:
-they attach to existing processes and do not select a launch binary.
+existing packaged-app path and avoiding a surprise runtime override. At the time of this amendment,
+CDP and Injector were unchanged: they attached to existing processes and did not select a launch
+binary. The packaged-CDP amendment below supersedes that statement for executable-only launches.
 
 ## Status Update — 2026-07-27: fuse-aware Playwright launch preflight
 
 Playwright's Electron transport always requires the main-process Node inspector channel
-(`--inspect=0`), including when `LaunchOptions.executablePath` selects a packaged binary. The
-lifecycle tool now inspects the selected binary's Electron fuse wire before invoking the
-transport. A positively disabled or removed `EnableNodeCliInspectArguments` fuse returns
-`FUSES_BLOCK_LAUNCH` with CDP-attach and development-build recovery actions, instead of spawning a
-process whose failed inspector handshake can surface as an opaque transport close.
+(`--inspect=0`), including when `LaunchOptions.executablePath` selects a custom Electron runtime for
+a `main` entry. The lifecycle tool inspects that selected binary's Electron fuse wire before invoking
+Playwright. A positively disabled or removed `EnableNodeCliInspectArguments` fuse returns
+`FUSES_BLOCK_LAUNCH` with packaged-CDP, CDP-attach, and development-build recovery actions, instead
+of spawning a process whose failed inspector handshake can surface as an opaque transport close.
 
 This remains tool-layer compatibility policy rather than a capability flag: the Playwright
 transport can launch compatible binaries, while fuse state belongs to each selected executable.
 Inspection is read-only, cached by executable path, and fail-open for unknown/non-Electron wires;
-only positive incompatibility evidence blocks process creation. CDP attach is unaffected because
-it uses Chromium's remote-debugging endpoint rather than the Node inspector channel.
+only positive incompatibility evidence blocks process creation. Executable-only packaged launches
+and CDP attach are unaffected because they use Chromium's remote-debugging endpoint rather than the
+Node inspector channel.
+
+## Status Update — 2026-07-27: owned packaged-app launch over CDP
+
+`CDPTransport.canLaunch` becomes honestly `true` for one deliberately narrow shape:
+`LaunchOptions.executablePath` with no `appPath`/`main`. The lifecycle tool treats that as a packaged
+app and requires the CDP transport by id; a `main`-based development launch continues to select the
+first generic `canLaunch` transport (Playwright).
+
+The CDP launch implementation owns the whole repeated consumer sequence:
+
+1. reserve a currently-free IPv4 loopback port;
+2. spawn the executable with transport-owned `--remote-debugging-address=127.0.0.1` and
+   `--remote-debugging-port`;
+3. poll `/json/version` and `/json/list` with bounded per-probe and total budgets until a page target
+   exists;
+4. connect through the existing pooled CDP attach path; and
+5. retain child ownership so stop waits for real process exit within the graceful-close budget,
+   escalates to SIGKILL when necessary, and briefly waits for the killed child to be reaped.
+
+Caller-supplied remote-debugging switches are refused because they would make endpoint ownership and
+cleanup ambiguous. Failed discovery or connection reaps the child. A launch-owned CDP session
+rejects detach just like a Playwright launch session; an ordinary CDP attach remains
+process-preserving on detach.
+
+`LaunchOptions.credentialStore` makes the packaged automation trade-off explicit. `testing`
+(default) adds `--use-mock-keychain` on macOS or `--password-store=basic` on Linux unless the caller
+already selected a Linux store; `system` adds neither. Testing mode prevents OS credential prompts
+from wedging unattended startup, but cannot validate genuine OS-backed `safeStorage` sealing.

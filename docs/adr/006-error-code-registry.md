@@ -245,9 +245,21 @@ packaged Electron binary can permanently disable that channel with the
 `EnableNodeCliInspectArguments` fuse; attempting the launch then yields transport-level symptoms
 instead of an actionable app error. Added one code to the registry:
 
-- **`FUSES_BLOCK_LAUNCH`** — `http: 409`, `retryable: false`, hint: attach to a running app over
-  CDP or use a development build whose Node CLI inspect fuse is enabled. `electron_launch`
-  performs a read-only, cached fuse inspection before spawning an explicit/project executable and
-  returns this code only when the blocking fuse state is positively identified. The response
-  includes the relevant bounded fuse states and recovery `next_actions`; unreadable, unsupported,
-  or unknown fuse wires do not block launch.
+- **`FUSES_BLOCK_LAUNCH`** — `http: 409`, `retryable: false`, hint: use executable-only packaged
+  CDP launch, attach to a running app over CDP, or use a development build whose Node CLI inspect
+  fuse is enabled. `electron_launch` performs a read-only, cached fuse inspection before a
+  `main`-based Playwright launch with an explicit/project executable and returns this code only when
+  the blocking fuse state is positively identified. The response includes the relevant bounded fuse
+  states and recovery `next_actions`; unreadable, unsupported, or unknown fuse wires do not block
+  launch.
+
+## Status Update (2026-07-27) — added `LAUNCH_FAILED`
+
+The owned packaged-CDP path can fail while reserving its loopback endpoint, spawning the executable,
+or observing a process exit before Chromium exposes a driveable page. Those are startup failures,
+not target-readiness timeouts or internal Stagewright defects:
+
+- **`LAUNCH_FAILED`** — `http: 500`, `retryable: false`, hint: inspect the executable path, startup
+  configuration, and logs. It carries only bounded path/process facts (`executable_path`,
+  `exit_code`, or `signal` when available), never unbounded application stderr. A process that stays
+  alive but never exposes a page remains the retryable `LAUNCH_TIMEOUT`.

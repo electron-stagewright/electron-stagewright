@@ -35,6 +35,7 @@ function setup(
   opts: {
     fileExists?: boolean
     transport?: FakeTransport
+    packagedTransport?: FakeTransport
     appRoot?: string
     launchDefaultMain?: string
     resolveProjectElectron?: (appRoot: string) => Promise<ProjectElectronResolution>
@@ -47,9 +48,15 @@ function setup(
   const transport =
     opts.transport ??
     new FakeTransport({ session: new FakeSession({ id: 'launched', windows: [WIN] }) })
+  const packagedTransport =
+    opts.packagedTransport ??
+    new FakeTransport({
+      id: 'cdp',
+      session: new FakeSession({ id: 'packaged', transport: 'cdp', windows: [WIN] }),
+    })
   const dispatcher = new Dispatcher({
     sessions,
-    transports: new TransportRegistry({ transports: [transport] }),
+    transports: new TransportRegistry({ transports: [transport, packagedTransport] }),
     ...(opts.appRoot !== undefined ? { appRoot: opts.appRoot } : {}),
     ...(opts.launchDefaultMain !== undefined ? { launchDefaultMain: opts.launchDefaultMain } : {}),
   })
@@ -64,7 +71,7 @@ function setup(
         : {}),
     }),
   )
-  return { sessions, transport, dispatcher }
+  return { sessions, transport, packagedTransport, dispatcher }
 }
 
 class CapturingTransport extends FakeTransport {
@@ -192,7 +199,7 @@ describe('electron_launch', () => {
 
   it('keeps an explicit executable authoritative over the requested project runtime', async () => {
     let resolverCalled = false
-    const { dispatcher, transport } = setup({
+    const { dispatcher, transport, packagedTransport } = setup({
       resolveProjectElectron: async () => {
         resolverCalled = true
         return { ok: false, message: 'must not run' }
@@ -205,11 +212,87 @@ describe('electron_launch', () => {
 
     expect(res).toMatchObject({ ok: true, runtime_source: 'explicit' })
     expect(resolverCalled).toBe(false)
-    expect(transport.launchCount).toBe(1)
+    expect(transport.launchCount).toBe(0)
+    expect(packagedTransport.launchCount).toBe(1)
   })
 
-  it('refuses a binary whose fuses disable the Playwright inspect channel', async () => {
+  it('routes an executable-only packaged app through CDP without inspecting Playwright fuses', async () => {
     const executablePath = '/abs/App.app/Contents/MacOS/App'
+    let inspected = false
+    const { dispatcher, transport, packagedTransport } = setup({
+      inspectElectronFuses: async () => {
+        inspected = true
+        return undefined
+      },
+    })
+
+    const res = await dispatcher.dispatch('electron_launch', {
+      executablePath,
+    })
+
+    expect(res).toMatchObject({
+      ok: true,
+      transport: 'cdp',
+      runtime_source: 'explicit',
+      launch_mode: 'packaged',
+      capabilities: packagedTransport.capabilities,
+    })
+    expect(inspected).toBe(false)
+    expect(transport.launchCount).toBe(0)
+    expect(packagedTransport.launchCount).toBe(1)
+  })
+
+  it('forwards the packaged credential-store policy to CDP and rejects it for development launch', async () => {
+    const packagedTransport = new CapturingTransport({
+      id: 'cdp',
+      session: new FakeSession({ id: 'packaged-policy', transport: 'cdp', windows: [WIN] }),
+    })
+    const { dispatcher, transport } = setup({ packagedTransport })
+
+    await expect(
+      dispatcher.dispatch('electron_launch', {
+        executablePath: '/abs/App.app/Contents/MacOS/App',
+        credentialStore: 'system',
+      }),
+    ).resolves.toMatchObject({ ok: true, launch_mode: 'packaged' })
+    expect(packagedTransport.lastLaunchOptions).toMatchObject({
+      executablePath: '/abs/App.app/Contents/MacOS/App',
+      credentialStore: 'system',
+    })
+    expect(transport.launchCount).toBe(0)
+
+    const development = (await setup().dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      credentialStore: 'testing',
+    })) as ErrorResponse
+    expect(development).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(development.error).toContain('executable-only packaged launches')
+  })
+
+  it('reports TRANSPORT_UNSUPPORTED when the packaged CDP launcher is unavailable', async () => {
+    const transport = new FakeTransport({
+      session: new FakeSession({ id: 'development-only', windows: [WIN] }),
+    })
+    const sessions = new SessionManager()
+    const dispatcher = new Dispatcher({
+      sessions,
+      transports: new TransportRegistry({ transports: [transport] }),
+    })
+    dispatcher.register(makeLaunchTool({ fileExists: () => true }))
+
+    const res = (await dispatcher.dispatch('electron_launch', {
+      executablePath: '/abs/App.app/Contents/MacOS/App',
+    })) as ErrorResponse
+    expect(res).toMatchObject({
+      ok: false,
+      code: 'TRANSPORT_UNSUPPORTED',
+      details: { transport: 'cdp', capability: 'canLaunch' },
+    })
+    expect(transport.launchCount).toBe(0)
+  })
+
+  it('refuses a main-based launch whose selected runtime blocks Playwright inspect', async () => {
+    const executablePath = '/abs/custom-electron'
     const { dispatcher, transport } = setup({
       inspectElectronFuses: async (pathToElectron) => {
         expect(pathToElectron).toBe(executablePath)
@@ -223,6 +306,7 @@ describe('electron_launch', () => {
     })
 
     const res = (await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
       executablePath,
     })) as ErrorResponse
 
@@ -230,15 +314,8 @@ describe('electron_launch', () => {
       ok: false,
       code: 'FUSES_BLOCK_LAUNCH',
       retryable: false,
-      details: {
-        executable_path: executablePath,
-        required_channel: '--inspect=0',
-        fuses: {
-          run_as_node: 'disabled',
-          node_cli_inspect_arguments: 'disabled',
-        },
-      },
       next_actions: expect.arrayContaining([
+        expect.stringContaining('electron_launch'),
         expect.stringContaining('electron_attach'),
         expect.stringContaining('development Electron build'),
       ]),
@@ -246,16 +323,21 @@ describe('electron_launch', () => {
     expect(transport.launchCount).toBe(0)
   })
 
-  it('does not block when fuse compatibility cannot be established', async () => {
+  it('does not block a main-based launch when fuse compatibility cannot be established', async () => {
     const { dispatcher, transport } = setup({
       inspectElectronFuses: async () => undefined,
     })
 
     const res = await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
       executablePath: '/abs/custom-electron',
     })
 
-    expect(res).toMatchObject({ ok: true, runtime_source: 'explicit' })
+    expect(res).toMatchObject({
+      ok: true,
+      runtime_source: 'explicit',
+      launch_mode: 'development',
+    })
     expect(transport.launchCount).toBe(1)
   })
 

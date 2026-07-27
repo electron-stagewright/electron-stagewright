@@ -153,6 +153,12 @@ const inputSchema = z.object({
     .describe('Environment variables for the spawned process.'),
   cwd: z.string().optional().describe('Working directory for the spawned process.'),
   timeoutMs: z.number().int().positive().optional().describe('Max wait for the first window.'),
+  credentialStore: z
+    .enum(['testing', 'system'])
+    .optional()
+    .describe(
+      'Packaged executable only. Default "testing" avoids blocking credential prompts with --use-mock-keychain on macOS or --password-store=basic on Linux. Use "system" to verify genuine safeStorage behavior.',
+    ),
   readyTimeoutMs: z
     .number()
     .int()
@@ -178,9 +184,13 @@ const DESCRIPTION = [
   'Launch an Electron app and start a driving session. Provide main (absolute path to the',
   'main-process entry) or executablePath. Set runtime:"project" to resolve Electron only from the',
   'operator-configured --app-root (requires main when resolving that runtime); explicit executablePath',
-  'takes precedence. A server',
+  'takes precedence. Executable-only launches are treated as packaged apps and use a transport-owned,',
+  'loopback CDP endpoint; main-based development launches use Playwright. A server',
   'started with --demo supplies its packaged demo entry when both are omitted. Returns: { ok, session_id,',
-  'transport, windows, renderer_ready, runtime_source }.',
+  'transport, windows, renderer_ready, runtime_source, launch_mode, capabilities }.',
+  'Packaged launches default credentialStore to "testing": macOS receives --use-mock-keychain and',
+  'Linux receives --password-store=basic so OS credential prompts cannot wedge automation. Use',
+  'credentialStore:"system" when assertions must verify genuine safeStorage sealing.',
   'Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a',
   'snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed',
   'in time (the session is still usable — retry the read, or wait_for_selector on an expected element).',
@@ -191,9 +201,11 @@ const DESCRIPTION = [
   'when no executablePath is given, or without --app-root when resolving that runtime; a',
   'runtime-altering env var like NODE_OPTIONS; instrumentNative without main; or,',
   'when the server set --app-root, a main/executablePath/cwd outside that root),',
-  'FUSES_BLOCK_LAUNCH (the selected binary disables the Node CLI inspect channel Playwright',
-  'requires; not retryable — attach over CDP or use a compatible development build),',
+  'FUSES_BLOCK_LAUNCH (a main-based development launch selected a binary that disables the Node CLI',
+  'inspect channel Playwright requires; not retryable — use executablePath without main for packaged',
+  'CDP launch, attach over CDP, or use a compatible development build),',
   'SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable),',
+  'LAUNCH_FAILED (the packaged app could not start or exited before a driveable renderer; not retryable),',
   'LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).',
 ].join(' ')
 
@@ -246,6 +258,7 @@ function toLaunchOptions(args: z.infer<typeof inputSchema>): LaunchOptions {
     ...(args.env !== undefined ? { env: args.env } : {}),
     ...(args.cwd !== undefined ? { cwd: args.cwd } : {}),
     ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+    ...(args.credentialStore !== undefined ? { credentialStore: args.credentialStore } : {}),
     ...(args.instrumentNative !== undefined ? { instrumentNative: args.instrumentNative } : {}),
   }
 }
@@ -347,6 +360,14 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
             'instrumentNative requires main (the app entry); executablePath-only launches cannot be wrapped with launch-time native instrumentation.',
         })
       }
+      const packagedLaunch = main === undefined && executablePath !== undefined
+      if (args.credentialStore !== undefined && !packagedLaunch) {
+        return makeError('BAD_ARGUMENT', {
+          ...meta,
+          message:
+            'credentialStore applies only to executable-only packaged launches; omit main or omit credentialStore.',
+        })
+      }
       if (args.env !== undefined) {
         const denied = Object.keys(args.env).filter(isDeniedEnvKey)
         if (denied.length > 0) {
@@ -384,7 +405,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         }
       }
 
-      if (executablePath !== undefined) {
+      if (executablePath !== undefined && !packagedLaunch) {
         const fuses = await inspectFuses(executablePath)
         if (fuses?.blocks_playwright_launch === true) {
           return makeError('FUSES_BLOCK_LAUNCH', {
@@ -397,6 +418,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
               required_channel: '--inspect=0',
             },
             next_actions: [
+              'Call electron_launch({ executablePath }) without main to use the packaged CDP launch path.',
               'Start the app with --remote-debugging-port=<port>, then call electron_attach({ port: <port> }).',
               'Use a development Electron build with EnableNodeCliInspectArguments enabled, then retry electron_launch.',
             ],
@@ -404,7 +426,9 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         }
       }
 
-      const transport = ctx.transports.requireCapability('canLaunch')
+      const transport = packagedLaunch
+        ? ctx.transports.requireById('cdp', 'canLaunch')
+        : ctx.transports.requireCapability('canLaunch')
       let session
       try {
         session = await transport.launch(
@@ -435,6 +459,8 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           windows,
           renderer_ready,
           runtime_source: runtimeSource,
+          launch_mode: packagedLaunch ? 'packaged' : 'development',
+          capabilities: transport.capabilities,
         },
         { ...meta, session_id: managed.id },
       )

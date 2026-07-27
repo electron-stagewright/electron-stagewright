@@ -1040,7 +1040,7 @@ describe('CDPTransport', () => {
   it('declares its capabilities up front', () => {
     expect(t.id).toBe('cdp')
     expect(t.capabilities).toMatchObject({
-      canLaunch: false,
+      canLaunch: true,
       canAttach: true,
       canInject: false,
       canIntercept: true,
@@ -1053,9 +1053,9 @@ describe('CDPTransport', () => {
     })
   })
 
-  it('launch() rejects with TRANSPORT_UNSUPPORTED (capability matrix refuses)', async () => {
+  it('launch() rejects a non-packaged appPath shape with BAD_ARGUMENT', async () => {
     await expect(t.launch({ appPath: '/' } as LaunchOptions)).rejects.toMatchObject({
-      code: 'TRANSPORT_UNSUPPORTED',
+      code: 'BAD_ARGUMENT',
     })
   })
 
