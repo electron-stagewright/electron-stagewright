@@ -1,6 +1,8 @@
 // Environment diagnostics shared by the standalone CLI and `electron_doctor`.
-// Checks inspect only the server process and configured filesystem paths: they
-// never launch an app, load plugin code, or create a caller-owned directory.
+// Base checks inspect only the server process and configured filesystem paths:
+// they never launch an app or create a caller-owned directory. The standalone
+// CLI may append a server-configuration check that loads only plugins explicitly
+// selected by the operator, then tears them down without connecting stdio.
 
 import { access, readFile, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -29,9 +31,12 @@ export interface DoctorCheck {
     | 'screenshot_dir'
     | 'eval_policy'
     | 'project_runtime'
+    | 'server_config'
   readonly status: 'pass' | 'fail' | 'skip' | 'warn'
   readonly message: string
   readonly hint?: string
+  readonly code?: string
+  readonly details?: Readonly<Record<string, unknown>>
 }
 
 /** Exact facts about the Node process hosting the MCP server. */
@@ -70,6 +75,15 @@ export interface DoctorOptions {
   readonly screenshotDir?: string
   readonly allowEvalMain: boolean
   readonly allowEvalRenderer: boolean
+  /** Standalone-CLI result from validating the exact serve configuration. */
+  readonly serverConfiguration?: {
+    readonly ok: boolean
+    readonly status?: 'pass' | 'warn'
+    readonly message: string
+    readonly hint?: string
+    readonly code?: string
+    readonly details?: Readonly<Record<string, unknown>>
+  }
 }
 
 // Injectable dependencies make missing-runtime and cross-platform cases
@@ -484,6 +498,26 @@ export async function runDoctorChecks(
     await directoryCheck('screenshot_dir', opts.screenshotDir, inspect),
     evalPolicyCheck(opts),
     projectRuntime.check,
+    ...(opts.serverConfiguration !== undefined
+      ? [
+          {
+            id: 'server_config' as const,
+            status: opts.serverConfiguration.ok
+              ? (opts.serverConfiguration.status ?? ('pass' as const))
+              : ('fail' as const),
+            message: opts.serverConfiguration.message,
+            ...(opts.serverConfiguration.hint !== undefined
+              ? { hint: opts.serverConfiguration.hint }
+              : {}),
+            ...(opts.serverConfiguration.code !== undefined
+              ? { code: opts.serverConfiguration.code }
+              : {}),
+            ...(opts.serverConfiguration.details !== undefined
+              ? { details: opts.serverConfiguration.details }
+              : {}),
+          },
+        ]
+      : []),
   ]
   return {
     ok: checks.every((check) => check.status !== 'fail'),

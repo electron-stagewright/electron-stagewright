@@ -19,7 +19,7 @@ npx -y \
   --package @electron-stagewright/plugin-trace@0.2.2 \
   --package playwright@1.61.1 \
   --package electron@42.3.0 \
-  electron-stagewright doctor --json
+  electron-stagewright doctor --json --plugin trace
 ```
 
 Then use the same packages with the plugin flag:
@@ -30,7 +30,7 @@ npx -y \
   --package @electron-stagewright/plugin-trace@0.2.2 \
   --package playwright@1.61.1 \
   --package electron@42.3.0 \
-  electron-stagewright --plugin @electron-stagewright/plugin-trace
+  electron-stagewright --plugin trace
 ```
 
 For an MCP client, preserve the same package and flag order in its `args`:
@@ -48,12 +48,30 @@ For an MCP client, preserve the same package and flag order in its `args`:
   "electron@42.3.0",
   "electron-stagewright",
   "--plugin",
-  "@electron-stagewright/plugin-trace"
+  "trace"
 ]
 ```
 
 Repeat `--plugin` to load more than one. A plugin may also be a trusted local package or file path;
 the server imports only the values you specify and rejects a bad manifest before it exposes tools.
+Shipped first-party suffixes are stable aliases, so `--plugin production` resolves to
+`@electron-stagewright/plugin-production`; full scoped package names remain valid and third-party
+specifiers are never rewritten.
+
+Run doctor with the same configuration before serving:
+
+```sh
+electron-stagewright doctor --json \
+  --plugin network \
+  --plugin-config network='{"redactHeaders":["x-api-key"],"redactBodies":true}' \
+  --tool-profile testing \
+  --operation-timeout-ms 120000
+```
+
+The `server_config` check imports the explicitly selected trusted plugin, validates its manifest and
+configuration, runs setup against an unconnected server, and immediately runs teardown. It reports
+plugin names and option states but never raw config values. A plugin's top-level and setup code
+therefore runs during this check under the same trust boundary as normal server startup.
 
 From code, pass imported plugin objects directly:
 

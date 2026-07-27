@@ -21,7 +21,7 @@ import { type SuccessResponse } from '../src/errors/envelope.js'
 import { clearPluginErrorCodes, lookupErrorCodeDefinition } from '../src/errors/registry.js'
 import { isMainEntryPoint, parseCliArgs } from '../src/cli.js'
 import { loadPlugins } from '../src/plugins/loader.js'
-import { importPlugin } from '../src/plugins/resolve.js'
+import { importPlugin, resolvePluginSpecifier } from '../src/plugins/resolve.js'
 import type { StagewrightPlugin } from '../src/plugins/types.js'
 import { createServer } from '../src/server/server.js'
 import { defineTool } from '../src/tools/types.js'
@@ -35,6 +35,42 @@ afterEach(() => {
 })
 
 describe('importPlugin', () => {
+  it.each([
+    ['a11y', '@electron-stagewright/plugin-a11y'],
+    ['clock', '@electron-stagewright/plugin-clock'],
+    ['ipc', '@electron-stagewright/plugin-ipc'],
+    ['native', '@electron-stagewright/plugin-native-ui'],
+    ['native-ui', '@electron-stagewright/plugin-native-ui'],
+    ['network', '@electron-stagewright/plugin-network'],
+    ['production', '@electron-stagewright/plugin-production'],
+    ['storage', '@electron-stagewright/plugin-storage'],
+    ['trace', '@electron-stagewright/plugin-trace'],
+    ['visual', '@electron-stagewright/plugin-visual'],
+  ])('expands the first-party short name %s', (shortName, packageName) => {
+    expect(resolvePluginSpecifier(shortName)).toBe(packageName)
+  })
+
+  it('does not rewrite paths or third-party package names', () => {
+    expect(resolvePluginSpecifier('@acme/stagewright-plugin')).toBe('@acme/stagewright-plugin')
+    expect(resolvePluginSpecifier('./local-plugin.mjs')).toBe('./local-plugin.mjs')
+  })
+
+  it('passes an expanded first-party short name to the module loader', async () => {
+    let importedTarget: string | undefined
+    const plugin = await importPlugin('production', async (target) => {
+      importedTarget = target
+      return {
+        default: {
+          name: 'production',
+          version: '0.0.0-test',
+        },
+      }
+    })
+
+    expect(importedTarget).toBe('@electron-stagewright/plugin-production')
+    expect(plugin.name).toBe('production')
+  })
+
   it('imports a plugin by file path', async () => {
     const plugin = await importPlugin(SAMPLE)
     expect(plugin.name).toBe('fixturep')
@@ -42,8 +78,10 @@ describe('importPlugin', () => {
   })
 
   it('rejects a missing module with PLUGIN_LOAD_FAILED', async () => {
-    await expect(importPlugin(path.join(HERE, 'fixtures', 'nope.mjs'))).rejects.toMatchObject({
+    const spec = path.join(HERE, 'fixtures', 'nope.mjs')
+    await expect(importPlugin(spec)).rejects.toMatchObject({
       code: 'PLUGIN_LOAD_FAILED',
+      details: { spec, resolved_spec: spec },
     })
   })
 

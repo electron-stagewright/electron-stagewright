@@ -21,6 +21,10 @@ import {
   resolveProjectElectron,
   type ProjectElectronResolution,
 } from '../../runtime/project-electron.js'
+import {
+  inspectElectronLaunchFuses,
+  type ElectronLaunchFuseInspection,
+} from '../../runtime/electron-fuses.js'
 import type { LaunchOptions, TransportSession } from '../../transports/index.js'
 import { isWithinRoot } from '../app-root.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -187,6 +191,8 @@ const DESCRIPTION = [
   'when no executablePath is given, or without --app-root when resolving that runtime; a',
   'runtime-altering env var like NODE_OPTIONS; instrumentNative without main; or,',
   'when the server set --app-root, a main/executablePath/cwd outside that root),',
+  'FUSES_BLOCK_LAUNCH (the selected binary disables the Node CLI inspect channel Playwright',
+  'requires; not retryable — attach over CDP or use a compatible development build),',
   'SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable),',
   'LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).',
 ].join(' ')
@@ -197,6 +203,10 @@ export interface LaunchToolDeps {
   readonly fileExists?: (path: string) => boolean
   /** App-root Electron resolver. Injected by tests; defaults to the constrained filesystem resolver. */
   readonly resolveProjectElectron?: (appRoot: string) => Promise<ProjectElectronResolution>
+  /** Read-only Electron fuse inspector. Injected by tests; failures/unknown states do not block. */
+  readonly inspectElectronFuses?: (
+    executablePath: string,
+  ) => Promise<ElectronLaunchFuseInspection | undefined>
 }
 
 /** Throws a {@link StagewrightError} when a supplied path is relative or missing. */
@@ -247,6 +257,7 @@ function toLaunchOptions(args: z.infer<typeof inputSchema>): LaunchOptions {
 export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
   const fileExists = deps.fileExists ?? existsSync
   const resolveFromProject = deps.resolveProjectElectron ?? resolveProjectElectron
+  const inspectFuses = deps.inspectElectronFuses ?? inspectElectronLaunchFuses
   return defineTool({
     name: 'electron_launch',
     title: 'Launch Electron app',
@@ -370,6 +381,26 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
               details: { app_root: ctx.appRoot, [label]: value },
             })
           }
+        }
+      }
+
+      if (executablePath !== undefined) {
+        const fuses = await inspectFuses(executablePath)
+        if (fuses?.blocks_playwright_launch === true) {
+          return makeError('FUSES_BLOCK_LAUNCH', {
+            ...meta,
+            message:
+              'Playwright Electron launch requires --inspect support, but the selected binary disables EnableNodeCliInspectArguments.',
+            details: {
+              executable_path: executablePath,
+              fuses,
+              required_channel: '--inspect=0',
+            },
+            next_actions: [
+              'Start the app with --remote-debugging-port=<port>, then call electron_attach({ port: <port> }).',
+              'Use a development Electron build with EnableNodeCliInspectArguments enabled, then retry electron_launch.',
+            ],
+          })
         }
       }
 

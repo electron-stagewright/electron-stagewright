@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { type ErrorResponse, type SuccessResponse } from '../src/errors/envelope.js'
 import { StagewrightError } from '../src/errors/registry.js'
 import type { ProjectElectronResolution } from '../src/runtime/project-electron.js'
+import type { ElectronLaunchFuseInspection } from '../src/runtime/electron-fuses.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
@@ -37,6 +38,9 @@ function setup(
     appRoot?: string
     launchDefaultMain?: string
     resolveProjectElectron?: (appRoot: string) => Promise<ProjectElectronResolution>
+    inspectElectronFuses?: (
+      executablePath: string,
+    ) => Promise<ElectronLaunchFuseInspection | undefined>
   } = {},
 ) {
   const sessions = new SessionManager()
@@ -54,6 +58,9 @@ function setup(
       fileExists: () => opts.fileExists ?? true,
       ...(opts.resolveProjectElectron !== undefined
         ? { resolveProjectElectron: opts.resolveProjectElectron }
+        : {}),
+      ...(opts.inspectElectronFuses !== undefined
+        ? { inspectElectronFuses: opts.inspectElectronFuses }
         : {}),
     }),
   )
@@ -198,6 +205,57 @@ describe('electron_launch', () => {
 
     expect(res).toMatchObject({ ok: true, runtime_source: 'explicit' })
     expect(resolverCalled).toBe(false)
+    expect(transport.launchCount).toBe(1)
+  })
+
+  it('refuses a binary whose fuses disable the Playwright inspect channel', async () => {
+    const executablePath = '/abs/App.app/Contents/MacOS/App'
+    const { dispatcher, transport } = setup({
+      inspectElectronFuses: async (pathToElectron) => {
+        expect(pathToElectron).toBe(executablePath)
+        return {
+          version: '1',
+          run_as_node: 'disabled',
+          node_cli_inspect_arguments: 'disabled',
+          blocks_playwright_launch: true,
+        }
+      },
+    })
+
+    const res = (await dispatcher.dispatch('electron_launch', {
+      executablePath,
+    })) as ErrorResponse
+
+    expect(res).toMatchObject({
+      ok: false,
+      code: 'FUSES_BLOCK_LAUNCH',
+      retryable: false,
+      details: {
+        executable_path: executablePath,
+        required_channel: '--inspect=0',
+        fuses: {
+          run_as_node: 'disabled',
+          node_cli_inspect_arguments: 'disabled',
+        },
+      },
+      next_actions: expect.arrayContaining([
+        expect.stringContaining('electron_attach'),
+        expect.stringContaining('development Electron build'),
+      ]),
+    })
+    expect(transport.launchCount).toBe(0)
+  })
+
+  it('does not block when fuse compatibility cannot be established', async () => {
+    const { dispatcher, transport } = setup({
+      inspectElectronFuses: async () => undefined,
+    })
+
+    const res = await dispatcher.dispatch('electron_launch', {
+      executablePath: '/abs/custom-electron',
+    })
+
+    expect(res).toMatchObject({ ok: true, runtime_source: 'explicit' })
     expect(transport.launchCount).toBe(1)
   })
 

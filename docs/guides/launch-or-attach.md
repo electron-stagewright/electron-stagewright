@@ -35,8 +35,13 @@ electron_wait_for_selector { "selector": "#app", "state": "visible", "timeoutMs"
 Failure modes worth knowing: `SINGLE_INSTANCE_LOCK` (another copy of the app holds Electron's
 single-instance lock — close it first), `ALREADY_RUNNING` (one live session per server by default;
 pass `allowMultiple: true` to run several), `LAUNCH_TIMEOUT` (no window within `timeoutMs`;
-retryable). When the server was started with `--app-root <dir>`, launch paths outside that root
-are refused — useful when the operator wants to confine what an agent can start.
+retryable), and `FUSES_BLOCK_LAUNCH` (the selected binary disables Electron's Node CLI inspect
+fuse, so Playwright cannot establish its required `--inspect=0` main-process channel). The fuse
+failure is detected before process creation and is not retryable: start the app with a Chromium
+remote-debugging port and use `electron_attach`, or test a development build with the inspect fuse
+enabled. Unknown or unreadable fuse state does not block launch. When the server was started with
+`--app-root <dir>`, launch paths outside that root are refused — useful when the operator wants to
+confine what an agent can start.
 
 ### Use the target project's Electron runtime
 
