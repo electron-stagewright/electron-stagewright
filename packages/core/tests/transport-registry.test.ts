@@ -60,10 +60,24 @@ describe('TransportRegistry', () => {
     expect(registry.byId('injector')).toBeUndefined()
   })
 
+  it('requires a concrete transport and capability for mode-specific lifecycle policy', () => {
+    const cdp = new FakeTransport({ id: 'cdp', capabilities: caps({ canLaunch: true }) })
+    const registry = new TransportRegistry({ transports: [cdp] })
+
+    expect(registry.requireById('cdp', 'canLaunch')).toBe(cdp)
+    expect(() => registry.requireById('cdp', 'canInject')).toThrowError(
+      expect.objectContaining({ code: 'TRANSPORT_UNSUPPORTED' }),
+    )
+    expect(() => registry.requireById('injector', 'canLaunch')).toThrowError(
+      expect.objectContaining({ code: 'TRANSPORT_UNSUPPORTED' }),
+    )
+  })
+
   it('defaults to the three built-in transports', () => {
     const registry = new TransportRegistry()
     expect(registry.all().map((t) => t.id)).toEqual(['playwright-electron', 'cdp', 'injector'])
-    // Playwright launches, CDP attaches, Injector injects.
+    // Playwright launches development entries; CDP launches packaged executables and attaches;
+    // Injector injects.
     expect(registry.requireCapability('canLaunch').id).toBe('playwright-electron')
     expect(registry.requireCapability('canAttach').id).toBe('cdp')
     expect(registry.requireCapability('canInject').id).toBe('injector')

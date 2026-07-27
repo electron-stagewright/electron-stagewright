@@ -1,7 +1,8 @@
 /**
  * CDPTransport — raw Chrome DevTools Protocol transport for attaching to an
- * already-running Electron app started with `--remote-debugging-port` (or
- * `--inspect`-adjacent CDP endpoints). Implements the connection-pool design
+ * Electron app over `--remote-debugging-port`. It can attach to an existing
+ * endpoint or launch an executable-only packaged app and own that process.
+ * Implements the connection-pool design
  * from ADR-003: one WebSocket per target (the browser endpoint plus one per
  * page target, opened lazily), a pending map keyed by request id, per-method
  * timeouts, an enabled-domain cache, and `awaitPromise` evaluation — all in
@@ -9,7 +10,8 @@
  *
  * Capability matrix:
  *
- * - `canLaunch: false` — CDP requires an existing process to connect to.
+ * - `canLaunch: true` — executable-only packaged launches are spawned with a transport-owned,
+ *   loopback-only remote-debugging endpoint.
  * - `canAttach: true` — attach is the primary purpose.
  * - `canInject: false` — InjectorTransport handles the no-pre-flag case.
  * - `canIntercept: true` — the full network seam is wired over the CDP Network domain
@@ -31,7 +33,9 @@
  * @module
  */
 
+import { type ChildProcess, type SpawnOptions, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { createServer } from 'node:net'
 import process from 'node:process'
 
 import { StagewrightError } from '../errors/registry.js'
@@ -134,8 +138,16 @@ const TRANSPORT_ID: TransportId = 'cdp'
 
 /** Default budget for a graceful `Browser.close` before escalating. */
 const STOP_GRACEFUL_BUDGET_MS = 10_000
+/** Default budget for a packaged process to expose CDP and its first page target. */
+const LAUNCH_BUDGET_MS = 30_000
 /** Budget for the `/json/version` + `/json/list` HTTP discovery probes. */
 const DISCOVERY_TIMEOUT_MS = 5_000
+/** Each packaged-launch discovery request is short so one dead probe cannot consume the budget. */
+const LAUNCH_PROBE_TIMEOUT_MS = 750
+/** Delay between packaged-launch discovery attempts. */
+const LAUNCH_POLL_INTERVAL_MS = 100
+/** Best-effort SIGKILL reap budget for an owned packaged process. */
+const PROCESS_REAP_BUDGET_MS = 2_000
 /** Max console entries retained per session (matches the Playwright transport). */
 const CONSOLE_CAP = 1000
 /** Max dialog events retained per session (matches the Playwright transport). */
@@ -146,6 +158,14 @@ export type FetchJson = (url: string, timeoutMs: number) => Promise<unknown>
 
 /** Sends SIGKILL to a pid. Injectable seam so unit tests never kill a real process. */
 export type KillProcess = (pid: number) => void
+/** Spawns a packaged executable. Injectable seam so unit tests never create a process. */
+export type SpawnProcess = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess
+/** Reserves one currently-free TCP port on IPv4 loopback. Injectable seam for deterministic tests. */
+export type ReserveLoopbackPort = () => Promise<number>
 
 const defaultFetchJson: FetchJson = async (url, timeoutMs) => {
   const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
@@ -157,6 +177,74 @@ const defaultFetchJson: FetchJson = async (url, timeoutMs) => {
 
 const defaultKillProcess: KillProcess = (pid) => {
   process.kill(pid, 'SIGKILL')
+}
+
+const defaultSpawnProcess: SpawnProcess = (command, args, options) =>
+  spawn(command, [...args], options)
+
+const defaultReserveLoopbackPort: ReserveLoopbackPort = async () => {
+  const server = createServer()
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.removeListener('listening', onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      server.removeListener('error', onError)
+      resolve()
+    }
+    server.once('error', onError)
+    server.once('listening', onListening)
+    server.listen({ host: '127.0.0.1', port: 0, exclusive: true })
+  })
+  server.unref()
+  const address = server.address()
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error !== undefined) reject(error)
+      else resolve()
+    })
+  })
+  if (address === null || typeof address === 'string') {
+    throw new StagewrightError(
+      'INTERNAL_ERROR',
+      'Could not determine the reserved loopback port.',
+      { transport: TRANSPORT_ID },
+    )
+  }
+  return address.port
+}
+
+function hasSwitch(args: readonly string[], name: string): boolean {
+  const prefix = `--${name}`
+  return args.some((arg) => arg === prefix || arg.startsWith(`${prefix}=`))
+}
+
+function processHasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null
+}
+
+async function waitForProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (processHasExited(child)) return true
+  if (timeoutMs <= 0) return false
+  return new Promise<boolean>((resolve) => {
+    let timer: NodeJS.Timeout | undefined
+    const finish = (exited: boolean) => {
+      if (timer !== undefined) clearTimeout(timer)
+      child.removeListener('exit', onExit)
+      resolve(exited)
+    }
+    const onExit = () => finish(true)
+    child.once('exit', onExit)
+    timer = setTimeout(() => finish(processHasExited(child)), timeoutMs)
+    timer.unref()
+  })
+}
+
+interface ProcessControl {
+  readonly ownsProcess: boolean
+  readonly kill?: () => boolean
+  readonly waitForExit?: (timeoutMs: number) => Promise<boolean>
 }
 
 function formatLoopbackHostForHttp(host: string): string {
@@ -324,7 +412,7 @@ class CdpSession implements TransportSession {
   readonly #browser: CdpConnection
   readonly #httpBase: string
   readonly #deps: CdpSessionDeps
-  readonly #pid: number | undefined
+  readonly #processControl: ProcessControl
   /** The per-target connection pool: one WebSocket per page target, opened lazily. */
   readonly #pool = new Map<string, CdpConnection>()
   /** In-flight opens so two concurrent calls never double-connect one target. */
@@ -354,12 +442,17 @@ class CdpSession implements TransportSession {
   readonly #inflight = new Map<string, InflightRequest>()
   #networkStubs: ActiveStub[] = []
 
-  constructor(browser: CdpConnection, httpBase: string, deps: CdpSessionDeps, pid?: number) {
+  constructor(
+    browser: CdpConnection,
+    httpBase: string,
+    deps: CdpSessionDeps,
+    processControl: ProcessControl = { ownsProcess: false },
+  ) {
     this.id = `cdp-${randomUUID()}`
     this.#browser = browser
     this.#httpBase = httpBase
     this.#deps = deps
-    this.#pid = pid
+    this.#processControl = processControl
     this.#browser.onClose(() => {
       // Browser endpoint gone → the whole session's transport is gone.
       for (const conn of this.#pool.values()) conn.close()
@@ -930,8 +1023,22 @@ class CdpSession implements TransportSession {
     return Promise.reject(unsupported('surfacesList', 'supportsSurfaceTargeting'))
   }
 
-  activeSurface(): Promise<SurfaceDescriptor> {
-    return Promise.reject(unsupported('activeSurface', 'supportsSurfaceTargeting'))
+  async activeSurface(): Promise<SurfaceDescriptor> {
+    const target = await this.#activeTarget()
+    return {
+      id: target.id,
+      // CDP discovery identifies a page target but does not expose enough Electron ownership
+      // metadata to distinguish BrowserWindow, WebContentsView, or webview honestly.
+      kind: 'other',
+      ...(target.title !== '' ? { title: target.title } : {}),
+      ...(target.url !== '' ? { url: target.url } : {}),
+      active: true,
+      capabilities: {
+        snapshot: true,
+        interaction: true,
+        rendererEval: true,
+      },
+    }
   }
 
   activateSurface(_surfaceId: string): Promise<SurfaceDescriptor> {
@@ -1470,27 +1577,39 @@ class CdpSession implements TransportSession {
 
   /**
    * Bounded graceful stop: ask the app to exit via `Browser.close`; when the
-   * call times out (a hung app) escalate to SIGKILL — possible only when the
-   * attach supplied a pid, since CDP itself has no process handle.
+   * call times out (a hung app) escalate to SIGKILL when the session owns a
+   * packaged child or an attach supplied a pid.
    */
   async stopGracefully(opts: StopOptions): Promise<StopResult> {
     if (this.#disposed) return { escalated: false }
     this.#disposed = true
     let escalated = false
     if (opts.force === true) {
-      escalated = this.#kill()
+      escalated = await this.#killAndReap()
     } else {
+      const budget = opts.timeoutMs ?? STOP_GRACEFUL_BUDGET_MS
+      const deadline = Date.now() + budget
       try {
         await this.#browser.send('Browser.close', undefined, {
-          timeoutMs: opts.timeoutMs ?? STOP_GRACEFUL_BUDGET_MS,
+          timeoutMs: budget,
         })
       } catch (err) {
         // A socket that drops right after Browser.close IS a successful close.
         // Only a TIMEOUT means the app ignored the request — escalate when we
         // hold a pid; without one, releasing the connections is all CDP can do.
         if (err instanceof StagewrightError && err.code === 'CDP_TIMEOUT') {
-          escalated = this.#kill()
+          escalated = await this.#killAndReap()
         }
+      }
+      // An owned packaged process is not considered stopped merely because Browser.close replied
+      // or dropped the socket. Wait for the actual child exit within the same bounded budget.
+      if (
+        !escalated &&
+        this.#processControl.ownsProcess &&
+        this.#processControl.waitForExit !== undefined
+      ) {
+        const exited = await this.#processControl.waitForExit(Math.max(0, deadline - Date.now()))
+        if (!exited) escalated = await this.#killAndReap()
       }
     }
     this.#closeAll()
@@ -1498,13 +1617,24 @@ class CdpSession implements TransportSession {
   }
 
   #kill(): boolean {
-    if (this.#pid === undefined) return false
+    if (this.#processControl.kill === undefined) return false
     try {
-      this.#deps.killProcess(this.#pid)
-      return true
+      return this.#processControl.kill()
     } catch {
       return false
     }
+  }
+
+  async #killAndReap(): Promise<boolean> {
+    const killed = this.#kill()
+    if (
+      killed &&
+      this.#processControl.ownsProcess &&
+      this.#processControl.waitForExit !== undefined
+    ) {
+      await this.#processControl.waitForExit(PROCESS_REAP_BUDGET_MS)
+    }
+    return killed
   }
 
   #closeAll(): void {
@@ -1521,8 +1651,15 @@ class CdpSession implements TransportSession {
   }
 
   async detach(): Promise<void> {
-    // CDP attach owns sockets, never the Electron process. `dispose` is exactly
-    // the process-preserving detach operation for this session kind.
+    if (this.#processControl.ownsProcess) {
+      throw new StagewrightError(
+        'TRANSPORT_UNSUPPORTED',
+        'This CDP launch session owns the Electron process and cannot detach without stopping it.',
+        { transport: TRANSPORT_ID, capability: 'detach' },
+      )
+    }
+    // Ordinary CDP attach owns sockets, never the Electron process. `dispose` is exactly the
+    // process-preserving detach operation for this session kind.
     await this.dispose()
   }
 
@@ -1539,6 +1676,14 @@ export interface CDPTransportOptions {
   readonly fetchJson?: FetchJson
   /** SIGKILL sender override (used by stop escalation). Defaults to `process.kill`. */
   readonly killProcess?: KillProcess
+  /** Packaged-process spawn override. Defaults to `node:child_process.spawn`. */
+  readonly spawnProcess?: SpawnProcess
+  /** Loopback-port reservation override. Defaults to a short-lived IPv4 TCP listener. */
+  readonly reserveLoopbackPort?: ReserveLoopbackPort
+  /** Platform override for credential-store defaults. Defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform
+  /** Packaged-launch poll interval override. */
+  readonly launchPollIntervalMs?: number
   /** Default per-method CDP timeout override. */
   readonly defaultMethodTimeoutMs?: number
 }
@@ -1546,7 +1691,7 @@ export interface CDPTransportOptions {
 export class CDPTransport implements ITransport {
   public readonly id: TransportId = TRANSPORT_ID
   public readonly capabilities: TransportCapabilities = {
-    canLaunch: false,
+    canLaunch: true,
     canAttach: true,
     canInject: false,
     // The full network seam is wired over the CDP Network domain (capture + bodies) and Fetch domain
@@ -1564,6 +1709,10 @@ export class CDPTransport implements ITransport {
   }
 
   readonly #deps: CdpSessionDeps
+  readonly #spawnProcess: SpawnProcess
+  readonly #reserveLoopbackPort: ReserveLoopbackPort
+  readonly #platform: NodeJS.Platform
+  readonly #launchPollIntervalMs: number
 
   constructor(opts: CDPTransportOptions = {}) {
     this.#deps = {
@@ -1572,13 +1721,131 @@ export class CDPTransport implements ITransport {
       killProcess: opts.killProcess ?? defaultKillProcess,
       defaultMethodTimeoutMs: opts.defaultMethodTimeoutMs,
     }
+    this.#spawnProcess = opts.spawnProcess ?? defaultSpawnProcess
+    this.#reserveLoopbackPort = opts.reserveLoopbackPort ?? defaultReserveLoopbackPort
+    this.#platform = opts.platform ?? process.platform
+    this.#launchPollIntervalMs = opts.launchPollIntervalMs ?? LAUNCH_POLL_INTERVAL_MS
   }
 
-  launch(_opts: LaunchOptions): Promise<TransportSession> {
-    return Promise.reject(unsupported('launch', 'canLaunch'))
+  async launch(opts: LaunchOptions): Promise<TransportSession> {
+    if (opts.executablePath === undefined || opts.appPath !== undefined) {
+      throw new StagewrightError(
+        'BAD_ARGUMENT',
+        'CDP packaged launch requires executablePath and does not accept appPath/main.',
+        { transport: TRANSPORT_ID },
+      )
+    }
+    const callerArgs = opts.args ?? []
+    const managedSwitch = ['remote-debugging-port', 'remote-debugging-address'].find((name) =>
+      hasSwitch(callerArgs, name),
+    )
+    if (managedSwitch !== undefined) {
+      throw new StagewrightError(
+        'BAD_ARGUMENT',
+        `CDP packaged launch manages --${managedSwitch}; remove that switch from args.`,
+        { transport: TRANSPORT_ID, managed_switch: managedSwitch },
+      )
+    }
+
+    const timeoutMs = opts.timeoutMs ?? LAUNCH_BUDGET_MS
+    const deadline = Date.now() + timeoutMs
+    let port: number
+    try {
+      port = await this.#reserveLoopbackPort()
+    } catch (cause) {
+      throw new StagewrightError(
+        'LAUNCH_FAILED',
+        `Could not reserve a loopback debugging port: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+        { transport: TRANSPORT_ID, executable_path: opts.executablePath },
+      )
+    }
+    const launchArgs = [
+      `--remote-debugging-address=127.0.0.1`,
+      `--remote-debugging-port=${port}`,
+      ...this.#credentialStoreArgs(callerArgs, opts.credentialStore ?? 'testing'),
+      ...callerArgs,
+    ]
+    let child: ChildProcess
+    try {
+      child = this.#spawnProcess(opts.executablePath, launchArgs, {
+        ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+        env: { ...process.env, ...opts.env },
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+    } catch (cause) {
+      throw new StagewrightError(
+        'LAUNCH_FAILED',
+        `Could not spawn packaged executable: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+        { transport: TRANSPORT_ID, executable_path: opts.executablePath },
+      )
+    }
+
+    const killChild = (): boolean => {
+      if (processHasExited(child)) return false
+      return child.kill('SIGKILL')
+    }
+
+    try {
+      const browserWsUrl = await this.#waitForPackagedTarget(child, port, deadline, timeoutMs)
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        throw new StagewrightError(
+          'LAUNCH_TIMEOUT',
+          `Packaged app did not become driveable within ${timeoutMs}ms.`,
+          { transport: TRANSPORT_ID, port, timeout_ms: timeoutMs },
+        )
+      }
+      return await this.#connect(
+        {
+          cdpUrl: browserWsUrl,
+          ...(child.pid !== undefined ? { pid: child.pid } : {}),
+          timeoutMs: remaining,
+        },
+        {
+          ownsProcess: true,
+          kill: killChild,
+          waitForExit: (budgetMs) => waitForProcessExit(child, budgetMs),
+        },
+      )
+    } catch (error) {
+      let killed = false
+      try {
+        killed = killChild()
+      } catch {
+        // Preserve the launch failure; cleanup is best-effort when spawning never yielded a pid.
+      }
+      if (killed) {
+        // A failed launch must not leave a child racing the caller's retry. SIGKILL should settle
+        // immediately, but still bound the reap wait in case the host delays process notification.
+        await waitForProcessExit(child, PROCESS_REAP_BUDGET_MS)
+      }
+      throw error
+    }
   }
 
   async attach(opts: AttachOptions): Promise<TransportSession> {
+    const pid = opts.pid
+    return this.#connect(
+      opts,
+      pid !== undefined
+        ? {
+            ownsProcess: false,
+            kill: () => {
+              this.#deps.killProcess(pid)
+              return true
+            },
+          }
+        : { ownsProcess: false },
+    )
+  }
+
+  async #connect(opts: AttachOptions, processControl: ProcessControl): Promise<TransportSession> {
     // Re-assert the loopback invariant at the transport boundary — the tool schema
     // also enforces it, but a direct API caller must not be able to point the
     // discovery probe at an arbitrary host (see transports/loopback.ts).
@@ -1634,7 +1901,7 @@ export class CDPTransport implements ITransport {
         : {}),
       ...(opts.timeoutMs !== undefined ? { connectTimeoutMs: opts.timeoutMs } : {}),
     })
-    const session = new CdpSession(browser, httpBase, this.#deps, opts.pid)
+    const session = new CdpSession(browser, httpBase, this.#deps, processControl)
 
     // Open pooled connections for the targets that already exist so console and
     // dialog capture aggregates across every current window from attach onward.
@@ -1649,6 +1916,108 @@ export class CDPTransport implements ITransport {
     }
 
     return session
+  }
+
+  #credentialStoreArgs(
+    callerArgs: readonly string[],
+    mode: NonNullable<LaunchOptions['credentialStore']>,
+  ): readonly string[] {
+    if (mode === 'system') return []
+    if (this.#platform === 'darwin' && !hasSwitch(callerArgs, 'use-mock-keychain')) {
+      return ['--use-mock-keychain']
+    }
+    if (this.#platform === 'linux' && !hasSwitch(callerArgs, 'password-store')) {
+      return ['--password-store=basic']
+    }
+    return []
+  }
+
+  async #waitForPackagedTarget(
+    child: ChildProcess,
+    port: number,
+    deadline: number,
+    timeoutMs: number,
+  ): Promise<string> {
+    const httpBase = `http://127.0.0.1:${port}`
+    let spawnError: Error | undefined
+    let exit: { readonly code: number | null; readonly signal: NodeJS.Signals | null } | undefined
+    const onError = (error: Error) => {
+      spawnError = error
+    }
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      exit = { code, signal }
+    }
+    child.once('error', onError)
+    child.once('exit', onExit)
+    try {
+      let lastDiscoveryError: string | undefined
+      while (Date.now() < deadline) {
+        if (spawnError !== undefined) {
+          throw new StagewrightError(
+            'LAUNCH_FAILED',
+            `Packaged executable failed to start: ${spawnError.message}`,
+            { transport: TRANSPORT_ID },
+          )
+        }
+        if (exit !== undefined || processHasExited(child)) {
+          throw new StagewrightError(
+            'LAUNCH_FAILED',
+            'Packaged executable exited before exposing a driveable renderer.',
+            {
+              transport: TRANSPORT_ID,
+              exit_code: exit?.code ?? child.exitCode,
+              signal: exit?.signal ?? child.signalCode,
+            },
+          )
+        }
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) break
+        const versionProbeBudget = Math.min(LAUNCH_PROBE_TIMEOUT_MS, remaining)
+        try {
+          const version = await this.#deps.fetchJson(`${httpBase}/json/version`, versionProbeBudget)
+          const browserWsUrl = (version as { webSocketDebuggerUrl?: unknown }).webSocketDebuggerUrl
+          if (typeof browserWsUrl !== 'string' || browserWsUrl === '') {
+            throw new Error('/json/version returned no webSocketDebuggerUrl')
+          }
+          const listRemaining = deadline - Date.now()
+          if (listRemaining <= 0) {
+            lastDiscoveryError = 'launch budget elapsed before page-target discovery'
+            break
+          }
+          const targets = asPageTargets(
+            await this.#deps.fetchJson(
+              `${httpBase}/json/list`,
+              Math.min(LAUNCH_PROBE_TIMEOUT_MS, listRemaining),
+            ),
+          )
+          if (targets.length > 0 && Date.now() <= deadline) return browserWsUrl
+          if (Date.now() > deadline) {
+            lastDiscoveryError = 'launch budget elapsed during page-target discovery'
+            break
+          }
+          lastDiscoveryError = 'CDP is ready but no page target is open yet'
+        } catch (cause) {
+          lastDiscoveryError = cause instanceof Error ? cause.message : String(cause)
+        }
+        const pollRemaining = deadline - Date.now()
+        if (pollRemaining > 0) {
+          await delay(Math.min(this.#launchPollIntervalMs, pollRemaining))
+        }
+      }
+      throw new StagewrightError(
+        'LAUNCH_TIMEOUT',
+        `Packaged app did not expose a CDP page target within the launch budget.`,
+        {
+          transport: TRANSPORT_ID,
+          port,
+          timeout_ms: timeoutMs,
+          ...(lastDiscoveryError !== undefined ? { last_discovery_error: lastDiscoveryError } : {}),
+        },
+      )
+    } finally {
+      child.removeListener('error', onError)
+      child.removeListener('exit', onExit)
+    }
   }
 
   inject(_opts: InjectOptions): Promise<TransportSession> {

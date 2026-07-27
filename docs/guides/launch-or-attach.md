@@ -5,12 +5,13 @@ it exposes:
 
 | Your situation                                        | Tool              | Transport           |
 | ----------------------------------------------------- | ----------------- | ------------------- |
-| Stagewright should start the app itself               | `electron_launch` | Playwright Electron |
+| Start a development entry (`main`)                    | `electron_launch` | Playwright Electron |
+| Start a packaged executable (no `main`)               | `electron_launch` | Raw CDP             |
 | The app is already running **with** a CDP debug port  | `electron_attach` | Raw CDP             |
 | The app is already running **without** any debug flag | `electron_inject` | Node inspector      |
 
-All three return `{ ok, session_id, transport, windows }`; the `session_id` threads through every
-later call.
+All three return `{ ok, session_id, transport, windows, capabilities }`; the `session_id` threads
+through every later call.
 
 ## Launch — Stagewright owns the process
 
@@ -18,8 +19,12 @@ later call.
 electron_launch { "main": "/abs/path/to/app/main.js" }
 ```
 
-- `main` points at the app's main-process entry (run with the bundled Electron), or pass
-  `executablePath` for a packaged binary. Both must be absolute.
+- `main` points at the app's main-process entry and uses the Playwright Electron transport.
+- An `executablePath` **without** `main` is a packaged-app launch. Stagewright reserves a loopback
+  port, starts the binary with a managed Chromium remote-debugging endpoint, waits for a page target,
+  connects over CDP, and owns the process through stop/force-kill.
+- Passing both `main` and `executablePath` selects that Electron runtime for the development entry
+  and stays on Playwright. Both paths must be absolute.
 - `args`, `env`, and `cwd` shape the spawn. Environment variables that would alter the runtime
   (e.g. `NODE_OPTIONS`) are rejected with `BAD_ARGUMENT`.
 - The call resolves when the first window exists AND the renderer finished its initial render
@@ -35,13 +40,42 @@ electron_wait_for_selector { "selector": "#app", "state": "visible", "timeoutMs"
 Failure modes worth knowing: `SINGLE_INSTANCE_LOCK` (another copy of the app holds Electron's
 single-instance lock — close it first), `ALREADY_RUNNING` (one live session per server by default;
 pass `allowMultiple: true` to run several), `LAUNCH_TIMEOUT` (no window within `timeoutMs`;
-retryable), and `FUSES_BLOCK_LAUNCH` (the selected binary disables Electron's Node CLI inspect
-fuse, so Playwright cannot establish its required `--inspect=0` main-process channel). The fuse
-failure is detected before process creation and is not retryable: start the app with a Chromium
-remote-debugging port and use `electron_attach`, or test a development build with the inspect fuse
-enabled. Unknown or unreadable fuse state does not block launch. When the server was started with
+retryable), and `LAUNCH_FAILED` (the packaged app could not start or exited before a driveable
+renderer appeared).
+`FUSES_BLOCK_LAUNCH` applies only to a `main`-based Playwright launch whose selected runtime disables
+Electron's Node CLI inspect fuse. For a shipped build, omit `main` and launch the executable over
+CDP instead. Unknown or unreadable fuse state does not block a Playwright launch. When the server was started with
 `--app-root <dir>`, launch paths outside that root are refused — useful when the operator wants to
 confine what an agent can start.
+
+### Launch a packaged app
+
+```json
+electron_launch {
+  "executablePath": "/Applications/Your App.app/Contents/MacOS/Your App"
+}
+```
+
+Stagewright owns `--remote-debugging-address` and `--remote-debugging-port` for this path; do not
+pass either through `args`. The endpoint is loopback-only, each discovery probe is bounded, and a
+failed handshake reaps the process before returning. Electron documents
+[`--remote-debugging-port`](https://www.electronjs.org/docs/latest/api/command-line-switches#--remote-debugging-portport)
+as the HTTP CDP endpoint switch.
+
+Packaged launches default to `"credentialStore": "testing"`:
+
+- macOS receives `--use-mock-keychain`, avoiding a Keychain prompt that can block startup;
+- Linux receives `--password-store=basic` unless `args` already selects another password store;
+- Windows receives no credential-store switch.
+
+This default is for reliable automation, not security verification. A mock macOS keychain or
+Linux basic store does **not** prove genuine OS-backed `safeStorage` sealing. Use
+`"credentialStore": "system"` when that behavior is part of the assertion; the launch can then
+surface an OS credential prompt and may require an already-unlocked test account. Chromium's own
+[test launcher](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/chrome/test/base/test_launcher_utils.cc)
+uses the same macOS/Linux defaults to prevent test UI and timeouts; Electron's
+[`safeStorage` documentation](https://www.electronjs.org/docs/latest/api/safe-storage#platform-specific-key-providers)
+describes the platform security difference and the Linux `basic_text` backend.
 
 ### Use the target project's Electron runtime
 
@@ -98,10 +132,11 @@ loopback `host`) or a full loopback `cdpUrl`. Two notes:
 
 - A `pid` alone is **not** attachable over CDP — but passing it alongside `port` lets a later
   `electron_stop` escalate to SIGKILL if the app ignores the graceful close.
-- The CDP transport supports evaluation, reads, observation (console/dialogs), screenshots, and
-  the core interaction surface — pointer and keyboard input are synthesised through the protocol,
-  so a handful of behaviours differ from the launch transport (no auto-waiting actionability
-  retry; an element that is not yet visible fails retryably instead of being awaited).
+- The CDP transport supports snapshot/find against its selected root page, renderer evaluation,
+  reads, observation (console/dialogs), screenshots, and the core interaction surface. Explicit
+  iframe/webview/WebContentsView hierarchy discovery remains unavailable, so
+  `electron_surfaces_list` reports `TRANSPORT_UNSUPPORTED` on CDP. Pointer and keyboard input are
+  synthesised through the protocol, so there is no Playwright-style actionability auto-wait.
 
 ## Inject — the app is running with no debug flag
 
@@ -123,11 +158,11 @@ fails.
 
 ## Ending a session
 
-| Call                  | What happens                                                                                                          |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `electron_stop`       | Graceful close, bounded by `timeoutMs` (default 10 s); escalates to SIGKILL on timeout and reports `escalated: true`. |
-| `electron_force_kill` | Straight to SIGKILL.                                                                                                  |
-| `electron_detach`     | Releases an attached/injected session **without** touching the app — it keeps running.                                |
+| Call                  | What happens                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `electron_stop`       | Graceful close, bounded by `timeoutMs` (default 10 s); escalates to SIGKILL on timeout and reports `escalated: true`.                |
+| `electron_force_kill` | Straight to SIGKILL.                                                                                                                 |
+| `electron_detach`     | Releases an attached/injected session **without** touching the app. Launch-owned Playwright and packaged-CDP sessions reject detach. |
 
 A stopped session's process is never orphaned: either the close landed, or the escalation reaped
 it. For attached sessions, escalation needs the `pid` you optionally passed at attach time.

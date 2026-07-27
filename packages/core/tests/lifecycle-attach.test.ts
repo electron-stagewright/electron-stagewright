@@ -14,6 +14,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { attachTool, injectTool } from '../src/tools/lifecycle/index.js'
 import { InjectorTransport } from '../src/transports/injector.js'
+import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
 function setup(transports?: TransportRegistry) {
   const dispatcher = new Dispatcher({
@@ -25,6 +26,22 @@ function setup(transports?: TransportRegistry) {
 }
 
 describe('electron_attach (default transport)', () => {
+  it('returns the selected transport capability matrix on success', async () => {
+    const transport = new FakeTransport({
+      id: 'cdp',
+      session: new FakeSession({ id: 'attached', transport: 'cdp' }),
+    })
+    const { dispatcher } = setup(new TransportRegistry({ transports: [transport] }))
+
+    const res = await dispatcher.dispatch('electron_attach', { port: 9222 })
+    expect(res).toMatchObject({
+      ok: true,
+      session_id: 'attached',
+      transport: 'cdp',
+      capabilities: transport.capabilities,
+    })
+  })
+
   it('rejects a missing attach target with BAD_ARGUMENT before choosing a transport', async () => {
     const { dispatcher } = setup()
     const res = await dispatcher.dispatch('electron_attach', {})

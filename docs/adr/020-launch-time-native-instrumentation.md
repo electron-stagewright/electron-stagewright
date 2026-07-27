@@ -51,9 +51,9 @@ removed when the session disposes (idempotent, best-effort).
   JSON-escaped into a string literal and written to a file Electron runs — never `eval`/`new Function`.
   The agent supplies nothing executable. So this is NOT an `--allow-eval` surface; it is a launch-mechanism
   opt-in.
-- **Launch transport only.** Only the Playwright launch path owns the app's entry. The CDP attach and
-  injector transports cannot wrap a main that is already running, so consumers of the registry (`getTrays`
-  and `invokeTrayEvent`) reject `NOT_IMPLEMENTED` there.
+- **Development-entry launch only.** Only the Playwright launch path owns the app's entry. Packaged
+  and attached CDP sessions plus injector sessions cannot wrap the app main, so consumers of the
+  registry (`getTrays` and `invokeTrayEvent`) reject `NOT_IMPLEMENTED` there.
 
 ## Rationale
 

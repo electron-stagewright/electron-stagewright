@@ -136,6 +136,19 @@ surfaces through main-process eval.
 - A future transport can add surface support independently by declaring the capability and honoring
   this descriptor/selection/ref contract; it does not need to imitate Playwright internals.
 
+## Status Update — 2026-07-27: CDP default root surface
+
+CDP now implements `activeSurface()` for its selected page target, which makes
+`electron_snapshot`, `electron_find`, renderer reads, waits, expectations, and interactions work
+against an attached or packaged-launched root page. The descriptor uses `kind: "other"` rather than
+guessing `window`, `webcontents_view`, or `webview`: `/json/list` does not expose enough Electron
+ownership metadata to distinguish those honestly.
+
+This does **not** flip `supportsSurfaceTargeting`. CDP still cannot enumerate and select the complete
+iframe/webview/WebContentsView hierarchy required by this ADR, so `electron_surfaces_list` and
+`electron_switch_surface` continue to return `TRANSPORT_UNSUPPORTED`. A default root is the narrow
+consumer fix; hierarchy targeting remains a separate evidence-backed implementation.
+
 ## References
 
 - [ADR-003](./003-transport-abstraction.md) — transport seam and capability matrix.

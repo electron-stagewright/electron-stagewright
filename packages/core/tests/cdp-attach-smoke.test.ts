@@ -1,9 +1,9 @@
 /**
- * Real-Electron CDP attach smoke — spawns the minimal fixture app with
- * `--remote-debugging-port=0`, parses the DevTools endpoint from stderr, and
- * drives the REAL CDP transport end to end through the dispatcher:
- * `electron_attach` → windows list → renderer eval → console capture →
- * `electron_stop` (which must actually reap the process).
+ * Real-Electron CDP lifecycle smoke — launches an executable-only fixture through
+ * the transport-owned endpoint and also spawns the fixture with
+ * `--remote-debugging-port=0` for attach coverage. Drives the REAL CDP transport
+ * end to end through the dispatcher, including default-surface snapshot/find,
+ * renderer eval, console/network capture, detach ownership, and process reaping.
  *
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (and the `electron` devDep binary
  * is installed). Skipped by default so `pnpm test` stays fast and headless-CI-safe.
@@ -21,7 +21,8 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { attachTool } from '../src/tools/lifecycle/attach.js'
-import { detachTool, stopTool } from '../src/tools/lifecycle/index.js'
+import { detachTool, launchTool, stopTool } from '../src/tools/lifecycle/index.js'
+import { findTool, snapshotTool } from '../src/tools/snapshot/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
 const FIXTURE_MAIN = path.join(
@@ -67,6 +68,81 @@ async function spawnWithCdp(): Promise<{ readonly cdpUrl: string; readonly proc:
 }
 
 describe('CDP attach smoke (real Electron)', () => {
+  it.skipIf(!RUN_E2E)(
+    'launches an executable-only app over CDP, snapshots/finds its default page, and reaps it',
+    async () => {
+      const electronPath = (await import('electron')).default as unknown as string
+      const sessions = new SessionManager()
+      const dispatcher = new Dispatcher({
+        sessions,
+        snapshots: new SnapshotStore(),
+        transports: new TransportRegistry(),
+      })
+      dispatcher.registerAll([launchTool, snapshotTool, findTool, detachTool, stopTool])
+
+      let sessionId: string | undefined
+      try {
+        const launched = (await dispatcher.dispatch('electron_launch', {
+          executablePath: electronPath,
+          // A packaged binary embeds its app. Passing the fixture as an argument lets the stock
+          // Electron dev dependency exercise the same executable-only CDP lifecycle in CI.
+          args: [FIXTURE_MAIN],
+          timeoutMs: 30_000,
+          readyTimeoutMs: 10_000,
+        })) as SuccessResponse & {
+          readonly session_id: string
+          readonly transport: string
+          readonly launch_mode: string
+          readonly renderer_ready: boolean
+          readonly capabilities: { readonly canLaunch: boolean }
+        }
+        sessionId = launched.session_id
+        expect(launched).toMatchObject({
+          ok: true,
+          transport: 'cdp',
+          launch_mode: 'packaged',
+          renderer_ready: true,
+          capabilities: { canLaunch: true },
+        })
+
+        const snapshot = (await dispatcher.dispatch('electron_snapshot', {
+          sessionId,
+        })) as SuccessResponse & {
+          readonly surface_id: string
+          readonly snapshot: { readonly entries: readonly { readonly name: string }[] }
+        }
+        expect(snapshot.ok).toBe(true)
+        expect(snapshot.surface_id).toBeTruthy()
+        expect(
+          snapshot.snapshot.entries.some((entry) =>
+            entry.name.includes('Stagewright minimal fixture'),
+          ),
+        ).toBe(true)
+
+        const found = await dispatcher.dispatch('electron_find', {
+          sessionId,
+          role: 'button',
+          name_exact: 'Ping',
+        })
+        expect(found).toMatchObject({ ok: true, count: 1, surface_id: snapshot.surface_id })
+
+        const detached = await dispatcher.dispatch('electron_detach', { sessionId })
+        expect(detached).toMatchObject({ ok: false, code: 'TRANSPORT_UNSUPPORTED' })
+        expect(sessions.has(sessionId)).toBe(true)
+
+        const stopped = await dispatcher.dispatch('electron_stop', { sessionId })
+        expect(stopped).toMatchObject({ ok: true, stopped: true, escalated: false })
+        expect(sessions.size).toBe(0)
+        sessionId = undefined
+      } finally {
+        if (sessionId !== undefined && sessions.has(sessionId)) {
+          await sessions.remove(sessionId, { force: true })
+        }
+      }
+    },
+    120_000,
+  )
+
   it.skipIf(!RUN_E2E)(
     'detaches without terminating the attached Electron process',
     async () => {

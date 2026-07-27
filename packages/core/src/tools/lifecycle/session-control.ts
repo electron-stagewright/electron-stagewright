@@ -106,7 +106,8 @@ export const detachTool: AnyToolDefinition = defineTool({
   title: 'Detach from Electron app',
   description: [
     'Disconnect from an attached or injected app without stopping it. A launch-owned session cannot detach',
-    'because its Playwright connection owns the process; use electron_stop for that case.',
+    'because its transport owns the process; this includes Playwright development launches and packaged',
+    'CDP launches. Use electron_stop for that case.',
     'Returns: { ok, session_id, detached: true }. Errors: TRANSPORT_UNSUPPORTED (launch-owned session;',
     'not retryable), NOT_RUNNING (no such session), BAD_ARGUMENT (multiple sessions).',
   ].join(' '),
