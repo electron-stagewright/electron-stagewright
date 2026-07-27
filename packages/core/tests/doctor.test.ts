@@ -49,6 +49,39 @@ describe('runDoctorChecks', () => {
     expect(report.runtime.server).toMatchObject({ core: '0.3.0', electron: '42.6.2' })
   })
 
+  it('appends exact server-configuration validation and makes its failure blocking', async () => {
+    const report = await runDoctorChecks(
+      {
+        allowEvalMain: false,
+        allowEvalRenderer: false,
+        serverConfiguration: {
+          ok: false,
+          message: 'Server configuration is invalid: plugin missing',
+          code: 'PLUGIN_LOAD_FAILED',
+          hint: 'Install the selected plugin.',
+          details: {
+            spec: 'production',
+            resolved_spec: '@electron-stagewright/plugin-production',
+          },
+        },
+      },
+      READY_DEPS,
+    )
+
+    expect(report.ok).toBe(false)
+    expect(report.checks.at(-1)).toEqual({
+      id: 'server_config',
+      status: 'fail',
+      message: 'Server configuration is invalid: plugin missing',
+      code: 'PLUGIN_LOAD_FAILED',
+      hint: 'Install the selected plugin.',
+      details: {
+        spec: 'production',
+        resolved_spec: '@electron-stagewright/plugin-production',
+      },
+    })
+  })
+
   it.each(['darwin', 'win32'] as const)(
     'skips the Linux display preflight on %s',
     async (platform) => {

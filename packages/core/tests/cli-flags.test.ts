@@ -58,13 +58,11 @@ describe('parseCliArgs — value-bearing flags fail closed on a missing value', 
     )
   })
 
-  it('parses the opt-in demo flag once and refuses it in doctor mode', () => {
+  it('parses the opt-in demo flag once in serve and doctor modes', () => {
     expect(parseCliArgs(['--demo']).demo).toBe(true)
+    expect(parseCliArgs(['doctor', '--demo']).demo).toBe(true)
     expect(parseCliArgs([]).demo).toBe(false)
     expect(() => parseCliArgs(['--demo', '--demo'])).toThrow('--demo may be specified only once')
-    expect(() => parseCliArgs(['doctor', '--demo'])).toThrow(
-      '--demo is only valid when starting the MCP server',
-    )
   })
 
   it('rejects unknown flags and positional arguments instead of silently ignoring them', () => {
@@ -87,16 +85,26 @@ describe('parseCliArgs — value-bearing flags fail closed on a missing value', 
     expect(doctor.allowEval).toEqual({ main: false, renderer: true })
   })
 
-  it('does not silently ignore server-only options in doctor mode', () => {
-    expect(() => parseCliArgs(['doctor', '--plugin', 'trace'])).toThrow(
-      '--plugin is only valid when starting the MCP server',
-    )
-    expect(() => parseCliArgs(['doctor', '--operation-timeout-ms', '5000'])).toThrow(
-      '--operation-timeout-ms is only valid when starting the MCP server',
-    )
-    expect(() => parseCliArgs(['doctor', '--tool-profile', 'essential'])).toThrow(
-      '--tool-profile is only valid when starting the MCP server',
-    )
+  it('parses the same server configuration flags in doctor mode', () => {
+    const doctor = parseCliArgs([
+      'doctor',
+      '--plugin',
+      'production,trace',
+      '--plugin-config',
+      'trace={"maxRecords":100}',
+      '--operation-timeout-ms',
+      '5000',
+      '--tool-profile',
+      'essential',
+    ])
+
+    expect(doctor).toMatchObject({
+      command: 'doctor',
+      pluginSpecs: ['production', 'trace'],
+      pluginConfigs: { trace: { maxRecords: 100 } },
+      operationTimeoutMs: 5000,
+      toolProfile: 'essential',
+    })
   })
 
   it('documents the profile and demo flags in standalone help', () => {

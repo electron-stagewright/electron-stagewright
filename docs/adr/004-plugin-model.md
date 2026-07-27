@@ -208,6 +208,24 @@ window arrays, or plugin-owned state, and it is not a plugin-status contributor 
 need to surface their own operational state must continue to do so through their explicit tools or
 a future dedicated, capability-limited contributor contract.
 
+## Status update (first-party aliases and exact doctor preflight, 2026-07-27)
+
+The CLI accepts each shipped first-party suffix as an explicit shorthand: for example,
+`--plugin production` resolves to `@electron-stagewright/plugin-production`, while scoped
+third-party package names and file paths pass through unchanged. This is package-name expansion,
+not discovery: every plugin remains operator-selected, and import still executes trusted code in
+the server process. Load failures preserve both the requested and resolved specifiers in
+machine-readable details.
+
+Standalone `doctor` now accepts the same configuration flags as serve mode (`--plugin`,
+`--plugin-config`, `--tool-profile`, `--operation-timeout-ms`, `--demo`, eval policy, and path
+controls). Both commands share one resolver. Doctor builds the unconnected server object graph,
+therefore validating plugin import, manifest, config schema, setup, tool registration, and profile
+composition, and immediately closes it so plugin teardown also runs. The `server_config` check is
+blocking and never prints raw plugin configuration values. This exactness deliberately means that
+doctor runs top-level/setup code from plugins the operator explicitly named; it does not weaken the
+ADR-004 trust boundary or auto-load anything.
+
 ## Related decisions
 
 - **ADR-006** (Error code registry) — anticipated `registerPluginCodes` and `<plugin>.CODE`;

@@ -7,10 +7,12 @@
  * corrupt the stream and break the client.
  *
  * Invocation:
- * - `doctor [--json]` — run preflight checks and exit without opening the MCP
- *   stdio server. Default output is line-oriented; `--json` writes a single
- *   machine-readable report instead. Either mode exits non-zero when a required
- *   check fails.
+ * - `doctor [--json]` — run environment checks plus exact serve-configuration
+ *   preflight and exit without opening MCP stdio. It accepts the same server
+ *   flags, loads only explicitly selected trusted plugins into an unconnected
+ *   server, then tears them down. Default output is line-oriented; `--json`
+ *   writes one machine-readable report. Either mode exits non-zero when a
+ *   required check fails.
  * - `--help` / `--version` — print standalone CLI output and exit.
  *
  * `doctor`, `--help`, and `--version` run to completion and exit before the MCP
@@ -29,9 +31,10 @@
  *   this directory (default: unset = no confinement). An opt-in allowlist: with it set, a tool call
  *   cannot spawn an arbitrary host binary or run arbitrary JS as the app main from outside the
  *   project root. Launching the app within the root is unaffected.
- * - `--plugin <name|path>` — load a plugin by package name or file path (ADR-004).
- *   Repeatable, and a single value may be comma-separated. Loaded explicitly; the
- *   server never auto-scans. An unresolvable plugin aborts startup.
+ * - `--plugin <name|path>` — load a plugin by package name, shipped first-party
+ *   short name, or file path (ADR-004). Repeatable, and a single value may be
+ *   comma-separated. Loaded explicitly; the server never auto-scans. An
+ *   unresolvable plugin aborts startup.
  * - `--plugin-config <name>=<json>` — supply a plugin's config as inline JSON,
  *   validated against the plugin's configSchema. Repeatable, keyed by plugin name.
  * - `--operation-timeout-ms <n>` — backstop timeout for a single tool dispatch (ADR-011); a
@@ -56,11 +59,9 @@
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-import { resolveDemoMain } from './demo.js'
 import { runDoctorChecks } from './doctor.js'
-import { importPlugin } from './plugins/index.js'
 import type { EvalPolicy } from './server/eval-policy.js'
-import { createServer } from './server/index.js'
+import { createConfiguredServer, inspectServerConfiguration } from './server/configuration.js'
 import { StderrLogger } from './server/logger.js'
 import { isToolProfile, type ToolProfile } from './tools/index.js'
 import { VERSION } from './version.js'
@@ -210,9 +211,6 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       continue
     }
     if (arg === '--demo') {
-      if (command === 'doctor') {
-        throw new Error('--demo is only valid when starting the MCP server')
-      }
       if (demo) throw new Error('--demo may be specified only once')
       demo = true
       continue
@@ -230,18 +228,12 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       continue
     }
     if (arg === '--operation-timeout-ms') {
-      if (command === 'doctor') {
-        throw new Error('--operation-timeout-ms is only valid when starting the MCP server')
-      }
       onlyOnce(operationTimeoutRaw, arg)
       operationTimeoutRaw = requireValue(argv, i, arg)
       i += 1
       continue
     }
     if (arg === '--tool-profile') {
-      if (command === 'doctor') {
-        throw new Error('--tool-profile is only valid when starting the MCP server')
-      }
       onlyOnce(toolProfileRaw, arg)
       toolProfileRaw = requireValue(argv, i, arg)
       if (!isToolProfile(toolProfileRaw)) {
@@ -254,9 +246,6 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       continue
     }
     if (arg === '--plugin') {
-      if (command === 'doctor') {
-        throw new Error('--plugin is only valid when starting the MCP server')
-      }
       const values = requireValue(argv, i, arg)
         .split(',')
         .map((spec) => spec.trim())
@@ -267,9 +256,6 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       continue
     }
     if (arg === '--plugin-config') {
-      if (command === 'doctor') {
-        throw new Error('--plugin-config is only valid when starting the MCP server')
-      }
       const [name, config] = parsePluginConfig(requireValue(argv, i, arg))
       pluginConfigs[name] = config
       i += 1
@@ -311,7 +297,7 @@ export function formatCliHelp(): string {
     '  --operation-timeout-ms <n>        Dispatch timeout in milliseconds (0 disables).',
     '  --tool-profile <profile>          Core tools: essential, testing, debug, or full.',
     '  --demo                            Default electron_launch to the packaged demo app.',
-    '  --plugin <name|path>              Load a plugin; repeatable and comma-separated.',
+    '  --plugin <name|path>              Load a plugin (first-party short names supported).',
     '  --plugin-config <name>=<json>     Supply a plugin configuration.',
     '  --help, -h                        Print this help and exit.',
     '  --version, -V                     Print the package version and exit.',
@@ -328,22 +314,15 @@ async function main(): Promise<void> {
     process.stdout.write(`${VERSION}\n`)
     return
   }
-  const {
-    allowEval,
-    toolProfile,
-    screenshotDir,
-    appRoot,
-    demo,
-    pluginSpecs,
-    pluginConfigs,
-    operationTimeoutMs,
-  } = options
+  const { allowEval, toolProfile, screenshotDir, appRoot, demo } = options
   if (options.command === 'doctor') {
+    const serverConfiguration = await inspectServerConfiguration(options)
     const report = await runDoctorChecks({
       ...(appRoot !== undefined ? { appRoot } : {}),
       ...(screenshotDir !== undefined ? { screenshotDir } : {}),
       allowEvalMain: allowEval.main,
       allowEvalRenderer: allowEval.renderer,
+      serverConfiguration,
     })
     if (options.doctorJson) {
       process.stdout.write(`${JSON.stringify(report)}\n`)
@@ -357,32 +336,8 @@ async function main(): Promise<void> {
     return
   }
   const logger = new StderrLogger({ level: 'info' })
-
-  if (demo && appRoot !== undefined) {
-    throw new Error(
-      '--demo cannot be combined with --app-root; the packaged demo is outside that root',
-    )
-  }
-  const launchDefaultMain = demo ? await resolveDemoMain() : undefined
-
-  // Resolve plugins before assembling the server. An unresolvable plugin throws (a
-  // StagewrightError) and aborts startup via main().catch — fail-closed.
-  const plugins = []
-  for (const spec of pluginSpecs) {
-    plugins.push(await importPlugin(spec))
-  }
-
-  const server = await createServer({
-    allowEval,
-    toolProfile,
-    logger,
-    ...(screenshotDir !== undefined ? { screenshotDir } : {}),
-    ...(appRoot !== undefined ? { appRoot } : {}),
-    ...(launchDefaultMain !== undefined ? { launchDefaultMain } : {}),
-    ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
-    ...(plugins.length > 0 ? { plugins } : {}),
-    ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
-  })
+  const configured = await createConfiguredServer(options, logger)
+  const { server } = configured
 
   let shuttingDown = false
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
@@ -406,7 +361,7 @@ async function main(): Promise<void> {
   logger.info('electron-stagewright MCP server ready (stdio)', {
     allowEval,
     toolProfile,
-    plugins: plugins.length,
+    plugins: configured.pluginNames.length,
     demo,
   })
 }

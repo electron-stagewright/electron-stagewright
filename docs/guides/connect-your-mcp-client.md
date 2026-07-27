@@ -239,13 +239,16 @@ Append flags to `args` (after the package/CLI). The common ones:
   install it globally with them. It cannot be combined with `--app-root`. See
   [Try the demo](./demo.md) for the exact host configuration.
 - `electron-stagewright doctor --json` runs a standalone preflight for Node, Playwright, Electron,
-  display setup, configured paths, eval policy, and (with `--app-root`) target runtime facts plus a
-  bounded potential-native-addon inventory. Do not append it to MCP server arguments.
-- `--plugin <name>` loads an installed plugin (trace, network, storage, clock, and others). With
-  `npx`, add that plugin package as another `--package` before the `electron-stagewright` bin; with
-  a global install, install the plugin package globally too. Then call `electron_plugins` to see
-  exactly which namespaced tools are enabled and which gate (if any) keeps a tool hidden. See
-  [Load, configure, and diagnose plugins](./plugins.md).
+  display setup, configured paths, eval policy, target runtime facts, and the exact server
+  configuration. Pass the same `--plugin`, `--plugin-config`, profile, timeout, demo, eval, and path
+  flags you plan to use in the MCP client; doctor constructs and tears down an unconnected server
+  without opening stdio. Do not append the `doctor --json` command itself to MCP server arguments.
+- `--plugin <name>` loads an installed plugin (trace, network, storage, clock, and others). Shipped
+  first-party suffixes are aliases (`--plugin trace` resolves to
+  `@electron-stagewright/plugin-trace`). With `npx`, add that plugin package as another `--package`
+  before the `electron-stagewright` bin; with a global install, install the plugin package globally
+  too. Then call `electron_plugins` to see exactly which namespaced tools are enabled and which gate
+  (if any) keeps a tool hidden. See [Load, configure, and diagnose plugins](./plugins.md).
 
 With `npx`, server flags follow the `electron-stagewright` bin name:
 
@@ -297,6 +300,7 @@ The failure modes are almost all about the stdio channel or the spawn command.
 | `project_runtime` warns about ABI or a native addon                    | The server's default Electron differs from the app's runtime, or inventory is incomplete                                     | Start the server with `--app-root <project>`, run `electron-stagewright doctor --json`, then launch with `runtime: "project"` when appropriate. |
 | `electron_eval_main` / `electron_eval_renderer` missing                | Eval tools are gated off by default                                                                                          | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                      |
 | A known core tool is missing                                           | The selected core profile does not include it                                                                                | Restart with the profile named in the tool's recovery hint, or use `--tool-profile full`.                                                       |
+| `electron_launch` returns `FUSES_BLOCK_LAUNCH`                         | The packaged binary disables the Node CLI inspect fuse required by Playwright                                                | Start it with a Chromium remote-debugging port and use `electron_attach`, or use a compatible development build.                                |
 | The app won't launch from `electron_launch`                            | `main` is not an absolute path, or the app needs attach/inject                                                               | Pass an absolute `main`; see [Launch, attach, or inject](./launch-or-attach.md) for apps that are already running.                              |
 
 ## Where next

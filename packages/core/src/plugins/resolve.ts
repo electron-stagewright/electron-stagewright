@@ -17,6 +17,23 @@ import { pathToFileURL } from 'node:url'
 import { StagewrightError } from '../errors/index.js'
 import type { StagewrightPlugin } from './types.js'
 
+/**
+ * Stable short names for the first-party packages shipped from this monorepo. The CLI still
+ * requires an explicit `--plugin`; this is an ergonomic package-name expansion, never discovery.
+ */
+const FIRST_PARTY_PLUGIN_PACKAGES = {
+  a11y: '@electron-stagewright/plugin-a11y',
+  clock: '@electron-stagewright/plugin-clock',
+  ipc: '@electron-stagewright/plugin-ipc',
+  native: '@electron-stagewright/plugin-native-ui',
+  'native-ui': '@electron-stagewright/plugin-native-ui',
+  network: '@electron-stagewright/plugin-network',
+  production: '@electron-stagewright/plugin-production',
+  storage: '@electron-stagewright/plugin-storage',
+  trace: '@electron-stagewright/plugin-trace',
+  visual: '@electron-stagewright/plugin-visual',
+} as const satisfies Readonly<Record<string, string>>
+
 /** True when `value` is shaped like a {@link StagewrightPlugin} (name + version present). */
 function isStagewrightPlugin(value: unknown): value is StagewrightPlugin {
   return (
@@ -37,6 +54,14 @@ function isPathSpec(spec: string): boolean {
 }
 
 /**
+ * Expand a shipped first-party short name to its package specifier. Paths, scoped packages,
+ * and third-party bare package names pass through unchanged.
+ */
+export function resolvePluginSpecifier(spec: string): string {
+  return FIRST_PARTY_PLUGIN_PACKAGES[spec as keyof typeof FIRST_PARTY_PLUGIN_PACKAGES] ?? spec
+}
+
+/**
  * Dynamic-import a plugin by package name or file path and return its
  * {@link StagewrightPlugin}. Throws `PLUGIN_LOAD_FAILED` when the module cannot be
  * imported, `PLUGIN_MANIFEST_INVALID` when it exports no valid plugin.
@@ -48,23 +73,28 @@ function isPathSpec(spec: string): boolean {
  * ADR-004). Never call `importPlugin` with an untrusted or remotely-sourced path.
  */
 export async function importPlugin(spec: string): Promise<StagewrightPlugin> {
-  const target = isPathSpec(spec) ? pathToFileURL(path.resolve(spec)).href : spec
+  const resolvedSpec = resolvePluginSpecifier(spec)
+  const target = isPathSpec(resolvedSpec)
+    ? pathToFileURL(path.resolve(resolvedSpec)).href
+    : resolvedSpec
   let mod: Record<string, unknown>
   try {
     mod = (await import(target)) as Record<string, unknown>
   } catch (cause) {
     throw new StagewrightError(
       'PLUGIN_LOAD_FAILED',
-      `Could not import plugin "${spec}": ${cause instanceof Error ? cause.message : String(cause)}`,
-      { spec },
+      `Could not import plugin "${spec}" (resolved as "${resolvedSpec}"): ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { spec, resolved_spec: resolvedSpec },
     )
   }
   const candidate = mod['default'] ?? mod['plugin']
   if (!isStagewrightPlugin(candidate)) {
     throw new StagewrightError(
       'PLUGIN_MANIFEST_INVALID',
-      `Module "${spec}" does not export a StagewrightPlugin (as default or a named "plugin" export).`,
-      { spec },
+      `Module "${spec}" (resolved as "${resolvedSpec}") does not export a StagewrightPlugin (as default or a named "plugin" export).`,
+      { spec, resolved_spec: resolvedSpec },
     )
   }
   return candidate

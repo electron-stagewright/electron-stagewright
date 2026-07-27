@@ -43,6 +43,11 @@ export const ERROR_CODES = {
     retryable: true,
     hint: 'Check main process startup time.',
   },
+  FUSES_BLOCK_LAUNCH: {
+    http: 409,
+    retryable: false,
+    hint: 'Use electron_attach with a CDP-enabled running app, or launch a development build whose Node CLI inspect fuse is enabled.',
+  },
   SINGLE_INSTANCE_LOCK: {
     http: 409,
     retryable: false,

@@ -237,3 +237,17 @@ substring keyword block. Added one code to the registry:
   a raw substring, such as `process['exit']`, `globalThis['Function']`, or the
   `.constructor.constructor` escape. Its `details` carry `{ construct, code_hash }`, matching the
   eval audit hash without logging the payload.
+
+## Status Update (2026-07-27) — added `FUSES_BLOCK_LAUNCH`
+
+Playwright establishes Electron main-process control by passing `--inspect=0` on every launch. A
+packaged Electron binary can permanently disable that channel with the
+`EnableNodeCliInspectArguments` fuse; attempting the launch then yields transport-level symptoms
+instead of an actionable app error. Added one code to the registry:
+
+- **`FUSES_BLOCK_LAUNCH`** — `http: 409`, `retryable: false`, hint: attach to a running app over
+  CDP or use a development build whose Node CLI inspect fuse is enabled. `electron_launch`
+  performs a read-only, cached fuse inspection before spawning an explicit/project executable and
+  returns this code only when the blocking fuse state is positively identified. The response
+  includes the relevant bounded fuse states and recovery `next_actions`; unreadable, unsupported,
+  or unknown fuse wires do not block launch.

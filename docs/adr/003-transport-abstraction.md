@@ -524,3 +524,18 @@ the transport still receives one already-authorized executable and owns the same
 `executablePath` remains authoritative when the caller explicitly provides it, preserving the
 existing packaged-app path and avoiding a surprise runtime override. CDP and Injector are unchanged:
 they attach to existing processes and do not select a launch binary.
+
+## Status Update — 2026-07-27: fuse-aware Playwright launch preflight
+
+Playwright's Electron transport always requires the main-process Node inspector channel
+(`--inspect=0`), including when `LaunchOptions.executablePath` selects a packaged binary. The
+lifecycle tool now inspects the selected binary's Electron fuse wire before invoking the
+transport. A positively disabled or removed `EnableNodeCliInspectArguments` fuse returns
+`FUSES_BLOCK_LAUNCH` with CDP-attach and development-build recovery actions, instead of spawning a
+process whose failed inspector handshake can surface as an opaque transport close.
+
+This remains tool-layer compatibility policy rather than a capability flag: the Playwright
+transport can launch compatible binaries, while fuse state belongs to each selected executable.
+Inspection is read-only, cached by executable path, and fail-open for unknown/non-Electron wires;
+only positive incompatibility evidence blocks process creation. CDP attach is unaffected because
+it uses Chromium's remote-debugging endpoint rather than the Node inspector channel.
