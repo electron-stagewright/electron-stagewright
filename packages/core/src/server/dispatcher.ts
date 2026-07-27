@@ -54,12 +54,14 @@ import type {
   DispatchObserver,
   DispatchRecord,
   EvalTarget,
+  ProgressReporter,
   ToolAnnotations,
   ToolContext,
   ToolResult,
 } from '../tools/types.js'
 import { anyEvalAllowed, type EvalPolicy, normalizeEvalPolicy } from './eval-policy.js'
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
+import { createProgressReporter, NOOP_PROGRESS_REPORTER } from './progress.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
 import { ServerStatus } from './status.js'
@@ -136,6 +138,15 @@ export interface DispatcherOptions {
    * remains authoritative.
    */
   readonly excludedToolProfileHints?: ReadonlyMap<string, string>
+}
+
+/** Request-scoped collaborators supplied by the transport-facing dispatcher entry point. */
+export interface DispatchOptions {
+  /**
+   * Advisory MCP progress sink. Direct callers may omit it; nested dispatches reuse the same
+   * instance so ordering and the per-request notification budget remain global to the call.
+   */
+  readonly progress?: ProgressReporter
 }
 
 /**
@@ -556,7 +567,7 @@ export class Dispatcher {
    * {@link MAX_REDISPATCH_DEPTH} it returns a `BAD_ARGUMENT` envelope instead of recursing, so an
    * accidental dispatch cycle cannot blow the stack. Never throws.
    */
-  #redispatch(tool: string, args: unknown): Promise<ToolResult> {
+  #redispatch(tool: string, args: unknown, progress: ProgressReporter): Promise<ToolResult> {
     const depth = (REDISPATCH_DEPTH.getStore() ?? 0) + 1
     if (depth > MAX_REDISPATCH_DEPTH) {
       return Promise.resolve(
@@ -567,15 +578,20 @@ export class Dispatcher {
         }),
       )
     }
-    return REDISPATCH_DEPTH.run(depth, () => this.dispatch(tool, args))
+    return REDISPATCH_DEPTH.run(depth, () => this.dispatch(tool, args, { progress }))
   }
 
   /**
    * Execute a tool by name with raw (unvalidated) arguments. Always resolves to a response envelope
    * — never throws — so the transport layer can serialise the result uniformly.
    */
-  async dispatch(name: string, rawArgs: unknown): Promise<ToolResult> {
+  async dispatch(
+    name: string,
+    rawArgs: unknown,
+    options: DispatchOptions = {},
+  ): Promise<ToolResult> {
     const startedAt = this.#now()
+    const progress = options.progress ?? NOOP_PROGRESS_REPORTER
     const def = this.#tools.get(name)
     if (def === undefined) {
       return this.#complete(name, rawArgs, this.#unknownToolError(name, startedAt), startedAt)
@@ -617,6 +633,7 @@ export class Dispatcher {
       snapshots: this.#snapshots,
       status: this.#status,
       logger: this.#logger,
+      progress,
       allowEval: this.#evalPolicy.main,
       allowEvalRenderer: this.#evalPolicy.renderer,
       ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
@@ -627,7 +644,7 @@ export class Dispatcher {
       startedAt,
       now: this.#now,
       addDispatchObserver: (observer) => this.addObserver(observer),
-      dispatch: (tool, dispatchArgs) => this.#redispatch(tool, dispatchArgs),
+      dispatch: (tool, dispatchArgs) => this.#redispatch(tool, dispatchArgs, progress),
       validate: (tool, validateArgs) => this.validate(tool, validateArgs),
       addDispatchGuard: (guard) => this.addGuard(guard),
     }
@@ -746,9 +763,23 @@ export class Dispatcher {
 
     server.server.setRequestHandler(
       CallToolRequestSchema,
-      async (request): Promise<CallToolResult> => {
-        const result = await this.dispatch(request.params.name, request.params.arguments)
-        return toCallToolResult(result)
+      async (request, extra): Promise<CallToolResult> => {
+        const progress = createProgressReporter({
+          ...(extra._meta?.progressToken !== undefined
+            ? { progressToken: extra._meta.progressToken }
+            : {}),
+          sendNotification: (notification) => extra.sendNotification(notification),
+          signal: extra.signal,
+          logger: this.#logger,
+        })
+        try {
+          const result = await this.dispatch(request.params.name, request.params.arguments, {
+            progress,
+          })
+          return toCallToolResult(result)
+        } finally {
+          progress.close()
+        }
       },
     )
   }

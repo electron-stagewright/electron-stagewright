@@ -59,6 +59,7 @@ export function makeExpectStateTool(deps: ExpectStateDeps = {}): AnyToolDefiniti
         },
         (raw: WaitRaw) => ({ matched: true, state: raw.state ?? null }),
         {
+          timeoutMs,
           timeoutMessage: `Element state did not match within ${timeoutMs}ms.`,
           timeoutCode: 'EXPECTATION_FAILED',
           buildTimeoutDetails: (raw: WaitRaw) => ({

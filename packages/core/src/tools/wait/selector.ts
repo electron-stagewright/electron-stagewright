@@ -54,7 +54,10 @@ export const waitForSelectorTool: AnyToolDefinition = defineTool({
       args,
       { body: buildWaitForSelectorBody(), arg: { selector, state, timeoutMs } },
       (_raw: WaitRaw) => ({ matched: true, state }),
-      { timeoutMessage: `Selector did not reach state "${state}" within ${timeoutMs}ms.` },
+      {
+        timeoutMs,
+        timeoutMessage: `Selector did not reach state "${state}" within ${timeoutMs}ms.`,
+      },
     )
   },
 })

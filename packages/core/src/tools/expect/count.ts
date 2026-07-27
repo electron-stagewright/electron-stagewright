@@ -16,6 +16,7 @@
 import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
+import { withElapsedProgress } from '../../server/progress.js'
 import {
   type FindQuery,
   type Snapshot,
@@ -138,6 +139,7 @@ export function makeExpectCountTool(deps: ExpectCountDeps = {}): AnyToolDefiniti
           },
           (raw: WaitRaw) => ({ matched: true, actual: raw['actual'] ?? null }),
           {
+            timeoutMs,
             timeoutMessage: `The match count did not satisfy the predicate within ${timeoutMs}ms.`,
             timeoutCode: 'EXPECTATION_FAILED',
             buildTimeoutDetails: (raw: WaitRaw) => ({
@@ -197,42 +199,54 @@ async function pollRoleCount(
   assertCapability(managed.transport, 'supportsRendererEval')
   const surface = await managed.session.activeSurface()
   const bundle = loadBundle()
-  const startedAt = Date.now()
-  for (;;) {
-    let actual: number
-    try {
-      const walked = await runWalk<Snapshot>(managed.session, bundle, {})
-      // The walker CLEARS and renumbers every data-sw-ref in document order. Without
-      // reconciling and re-tagging (as snapshot/find do), the DOM tags would silently
-      // diverge from the stored baseline, so a later click({ ref }) resolved against the
-      // stored snapshot would hit the wrong element. Reconcile + retag + store so the
-      // baseline and the DOM stay consistent, then count against the reconciled view.
-      const { curr } = await reconcileRetagAndStore({
-        session: managed.session,
-        store: ctx.snapshots,
-        sessionId: managed.id,
-        surfaceId: surface.id,
-        prev: ctx.snapshots.get(managed.id, surface.id),
-        walked,
-      })
-      actual = findEntries(curr, query).length
-    } catch (err) {
-      return handleTargetFailure(err, { ctx, session: managed.session, meta })
-    }
-    if (countSatisfied(actual, match)) {
-      return makeSuccess({ session_id: managed.id, matched: true, actual }, meta)
-    }
-    const remaining = timeoutMs - (Date.now() - startedAt)
-    if (remaining <= 0) {
-      return makeError('EXPECTATION_FAILED', {
-        ...meta,
-        message: `The match count did not satisfy the predicate within ${timeoutMs}ms.`,
-        next_actions: ['electron_snapshot()'],
-        details: { expected: describeCount(match), actual },
-      })
-    }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(ROLE_POLL_INTERVAL_MS, remaining)))
-  }
+  return withElapsedProgress(
+    {
+      reporter: ctx.progress,
+      totalMs: timeoutMs,
+      message: 'Counting accessibility matches',
+      now: ctx.now,
+    },
+    async () => {
+      const startedAt = ctx.now()
+      for (;;) {
+        let actual: number
+        try {
+          const walked = await runWalk<Snapshot>(managed.session, bundle, {})
+          // The walker CLEARS and renumbers every data-sw-ref in document order. Without
+          // reconciling and re-tagging (as snapshot/find do), the DOM tags would silently
+          // diverge from the stored baseline, so a later click({ ref }) resolved against the
+          // stored snapshot would hit the wrong element. Reconcile + retag + store so the
+          // baseline and the DOM stay consistent, then count against the reconciled view.
+          const { curr } = await reconcileRetagAndStore({
+            session: managed.session,
+            store: ctx.snapshots,
+            sessionId: managed.id,
+            surfaceId: surface.id,
+            prev: ctx.snapshots.get(managed.id, surface.id),
+            walked,
+          })
+          actual = findEntries(curr, query).length
+        } catch (err) {
+          return handleTargetFailure(err, { ctx, session: managed.session, meta })
+        }
+        if (countSatisfied(actual, match)) {
+          return makeSuccess({ session_id: managed.id, matched: true, actual }, meta)
+        }
+        const remaining = timeoutMs - (ctx.now() - startedAt)
+        if (remaining <= 0) {
+          return makeError('EXPECTATION_FAILED', {
+            ...meta,
+            message: `The match count did not satisfy the predicate within ${timeoutMs}ms.`,
+            next_actions: ['electron_snapshot()'],
+            details: { expected: describeCount(match), actual },
+          })
+        }
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(ROLE_POLL_INTERVAL_MS, remaining)),
+        )
+      }
+    },
+  )
 }
 
 /** The default `electron_expect_count` tool registered by the server. */

@@ -10,7 +10,12 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import {
+  type CallToolResult,
+  CallToolResultSchema,
+  ProgressNotificationSchema,
+  type ProgressToken,
+} from '@modelcontextprotocol/sdk/types.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
@@ -35,6 +40,30 @@ const dangerTool = defineTool({
   operationType: 'command',
   annotations: { destructiveHint: true },
   handler: async (_args, ctx) => makeSuccess({}, { startedAt: ctx.startedAt, now: ctx.now }),
+})
+
+const progressTool = defineTool({
+  name: 'test_progress',
+  description: 'Emit deterministic progress updates before returning a complete envelope.',
+  inputSchema: z.object({
+    label: z.string(),
+    offset: z.number().int().nonnegative().default(0),
+  }),
+  operationType: 'query',
+  handler: async (args, ctx) => {
+    for (let step = 1; step <= 3; step += 1) {
+      ctx.progress.report({
+        progress: args.offset + step,
+        total: args.offset + 3,
+        message: `${args.label}:${step}`,
+      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    return makeSuccess(
+      { label: args.label, completed: true },
+      { startedAt: ctx.startedAt, now: ctx.now },
+    )
+  },
 })
 
 const closers: Array<() => Promise<void>> = []
@@ -163,5 +192,91 @@ describe('dispatcher MCP binding', () => {
     const issues = (env['details'] as { issues?: ReadonlyArray<{ field?: string }> }).issues
     expect(issues?.[0]?.field).toBe('value')
     expect((env['next_actions'] as readonly string[]).length).toBeGreaterThan(0)
+  })
+
+  it('delivers monotonic bounded progress and the complete final result to an opted-in client', async () => {
+    const client = await connectClient([progressTool])
+    const updates: Array<{
+      progress: number
+      total?: number | undefined
+      message?: string | undefined
+    }> = []
+    const result = await client.callTool(
+      {
+        name: 'test_progress',
+        arguments: { label: 'aware' },
+      },
+      CallToolResultSchema,
+      {
+        onprogress: (update) => {
+          updates.push(update)
+        },
+      },
+    )
+
+    expect(updates).toEqual([
+      { progress: 1, total: 3, message: 'aware:1' },
+      { progress: 2, total: 3, message: 'aware:2' },
+      { progress: 3, total: 3, message: 'aware:3' },
+    ])
+    expect(updates.every((update) => update.progress <= (update.total ?? Infinity))).toBe(true)
+    expect(envelopeOf(result as CallToolResult)).toMatchObject({
+      ok: true,
+      label: 'aware',
+      completed: true,
+    })
+  })
+
+  it('returns the same complete result when the client does not request progress', async () => {
+    const client = await connectClient([progressTool])
+    const result = (await client.callTool({
+      name: 'test_progress',
+      arguments: { label: 'unaware' },
+    })) as CallToolResult
+
+    expect(envelopeOf(result)).toMatchObject({
+      ok: true,
+      label: 'unaware',
+      completed: true,
+    })
+  })
+
+  it('isolates concurrent string and numeric-zero progress tokens', async () => {
+    const client = await connectClient([progressTool])
+    const received: Array<{
+      progressToken: ProgressToken
+      progress: number
+      total?: number | undefined
+      message?: string | undefined
+    }> = []
+    client.setNotificationHandler(ProgressNotificationSchema, (notification) => {
+      received.push(notification.params)
+    })
+
+    const [alpha, zero] = await Promise.all([
+      client.callTool({
+        name: 'test_progress',
+        arguments: { label: 'alpha', offset: 0 },
+        _meta: { progressToken: 'alpha-token' },
+      }),
+      client.callTool({
+        name: 'test_progress',
+        arguments: { label: 'zero', offset: 10 },
+        _meta: { progressToken: 0 },
+      }),
+    ])
+
+    expect(envelopeOf(alpha as CallToolResult)).toMatchObject({ ok: true, label: 'alpha' })
+    expect(envelopeOf(zero as CallToolResult)).toMatchObject({ ok: true, label: 'zero' })
+    expect(received.filter((update) => update.progressToken === 'alpha-token')).toEqual([
+      { progressToken: 'alpha-token', progress: 1, total: 3, message: 'alpha:1' },
+      { progressToken: 'alpha-token', progress: 2, total: 3, message: 'alpha:2' },
+      { progressToken: 'alpha-token', progress: 3, total: 3, message: 'alpha:3' },
+    ])
+    expect(received.filter((update) => update.progressToken === 0)).toEqual([
+      { progressToken: 0, progress: 11, total: 13, message: 'zero:1' },
+      { progressToken: 0, progress: 12, total: 13, message: 'zero:2' },
+      { progressToken: 0, progress: 13, total: 13, message: 'zero:3' },
+    ])
   })
 })

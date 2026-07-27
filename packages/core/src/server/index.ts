@@ -7,6 +7,7 @@
 
 export {
   Dispatcher,
+  type DispatchOptions,
   type DispatcherOptions,
   type McpToolManifestEntry,
   type ToolManifestEntry,

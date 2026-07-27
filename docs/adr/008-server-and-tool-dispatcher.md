@@ -93,3 +93,24 @@ inputSchema (Zod object), operationType, requiresEvalFlag?, handler }`. The
   after session resolution if richer correlation is wanted).
 - This decision is revisitable only by amendment (a new ADR or a Status Update
   block here).
+
+## Status Update — 2026-07-27: request-scoped MCP progress
+
+Long-running calls may report request-scoped MCP progress. A client opts in
+through the standard opaque `_meta.progressToken`; individual tool schemas do
+not grow a progress argument. The MCP request handler creates one best-effort
+reporter and threads it through `ToolContext`, including nested `ctx.dispatch`
+calls. Direct dispatch and token-less requests receive a no-op.
+
+The reporter accepts only finite, non-negative, strictly increasing values,
+enforces a 12-notification request budget, stops on request abort, and swallows
+notification-delivery failures. Bounded waits and expectations emit elapsed
+milliseconds against their clamped timeout after a 250 ms minimum, using an
+adaptive cadence. Reporter closure also stops its heartbeat timer when the
+underlying operation remains pending.
+
+Progress is advisory: it neither cancels the underlying operation nor replaces
+the final success/error envelope. Hosts that request progress can surface
+bounded wait/expect activity without changing the result contract. Hosts that
+ignore progress receive the same complete envelope; callers must always use
+that final envelope as the completion and outcome signal.

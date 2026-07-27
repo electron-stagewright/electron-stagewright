@@ -18,6 +18,7 @@ import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { type Snapshot, walkAccessibilityTree } from '../src/snapshot/index.js'
 import { EXPECT_TOOLS } from '../src/tools/expect/index.js'
 import { READ_TOOLS } from '../src/tools/read/index.js'
+import type { ProgressReporter, ProgressUpdate } from '../src/tools/types.js'
 import { WAIT_TOOLS } from '../src/tools/wait/index.js'
 import type { TransportCapabilities } from '../src/transports/index.js'
 import { FakeSession, FakeTransport, type FakeEvaluate } from './helpers/fake-transport.js'
@@ -85,6 +86,23 @@ const canned =
   async () =>
     raw
 
+function recordingProgress(): {
+  readonly reporter: ProgressReporter
+  readonly updates: ProgressUpdate[]
+} {
+  const updates: ProgressUpdate[] = []
+  return {
+    updates,
+    reporter: {
+      enabled: true,
+      report(update): boolean {
+        updates.push(update)
+        return true
+      },
+    },
+  }
+}
+
 describe('electron_expect_text', () => {
   it('returns matched with the observed value when the predicate holds', async () => {
     const { dispatcher } = setup({ evaluate: canned({ satisfied: true, actual: 'Welcome back' }) })
@@ -93,6 +111,32 @@ describe('electron_expect_text', () => {
       contains: 'Welcome',
     })) as SuccessResponse & { matched: boolean; actual: string }
     expect(res).toMatchObject({ ok: true, matched: true, actual: 'Welcome back' })
+  })
+
+  it('reports elapsed expectation progress while the renderer poll is pending', async () => {
+    vi.useFakeTimers()
+    try {
+      let finish!: (value: unknown) => void
+      const { dispatcher } = setup({
+        evaluate: () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      })
+      const { reporter, updates } = recordingProgress()
+      const pending = dispatcher.dispatch(
+        'electron_expect_text',
+        { selector: '#h', equals: 'Ready', timeoutMs: 1000 },
+        { progress: reporter },
+      )
+
+      await vi.advanceTimersByTimeAsync(250)
+      expect(updates).toEqual([{ progress: 250, total: 1000, message: 'Checking expectation' }])
+      finish({ satisfied: true, actual: 'Ready' })
+      await expect(pending).resolves.toMatchObject({ ok: true, matched: true })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('fails with EXPECTATION_FAILED carrying expected + actual on mismatch', async () => {
@@ -363,6 +407,33 @@ describe('electron_expect_count (role mode)', () => {
     expect(res.details?.actual).toBe(2)
   })
 
+  it('reports accessibility-count progress while role polling continues', async () => {
+    vi.useFakeTimers()
+    try {
+      const { dispatcher } = setup({ evaluate: canned(snap(TWO_BUTTONS)) })
+      const { reporter, updates } = recordingProgress()
+      const pending = dispatcher.dispatch(
+        'electron_expect_count',
+        { role: 'button', min: 5, timeoutMs: 500 },
+        { progress: reporter },
+      )
+
+      await vi.advanceTimersByTimeAsync(250)
+      expect(updates[0]).toEqual({
+        progress: 250,
+        total: 500,
+        message: 'Counting accessibility matches',
+      })
+      await vi.advanceTimersByTimeAsync(250)
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        code: 'EXPECTATION_FAILED',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('rejects role mode with no selector and no target filter', async () => {
     const { dispatcher } = setup()
     const res = (await dispatcher.dispatch('electron_expect_count', { equals: 1 })) as ErrorResponse
@@ -416,6 +487,19 @@ describe('electron_assert_pattern', () => {
       contains: 'OK',
     })) as SuccessResponse & { matched: boolean; actual: string }
     expect(res).toMatchObject({ matched: true, actual: 'OK' })
+  })
+
+  it('does not emit progress for its zero-duration one-shot check', async () => {
+    const { dispatcher } = setup({ evaluate: canned({ satisfied: true, actual: 'OK' }) })
+    const { reporter, updates } = recordingProgress()
+    const res = await dispatcher.dispatch(
+      'electron_assert_pattern',
+      { selector: '#status', contains: 'OK' },
+      { progress: reporter },
+    )
+
+    expect(res.ok).toBe(true)
+    expect(updates).toEqual([])
   })
 
   it('validates an attribute against a regex', async () => {

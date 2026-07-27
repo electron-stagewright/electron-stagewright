@@ -87,7 +87,7 @@ export function makeWaitForStateTool(deps: WaitForStateDeps = {}): AnyToolDefini
           arg: { selector, want: args.state, timeoutMs },
         },
         (raw: WaitRaw) => ({ matched: true, state: raw.state ?? null }),
-        { timeoutMessage: `Element state did not match within ${timeoutMs}ms.` },
+        { timeoutMs, timeoutMessage: `Element state did not match within ${timeoutMs}ms.` },
       )
     },
   })

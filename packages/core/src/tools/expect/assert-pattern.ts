@@ -135,6 +135,7 @@ export const assertPatternTool: AnyToolDefinition = defineTool({
       },
       (raw: WaitRaw) => ({ matched: true, actual: raw['actual'] ?? null }),
       {
+        timeoutMs: 0,
         timeoutMessage: `The ${subject} did not match the pattern.`,
         timeoutCode: 'EXPECTATION_FAILED',
         buildTimeoutDetails: (raw: WaitRaw) => ({

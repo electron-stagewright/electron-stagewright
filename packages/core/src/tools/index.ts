@@ -25,6 +25,8 @@ export {
   type DispatchObserver,
   type DispatchGuard,
   type DispatchGuardCall,
+  type ProgressReporter,
+  type ProgressUpdate,
   defineTool,
 } from './types.js'
 

@@ -11,6 +11,8 @@ import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
+import { NOOP_LOGGER } from '../src/server/logger.js'
+import { createProgressReporter } from '../src/server/progress.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { type DispatchRecord, defineTool } from '../src/tools/types.js'
 
@@ -146,6 +148,54 @@ describe('Dispatcher re-dispatch seam (ctx.dispatch + ctx.validate)', () => {
     expect(res.ok).toBe(true)
     // Depth 0 runs, depth 1 runs, depth 2 is refused before the handler — exactly two runs.
     expect(runs).toBe(2)
+  })
+
+  it('shares one progress reporter and notification cap across re-dispatch', async () => {
+    const d = newDispatcher()
+    const sent: number[] = []
+    const progress = createProgressReporter({
+      progressToken: 'shared',
+      sendNotification: async (notification) => {
+        sent.push(notification.params.progress)
+      },
+      logger: NOOP_LOGGER,
+    })
+    d.register(
+      defineTool({
+        name: 'test_progress_inner',
+        description: 'Reports nested progress.',
+        inputSchema: z.object({}),
+        operationType: 'query',
+        handler: async (_args, ctx) => {
+          for (let value = 7; value <= 18; value += 1) {
+            ctx.progress.report({ progress: value })
+          }
+          return makeSuccess({}, { startedAt: ctx.startedAt, now: ctx.now })
+        },
+      }),
+    )
+    d.register(
+      defineTool({
+        name: 'test_progress_outer',
+        description: 'Reports progress around a nested dispatch.',
+        inputSchema: z.object({}),
+        operationType: 'query',
+        handler: async (_args, ctx) => {
+          for (let value = 1; value <= 6; value += 1) {
+            ctx.progress.report({ progress: value })
+          }
+          await ctx.dispatch('test_progress_inner', {})
+          ctx.progress.report({ progress: 19 })
+          return makeSuccess({}, { startedAt: ctx.startedAt, now: ctx.now })
+        },
+      }),
+    )
+
+    const result = await d.dispatch('test_progress_outer', {}, { progress })
+    progress.close()
+
+    expect(result.ok).toBe(true)
+    expect(sent).toEqual(Array.from({ length: 12 }, (_, index) => index + 1))
   })
 
   it('validate accepts a good call, rejects a bad/unknown one, and never runs the handler', async () => {
