@@ -243,3 +243,19 @@ historical dataset.
   queries return only requested fields.
 - [GitHub Actions token permissions](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token) —
   least-privilege workflow guidance.
+
+## Status Update — 2026-07-27: Aggregate collector implemented
+
+The first provider-neutral collector is implemented as the private
+`@electron-stagewright/release-health` workspace. Maintainers invoke it explicitly with
+`pnpm release-health`; it derives publishable npm packages from workspace manifests, reconstructs
+the maintainer roster from tracked governance history, and emits only the versioned aggregate
+report to stdout.
+
+The implementation keeps npm, clone traffic, issues, and merged pull requests behind independent
+injectable source seams. Missing credentials, traffic permission, invalid schemas, and incomplete
+pagination therefore make only the affected metric family unavailable. It adds no runtime
+analytics, scheduler, persistent storage, upload destination, or release credential.
+
+In schema version 1, `response_coverage` is a ratio from `0` through `1`, or `null` when the
+eligible-issue count is zero.
