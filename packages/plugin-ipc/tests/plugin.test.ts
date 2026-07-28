@@ -6,14 +6,20 @@
  * The real INSTRUMENT_BODY shim is covered by the gated real-Electron smoke.
  */
 
-import type { EvalPolicy, StagewrightServer, TransportSession } from '@electron-stagewright/core'
+import type {
+  EvalPolicy,
+  ProgressReporter,
+  ProgressUpdate,
+  StagewrightServer,
+  TransportSession,
+} from '@electron-stagewright/core'
 import {
   FakeSession,
   FakeTransport,
   type FakeEvaluate,
   TestLifecycle,
 } from '@electron-stagewright/testkit'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import packageJson from '../package.json' with { type: 'json' }
 import ipcPlugin from '../src/index.js'
@@ -102,7 +108,10 @@ async function launch(
   return lifecycle.launch(server, opts)
 }
 
-afterEach(() => lifecycle.cleanup())
+afterEach(async () => {
+  vi.useRealTimers()
+  await lifecycle.cleanup()
+})
 async function open(
   opts: { allowEval: AllowEvalOption } = { allowEval: true },
 ): Promise<StagewrightServer> {
@@ -172,6 +181,48 @@ describe('ipc plugin (in-process, simulated main)', () => {
       stopped: true,
       events: 1,
     })
+  })
+
+  it('reports bounded elapsed progress for an invoke with a timeout', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const main = fakeMain()
+    const evaluate: FakeEvaluate = async (target, body, arg) => {
+      if ((arg as { op?: string } | undefined)?.op === 'invoke') await gate
+      return main(target, body, arg)
+    }
+    let clock = 0
+    const { server } = await lifecycle.createPluginTestServer(ipcPlugin, {
+      session: new FakeSession({ evaluate }),
+      allowEval: true,
+      now: () => clock,
+    })
+    const sessionId = await launch(server)
+    const updates: ProgressUpdate[] = []
+    const progress: ProgressReporter = {
+      enabled: true,
+      report(update) {
+        updates.push(update)
+        return true
+      },
+    }
+    vi.useFakeTimers()
+
+    const pending = server.dispatcher.dispatch(
+      'ipc_invoke',
+      { sessionId, channel: 'save', timeoutMs: 1000 },
+      { progress },
+    )
+    await vi.advanceTimersByTimeAsync(249)
+    expect(updates).toEqual([])
+    clock = 250
+    await vi.advanceTimersByTimeAsync(1)
+    expect(updates).toEqual([{ progress: 250, total: 1000, message: 'Waiting for IPC handler' }])
+
+    release()
+    await expect(pending).resolves.toMatchObject({ ok: true })
   })
 
   it('stubs an allowlisted channel so invoke returns the canned value', async () => {

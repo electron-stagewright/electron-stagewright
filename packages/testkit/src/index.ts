@@ -17,3 +17,10 @@ export {
   type LaunchTestSessionOptions,
   type TestServer,
 } from './server.js'
+export {
+  waitForTestSurfaces,
+  type TestSurfaceDescriptor,
+  type TestSurfaceListResult,
+  type TestToolDispatcher,
+  type WaitForTestSurfacesOptions,
+} from './surfaces.js'

@@ -6,12 +6,13 @@
  * signals an arbitrary local pid.
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { type ErrorResponse } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
+import type { ProgressReporter } from '../src/tools/types.js'
 import { attachTool, injectTool } from '../src/tools/lifecycle/index.js'
 import { InjectorTransport } from '../src/transports/injector.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
@@ -24,6 +25,10 @@ function setup(transports?: TransportRegistry) {
   dispatcher.registerAll([attachTool, injectTool])
   return { dispatcher }
 }
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('electron_attach (default transport)', () => {
   it('returns the selected transport capability matrix on success', async () => {
@@ -40,6 +45,42 @@ describe('electron_attach (default transport)', () => {
       transport: 'cdp',
       capabilities: transport.capabilities,
     })
+  })
+
+  it('reports delayed semantic phases through the dispatch progress reporter', async () => {
+    vi.useFakeTimers()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const transport = new FakeTransport({
+      id: 'cdp',
+      session: new FakeSession({ id: 'attached', transport: 'cdp' }),
+    })
+    vi.spyOn(transport, 'attach').mockImplementation(async () => {
+      await gate
+      return transport.session
+    })
+    const phases: string[] = []
+    const progress: ProgressReporter = {
+      enabled: true,
+      report: () => false,
+      phase(message) {
+        phases.push(message)
+        return true
+      },
+    }
+    const { dispatcher } = setup(new TransportRegistry({ transports: [transport] }))
+
+    const pending = dispatcher.dispatch('electron_attach', { port: 9222 }, { progress })
+    await vi.advanceTimersByTimeAsync(249)
+    expect(phases).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(phases).toEqual(['Connecting to Electron CDP endpoint'])
+
+    release()
+    await expect(pending).resolves.toMatchObject({ ok: true, session_id: 'attached' })
+    expect(phases).toEqual(['Connecting to Electron CDP endpoint', 'Registering Electron session'])
   })
 
   it('rejects a missing attach target with BAD_ARGUMENT before choosing a transport', async () => {

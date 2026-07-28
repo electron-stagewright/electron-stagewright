@@ -8,6 +8,7 @@ import {
   FULL_CAPABILITIES,
   fullCapabilities,
   TestLifecycle,
+  waitForTestSurfaces,
 } from '../src/index.js'
 
 describe('testkit', () => {
@@ -60,5 +61,55 @@ describe('testkit', () => {
       await connection.close()
       await lifecycle.cleanup()
     }
+  })
+
+  it('waits for asynchronously attached renderer surfaces', async () => {
+    let calls = 0
+    const dispatcher = {
+      dispatch: async () => {
+        calls += 1
+        return {
+          ok: true,
+          surfaces: [
+            { id: 'window-1', kind: 'window', url: 'file:///fixture/host.html' },
+            ...(calls > 1
+              ? [{ id: 'frame-1', kind: 'frame', url: 'file:///fixture/child.html' }]
+              : []),
+          ],
+        }
+      },
+    }
+
+    const listed = await waitForTestSurfaces(
+      dispatcher,
+      'session-1',
+      (result) => result.surfaces.some((surface) => surface.kind === 'frame'),
+      { timeoutMs: 50, intervalMs: 1 },
+    )
+
+    expect(calls).toBe(2)
+    expect(listed.surfaces).toContainEqual(
+      expect.objectContaining({ kind: 'frame', url: 'file:///fixture/child.html' }),
+    )
+  })
+
+  it('reports observed surfaces when attachment does not complete', async () => {
+    const dispatcher = {
+      dispatch: async () => ({
+        ok: true,
+        surfaces: [{ id: 'window-1', kind: 'window', url: 'file:///fixture/host.html' }],
+      }),
+    }
+
+    await expect(
+      waitForTestSurfaces(
+        dispatcher,
+        'session-1',
+        (result) => result.surfaces.some((surface) => surface.kind === 'frame'),
+        { timeoutMs: 5, intervalMs: 1 },
+      ),
+    ).rejects.toThrow(
+      'Timed out after 5ms waiting for Electron surfaces; observed window:file:///fixture/host.html',
+    )
   })
 })

@@ -25,6 +25,7 @@ import {
   makePluginError,
   makeSuccess,
   readPackageVersion,
+  withElapsedProgress,
   type AnyToolDefinition,
   type StagewrightPlugin,
   type ToolContext,
@@ -339,16 +340,25 @@ export function createIpcPlugin(): StagewrightPlugin {
           details: { channel: args.channel, allowed: config.current.invokeAllow },
         })
       }
-      const result = await guard.session.evaluate<{
-        ok: boolean
-        result?: unknown
-        error?: string
-      }>('main', INSTRUMENT_BODY, {
-        op: 'invoke',
-        channel: args.channel,
-        args: args.args ?? [],
-        timeoutMs: args.timeoutMs ?? 0,
-      })
+      const result = await withElapsedProgress(
+        {
+          reporter: ctx.progress,
+          totalMs: args.timeoutMs ?? 0,
+          message: 'Waiting for IPC handler',
+          now: ctx.now,
+        },
+        () =>
+          guard.session.evaluate<{
+            ok: boolean
+            result?: unknown
+            error?: string
+          }>('main', INSTRUMENT_BODY, {
+            op: 'invoke',
+            channel: args.channel,
+            args: args.args ?? [],
+            timeoutMs: args.timeoutMs ?? 0,
+          }),
+      )
       if (!result.ok) {
         return makePluginError('ipc.INVOKE_FAILED', {
           ...meta,

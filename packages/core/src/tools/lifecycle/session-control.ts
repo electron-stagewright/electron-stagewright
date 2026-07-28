@@ -13,6 +13,7 @@
 import { z } from 'zod'
 
 import { makeSuccess } from '../../errors/envelope.js'
+import { withProgressPhases } from '../../server/progress.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 
 const sessionOnly = z.object({
@@ -51,22 +52,24 @@ export const stopTool: AnyToolDefinition = defineTool({
   operationType: 'command',
   // Ends the session and closes the app — a destructive, non-undoable action.
   annotations: { destructiveHint: true },
-  handler: async (args, ctx) => {
-    const managed = ctx.sessions.resolve(args.sessionId)
-    let escalated = false
-    try {
-      const result = await ctx.sessions.remove(managed.id, {
-        ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
-      })
-      escalated = result.escalated
-    } finally {
-      ctx.snapshots.clear(managed.id)
-    }
-    return makeSuccess(
-      { session_id: managed.id, stopped: true, escalated },
-      { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
-    )
-  },
+  handler: async (args, ctx) =>
+    withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+      const managed = ctx.sessions.resolve(args.sessionId)
+      let escalated = false
+      try {
+        phase('Stopping Electron session')
+        const result = await ctx.sessions.remove(managed.id, {
+          ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+        })
+        escalated = result.escalated
+      } finally {
+        ctx.snapshots.clear(managed.id)
+      }
+      return makeSuccess(
+        { session_id: managed.id, stopped: true, escalated },
+        { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
+      )
+    }),
 })
 
 /** `electron_force_kill` — SIGKILL escape hatch. */

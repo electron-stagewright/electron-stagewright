@@ -9,6 +9,8 @@ import {
   MAX_PROGRESS_NOTIFICATIONS,
   createProgressReporter,
   withElapsedProgress,
+  withProgressPhases,
+  type ProgressPhaseSetter,
 } from '../src/server/progress.js'
 import type { ProgressReporter, ProgressUpdate } from '../src/tools/types.js'
 
@@ -83,6 +85,28 @@ describe('createProgressReporter', () => {
 
     await Promise.resolve()
     expect(sent).toHaveLength(2)
+  })
+
+  it('advances semantic phases from the current global progress value', async () => {
+    const sent: unknown[] = []
+    const reporter = createProgressReporter({
+      progressToken: 'semantic',
+      sendNotification: async (notification) => {
+        sent.push(notification)
+      },
+      logger: NOOP_LOGGER,
+    })
+
+    expect(reporter.report({ progress: 250, total: 1000, message: 'Waiting' })).toBe(true)
+    expect(reporter.phase('Registering session')).toBe(true)
+    expect(reporter.phase('Waiting for renderer')).toBe(true)
+    await Promise.resolve()
+
+    expect(sent.map((notification) => (notification as { params: unknown }).params)).toEqual([
+      { progressToken: 'semantic', progress: 250, total: 1000, message: 'Waiting' },
+      { progressToken: 'semantic', progress: 251, message: 'Registering session' },
+      { progressToken: 'semantic', progress: 252, message: 'Waiting for renderer' },
+    ])
   })
 
   it('enforces one notification cap across the reporter lifetime', async () => {
@@ -277,6 +301,117 @@ describe('withElapsedProgress', () => {
 
     expect(updates).toEqual([{ progress: 1000, total: 1000, message: 'Waiting for condition' }])
     expect(vi.getTimerCount()).toBe(0)
+    void pending
+  })
+})
+
+describe('withProgressPhases', () => {
+  it('ignores a throwing custom phase reporter', async () => {
+    const result = await withProgressPhases(
+      {
+        reporter: {
+          enabled: true,
+          report: () => false,
+          phase() {
+            throw new Error('custom reporter failed')
+          },
+        },
+        thresholdMs: 0,
+      },
+      async (phase) => {
+        phase('Launching app')
+        return 'ok'
+      },
+    )
+
+    expect(result).toBe('ok')
+  })
+
+  it('keeps work that settles before the threshold silent', async () => {
+    vi.useFakeTimers()
+    const sent: unknown[] = []
+    const reporter = createProgressReporter({
+      progressToken: 'quick-phase',
+      sendNotification: async (notification) => {
+        sent.push(notification)
+      },
+      logger: NOOP_LOGGER,
+    })
+
+    await withProgressPhases({ reporter }, async (phase) => {
+      phase('Launching app')
+    })
+    await vi.runAllTimersAsync()
+
+    expect(sent).toEqual([])
+  })
+
+  it('coalesces pre-threshold transitions and emits the latest phase', async () => {
+    vi.useFakeTimers()
+    const sent: unknown[] = []
+    const reporter = createProgressReporter({
+      progressToken: 'phases',
+      sendNotification: async (notification) => {
+        sent.push(notification)
+      },
+      logger: NOOP_LOGGER,
+    })
+    let finish!: () => void
+    const work = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+
+    const pending = withProgressPhases({ reporter }, async (phase) => {
+      phase('Resolving runtime')
+      phase('Launching app')
+      await work
+    })
+    await vi.advanceTimersByTimeAsync(249)
+    expect(sent).toEqual([])
+
+    await vi.advanceTimersByTimeAsync(1)
+    await Promise.resolve()
+    expect(sent).toMatchObject([
+      {
+        params: {
+          progressToken: 'phases',
+          progress: 1,
+          message: 'Launching app',
+        },
+      },
+    ])
+
+    finish()
+    await pending
+  })
+
+  it('reports distinct transitions after the threshold and clears on close', async () => {
+    vi.useFakeTimers()
+    const sent: unknown[] = []
+    const reporter = createProgressReporter({
+      progressToken: 'phase-close',
+      sendNotification: async (notification) => {
+        sent.push(notification)
+      },
+      logger: NOOP_LOGGER,
+    })
+    let setPhase!: ProgressPhaseSetter
+    const pending = withProgressPhases({ reporter }, async (phase) => {
+      setPhase = phase
+      phase('Launching app')
+      await new Promise<never>(() => undefined)
+    })
+
+    await vi.advanceTimersByTimeAsync(250)
+    setPhase('Registering session')
+    setPhase('Registering session')
+    await Promise.resolve()
+    expect(sent).toHaveLength(2)
+    expect(vi.getTimerCount()).toBe(0)
+
+    reporter.close()
+    setPhase('Waiting for renderer')
+    expect(sent).toHaveLength(2)
     void pending
   })
 })

@@ -79,7 +79,10 @@ trace_view { "path": "/abs/traces/<artifact>.jsonl" }
   only for the values a regression must observe.
 - **`trace_replay`** re-dispatches a recorded session against a fresh app instance (session ids
   remapped automatically) and judges each step on its stable outcome — the regression-check
-  companion: record once, replay after the change.
+  companion: record once, replay after the change. When the MCP host requests progress, a replay
+  that crosses 250 ms reports loading plus per-call validation/replay phases; messages identify
+  positions only and never expose recorded tool names or artifact paths. `trace_stop` similarly
+  reports when a slow artifact flush is still active. The final envelope remains authoritative.
 
 ## Run a promoted spec in CI
 
@@ -112,7 +115,8 @@ context budget: it shows which tools cost the most before the budget bites.
 When the thing to diagnose is a **packaged build** rather than a running session — signing,
 notarization, update feed, crash machinery — that is `production_validate` from
 `@electron-stagewright/plugin-production`; see the [tool reference](../../TOOL-REFERENCE.md) and
-the plugin's README.
+the plugin's README. A host that opts into MCP progress receives delayed per-check phases for a
+long validation run, without exposing the inspected path.
 
 **A capture can hold secrets.** Screenshots, console logs, traces, and IPC payloads record whatever
 the app exposed. Configure `redact` for structured trace arguments and IPC payload fields before

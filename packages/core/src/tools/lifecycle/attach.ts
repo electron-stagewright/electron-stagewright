@@ -12,6 +12,7 @@
 import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
+import { withProgressPhases } from '../../server/progress.js'
 import { type AttachOptions, type InjectOptions, isLoopbackCdpUrl } from '../../transports/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { registerWithWindows } from './session-init.js'
@@ -55,38 +56,42 @@ export const attachTool: AnyToolDefinition = defineTool({
   ].join(' '),
   inputSchema: attachInput,
   operationType: 'command',
-  handler: async (args, ctx) => {
-    if (args.port === undefined && args.cdpUrl === undefined) {
-      return makeError('BAD_ARGUMENT', {
-        message: 'Provide port or cdpUrl for electron_attach; pid alone requires electron_inject.',
-        next_actions: [
-          'electron_discover_running()',
-          'Use electron_inject({ pid }) when the app was not started with a CDP endpoint.',
-        ],
-        startedAt: ctx.startedAt,
-        now: ctx.now,
-      })
-    }
-    const transport = ctx.transports.requireCapability('canAttach')
-    const opts: AttachOptions = {
-      ...(args.port !== undefined ? { port: args.port } : {}),
-      ...(args.host !== undefined ? { host: args.host } : {}),
-      ...(args.cdpUrl !== undefined ? { cdpUrl: args.cdpUrl } : {}),
-      ...(args.pid !== undefined ? { pid: args.pid } : {}),
-      ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
-    }
-    const session = await transport.attach(opts)
-    const { managed, windows } = await registerWithWindows(ctx, transport, session)
-    return makeSuccess(
-      {
-        session_id: managed.id,
-        transport: transport.id,
-        windows,
-        capabilities: transport.capabilities,
-      },
-      { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
-    )
-  },
+  handler: async (args, ctx) =>
+    withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+      if (args.port === undefined && args.cdpUrl === undefined) {
+        return makeError('BAD_ARGUMENT', {
+          message:
+            'Provide port or cdpUrl for electron_attach; pid alone requires electron_inject.',
+          next_actions: [
+            'electron_discover_running()',
+            'Use electron_inject({ pid }) when the app was not started with a CDP endpoint.',
+          ],
+          startedAt: ctx.startedAt,
+          now: ctx.now,
+        })
+      }
+      const transport = ctx.transports.requireCapability('canAttach')
+      const opts: AttachOptions = {
+        ...(args.port !== undefined ? { port: args.port } : {}),
+        ...(args.host !== undefined ? { host: args.host } : {}),
+        ...(args.cdpUrl !== undefined ? { cdpUrl: args.cdpUrl } : {}),
+        ...(args.pid !== undefined ? { pid: args.pid } : {}),
+        ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+      }
+      phase('Connecting to Electron CDP endpoint')
+      const session = await transport.attach(opts)
+      phase('Registering Electron session')
+      const { managed, windows } = await registerWithWindows(ctx, transport, session)
+      return makeSuccess(
+        {
+          session_id: managed.id,
+          transport: transport.id,
+          windows,
+          capabilities: transport.capabilities,
+        },
+        { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
+      )
+    }),
 })
 
 const injectInput = z.object({
@@ -112,22 +117,25 @@ export const injectTool: AnyToolDefinition = defineTool({
   ].join(' '),
   inputSchema: injectInput,
   operationType: 'command',
-  handler: async (args, ctx) => {
-    const transport = ctx.transports.requireCapability('canInject')
-    const opts: InjectOptions = {
-      pid: args.pid,
-      ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
-    }
-    const session = await transport.inject(opts)
-    const { managed, windows } = await registerWithWindows(ctx, transport, session)
-    return makeSuccess(
-      {
-        session_id: managed.id,
-        transport: transport.id,
-        windows,
-        capabilities: transport.capabilities,
-      },
-      { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
-    )
-  },
+  handler: async (args, ctx) =>
+    withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+      const transport = ctx.transports.requireCapability('canInject')
+      const opts: InjectOptions = {
+        pid: args.pid,
+        ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+      }
+      phase('Injecting Electron inspector')
+      const session = await transport.inject(opts)
+      phase('Registering Electron session')
+      const { managed, windows } = await registerWithWindows(ctx, transport, session)
+      return makeSuccess(
+        {
+          session_id: managed.id,
+          transport: transport.id,
+          windows,
+          capabilities: transport.capabilities,
+        },
+        { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id },
+      )
+    }),
 })

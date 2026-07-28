@@ -60,6 +60,13 @@ export const CHECK_IDS = [
 /** A check identifier — one of {@link CHECK_IDS}. */
 export type CheckId = (typeof CHECK_IDS)[number]
 
+/** Notification before one selected production check begins. */
+export type CheckStartObserver = (check: {
+  readonly id: CheckId
+  readonly index: number
+  readonly total: number
+}) => void
+
 /** First non-empty line of a tool's output, trimmed — a compact `evidence` snippet. */
 function firstLine(value: string): string {
   const trimmed = value.trim()
@@ -1032,11 +1039,20 @@ export async function runChecks(
   appPath: string,
   run: RunCommand,
   ids: readonly CheckId[] = CHECK_IDS,
+  onCheckStart?: CheckStartObserver,
 ): Promise<readonly CheckResult[]> {
   const requested = new Set(ids)
+  const selected = CHECK_IDS.filter((id) => requested.has(id))
   const results: CheckResult[] = []
-  for (const id of CHECK_IDS) {
-    if (requested.has(id)) results.push(await RUNNERS[id](appPath, run))
+  for (let index = 0; index < selected.length; index += 1) {
+    const id = selected[index]
+    if (id === undefined) continue
+    try {
+      onCheckStart?.({ id, index, total: selected.length })
+    } catch {
+      // Advisory progress observation must never alter validation results.
+    }
+    results.push(await RUNNERS[id](appPath, run))
   }
   return results
 }

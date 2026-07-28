@@ -288,6 +288,34 @@ describe('replayTrace — option flags', () => {
     expect(dispatch).toHaveBeenCalledWith('electron_snapshot', expect.anything())
   })
 
+  it('observes only processed calls and ignores observer failures', async () => {
+    const calls = [
+      callRec('trace_status', {}),
+      callRec('electron_snapshot', { sessionId: 'S1' }, { sessionId: 'S1' }),
+      callRec('electron_click', { sessionId: 'S1', selector: '#go' }, { sessionId: 'S1' }),
+    ]
+    const observed: Array<{ index: number; total: number }> = []
+    const dispatch = vi.fn(async () => okResult('S2'))
+
+    const report = await replayTrace(
+      calls,
+      { dispatch, validate: neverValidate },
+      {
+        maxCalls: 1,
+        skipTool: (tool) => tool.startsWith('trace_'),
+        onCall: (call) => {
+          observed.push(call)
+          throw new Error('advisory observer failed')
+        },
+      },
+    )
+
+    expect(observed).toEqual([{ index: 1, total: 3 }])
+    expect(report).toMatchObject({ replayed: 1, matched: 1, diverged: 0, skipped: 2 })
+    expect(report.calls[0]).toMatchObject({ skipped: true, skip_reason: 'self_tool' })
+    expect(report.calls[2]).toMatchObject({ skipped: true, skip_reason: 'max_calls' })
+  })
+
   it('handles an empty trace', async () => {
     const report = await replayTrace([], { dispatch: vi.fn(), validate: neverValidate })
     expect(report).toMatchObject({ replayed: 0, matched: 0, diverged: 0, skipped: 0 })
