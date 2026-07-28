@@ -457,6 +457,7 @@ async function main() {
     const pluginSdkPath = path.join(scratchDir, 'plugin-sdk-smoke.mjs')
     const productionApiPath = path.join(scratchDir, 'production-api-smoke.mjs')
     const productionAppPath = path.join(scratchDir, 'Production.app')
+    const productionAppImagePath = path.join(scratchDir, 'Production.AppImage')
     await mkdir(path.join(productionAppPath, 'Contents', 'MacOS'), { recursive: true })
     await Promise.all([
       writeFile(clientPath, CLIENT_SMOKE),
@@ -473,8 +474,25 @@ const report = await validateProductionApp(process.argv[2], { checks: ['bundle-s
 if (!report.passed || report.summary.pass !== 1 || report.checks[0]?.id !== 'bundle-structure') {
   throw new Error('published production library API returned an invalid report')
 }
+
+const appImageReport = await validateProductionApp(process.argv[3], {
+  runCommand: async () => ({
+    ok: true,
+    code: 0,
+    stdout: '',
+    stderr: 'gpg: Good signature from "Package Smoke"',
+  }),
+})
+if (
+  appImageReport.artifact_type !== 'linux-appimage' ||
+  !appImageReport.passed ||
+  appImageReport.checks[0]?.id !== 'appimage-signature'
+) {
+  throw new Error('published production library API selected an invalid AppImage check')
+}
 `,
       ),
+      writeFile(productionAppImagePath, 'synthetic AppImage artifact\n'),
       writeFile(path.join(productionAppPath, 'Contents', 'Info.plist'), '<plist/>\\n'),
       writeFile(path.join(productionAppPath, 'Contents', 'MacOS', 'Production'), '#!/bin/sh\\n'),
       writeFile(
@@ -527,10 +545,14 @@ if (!report.passed || report.summary.pass !== 1 || report.checks[0]?.id !== 'bun
       cwd: scratchDir,
       maxBuffer: 8 * 1024 * 1024,
     })
-    await execFile(process.execPath, [productionApiPath, productionAppPath], {
-      cwd: scratchDir,
-      maxBuffer: 8 * 1024 * 1024,
-    })
+    await execFile(
+      process.execPath,
+      [productionApiPath, productionAppPath, productionAppImagePath],
+      {
+        cwd: scratchDir,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    )
     const cliPath = path.join(
       scratchDir,
       'node_modules',

@@ -35,6 +35,7 @@ function dependencies(report: ProductionValidationReport): ProductionCliDependen
 
 const passingReport: ProductionValidationReport = {
   app_path: '/tmp/Demo.app',
+  artifact_type: 'macos-app',
   passed: true,
   summary: { pass: 1, fail: 0, unknown: 0 },
   checks: [
@@ -55,7 +56,7 @@ describe('parseProductionCliArgs', () => {
         '--app',
         '/tmp/Demo.app',
         '--checks',
-        'updater-feed,bundle-structure,updater-feed',
+        'appimage-signature,bundle-structure,appimage-signature',
         '--command-timeout-ms',
         '15000',
         '--json',
@@ -63,7 +64,7 @@ describe('parseProductionCliArgs', () => {
     ).toEqual({
       command: 'validate',
       appPath: '/tmp/Demo.app',
-      checks: ['updater-feed', 'bundle-structure'],
+      checks: ['appimage-signature', 'bundle-structure'],
       commandTimeoutMs: 15_000,
       json: true,
     })
@@ -98,6 +99,7 @@ describe('runProductionCli', () => {
     expect(JSON.parse(stdout[0] ?? '')).toMatchObject({
       format: 'electron-stagewright-production-validation',
       version: 1,
+      artifact_type: 'macos-app',
       passed: true,
       exit_code: 0,
     })

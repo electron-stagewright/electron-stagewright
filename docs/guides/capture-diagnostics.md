@@ -117,13 +117,15 @@ notarization, update feed, crash machinery — run the same production engine di
 
 ```sh
 electron-stagewright production validate \
-  --app /absolute/path/to/My.app \
+  --app /absolute/path/to/My.AppImage \
   --json > production-validation.json
 ```
 
 Install `@electron-stagewright/plugin-production` beside core before using the root command, or run
 its equivalent `electron-stagewright-production` binary. JSON mode writes one versioned report and
 uses exit `0` for no failed checks, `1` for verified failures, and `2` for invalid usage/input.
+The command recognizes macOS `.app`, Windows `.exe`/`.msi`, and Linux `.AppImage` artifacts and
+selects relevant checks by default.
 The MCP delivery channel remains `production_validate`; see the
 [tool reference](../../TOOL-REFERENCE.md) and the plugin's README. A host that opts into MCP
 progress receives delayed per-check phases for a long validation run, without exposing the

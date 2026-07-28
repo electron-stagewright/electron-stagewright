@@ -41,6 +41,7 @@ describe('validateProductionApp', () => {
 
     expect(report).toMatchObject({
       app_path: appPath,
+      artifact_type: 'macos-app',
       passed: true,
       summary: { pass: 1, fail: 0, unknown: 1 },
     })
@@ -73,6 +74,63 @@ describe('validateProductionApp', () => {
     const file = path.join(root, 'Demo.app')
     await writeFile(file, 'not a bundle')
     await expect(validateProductionApp(file)).rejects.toMatchObject({ code: 'NOT_A_BUNDLE' })
+
+    const unsupported = path.join(root, 'Demo.zip')
+    await writeFile(unsupported, 'not a supported artifact')
+    await expect(validateProductionApp(unsupported)).rejects.toMatchObject({
+      code: 'UNSUPPORTED_ARTIFACT',
+    })
+  })
+
+  it('selects Windows Authenticode by default for .exe and .msi artifacts', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'stagewright-production-api-'))
+    created.push(root)
+
+    for (const name of ['Demo.exe', 'Demo.msi']) {
+      const artifactPath = path.join(root, name)
+      await writeFile(artifactPath, 'windows artifact')
+      const report = await validateProductionApp(artifactPath, {
+        runCommand: async () => ({
+          ok: true,
+          code: 0,
+          stdout:
+            '{"status":"Valid","status_message":"Signature verified.","signer_subject":"CN=Acme","thumbprint":"ABC123"}',
+          stderr: '',
+        }),
+      })
+
+      expect(report).toMatchObject({
+        app_path: artifactPath,
+        artifact_type: 'windows-artifact',
+        passed: true,
+        summary: { pass: 1, fail: 0, unknown: 0 },
+        checks: [{ id: 'windows-authenticode', status: 'pass' }],
+      })
+    }
+  })
+
+  it('selects embedded-signature validation by default for AppImage artifacts', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'stagewright-production-api-'))
+    created.push(root)
+    const artifactPath = path.join(root, 'Demo.AppImage')
+    await writeFile(artifactPath, 'linux artifact')
+
+    const report = await validateProductionApp(artifactPath, {
+      runCommand: async () => ({
+        ok: true,
+        code: 0,
+        stdout: '',
+        stderr: 'gpg: Good signature from "Acme Releases"',
+      }),
+    })
+
+    expect(report).toMatchObject({
+      app_path: artifactPath,
+      artifact_type: 'linux-appimage',
+      passed: true,
+      summary: { pass: 1, fail: 0, unknown: 0 },
+      checks: [{ id: 'appimage-signature', status: 'pass' }],
+    })
   })
 
   it('rejects invalid direct-JavaScript options without a false green report', async () => {

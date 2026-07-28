@@ -17,6 +17,7 @@ import { CHECK_IDS, type CheckId, type CheckResult } from './checks.js'
 import {
   ProductionValidationError,
   validateProductionApp,
+  type ProductionArtifactType,
   type ProductionValidationOptions,
   type ProductionValidationReport,
 } from './validate.js'
@@ -43,6 +44,7 @@ export interface ProductionCliError {
     | 'ABSOLUTE_PATH_REQUIRED'
     | 'APP_NOT_FOUND'
     | 'NOT_A_BUNDLE'
+    | 'UNSUPPORTED_ARTIFACT'
     | 'INVALID_OPTIONS'
     | 'VALIDATION_ERROR'
   readonly message: string
@@ -52,6 +54,7 @@ export interface ProductionCliReport {
   readonly format: 'electron-stagewright-production-validation'
   readonly version: 1
   readonly app_path: string
+  readonly artifact_type?: ProductionArtifactType
   readonly passed: boolean
   readonly exit_code: ProductionExitCode
   readonly summary?: ProductionValidationReport['summary']
@@ -185,7 +188,7 @@ export function formatProductionCliHelp(): string {
     '       electron-stagewright-production validate --app <path> [options]',
     '',
     'Options:',
-    '  --app <path>                    Absolute path to a packaged macOS .app bundle.',
+    '  --app <path>                    Absolute path to a packaged .app, .exe, .msi, or .AppImage.',
     '  --checks <id[,id]>              Run only selected production checks.',
     '  --command-timeout-ms <n>        Timeout for each platform command (default: 10000).',
     '  --json                          Write one machine-readable JSON report.',

@@ -1,17 +1,17 @@
 # @electron-stagewright/plugin-production
 
-Validate a packaged **macOS** app for production readiness and get back structured results. Where
+Validate packaged **macOS, Windows, and Linux** artifacts for production readiness and get back
+structured results. Where
 the rest of Electron Stagewright drives a _running_ app, this plugin (ADR-012, built on the ADR-004
-plugin contract) inspects the **build artifact on disk** — is the `.app` a well-formed bundle, does
-its Info.plist identify the app and declare well-formed deep links, is its auto-update feed
-coherent, does the crash-capture machinery ship intact, is it code-signed and notarized, will
-Gatekeeper accept it — the failures that only bite on a user's machine.
+plugin contract) inspects the **build artifact on disk**. It checks macOS bundle integrity,
+signing, notarization, and Gatekeeper; Windows Authenticode; and AppImage embedded signatures —
+the failures that only bite on a user's machine.
 
 One tool, `production_validate`, runs a set of checks against an app path and returns each as
 `pass`, `fail`, or `unknown`. The load-bearing distinction is **`unknown` (missing evidence)** —
-a required tool is absent, a command times out, or the host is not macOS — versus **`fail` (verified
-bad)**. A green result with `unknown` checks is never silently mistaken for full verification: the
-summary discloses every category.
+a required platform tool or public key is absent, or a command times out — versus **`fail`
+(verified bad)**. A green result with `unknown` checks is never silently mistaken for full
+verification: the summary discloses every category.
 
 ## Use it without MCP
 
@@ -20,7 +20,7 @@ The checks are a public library API and a CI-friendly CLI. Install this package 
 
 ```sh
 electron-stagewright production validate \
-  --app /absolute/path/to/My.app \
+  --app /absolute/path/to/My.AppImage \
   --json
 ```
 
@@ -28,8 +28,8 @@ The package also installs a direct binary with the same parser and report contra
 
 ```sh
 electron-stagewright-production validate \
-  --app /absolute/path/to/My.app \
-  --checks bundle-structure,code-signing,notarization \
+  --app C:/absolute/path/to/MySetup.exe \
+  --checks windows-authenticode \
   --json
 ```
 
@@ -45,14 +45,15 @@ Programmatic consumers use the same engine directly:
 ```js
 import { validateProductionApp } from '@electron-stagewright/plugin-production'
 
-const report = await validateProductionApp('/absolute/path/to/My.app', {
-  checks: ['bundle-structure', 'code-signing', 'notarization'],
+const report = await validateProductionApp('/absolute/path/to/My.AppImage', {
   commandTimeoutMs: 15_000,
 })
 ```
 
-`validateProductionApp()` returns `{ app_path, passed, summary, checks }`. Verified defects remain
-check data; caller errors throw `ProductionValidationError` with a stable `code`.
+`validateProductionApp()` detects the artifact family and returns
+`{ app_path, artifact_type, passed, summary, checks }`. Omit `checks` to run the artifact-aware
+defaults, or provide an explicit subset. Verified defects remain check data; caller errors throw
+`ProductionValidationError` with a stable `code`.
 
 ## Load it
 
@@ -77,22 +78,22 @@ const server = await createServer({ plugins: [productionPlugin] })
 The MCP tool delegates to the same `validateProductionApp()` API used by the standalone CLI, so
 check ordering, verdicts, timeouts, and summaries cannot drift between delivery channels.
 
-It needs **no `--allow-eval`** and **no running app session** — it shells out to the macOS toolchain
-(`plutil`, `codesign`, `xcrun stapler`, `spctl`) against a path on disk, not into app code.
+It needs **no `--allow-eval`** and **no running app session**. It invokes bounded platform
+validators against a path on disk and never executes the inspected artifact.
 
 ## Tool
 
 The loader namespaces the tool under the plugin name `production`:
 
-- **`production_validate`** `{ appPath, checks? }` — validate the packaged `.app` at `appPath`
-  (absolute path). `checks` optionally names a subset (`bundle-structure`, `info-plist`,
-  `protocol-schemes`, `updater-feed`, `crash-reporter`, `code-signing`, `notarization`,
-  `gatekeeper`); omit to run all. Returns:
+- **`production_validate`** `{ appPath, checks? }` — validate a packaged `.app`, `.exe`, `.msi`, or
+  `.AppImage` at an absolute `appPath`. `checks` optionally names a subset; omit it to run the
+  defaults for the detected artifact family. Returns:
 
   ```json
   {
     "ok": true,
     "app_path": "/path/to/My.app",
+    "artifact_type": "macos-app",
     "passed": false,
     "summary": { "pass": 5, "fail": 3, "unknown": 0 },
     "checks": [
@@ -159,21 +160,23 @@ The loader namespaces the tool under the plugin name `production`:
   The envelope `ok` is `true` whenever validation **ran**; the app's own verdict is `passed` (no
   failed checks — `unknown` checks do not flip it, but `summary` reports them). A `fail` carries
   `next_actions` with remediation. Errors: `ABSOLUTE_PATH_REQUIRED` (relative `appPath`),
-  `production.APP_NOT_FOUND` (no file/dir at `appPath`), `production.NOT_A_BUNDLE` (`appPath` is not
-  a directory).
+  `production.APP_NOT_FOUND` (no file/dir at `appPath`), `production.NOT_A_BUNDLE` (a `.app` path
+  is not a directory), or `production.UNSUPPORTED_ARTIFACT` (unsupported file type).
 
 ## Checks
 
-| id                 | What it verifies                                                                                               | How                                 | Runs on                |
-| ------------------ | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------- |
-| `bundle-structure` | The `.app` has `Contents/Info.plist` and a `Contents/MacOS/` executable                                        | Filesystem                          | Any host               |
-| `info-plist`       | Info.plist declares the required identity fields                                                               | `plutil -convert json`              | macOS (else `unknown`) |
-| `protocol-schemes` | `CFBundleURLTypes` deep-link declarations are well-formed, unique, and shadow no system scheme                 | `plutil -convert json`              | macOS (else `unknown`) |
-| `updater-feed`     | A packaged `app-update.yml` declares a provider with its required fields and `https` URLs (absent → `unknown`) | Filesystem                          | Any host               |
-| `crash-reporter`   | The crashpad handler ships intact and executable inside `Electron Framework.framework`                         | Filesystem                          | Any host               |
-| `code-signing`     | The signature is present and valid                                                                             | `codesign --verify --deep --strict` | macOS (else `unknown`) |
-| `notarization`     | A valid notarization ticket is stapled to the bundle                                                           | `xcrun stapler validate`            | macOS (else `unknown`) |
-| `gatekeeper`       | Gatekeeper will accept the app for execution                                                                   | `spctl --assess --type execute`     | macOS (else `unknown`) |
+| id                     | What it verifies                                                                                               | How                                 | Runs on                  |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------------------ |
+| `bundle-structure`     | The `.app` has `Contents/Info.plist` and a `Contents/MacOS/` executable                                        | Filesystem                          | Any host                 |
+| `info-plist`           | Info.plist declares the required identity fields                                                               | `plutil -convert json`              | macOS (else `unknown`)   |
+| `protocol-schemes`     | `CFBundleURLTypes` deep-link declarations are well-formed, unique, and shadow no system scheme                 | `plutil -convert json`              | macOS (else `unknown`)   |
+| `updater-feed`         | A packaged `app-update.yml` declares a provider with its required fields and `https` URLs (absent → `unknown`) | Filesystem                          | Any host                 |
+| `crash-reporter`       | The crashpad handler ships intact and executable inside `Electron Framework.framework`                         | Filesystem                          | Any host                 |
+| `code-signing`         | The macOS signature is present and valid                                                                       | `codesign --verify --deep --strict` | macOS (else `unknown`)   |
+| `notarization`         | A valid notarization ticket is stapled to the bundle                                                           | `xcrun stapler validate`            | macOS (else `unknown`)   |
+| `gatekeeper`           | Gatekeeper will accept the app for execution                                                                   | `spctl --assess --type execute`     | macOS (else `unknown`)   |
+| `windows-authenticode` | Windows reports a valid Authenticode signature                                                                 | `Get-AuthenticodeSignature`         | Windows (else `unknown`) |
+| `appimage-signature`   | The embedded AppImage OpenPGP signature validates against an available public key                              | AppImageKit `validate` helper       | Linux (else `unknown`)   |
 
 Two `unknown` semantics worth knowing:
 
@@ -191,14 +194,24 @@ Two `unknown` semantics worth knowing:
 
 ## Platform
 
-macOS is the first-class target — that is where signing/notarization pain lives. On a non-macOS
-host the `codesign` / `xcrun stapler` / `spctl` / `plutil` checks report `unknown` (the tools are
-absent), not `fail`; the pure-filesystem checks (`bundle-structure`, `updater-feed`,
-`crash-reporter`) run everywhere — see the "Runs on" column above for what `unknown` means per
-check on an off-macOS CI host. Notarization is also `unknown` on macOS when the developer
-toolchain is incomplete — `xcrun` runs but cannot find `stapler`, or `xcode-select` points at an
-invalid path — since the ticket cannot be verified. Each external command is timeout-bounded
-(`commandTimeoutMs`) so a hung tool cannot wedge the call.
+Artifact-aware defaults avoid irrelevant cross-platform failures:
+
+- a `.app` directory runs the eight macOS bundle and trust checks;
+- a `.exe` or `.msi` file runs `windows-authenticode`;
+- a `.AppImage` file runs `appimage-signature`.
+
+Windows validation uses the built-in Windows PowerShell
+`Get-AuthenticodeSignature -LiteralPath` cmdlet. The artifact path is passed as base64 data rather
+than interpolated into PowerShell code. `Valid` passes; unsigned, hash-mismatched, invalid, or
+untrusted signatures fail; unsupported formats and unavailable tooling remain `unknown`.
+
+AppImage's own `--appimage-signature` flag only displays a signature and would execute untrusted
+artifact code. This plugin never invokes it. Instead, it uses AppImageKit's external `validate`
+helper and requires both a zero exit and a `Good signature` marker. A missing public key is
+`unknown`; an absent or bad embedded signature is `fail`.
+
+On a host without the relevant toolchain, platform checks report `unknown`, not `fail`. Each
+external command is timeout-bounded (`commandTimeoutMs`) so a hung tool cannot wedge the call.
 
 `xcrun stapler validate` inspects the notarization ticket **embedded** in the bundle and needs no
 network, so a notarization `fail` is authoritative — the ticket is genuinely missing or invalid,

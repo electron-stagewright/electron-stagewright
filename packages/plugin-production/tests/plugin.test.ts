@@ -77,6 +77,7 @@ async function makeApp(opts: { info?: boolean } = {}): Promise<string> {
 interface ValidateResult {
   readonly ok: boolean
   readonly app_path: string
+  readonly artifact_type: string
   readonly passed: boolean
   readonly summary: { pass: number; fail: number; unknown: number }
   readonly checks: ReadonlyArray<{ id: string; status: string }>
@@ -113,6 +114,7 @@ describe('production plugin (in-process)', () => {
       })) as unknown as ValidateResult
       expect(res.ok).toBe(true)
       expect(res.app_path).toBe(app)
+      expect(res.artifact_type).toBe('macos-app')
       expect(res.checks).toHaveLength(8)
       // Host-agnostic: the pure-fs checks (bundle-structure, updater-feed, crash-reporter) are
       // deterministic on every host; the shell-out checks (info-plist/protocol-schemes/
@@ -137,6 +139,31 @@ describe('production plugin (in-process)', () => {
       expect(res.checks).toHaveLength(1)
       expect(res.checks[0]).toMatchObject({ id: 'bundle-structure', status: 'pass' })
       expect(res.passed).toBe(true)
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it.each([
+    ['Demo.exe', 'windows-artifact', 'windows-authenticode'],
+    ['Demo.AppImage', 'linux-appimage', 'appimage-signature'],
+  ])('selects the artifact-aware default for %s', async (fileName, artifactType, expectedCheck) => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'sw-prod-'))
+    created.push(dir)
+    const artifact = path.join(dir, fileName)
+    await writeFile(artifact, 'synthetic release artifact')
+    const server = await createServer({ plugins: [productionPlugin] })
+    try {
+      const res = (await server.dispatcher.dispatch('production_validate', {
+        appPath: artifact,
+      })) as unknown as ValidateResult
+      expect(res).toMatchObject({
+        ok: true,
+        artifact_type: artifactType,
+        checks: [{ id: expectedCheck }],
+      })
+      expect(res.checks).toHaveLength(1)
+      expect(res.summary.pass + res.summary.fail + res.summary.unknown).toBe(1)
     } finally {
       await server.close().catch(() => undefined)
     }
@@ -202,13 +229,28 @@ describe('production plugin (in-process)', () => {
   it('rejects a non-directory path with NOT_A_BUNDLE', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sw-prod-'))
     created.push(dir)
-    const file = path.join(dir, 'notanapp')
+    const file = path.join(dir, 'Demo.app')
     await writeFile(file, 'x')
     const server = await createServer({ plugins: [productionPlugin] })
     try {
       expect(
         await server.dispatcher.dispatch('production_validate', { appPath: file }),
       ).toMatchObject({ ok: false, code: 'production.NOT_A_BUNDLE' })
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
+  it('rejects an unsupported release artifact with UNSUPPORTED_ARTIFACT', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'sw-prod-'))
+    created.push(dir)
+    const file = path.join(dir, 'Demo.zip')
+    await writeFile(file, 'x')
+    const server = await createServer({ plugins: [productionPlugin] })
+    try {
+      expect(
+        await server.dispatcher.dispatch('production_validate', { appPath: file }),
+      ).toMatchObject({ ok: false, code: 'production.UNSUPPORTED_ARTIFACT' })
     } finally {
       await server.close().catch(() => undefined)
     }

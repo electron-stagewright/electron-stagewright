@@ -1,8 +1,8 @@
 # ADR-012: Production validation plugin
 
-Status: Accepted. Current checks cover bundle structure, Info.plist fields, URL scheme
-declarations, the packaged updater feed, the crash-reporter machinery, code signing, notarization
-(`xcrun stapler validate`), and Gatekeeper.
+Status: Accepted. Current checks cover macOS bundle structure, metadata, update/crash machinery,
+code signing, notarization, and Gatekeeper; Windows Authenticode; and AppImage embedded
+signatures.
 
 ## Context
 
@@ -75,8 +75,9 @@ bit is a `fail` — packaging silently disabled crash capture.
 
 ## Consequences
 
-- New package `@electron-stagewright/plugin-production` with one tool, `production_validate`, and
-  two error codes. No core change.
+- The initial implementation introduced `@electron-stagewright/plugin-production` with one tool,
+  `production_validate`, two namespaced error codes, and no core change. The status updates below
+  record the later optional core CLI route and additive artifact error.
 - The full value (a `pass` on signing/Gatekeeper) needs a real signed app; unit tests use a fake
   `runCommand` (pass/fail/unknown) + a synthetic bundle, and a gated smoke runs the real CLIs.
 - Spawning external processes is a new capability for the plugin surface; it is bounded and
@@ -104,6 +105,32 @@ The MCP tool, public API, and CLI all call the same orchestration function. Path
 validation, canonical check ordering, summary aggregation, and the pass/fail/unknown model now have
 one implementation.
 
+## Status update (cross-platform release artifacts, 2026-07-28)
+
+Consumer release matrices now build macOS, Windows, and Linux artifacts from one commit. Validation
+therefore recognizes three artifact families and selects relevant checks when `checks` is omitted:
+
+- a macOS `.app` directory runs the original eight bundle and trust checks;
+- a Windows `.exe` or `.msi` file runs `windows-authenticode`;
+- a Linux `.AppImage` file runs `appimage-signature`.
+
+The report adds `artifact_type` while retaining `app_path` for compatibility. Explicit check
+subsets still use the canonical global order; a platform-specific check selected for an
+inapplicable artifact returns `unknown`, not a false failure. Unsupported regular files fail before
+validation with `production.UNSUPPORTED_ARTIFACT`.
+
+Windows validation invokes the built-in Windows PowerShell
+`Get-AuthenticodeSignature -LiteralPath`. The path is UTF-8/base64 data decoded by a fixed script,
+never interpolated into executable PowerShell. `Valid` is a pass. `NotSigned`, `HashMismatch`,
+`NotTrusted`, and `UnknownError` are verified failures; unsupported/incompatible formats, missing
+PowerShell, command failures, and malformed output remain unknown.
+
+AppImage's `--appimage-signature` flag only prints the embedded signature and would execute the
+untrusted artifact. The plugin deliberately does not use it. It invokes AppImageKit's external
+`validate` helper instead and requires both exit zero and a `Good signature` marker for a pass. A
+missing public key is unknown; an absent, bad, or malformed embedded signature is a failure. This
+keeps the original three-valued evidence rule and never turns tool absence into a defect.
+
 ## Related decisions
 
 - ADR-004 (plugin model) — the contract this is built on.
@@ -116,3 +143,5 @@ one implementation.
 - `packages/plugin-production/src/validate.ts` — the shared transport-neutral validation API.
 - `packages/plugin-production/src/cli.ts` — the standalone JSON/human CLI and exit contract.
 - `packages/plugin-production/src/index.ts` — the plugin + `production_validate`.
+- [Microsoft Get-AuthenticodeSignature](https://learn.microsoft.com/powershell/module/microsoft.powershell.security/get-authenticodesignature)
+- [AppImage signing and validation](https://docs.appimage.org/packaging-guide/optional/signatures.html)
