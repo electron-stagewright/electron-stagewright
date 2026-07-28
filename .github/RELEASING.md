@@ -23,9 +23,26 @@ The publishable packages are every `packages/*` that is **not** `private: true`:
 - `@electron-stagewright/plugin-trace` (session trace, token budget, and replay)
 - `@electron-stagewright/plugin-visual` (safe visual baseline capture and comparison)
 
-Everything under `examples/`, `packages/bench`, and `packages/testkit` is `private: true` and never
-publishes. Each publishable package sets `publishConfig.access: "public"` (scoped packages default to
-restricted) and an `engines.node` floor matching [ADR-002](../docs/adr/002-runtime-and-language.md).
+Everything under `examples/`, `packages/bench`, `packages/release-health`, and `packages/testkit` is
+`private: true` and never publishes. Each publishable package sets
+`publishConfig.access: "public"` (scoped packages default to restricted) and an `engines.node` floor
+matching [ADR-002](../docs/adr/002-runtime-and-language.md).
+
+## Measure release health
+
+The explicit maintainer command from
+[ADR-027](../docs/adr/027-release-health-metrics.md) emits one aggregate-only JSON report to stdout:
+
+```bash
+pnpm release-health > release-health.json
+```
+
+Set `GITHUB_TOKEN` in the command environment to collect public issue and merged-pull-request
+metadata. The clone snapshot additionally requires repository Administration read permission.
+Without a token, npm adoption remains available and every GitHub family reports
+`missing_credential`; without the clone permission, only repository discovery reports
+`permission_denied`. The command does not schedule itself, persist source responses, upload the
+report, or retain actor identities.
 
 ## Do a release
 

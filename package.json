@@ -31,6 +31,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "matrix": "pnpm --filter @electron-stagewright/framework-matrix matrix",
+    "release-health": "pnpm --filter @electron-stagewright/release-health report",
     "bench": "pnpm --filter @electron-stagewright/bench bench",
     "bench:check": "pnpm --filter @electron-stagewright/bench bench:check",
     "manifest:check": "pnpm --filter @electron-stagewright/bench manifest:check",
