@@ -16,6 +16,7 @@ import {
   makePluginError,
   makeSuccess,
   readPackageVersion,
+  withProgressPhases,
   type AnyToolDefinition,
   type StagewrightPlugin,
   type ToolContext,
@@ -165,108 +166,113 @@ export function createA11yPlugin(): StagewrightPlugin {
     ].join(' '),
     inputSchema: auditSchema,
     operationType: 'query',
-    handler: async (args, ctx) => {
-      const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      const guard = requireAuditSurface(ctx, args.sessionId, meta)
-      if ('error' in guard) return guard.error
-      const session = guard.session
-      const sessionId = guard.sessionId
-      const surface = await session.activeSurface()
-      const request: AuditRequest = {
-        ...(args.scope !== undefined ? { scope: args.scope } : {}),
-        ...(args.include !== undefined ? { include: args.include } : {}),
-        ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
-        ...(args.tags !== undefined ? { tags: args.tags } : {}),
-        ...(args.rules !== undefined ? { rules: args.rules } : {}),
-        ...(args.impactMin !== undefined ? { impactMin: args.impactMin as Impact } : {}),
-        maxViolations: args.maxViolations,
-        maxNodesPerViolation: args.maxNodesPerViolation,
-      }
-      const installedForSession = installedSurfaces.get(sessionId) ?? new Set<string>()
-      installedSurfaces.set(sessionId, installedForSession)
-      let cacheHit = installedForSession.has(surface.id)
-      let transferredBytes = 0
+    handler: async (args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        const meta = { startedAt: ctx.startedAt, now: ctx.now }
+        const guard = requireAuditSurface(ctx, args.sessionId, meta)
+        if ('error' in guard) return guard.error
+        const session = guard.session
+        const sessionId = guard.sessionId
+        phase('Selecting accessibility audit surface')
+        const surface = await session.activeSurface()
+        const request: AuditRequest = {
+          ...(args.scope !== undefined ? { scope: args.scope } : {}),
+          ...(args.include !== undefined ? { include: args.include } : {}),
+          ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
+          ...(args.tags !== undefined ? { tags: args.tags } : {}),
+          ...(args.rules !== undefined ? { rules: args.rules } : {}),
+          ...(args.impactMin !== undefined ? { impactMin: args.impactMin as Impact } : {}),
+          maxViolations: args.maxViolations,
+          maxNodesPerViolation: args.maxNodesPerViolation,
+        }
+        const installedForSession = installedSurfaces.get(sessionId) ?? new Set<string>()
+        installedSurfaces.set(sessionId, installedForSession)
+        let cacheHit = installedForSession.has(surface.id)
+        let transferredBytes = 0
 
-      async function installEngine(): Promise<EngineInstallFailure | undefined> {
-        const install = buildAxeInstallBody()
-        const installed = await session.evaluate<EngineInstallResult>('renderer', install.body)
-        if (installed.kind === 'engine_error') return installed
-        installedForSession.add(surface.id)
-        cacheHit = false
-        transferredBytes = install.transferredBytes
-        return undefined
-      }
+        async function installEngine(): Promise<EngineInstallFailure | undefined> {
+          phase('Installing accessibility audit engine')
+          const install = buildAxeInstallBody()
+          const installed = await session.evaluate<EngineInstallResult>('renderer', install.body)
+          if (installed.kind === 'engine_error') return installed
+          installedForSession.add(surface.id)
+          cacheHit = false
+          transferredBytes = install.transferredBytes
+          return undefined
+        }
 
-      if (!cacheHit) {
-        const failure = await installEngine()
-        if (failure !== undefined) {
-          return makePluginError('a11y.ENGINE_FAILED', {
+        if (!cacheHit) {
+          const failure = await installEngine()
+          if (failure !== undefined) {
+            return makePluginError('a11y.ENGINE_FAILED', {
+              ...meta,
+              message: `axe-core could not install for this renderer: ${failure.message}`,
+            })
+          }
+        }
+
+        phase('Running accessibility audit')
+        let result = await session.evaluate<AuditResult>('renderer', buildAxeAuditBody(), request)
+        if (result.kind === 'engine_missing') {
+          const failure = await installEngine()
+          if (failure !== undefined) {
+            return makePluginError('a11y.ENGINE_FAILED', {
+              ...meta,
+              message: `axe-core could not install for this renderer: ${failure.message}`,
+            })
+          }
+          phase('Retrying accessibility audit')
+          result = await session.evaluate<AuditResult>('renderer', buildAxeAuditBody(), request)
+        }
+        if (result.kind === 'invalid_selector') {
+          return makePluginError('a11y.INVALID_SELECTOR', {
             ...meta,
-            message: `axe-core could not install for this renderer: ${failure.message}`,
+            message: `Invalid ${result.field} selector ${JSON.stringify(result.selector)}: ${result.message}`,
+            details: { field: result.field, selector: result.selector },
           })
         }
-      }
-
-      let result = await session.evaluate<AuditResult>('renderer', buildAxeAuditBody(), request)
-      if (result.kind === 'engine_missing') {
-        const failure = await installEngine()
-        if (failure !== undefined) {
-          return makePluginError('a11y.ENGINE_FAILED', {
+        if (result.kind === 'scope_not_found') {
+          return makePluginError('a11y.SCOPE_NOT_FOUND', {
             ...meta,
-            message: `axe-core could not install for this renderer: ${failure.message}`,
+            message: `No element matched the ${result.field} selector ${JSON.stringify(result.selector)}.`,
+            details: { field: result.field, selector: result.selector },
           })
         }
-        result = await session.evaluate<AuditResult>('renderer', buildAxeAuditBody(), request)
-      }
-      if (result.kind === 'invalid_selector') {
-        return makePluginError('a11y.INVALID_SELECTOR', {
-          ...meta,
-          message: `Invalid ${result.field} selector ${JSON.stringify(result.selector)}: ${result.message}`,
-          details: { field: result.field, selector: result.selector },
-        })
-      }
-      if (result.kind === 'scope_not_found') {
-        return makePluginError('a11y.SCOPE_NOT_FOUND', {
-          ...meta,
-          message: `No element matched the ${result.field} selector ${JSON.stringify(result.selector)}.`,
-          details: { field: result.field, selector: result.selector },
-        })
-      }
-      if (result.kind === 'engine_error') {
-        return makePluginError('a11y.ENGINE_FAILED', {
-          ...meta,
-          message: `axe-core could not complete the audit: ${result.message}`,
-        })
-      }
-      if (result.kind === 'engine_missing') {
-        return makePluginError('a11y.ENGINE_FAILED', {
-          ...meta,
-          message: 'axe-core was unavailable immediately after the fixed engine installation.',
-        })
-      }
-      return makeSuccess(
-        {
-          session_id: sessionId,
-          surface_id: surface.id,
-          engine: {
-            version: result.version,
-            cache_hit: cacheHit,
-            transferred_bytes: transferredBytes,
+        if (result.kind === 'engine_error') {
+          return makePluginError('a11y.ENGINE_FAILED', {
+            ...meta,
+            message: `axe-core could not complete the audit: ${result.message}`,
+          })
+        }
+        if (result.kind === 'engine_missing') {
+          return makePluginError('a11y.ENGINE_FAILED', {
+            ...meta,
+            message: 'axe-core was unavailable immediately after the fixed engine installation.',
+          })
+        }
+        return makeSuccess(
+          {
+            session_id: sessionId,
+            surface_id: surface.id,
+            engine: {
+              version: result.version,
+              cache_hit: cacheHit,
+              transferred_bytes: transferredBytes,
+            },
+            summary: {
+              violations: result.violations.total,
+              incomplete: result.incomplete.total,
+              violations_truncated: result.violations.truncated,
+              incomplete_truncated: result.incomplete.truncated,
+            },
+            violations: result.violations.issues,
+            incomplete: result.incomplete.issues,
+            limitation:
+              'Automated checks cover only part of accessibility. Zero violations is not full WCAG conformance; review incomplete results and test relevant hidden or closed-shadow content separately.',
           },
-          summary: {
-            violations: result.violations.total,
-            incomplete: result.incomplete.total,
-            violations_truncated: result.violations.truncated,
-            incomplete_truncated: result.incomplete.truncated,
-          },
-          violations: result.violations.issues,
-          incomplete: result.incomplete.issues,
-          limitation:
-            'Automated checks cover only part of accessibility. Zero violations is not full WCAG conformance; review incomplete results and test relevant hidden or closed-shadow content separately.',
-        },
-        { ...meta, session_id: sessionId },
-      )
-    },
+          { ...meta, session_id: sessionId },
+        )
+      }),
   })
 
   return {

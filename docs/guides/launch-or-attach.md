@@ -13,6 +13,15 @@ it exposes:
 All three return `{ ok, session_id, transport, windows, capabilities }`; the `session_id` threads
 through every later call.
 
+## Optional MCP progress
+
+When an MCP host requests standard progress, lifecycle calls that cross 250 ms report privacy-safe
+semantic phases such as resolving the runtime, connecting to a CDP endpoint, registering the
+session, waiting for the initial renderer, or stopping the app. Discovery uses the same mechanism
+while scanning loopback endpoints. Calls that finish before the threshold remain silent, and
+force-kill or detach do not emit synthetic progress for work they cannot meaningfully subdivide.
+The final success/error envelope—not a progress notification—is always the completion signal.
+
 ## Launch — Stagewright owns the process
 
 ```json

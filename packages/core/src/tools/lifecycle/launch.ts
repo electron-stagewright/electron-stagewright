@@ -17,6 +17,7 @@ import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import { StagewrightError } from '../../errors/registry.js'
+import { withProgressPhases } from '../../server/progress.js'
 import {
   resolveProjectElectron,
   type ProjectElectronResolution,
@@ -277,194 +278,201 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
     description: DESCRIPTION,
     inputSchema,
     operationType: 'command',
-    handler: async (args, ctx) => {
-      const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      if (args.allowMultiple !== true && ctx.sessions.size > 0) {
-        return makeError('ALREADY_RUNNING', {
-          ...meta,
-          next_actions: ['electron_stop()', 'electron_launch({ allowMultiple: true })'],
-        })
-      }
-      // Hard cap on concurrent sessions — a backstop against an allowMultiple launch loop
-      // exhausting the host. allowMultiple bypasses the single-instance guard above, but not this.
-      if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-        return makeError('ALREADY_RUNNING', {
-          ...meta,
-          message: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached; stop a session before launching another.`,
-          next_actions: ['electron_stop({ sessionId })'],
-        })
-      }
-      if (
-        args.runtime === 'project' &&
-        args.main === undefined &&
-        args.executablePath === undefined
-      ) {
-        return makeError('BAD_ARGUMENT', {
-          ...meta,
-          message: 'runtime:"project" requires main (the target app entry).',
-          next_actions: [
-            'electron_launch({ main: "/absolute/path/to/main.js", runtime: "project" })',
-          ],
-        })
-      }
-
-      // A configured default is only an ergonomic fallback for an otherwise empty default-runtime
-      // launch. Explicit executables and project runtimes require the caller's app entry instead.
-      const main =
-        args.main ??
-        (args.executablePath === undefined && args.runtime !== 'project'
-          ? ctx.launchDefaultMain
-          : undefined)
-      let executablePath = args.executablePath
-      // The app-root string preserves the operator's spelling for main/cwd input checks. Project
-      // resolution also returns its canonical root so a legitimate macOS /var -> /private/var alias
-      // does not make the canonical Electron binary appear to escape that same root.
-      let resolvedProjectRoot: string | undefined
-      let runtimeSource: 'default' | 'project' | 'explicit' =
-        executablePath === undefined ? 'default' : 'explicit'
-      if (executablePath === undefined && args.runtime === 'project') {
-        if (ctx.appRoot === undefined) {
+    handler: async (args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        phase('Validating launch configuration')
+        const meta = { startedAt: ctx.startedAt, now: ctx.now }
+        if (args.allowMultiple !== true && ctx.sessions.size > 0) {
+          return makeError('ALREADY_RUNNING', {
+            ...meta,
+            next_actions: ['electron_stop()', 'electron_launch({ allowMultiple: true })'],
+          })
+        }
+        // Hard cap on concurrent sessions — a backstop against an allowMultiple launch loop
+        // exhausting the host. allowMultiple bypasses the single-instance guard above, but not this.
+        if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+          return makeError('ALREADY_RUNNING', {
+            ...meta,
+            message: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached; stop a session before launching another.`,
+            next_actions: ['electron_stop({ sessionId })'],
+          })
+        }
+        if (
+          args.runtime === 'project' &&
+          args.main === undefined &&
+          args.executablePath === undefined
+        ) {
           return makeError('BAD_ARGUMENT', {
             ...meta,
-            message:
-              'runtime:"project" requires the server to start with --app-root <project-root>.',
+            message: 'runtime:"project" requires main (the target app entry).',
             next_actions: [
-              'Restart the server with --app-root <project-root>, then retry the launch.',
+              'electron_launch({ main: "/absolute/path/to/main.js", runtime: "project" })',
             ],
           })
         }
-        const resolution = await resolveFromProject(ctx.appRoot)
-        if (!resolution.ok) {
-          return makeError('BAD_ARGUMENT', {
-            ...meta,
-            message: resolution.message,
-            details: { app_root: ctx.appRoot, runtime: 'project' },
-            next_actions: ['Run electron_doctor to inspect the configured project runtime.'],
-          })
-        }
-        executablePath = resolution.electron.executablePath
-        resolvedProjectRoot = resolution.rootPath
-        runtimeSource = 'project'
-      }
-      if (main === undefined && executablePath === undefined) {
-        return makeError('BAD_ARGUMENT', {
-          ...meta,
-          message:
-            'Provide main (the app entry) or executablePath, or start the server with --demo.',
-        })
-      }
-      if (args.instrumentNative === true && main === undefined) {
-        return makeError('BAD_ARGUMENT', {
-          ...meta,
-          message:
-            'instrumentNative requires main (the app entry); executablePath-only launches cannot be wrapped with launch-time native instrumentation.',
-        })
-      }
-      const packagedLaunch = main === undefined && executablePath !== undefined
-      if (args.credentialStore !== undefined && !packagedLaunch) {
-        return makeError('BAD_ARGUMENT', {
-          ...meta,
-          message:
-            'credentialStore applies only to executable-only packaged launches; omit main or omit credentialStore.',
-        })
-      }
-      if (args.env !== undefined) {
-        const denied = Object.keys(args.env).filter(isDeniedEnvKey)
-        if (denied.length > 0) {
-          return makeError('BAD_ARGUMENT', {
-            ...meta,
-            message: `env may not set runtime-altering variables (${denied.join(', ')}); they can execute code outside the app sandbox and are refused.`,
-            details: { denied_env_keys: denied },
-          })
-        }
-      }
-      // Preflight throws a registered error the dispatcher maps to an envelope.
-      preflight(main, executablePath, fileExists)
 
-      // When the operator configured --app-root, confine the launch surface to it: main and
-      // executablePath both run code (a main.js as the Electron main process, or an arbitrary
-      // binary), so an out-of-root path is how a hostile tool call would escape the project into
-      // arbitrary host execution. cwd is confined too. Without --app-root, paths are unconstrained.
-      if (ctx.appRoot !== undefined) {
-        for (const [label, value] of [
-          ['main', main],
-          ['executablePath', executablePath],
-          ['cwd', args.cwd],
-        ] as const) {
-          const boundary =
-            label === 'executablePath' && resolvedProjectRoot !== undefined
-              ? resolvedProjectRoot
-              : ctx.appRoot
-          if (value !== undefined && !isWithinRoot(boundary, value)) {
+        // A configured default is only an ergonomic fallback for an otherwise empty default-runtime
+        // launch. Explicit executables and project runtimes require the caller's app entry instead.
+        const main =
+          args.main ??
+          (args.executablePath === undefined && args.runtime !== 'project'
+            ? ctx.launchDefaultMain
+            : undefined)
+        let executablePath = args.executablePath
+        // The app-root string preserves the operator's spelling for main/cwd input checks. Project
+        // resolution also returns its canonical root so a legitimate macOS /var -> /private/var alias
+        // does not make the canonical Electron binary appear to escape that same root.
+        let resolvedProjectRoot: string | undefined
+        let runtimeSource: 'default' | 'project' | 'explicit' =
+          executablePath === undefined ? 'default' : 'explicit'
+        if (executablePath === undefined && args.runtime === 'project') {
+          phase('Resolving project Electron runtime')
+          if (ctx.appRoot === undefined) {
             return makeError('BAD_ARGUMENT', {
               ...meta,
-              message: `${label} must resolve within the configured --app-root (${ctx.appRoot}); "${value}" is outside it.`,
-              details: { app_root: ctx.appRoot, [label]: value },
+              message:
+                'runtime:"project" requires the server to start with --app-root <project-root>.',
+              next_actions: [
+                'Restart the server with --app-root <project-root>, then retry the launch.',
+              ],
+            })
+          }
+          const resolution = await resolveFromProject(ctx.appRoot)
+          if (!resolution.ok) {
+            return makeError('BAD_ARGUMENT', {
+              ...meta,
+              message: resolution.message,
+              details: { app_root: ctx.appRoot, runtime: 'project' },
+              next_actions: ['Run electron_doctor to inspect the configured project runtime.'],
+            })
+          }
+          executablePath = resolution.electron.executablePath
+          resolvedProjectRoot = resolution.rootPath
+          runtimeSource = 'project'
+        }
+        if (main === undefined && executablePath === undefined) {
+          return makeError('BAD_ARGUMENT', {
+            ...meta,
+            message:
+              'Provide main (the app entry) or executablePath, or start the server with --demo.',
+          })
+        }
+        if (args.instrumentNative === true && main === undefined) {
+          return makeError('BAD_ARGUMENT', {
+            ...meta,
+            message:
+              'instrumentNative requires main (the app entry); executablePath-only launches cannot be wrapped with launch-time native instrumentation.',
+          })
+        }
+        const packagedLaunch = main === undefined && executablePath !== undefined
+        if (args.credentialStore !== undefined && !packagedLaunch) {
+          return makeError('BAD_ARGUMENT', {
+            ...meta,
+            message:
+              'credentialStore applies only to executable-only packaged launches; omit main or omit credentialStore.',
+          })
+        }
+        if (args.env !== undefined) {
+          const denied = Object.keys(args.env).filter(isDeniedEnvKey)
+          if (denied.length > 0) {
+            return makeError('BAD_ARGUMENT', {
+              ...meta,
+              message: `env may not set runtime-altering variables (${denied.join(', ')}); they can execute code outside the app sandbox and are refused.`,
+              details: { denied_env_keys: denied },
             })
           }
         }
-      }
+        // Preflight throws a registered error the dispatcher maps to an envelope.
+        preflight(main, executablePath, fileExists)
 
-      if (executablePath !== undefined && !packagedLaunch) {
-        const fuses = await inspectFuses(executablePath)
-        if (fuses?.blocks_playwright_launch === true) {
-          return makeError('FUSES_BLOCK_LAUNCH', {
-            ...meta,
-            message:
-              'Playwright Electron launch requires --inspect support, but the selected binary disables EnableNodeCliInspectArguments.',
-            details: {
-              executable_path: executablePath,
-              fuses,
-              required_channel: '--inspect=0',
-            },
-            next_actions: [
-              'Call electron_launch({ executablePath }) without main to use the packaged CDP launch path.',
-              'Start the app with --remote-debugging-port=<port>, then call electron_attach({ port: <port> }).',
-              'Use a development Electron build with EnableNodeCliInspectArguments enabled, then retry electron_launch.',
-            ],
-          })
+        // When the operator configured --app-root, confine the launch surface to it: main and
+        // executablePath both run code (a main.js as the Electron main process, or an arbitrary
+        // binary), so an out-of-root path is how a hostile tool call would escape the project into
+        // arbitrary host execution. cwd is confined too. Without --app-root, paths are unconstrained.
+        if (ctx.appRoot !== undefined) {
+          for (const [label, value] of [
+            ['main', main],
+            ['executablePath', executablePath],
+            ['cwd', args.cwd],
+          ] as const) {
+            const boundary =
+              label === 'executablePath' && resolvedProjectRoot !== undefined
+                ? resolvedProjectRoot
+                : ctx.appRoot
+            if (value !== undefined && !isWithinRoot(boundary, value)) {
+              return makeError('BAD_ARGUMENT', {
+                ...meta,
+                message: `${label} must resolve within the configured --app-root (${ctx.appRoot}); "${value}" is outside it.`,
+                details: { app_root: ctx.appRoot, [label]: value },
+              })
+            }
+          }
         }
-      }
 
-      const transport = packagedLaunch
-        ? ctx.transports.requireById('cdp', 'canLaunch')
-        : ctx.transports.requireCapability('canLaunch')
-      let session
-      try {
-        session = await transport.launch(
-          toLaunchOptions({
-            ...args,
-            ...(main !== undefined ? { main } : {}),
-            ...(executablePath !== undefined ? { executablePath } : {}),
-          }),
+        if (executablePath !== undefined && !packagedLaunch) {
+          phase('Inspecting Electron launch compatibility')
+          const fuses = await inspectFuses(executablePath)
+          if (fuses?.blocks_playwright_launch === true) {
+            return makeError('FUSES_BLOCK_LAUNCH', {
+              ...meta,
+              message:
+                'Playwright Electron launch requires --inspect support, but the selected binary disables EnableNodeCliInspectArguments.',
+              details: {
+                executable_path: executablePath,
+                fuses,
+                required_channel: '--inspect=0',
+              },
+              next_actions: [
+                'Call electron_launch({ executablePath }) without main to use the packaged CDP launch path.',
+                'Start the app with --remote-debugging-port=<port>, then call electron_attach({ port: <port> }).',
+                'Use a development Electron build with EnableNodeCliInspectArguments enabled, then retry electron_launch.',
+              ],
+            })
+          }
+        }
+
+        const transport = packagedLaunch
+          ? ctx.transports.requireById('cdp', 'canLaunch')
+          : ctx.transports.requireCapability('canLaunch')
+        let session
+        try {
+          phase('Launching Electron app')
+          session = await transport.launch(
+            toLaunchOptions({
+              ...args,
+              ...(main !== undefined ? { main } : {}),
+              ...(executablePath !== undefined ? { executablePath } : {}),
+            }),
+          )
+        } catch (err) {
+          throw diagnoseLaunchError(err)
+        }
+        // registerWithWindows deregisters the session if the window-list call
+        // fails, so a post-launch error never leaves an orphaned session.
+        phase('Registering Electron session')
+        const { managed, windows } = await registerWithWindows(ctx, transport, session)
+        // The transport resolves launch once the first window FRAME exists, which is before
+        // the renderer has parsed + populated its DOM — so a naive launch -> snapshot -> find
+        // would see a near-empty tree. Wait for the renderer to finish its initial render
+        // (best-effort, bounded) and report renderer_ready so the agent need not guess.
+        phase('Waiting for initial renderer')
+        const renderer_ready = await awaitRendererReady(
+          managed.session,
+          args.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
         )
-      } catch (err) {
-        throw diagnoseLaunchError(err)
-      }
-      // registerWithWindows deregisters the session if the window-list call
-      // fails, so a post-launch error never leaves an orphaned session.
-      const { managed, windows } = await registerWithWindows(ctx, transport, session)
-      // The transport resolves launch once the first window FRAME exists, which is before
-      // the renderer has parsed + populated its DOM — so a naive launch -> snapshot -> find
-      // would see a near-empty tree. Wait for the renderer to finish its initial render
-      // (best-effort, bounded) and report renderer_ready so the agent need not guess.
-      const renderer_ready = await awaitRendererReady(
-        managed.session,
-        args.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
-      )
-      return makeSuccess(
-        {
-          session_id: managed.id,
-          transport: transport.id,
-          windows,
-          renderer_ready,
-          runtime_source: runtimeSource,
-          launch_mode: packagedLaunch ? 'packaged' : 'development',
-          capabilities: transport.capabilities,
-        },
-        { ...meta, session_id: managed.id },
-      )
-    },
+        return makeSuccess(
+          {
+            session_id: managed.id,
+            transport: transport.id,
+            windows,
+            renderer_ready,
+            runtime_source: runtimeSource,
+            launch_mode: packagedLaunch ? 'packaged' : 'development',
+            capabilities: transport.capabilities,
+          },
+          { ...meta, session_id: managed.id },
+        )
+      }),
   })
 }
 

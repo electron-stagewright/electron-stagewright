@@ -11,6 +11,7 @@ import {
   makePluginError,
   makeSuccess,
   readPackageVersion,
+  withProgressPhases,
   type AnyToolDefinition,
   type StagewrightPlugin,
   type ToolContext,
@@ -380,34 +381,38 @@ export function createVisualPlugin(): StagewrightPlugin {
       'Capture the selected BrowserWindow to a unique artifact under the configured visual artifact root. This never creates or changes a baseline. Fixed temporary preparation can settle layout, disable animations, hide the caret, apply bounded CSS, and mask bounded CSS selectors. Errors: visual.UNSUPPORTED, visual.SURFACE_UNSUPPORTED, visual.INVALID_SELECTOR, visual.UNSTABLE, visual.CAPTURE_FAILED, visual.IMAGE_TOO_LARGE, visual.PATH_INVALID.',
     inputSchema: captureSchema,
     operationType: 'screenshot',
-    handler: async (args, ctx) => {
-      const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      const managed = ctx.sessions.resolve(args.sessionId)
-      try {
-        assertVisualName(args.name)
-        const artifactRoot = await canonicalRoot(
-          configuredRoot(config.current, 'artifactsDir'),
-          true,
-        )
-        return await sessionSerial.run(managed.id, async () => {
-          const captured = await capture(args, ctx, managed)
-          if ('ok' in captured) return captured
-          const artifact = await writeCaptureArtifact(captured, artifactRoot, ctx.now())
-          return makeSuccess(
-            {
-              session_id: captured.sessionId,
-              surface_id: captured.surfaceId,
-              artifact: { path: artifact.imagePath, metadata_path: artifact.metaPath },
-              metadata: captured.metadata,
-              masks_truncated: captured.masksTruncated,
-            },
-            { ...meta, session_id: captured.sessionId },
+    handler: async (args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        const meta = { startedAt: ctx.startedAt, now: ctx.now }
+        const managed = ctx.sessions.resolve(args.sessionId)
+        try {
+          assertVisualName(args.name)
+          phase('Preparing visual capture')
+          const artifactRoot = await canonicalRoot(
+            configuredRoot(config.current, 'artifactsDir'),
+            true,
           )
-        })
-      } catch (cause) {
-        return filesystemError(cause, meta)
-      }
-    },
+          return await sessionSerial.run(managed.id, async () => {
+            phase('Capturing visual surface')
+            const captured = await capture(args, ctx, managed)
+            if ('ok' in captured) return captured
+            phase('Writing visual artifact')
+            const artifact = await writeCaptureArtifact(captured, artifactRoot, ctx.now())
+            return makeSuccess(
+              {
+                session_id: captured.sessionId,
+                surface_id: captured.surfaceId,
+                artifact: { path: artifact.imagePath, metadata_path: artifact.metaPath },
+                metadata: captured.metadata,
+                masks_truncated: captured.masksTruncated,
+              },
+              { ...meta, session_id: captured.sessionId },
+            )
+          })
+        } catch (cause) {
+          return filesystemError(cause, meta)
+        }
+      }),
   })
 
   const updateTool: AnyToolDefinition = defineTool({
@@ -417,45 +422,49 @@ export function createVisualPlugin(): StagewrightPlugin {
       'Capture the selected BrowserWindow and explicitly replace its configured-root baseline only when confirm is true. This destructive operation is separate from visual_expect; CI comparisons never update baselines implicitly. Errors: visual.UNSUPPORTED, visual.SURFACE_UNSUPPORTED, visual.INVALID_SELECTOR, visual.UNSTABLE, visual.CAPTURE_FAILED, visual.IMAGE_TOO_LARGE, visual.PATH_INVALID, visual.WRITE_FAILED.',
     inputSchema: updateSchema,
     operationType: 'command',
-    handler: async (args, ctx) => {
-      const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      const managed = ctx.sessions.resolve(args.sessionId)
-      try {
-        assertVisualName(args.name)
-        const baselineRoot = await canonicalRoot(
-          configuredRoot(config.current, 'baselineDir'),
-          true,
-        )
-        return await sessionSerial.run(managed.id, () =>
-          baselineSerial.run(args.name, async () => {
-            const captured = await capture(args, ctx, managed)
-            if ('ok' in captured) return captured
-            const imagePath = await writeConfinedAtomically(
-              baselineRoot,
-              `${args.name}.png`,
-              captured.screenshot,
-            )
-            const metadataPath = await writeConfinedAtomically(
-              baselineRoot,
-              `${args.name}.meta.json`,
-              `${JSON.stringify(captured.metadata, null, 2)}\n`,
-            )
-            return makeSuccess(
-              {
-                session_id: captured.sessionId,
-                surface_id: captured.surfaceId,
-                baseline: { path: imagePath, metadata_path: metadataPath, replaced: true },
-                metadata: captured.metadata,
-                masks_truncated: captured.masksTruncated,
-              },
-              { ...meta, session_id: captured.sessionId },
-            )
-          }),
-        )
-      } catch (cause) {
-        return filesystemError(cause, meta)
-      }
-    },
+    handler: async (args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        const meta = { startedAt: ctx.startedAt, now: ctx.now }
+        const managed = ctx.sessions.resolve(args.sessionId)
+        try {
+          assertVisualName(args.name)
+          phase('Preparing visual baseline update')
+          const baselineRoot = await canonicalRoot(
+            configuredRoot(config.current, 'baselineDir'),
+            true,
+          )
+          return await sessionSerial.run(managed.id, () =>
+            baselineSerial.run(args.name, async () => {
+              phase('Capturing visual baseline')
+              const captured = await capture(args, ctx, managed)
+              if ('ok' in captured) return captured
+              phase('Writing visual baseline')
+              const imagePath = await writeConfinedAtomically(
+                baselineRoot,
+                `${args.name}.png`,
+                captured.screenshot,
+              )
+              const metadataPath = await writeConfinedAtomically(
+                baselineRoot,
+                `${args.name}.meta.json`,
+                `${JSON.stringify(captured.metadata, null, 2)}\n`,
+              )
+              return makeSuccess(
+                {
+                  session_id: captured.sessionId,
+                  surface_id: captured.surfaceId,
+                  baseline: { path: imagePath, metadata_path: metadataPath, replaced: true },
+                  metadata: captured.metadata,
+                  masks_truncated: captured.masksTruncated,
+                },
+                { ...meta, session_id: captured.sessionId },
+              )
+            }),
+          )
+        } catch (cause) {
+          return filesystemError(cause, meta)
+        }
+      }),
   })
 
   const expectTool: AnyToolDefinition = defineTool({
@@ -465,97 +474,102 @@ export function createVisualPlugin(): StagewrightPlugin {
       'Compare a stable selected-BrowserWindow PNG against an existing configured-root baseline. A missing baseline is an error; this tool never writes or updates one. Metadata must match before comparison. A mismatch atomically writes unique actual and diff artifacts. Errors: visual.BASELINE_NOT_FOUND, visual.BASELINE_INVALID, visual.ENV_MISMATCH, visual.MISMATCH, visual.UNSUPPORTED, visual.SURFACE_UNSUPPORTED, visual.INVALID_SELECTOR, visual.UNSTABLE, visual.CAPTURE_FAILED, visual.IMAGE_TOO_LARGE, visual.PATH_INVALID, visual.WRITE_FAILED.',
     inputSchema: expectSchema,
     operationType: 'query',
-    handler: async (args, ctx) => {
-      const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      const managed = ctx.sessions.resolve(args.sessionId)
-      try {
-        assertVisualName(args.name)
-        const baselineRoot = await canonicalRoot(
-          configuredRoot(config.current, 'baselineDir'),
-          false,
-        )
-        return await sessionSerial.run(managed.id, () =>
-          baselineSerial.run(args.name, async () => {
-            const [baselineBuffer, metadataBuffer] = await Promise.all([
-              readConfinedFile(baselineRoot, `${args.name}.png`),
-              readConfinedFile(baselineRoot, `${args.name}.meta.json`),
-            ])
-            const baseline = parseMetadata(metadataBuffer)
-            if (baseline.name !== args.name || baseline.image.sha256 !== sha256(baselineBuffer)) {
-              return makePluginError('visual.BASELINE_INVALID', {
+    handler: async (args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        const meta = { startedAt: ctx.startedAt, now: ctx.now }
+        const managed = ctx.sessions.resolve(args.sessionId)
+        try {
+          assertVisualName(args.name)
+          phase('Loading visual baseline')
+          const baselineRoot = await canonicalRoot(
+            configuredRoot(config.current, 'baselineDir'),
+            false,
+          )
+          return await sessionSerial.run(managed.id, () =>
+            baselineSerial.run(args.name, async () => {
+              const [baselineBuffer, metadataBuffer] = await Promise.all([
+                readConfinedFile(baselineRoot, `${args.name}.png`),
+                readConfinedFile(baselineRoot, `${args.name}.meta.json`),
+              ])
+              const baseline = parseMetadata(metadataBuffer)
+              if (baseline.name !== args.name || baseline.image.sha256 !== sha256(baselineBuffer)) {
+                return makePluginError('visual.BASELINE_INVALID', {
+                  ...meta,
+                  message:
+                    'The visual baseline PNG and metadata sidecar do not form a verified pair.',
+                })
+              }
+              const expected = decodePng(baselineBuffer)
+              assertImageBounds(expected, baselineBuffer.byteLength)
+              phase('Capturing visual comparison')
+              const captured = await capture(args, ctx, managed)
+              if ('ok' in captured) return captured
+              const incompatible = incompatibleMetadata(baseline, captured.metadata)
+              if (incompatible.length > 0) {
+                return makePluginError('visual.ENV_MISMATCH', {
+                  ...meta,
+                  message:
+                    'The current capture environment is incompatible with the accepted visual baseline; no diff was computed.',
+                  details: { fields: incompatible },
+                })
+              }
+              const actual = decodePng(captured.screenshot)
+              assertImageBounds(actual, captured.screenshot.byteLength)
+              phase('Comparing visual baseline')
+              const comparison = comparePngs(expected, actual, args.threshold)
+              const totalPixels = expected.width * expected.height
+              const diffRatio = comparison.diffPixels / totalPixels
+              const matches =
+                comparison.diffPixels <= args.maxDiffPixels && diffRatio <= args.maxDiffRatio
+              if (matches) {
+                return makeSuccess(
+                  {
+                    session_id: captured.sessionId,
+                    surface_id: captured.surfaceId,
+                    name: args.name,
+                    matched: true,
+                    diff_pixels: comparison.diffPixels,
+                    diff_ratio: diffRatio,
+                    masks_truncated: captured.masksTruncated,
+                  },
+                  { ...meta, session_id: captured.sessionId },
+                )
+              }
+              const artifactRoot = await canonicalRoot(
+                configuredRoot(config.current, 'artifactsDir'),
+                true,
+              )
+              phase('Writing visual mismatch artifacts')
+              const stem = artifactStem(args.name, ctx.now())
+              const { actualPath, diffPath } = await writeConfinedMismatchPairAtomically(
+                artifactRoot,
+                `${stem}.mismatch`,
+                captured.screenshot,
+                comparison.diffPng,
+              )
+              return makePluginError('visual.MISMATCH', {
                 ...meta,
-                message:
-                  'The visual baseline PNG and metadata sidecar do not form a verified pair.',
-              })
-            }
-            const expected = decodePng(baselineBuffer)
-            assertImageBounds(expected, baselineBuffer.byteLength)
-            const captured = await capture(args, ctx, managed)
-            if ('ok' in captured) return captured
-            const incompatible = incompatibleMetadata(baseline, captured.metadata)
-            if (incompatible.length > 0) {
-              return makePluginError('visual.ENV_MISMATCH', {
-                ...meta,
-                message:
-                  'The current capture environment is incompatible with the accepted visual baseline; no diff was computed.',
-                details: { fields: incompatible },
-              })
-            }
-            const actual = decodePng(captured.screenshot)
-            assertImageBounds(actual, captured.screenshot.byteLength)
-            const comparison = comparePngs(expected, actual, args.threshold)
-            const totalPixels = expected.width * expected.height
-            const diffRatio = comparison.diffPixels / totalPixels
-            const matches =
-              comparison.diffPixels <= args.maxDiffPixels && diffRatio <= args.maxDiffRatio
-            if (matches) {
-              return makeSuccess(
-                {
-                  session_id: captured.sessionId,
-                  surface_id: captured.surfaceId,
+                message: `Visual baseline ${JSON.stringify(args.name)} exceeded its allowed pixel difference.`,
+                details: {
                   name: args.name,
-                  matched: true,
                   diff_pixels: comparison.diffPixels,
                   diff_ratio: diffRatio,
+                  max_diff_pixels: args.maxDiffPixels,
+                  max_diff_ratio: args.maxDiffRatio,
+                  actual_path: actualPath,
+                  diff_path: diffPath,
                   masks_truncated: captured.masksTruncated,
                 },
-                { ...meta, session_id: captured.sessionId },
-              )
-            }
-            const artifactRoot = await canonicalRoot(
-              configuredRoot(config.current, 'artifactsDir'),
-              true,
-            )
-            const stem = artifactStem(args.name, ctx.now())
-            const { actualPath, diffPath } = await writeConfinedMismatchPairAtomically(
-              artifactRoot,
-              `${stem}.mismatch`,
-              captured.screenshot,
-              comparison.diffPng,
-            )
-            return makePluginError('visual.MISMATCH', {
-              ...meta,
-              message: `Visual baseline ${JSON.stringify(args.name)} exceeded its allowed pixel difference.`,
-              details: {
-                name: args.name,
-                diff_pixels: comparison.diffPixels,
-                diff_ratio: diffRatio,
-                max_diff_pixels: args.maxDiffPixels,
-                max_diff_ratio: args.maxDiffRatio,
-                actual_path: actualPath,
-                diff_path: diffPath,
-                masks_truncated: captured.masksTruncated,
-              },
-              next_actions: [
-                'Inspect the actual_path and diff_path artifacts, then use visual_update_baseline only after intentional review.',
-              ],
-            })
-          }),
-        )
-      } catch (cause) {
-        return filesystemError(cause, meta)
-      }
-    },
+                next_actions: [
+                  'Inspect the actual_path and diff_path artifacts, then use visual_update_baseline only after intentional review.',
+                ],
+              })
+            }),
+          )
+        } catch (cause) {
+          return filesystemError(cause, meta)
+        }
+      }),
   })
 
   return {

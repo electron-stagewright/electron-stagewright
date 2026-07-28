@@ -772,6 +772,34 @@ describe('runChecks', () => {
     expect(results.map((r) => r.id)).toEqual(['bundle-structure', 'gatekeeper'])
   })
 
+  it('observes selected checks in canonical order with a stable total', async () => {
+    const started: Array<{ id: string; index: number; total: number }> = []
+    await runChecks(
+      await makeApp(),
+      fakeRun({}),
+      ['gatekeeper', 'bundle-structure', 'gatekeeper'],
+      (check) => started.push(check),
+    )
+
+    expect(started).toEqual([
+      { id: 'bundle-structure', index: 0, total: 2 },
+      { id: 'gatekeeper', index: 1, total: 2 },
+    ])
+  })
+
+  it('ignores observer failures and still runs every selected check', async () => {
+    const results = await runChecks(
+      await makeApp(),
+      fakeRun({}),
+      ['gatekeeper', 'bundle-structure'],
+      () => {
+        throw new Error('advisory observer failed')
+      },
+    )
+
+    expect(results.map((result) => result.id)).toEqual(['bundle-structure', 'gatekeeper'])
+  })
+
   it('runs notarization alone, independent of the other checks', async () => {
     const results = await runChecks(await makeApp(), fakeRun({}), ['notarization'])
     expect(results.map((r) => r.id)).toEqual(['notarization'])

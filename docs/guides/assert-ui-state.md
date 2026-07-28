@@ -63,12 +63,17 @@ times out by design. The expiry is `WAIT_TIMEOUT` (retryable), and `wait_for_sta
 last state it observed so the agent sees how close it got. Typing into that editor has its own
 reliable path — see [Type into code editors](./type-into-code-editors.md).
 
-## Optional MCP progress during bounded waits
+## Optional MCP progress during long calls
 
 When an MCP host requests standard progress for a tool call, fixed waits, predicate waits, and
 polling expectations can emit advisory elapsed-time updates. Each update uses the operation's
 clamped timeout as its total and a stable phase such as `Waiting for condition` or
 `Checking expectation`. Fast calls and checks with `timeoutMs: 0` remain silent.
+
+Other operations whose duration has no honest numeric total use semantic phases instead. Lifecycle
+calls and long plugin work can report transitions such as connecting, registering a session,
+capturing, comparing, or replaying. Pre-threshold transitions coalesce, and the same request-wide
+notification cap applies across nested calls.
 
 There is no tool-level progress argument to add. The host opts in through MCP request metadata,
 and it may ignore notifications even when requested. Progress also does not make a wait

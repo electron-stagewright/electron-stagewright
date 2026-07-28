@@ -68,6 +68,8 @@ export interface ReplayOptions {
    * artifacts. The trace plugin passes `(t) => t.startsWith('trace_')`.
    */
   readonly skipTool?: (tool: string) => boolean
+  /** Best-effort observation immediately before one selected call is processed. */
+  readonly onCall?: (call: { readonly index: number; readonly total: number }) => void
 }
 
 /** The collaborators the engine drives, injected so it is testable without a real dispatcher. */
@@ -278,6 +280,11 @@ export async function replayTrace(
       continue
     }
     processed += 1
+    try {
+      opts.onCall?.({ index, total: calls.length })
+    } catch {
+      // Advisory progress must never alter replay outcomes.
+    }
 
     let replayedOk: boolean
     let replayedCode: string | undefined

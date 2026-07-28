@@ -30,6 +30,7 @@ import {
   makePluginError,
   makeSuccess,
   readPackageVersion,
+  withProgressPhases,
   type AnyToolDefinition,
   type StagewrightPlugin,
   type ToolResult,
@@ -305,33 +306,35 @@ export function createTracePlugin(): StagewrightPlugin {
     ].join(' '),
     inputSchema: z.object({}),
     operationType: 'command',
-    handler: async (_args, ctx) => {
-      const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      if (active === undefined) {
-        return makePluginError('trace.NOT_RECORDING', {
-          ...meta,
-          message: 'No active trace; call trace_start first.',
-        })
-      }
-      const current = active
-      let summary
-      try {
-        summary = await current.recorder.stop()
-      } catch (err) {
-        return makePluginError('trace.ARTIFACT_WRITE_FAILED', {
-          ...meta,
-          message: `Could not write trace artifact at ${current.recorder.path}.`,
-          details: {
-            path: current.recorder.path,
-            cause: err instanceof Error ? err.message : String(err),
-          },
-        })
-      }
-      active = undefined
-      current.unsubscribe()
-      current.unguard?.()
-      return makeSuccess({ ...summary }, meta)
-    },
+    handler: async (_args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        const meta = { startedAt: ctx.startedAt, now: ctx.now }
+        if (active === undefined) {
+          return makePluginError('trace.NOT_RECORDING', {
+            ...meta,
+            message: 'No active trace; call trace_start first.',
+          })
+        }
+        const current = active
+        let summary
+        try {
+          phase('Flushing trace records')
+          summary = await current.recorder.stop()
+        } catch (err) {
+          return makePluginError('trace.ARTIFACT_WRITE_FAILED', {
+            ...meta,
+            message: `Could not write trace artifact at ${current.recorder.path}.`,
+            details: {
+              path: current.recorder.path,
+              cause: err instanceof Error ? err.message : String(err),
+            },
+          })
+        }
+        active = undefined
+        current.unsubscribe()
+        current.unguard?.()
+        return makeSuccess({ ...summary }, meta)
+      }),
   })
 
   const tokensTool: AnyToolDefinition = defineTool({
@@ -477,27 +480,35 @@ export function createTracePlugin(): StagewrightPlugin {
       maxCalls: z.number().int().positive().optional().describe('Replay at most this many calls.'),
     }),
     operationType: 'command',
-    handler: async (args, ctx) => {
-      const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      const target = path.resolve(args.path)
-      const loaded = await loadTrace(target, meta)
-      if ('error' in loaded) return loaded.error
-      const report = await replayTrace(
-        loaded.parsed.calls,
-        { dispatch: ctx.dispatch, validate: ctx.validate },
-        {
-          ...(args.dryRun !== undefined ? { dryRun: args.dryRun } : {}),
-          ...(args.stopOnError !== undefined ? { stopOnError: args.stopOnError } : {}),
-          ...(args.include !== undefined ? { include: args.include } : {}),
-          ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
-          ...(args.maxCalls !== undefined ? { maxCalls: args.maxCalls } : {}),
-          // Never re-dispatch the trace plugin's own tools (defensive: the recorder already excludes
-          // them, so a well-formed artifact has none — this guards hand-made / foreign artifacts).
-          skipTool: (tool) => tool.startsWith(`${TRACE_NAMESPACE}_`),
-        },
-      )
-      return makeSuccess({ path: target, ...report }, meta)
-    },
+    handler: async (args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        const meta = { startedAt: ctx.startedAt, now: ctx.now }
+        const target = path.resolve(args.path)
+        phase('Loading trace artifact')
+        const loaded = await loadTrace(target, meta)
+        if ('error' in loaded) return loaded.error
+        phase(args.dryRun === true ? 'Validating trace calls' : 'Replaying trace calls')
+        const report = await replayTrace(
+          loaded.parsed.calls,
+          { dispatch: ctx.dispatch, validate: ctx.validate },
+          {
+            ...(args.dryRun !== undefined ? { dryRun: args.dryRun } : {}),
+            ...(args.stopOnError !== undefined ? { stopOnError: args.stopOnError } : {}),
+            ...(args.include !== undefined ? { include: args.include } : {}),
+            ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
+            ...(args.maxCalls !== undefined ? { maxCalls: args.maxCalls } : {}),
+            // Never re-dispatch the trace plugin's own tools (defensive: the recorder already excludes
+            // them, so a well-formed artifact has none — this guards hand-made / foreign artifacts).
+            skipTool: (tool) => tool.startsWith(`${TRACE_NAMESPACE}_`),
+            onCall: ({ index, total }) => {
+              phase(
+                `${args.dryRun === true ? 'Validating' : 'Replaying'} trace call ${index + 1} of ${total}`,
+              )
+            },
+          },
+        )
+        return makeSuccess({ path: target, ...report }, meta)
+      }),
   })
 
   const viewTool: AnyToolDefinition = defineTool({

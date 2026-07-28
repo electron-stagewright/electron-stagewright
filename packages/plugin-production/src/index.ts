@@ -29,6 +29,7 @@ import {
   makePluginError,
   makeSuccess,
   readPackageVersion,
+  withProgressPhases,
   type AnyToolDefinition,
   type StagewrightPlugin,
 } from '@electron-stagewright/core'
@@ -103,46 +104,55 @@ export function createProductionPlugin(): StagewrightPlugin {
         ),
     }),
     operationType: 'query',
-    handler: async (args, ctx) => {
-      const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      if (!path.isAbsolute(args.appPath)) {
-        return makeError('ABSOLUTE_PATH_REQUIRED', {
-          ...meta,
-          message: 'appPath must be an absolute path to a packaged .app bundle.',
-          details: { app_path: args.appPath },
-        })
-      }
-      const appPath = path.resolve(args.appPath)
+    handler: async (args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        const meta = { startedAt: ctx.startedAt, now: ctx.now }
+        if (!path.isAbsolute(args.appPath)) {
+          return makeError('ABSOLUTE_PATH_REQUIRED', {
+            ...meta,
+            message: 'appPath must be an absolute path to a packaged .app bundle.',
+            details: { app_path: args.appPath },
+          })
+        }
+        const appPath = path.resolve(args.appPath)
 
-      let info
-      try {
-        info = await stat(appPath)
-      } catch {
-        return makePluginError('production.APP_NOT_FOUND', {
-          ...meta,
-          message: `No file or directory at ${appPath}; pass the path to the packaged .app.`,
-          details: { app_path: appPath },
-        })
-      }
-      if (!info.isDirectory()) {
-        return makePluginError('production.NOT_A_BUNDLE', {
-          ...meta,
-          message: `${appPath} is not a directory; a macOS .app is a bundle directory.`,
-          details: { app_path: appPath },
-        })
-      }
+        let info
+        try {
+          phase('Inspecting application bundle')
+          info = await stat(appPath)
+        } catch {
+          return makePluginError('production.APP_NOT_FOUND', {
+            ...meta,
+            message: `No file or directory at ${appPath}; pass the path to the packaged .app.`,
+            details: { app_path: appPath },
+          })
+        }
+        if (!info.isDirectory()) {
+          return makePluginError('production.NOT_A_BUNDLE', {
+            ...meta,
+            message: `${appPath} is not a directory; a macOS .app is a bundle directory.`,
+            details: { app_path: appPath },
+          })
+        }
 
-      const run = makeRunCommand(config.current.commandTimeoutMs)
-      const checks = await runChecks(appPath, run, args.checks ?? CHECK_IDS)
-      const tally = (status: CheckStatus): number =>
-        checks.filter((check) => check.status === status).length
-      const summary = { pass: tally('pass'), fail: tally('fail'), unknown: tally('unknown') }
-      // passed = nothing FAILED. unknown checks (missing evidence) do not flip it, but the summary
-      // discloses them so a green result with skipped checks is never mistaken for full verification.
-      const passed = summary.fail === 0
+        const run = makeRunCommand(config.current.commandTimeoutMs)
+        const checks = await runChecks(
+          appPath,
+          run,
+          args.checks ?? CHECK_IDS,
+          ({ index, total }) => {
+            phase(`Running production check ${index + 1} of ${total}`)
+          },
+        )
+        const tally = (status: CheckStatus): number =>
+          checks.filter((check) => check.status === status).length
+        const summary = { pass: tally('pass'), fail: tally('fail'), unknown: tally('unknown') }
+        // passed = nothing FAILED. unknown checks (missing evidence) do not flip it, but the summary
+        // discloses them so a green result with skipped checks is never mistaken for full verification.
+        const passed = summary.fail === 0
 
-      return makeSuccess({ app_path: appPath, passed, summary, checks }, meta)
-    },
+        return makeSuccess({ app_path: appPath, passed, summary, checks }, meta)
+      }),
   })
 
   /**

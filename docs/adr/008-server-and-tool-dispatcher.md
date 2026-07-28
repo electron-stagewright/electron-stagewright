@@ -114,3 +114,24 @@ the final success/error envelope. Hosts that request progress can surface
 bounded wait/expect activity without changing the result contract. Hosts that
 ignore progress receive the same complete envelope; callers must always use
 that final envelope as the completion and outcome signal.
+
+## Status Update — 2026-07-27: semantic progress for long operations
+
+The same request-scoped reporter now supports semantic phases for work whose
+duration is not a useful progress total. A phase remains buffered for the first
+250 ms, so quick calls stay silent; transitions after that threshold advance a
+reporter-owned monotonic sequence. Pre-threshold transitions coalesce to the
+latest phase, nested dispatches share the sequence, and the original
+12-notification request budget still applies.
+
+Semantic progress covers lifecycle launch, attach, inspector injection,
+loopback discovery, and graceful stop, plus accessibility audits, visual
+capture/comparison, production validation, and trace flush/replay. IPC invoke
+uses elapsed progress only when the caller supplies its bounded timeout.
+Operations without a meaningful long-running phase remain silent rather than
+emitting synthetic activity.
+
+Phase messages describe Stagewright-controlled work only. They do not include
+application content, artifact paths, IPC channel names, or replayed tool names.
+As with bounded progress, delivery is best-effort and the final envelope remains
+the sole completion and outcome signal.

@@ -40,4 +40,14 @@ export {
   type StderrLoggerOptions,
 } from './logger.js'
 
+export {
+  MAX_PROGRESS_NOTIFICATIONS,
+  MIN_PROGRESS_INTERVAL_MS,
+  withElapsedProgress,
+  withProgressPhases,
+  type ElapsedProgressOptions,
+  type ProgressPhasesOptions,
+  type ProgressPhaseSetter,
+} from './progress.js'
+
 export { createServer, type CreateServerOptions, type StagewrightServer } from './server.js'

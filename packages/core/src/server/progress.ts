@@ -28,6 +28,8 @@ export type ProgressNotificationSender = (notification: ProgressNotification) =>
 
 /** Reporter implementation owned by the MCP request handler. */
 export interface ManagedProgressReporter extends ProgressReporter {
+  /** Advance one semantic phase through the reporter-owned monotonic sequence. */
+  phase(message: string): boolean
   /** Stop accepting updates and detach request-abort observation. Idempotent. */
   close(): void
 }
@@ -44,6 +46,7 @@ export interface ProgressReporterOptions {
 export const NOOP_PROGRESS_REPORTER: ManagedProgressReporter = Object.freeze({
   enabled: false,
   report: () => false,
+  phase: () => false,
   close() {},
 })
 
@@ -93,40 +96,45 @@ export function createProgressReporter(options: ProgressReporterOptions): Manage
   }
   signal?.addEventListener('abort', close, { once: true })
 
+  const accept = (update: ProgressUpdate): boolean => {
+    if (closed || accepted >= MAX_PROGRESS_NOTIFICATIONS) return false
+    const { progress, total, message } = update
+    if (!Number.isFinite(progress) || progress < 0 || progress <= lastProgress) return false
+    if (total !== undefined && (!Number.isFinite(total) || total <= 0 || progress > total)) {
+      return false
+    }
+
+    lastProgress = progress
+    accepted += 1
+    const notification: ProgressNotification = {
+      method: 'notifications/progress',
+      params: {
+        progressToken,
+        progress,
+        ...(total !== undefined ? { total } : {}),
+        ...(message !== undefined ? { message } : {}),
+      },
+    }
+
+    // Attach rejection handling synchronously. Neither a synchronous sender
+    // throw nor a later rejected promise may escape the advisory progress path.
+    try {
+      void Promise.resolve(sendNotification(notification)).catch((error: unknown) => {
+        debugDeliveryFailure(logger, error)
+      })
+    } catch (error) {
+      debugDeliveryFailure(logger, error)
+    }
+    return true
+  }
+
   const reporter: ManagedProgressReporter = {
     get enabled(): boolean {
       return !closed && accepted < MAX_PROGRESS_NOTIFICATIONS
     },
-    report(update: ProgressUpdate): boolean {
-      if (closed || accepted >= MAX_PROGRESS_NOTIFICATIONS) return false
-      const { progress, total, message } = update
-      if (!Number.isFinite(progress) || progress < 0 || progress <= lastProgress) return false
-      if (total !== undefined && (!Number.isFinite(total) || total <= 0 || progress > total)) {
-        return false
-      }
-
-      lastProgress = progress
-      accepted += 1
-      const notification: ProgressNotification = {
-        method: 'notifications/progress',
-        params: {
-          progressToken,
-          progress,
-          ...(total !== undefined ? { total } : {}),
-          ...(message !== undefined ? { message } : {}),
-        },
-      }
-
-      // Attach rejection handling synchronously. Neither a synchronous sender
-      // throw nor a later rejected promise may escape the advisory progress path.
-      try {
-        void Promise.resolve(sendNotification(notification)).catch((error: unknown) => {
-          debugDeliveryFailure(logger, error)
-        })
-      } catch (error) {
-        debugDeliveryFailure(logger, error)
-      }
-      return true
+    report: accept,
+    phase(message: string): boolean {
+      return accept({ progress: Math.max(1, lastProgress + 1), message })
     },
     close,
   }
@@ -143,6 +151,76 @@ export interface ElapsedProgressOptions {
   readonly message: string
   /** Clock injection, normally the dispatcher's `ToolContext.now`. */
   readonly now?: () => number
+}
+
+/** Set one privacy-safe semantic phase while a long operation is active. */
+export type ProgressPhaseSetter = (message: string) => void
+
+/** Options for {@link withProgressPhases}. */
+export interface ProgressPhasesOptions {
+  readonly reporter: ProgressReporter
+  /** Delay before the first phase, keeping quick operations silent. */
+  readonly thresholdMs?: number
+}
+
+/**
+ * Run work with delayed semantic phase reporting.
+ *
+ * Calls that settle before the threshold emit nothing. Before the threshold,
+ * only the latest phase is retained; once crossed, each distinct transition is
+ * reported through the reporter-owned monotonic sequence. This keeps nested
+ * orchestration compatible with elapsed progress while sharing the same global
+ * notification cap.
+ */
+export async function withProgressPhases<T>(
+  options: ProgressPhasesOptions,
+  run: (phase: ProgressPhaseSetter) => Promise<T>,
+): Promise<T> {
+  const { reporter } = options
+  if (!reporter.enabled || reporter.phase === undefined) return run(() => undefined)
+
+  const thresholdMs = Math.max(0, options.thresholdMs ?? MIN_PROGRESS_INTERVAL_MS)
+  let latest: string | undefined
+  let reported: string | undefined
+  let thresholdPassed = thresholdMs === 0
+  let stopped = false
+
+  const stop = (): void => {
+    if (stopped) return
+    stopped = true
+    clearTimeout(timer)
+    CLOSE_LISTENERS.get(reporter)?.delete(stop)
+  }
+  const publish = (): void => {
+    if (stopped || latest === undefined || latest === reported) return
+    if (!reporter.enabled) {
+      stop()
+      return
+    }
+    try {
+      if (reporter.phase?.(latest) === true) reported = latest
+    } catch {
+      // A custom embedder reporter is advisory too; disable phases rather than altering the result.
+      stop()
+    }
+  }
+  const setPhase: ProgressPhaseSetter = (message) => {
+    if (stopped || message === latest) return
+    latest = message
+    if (thresholdPassed) publish()
+  }
+  const timer = setTimeout(() => {
+    thresholdPassed = true
+    publish()
+  }, thresholdMs)
+  timer.unref?.()
+  CLOSE_LISTENERS.get(reporter)?.add(stop)
+
+  try {
+    return await run(setPhase)
+  } finally {
+    stop()
+  }
 }
 
 /**

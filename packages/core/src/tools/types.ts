@@ -118,6 +118,12 @@ export interface ProgressReporter {
   readonly enabled: boolean
   /** Accept and send one update best-effort; false means ignored/rejected. */
   report(update: ProgressUpdate): boolean
+  /**
+   * Advance the request's reporter-owned monotonic sequence for one semantic
+   * phase. Optional so embedders that supply a custom elapsed-only reporter
+   * through {@link DispatchOptions} remain source-compatible.
+   */
+  phase?(message: string): boolean
 }
 
 /**

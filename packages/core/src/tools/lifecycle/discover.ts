@@ -24,6 +24,7 @@ import { z } from 'zod'
 
 import { makeSuccess } from '../../errors/envelope.js'
 import { StagewrightError } from '../../errors/registry.js'
+import { withProgressPhases } from '../../server/progress.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 
 /** A discovered debuggable target. `pid` is `null` when port→pid mapping is unavailable. */
@@ -242,18 +243,20 @@ export function makeDiscoverTool(deps: DiscoverToolDeps = {}): AnyToolDefinition
         .describe(`Per-port timeout in ms. Defaults to 300. Max ${MAX_TIMEOUT_MS}.`),
     }),
     operationType: 'query',
-    handler: async (args, ctx) => {
-      const result = await discover({
-        ...(args.ports !== undefined ? { ports: args.ports } : {}),
-        ...(args.host !== undefined ? { host: args.host } : {}),
-        ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
-        now: ctx.now,
-      })
-      return makeSuccess(
-        { targets: result.targets, count: result.targets.length, scanned: result.scanned },
-        { startedAt: ctx.startedAt, now: ctx.now },
-      )
-    },
+    handler: async (args, ctx) =>
+      withProgressPhases({ reporter: ctx.progress }, async (phase) => {
+        phase('Scanning loopback CDP endpoints')
+        const result = await discover({
+          ...(args.ports !== undefined ? { ports: args.ports } : {}),
+          ...(args.host !== undefined ? { host: args.host } : {}),
+          ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+          now: ctx.now,
+        })
+        return makeSuccess(
+          { targets: result.targets, count: result.targets.length, scanned: result.scanned },
+          { startedAt: ctx.startedAt, now: ctx.now },
+        )
+      }),
   })
 }
 
