@@ -1,6 +1,6 @@
 # ADR-026: Workflow composition without hidden tool calls
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-27
 
 ## Context
