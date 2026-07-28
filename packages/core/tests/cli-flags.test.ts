@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { formatCliHelp, parseCliArgs } from '../src/cli.js'
+import { formatCliHelp, parseCliArgs, runProductionCommand } from '../src/cli.js'
 
 describe('parseCliArgs — value-bearing flags fail closed on a missing value', () => {
   it('throws when --app-root is followed by another flag (would silently disable confinement)', () => {
@@ -85,6 +85,30 @@ describe('parseCliArgs — value-bearing flags fail closed on a missing value', 
     expect(doctor.allowEval).toEqual({ main: false, renderer: true })
   })
 
+  it('delegates production arguments without parsing them as MCP server flags', () => {
+    expect(
+      parseCliArgs([
+        'production',
+        'validate',
+        '--app',
+        '/tmp/Demo.app',
+        '--checks',
+        'bundle-structure',
+        '--json',
+      ]),
+    ).toMatchObject({
+      command: 'production',
+      productionArgs: [
+        'validate',
+        '--app',
+        '/tmp/Demo.app',
+        '--checks',
+        'bundle-structure',
+        '--json',
+      ],
+    })
+  })
+
   it('parses the same server configuration flags in doctor mode', () => {
     const doctor = parseCliArgs([
       'doctor',
@@ -110,5 +134,43 @@ describe('parseCliArgs — value-bearing flags fail closed on a missing value', 
   it('documents the profile and demo flags in standalone help', () => {
     expect(formatCliHelp()).toContain('--tool-profile <profile>')
     expect(formatCliHelp()).toContain('--demo')
+    expect(formatCliHelp()).toContain('production validate --app <path>')
+  })
+})
+
+describe('runProductionCommand', () => {
+  it('loads the optional production CLI subpath and forwards all arguments', async () => {
+    const forwarded: string[][] = []
+    const exitCode = await runProductionCommand(
+      ['validate', '--app', '/tmp/Demo.app', '--json'],
+      () => undefined,
+      async (target) => {
+        expect(target).toBe('@electron-stagewright/plugin-production/cli')
+        return {
+          runProductionCliCommand: async (argv) => {
+            forwarded.push([...argv])
+            return 1
+          },
+        }
+      },
+    )
+
+    expect(exitCode).toBe(1)
+    expect(forwarded).toEqual([['validate', '--app', '/tmp/Demo.app', '--json']])
+  })
+
+  it('returns usage failure with an install action when the optional package is absent', async () => {
+    const stderr: string[] = []
+    const exitCode = await runProductionCommand(
+      ['validate'],
+      (text) => stderr.push(text),
+      async () => {
+        throw new Error('module not found')
+      },
+    )
+
+    expect(exitCode).toBe(2)
+    expect(stderr.join('')).toContain('@electron-stagewright/plugin-production')
+    expect(stderr.join('')).toContain('installed beside @electron-stagewright/core')
   })
 })

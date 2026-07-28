@@ -25,6 +25,9 @@
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "electron-stagewright-production": "./dist/cli.js"
+  },
   "files": [
     "dist/",
     "README.md",
@@ -34,6 +37,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
     }
   },
   "scripts": {

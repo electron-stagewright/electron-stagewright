@@ -1,12 +1,12 @@
 /**
  * Bounded external-command runner for production checks (ADR-012).
  *
- * The validation checks shell out to platform tools (`codesign`, `xcrun stapler`, `spctl`,
- * `plutil`). Per the bound-every-spawn invariant, each run carries a timeout so a hung tool cannot
- * wedge the dispatch, and the runner NEVER rejects — it always resolves a {@link CommandResult}
- * classifying the outcome (clean exit, non-zero exit, command-not-found, or timeout). A missing
- * command or a non-macOS host therefore surfaces as `spawnError`, which the checks map to an
- * `unknown` status (missing evidence) rather than a failure.
+ * The validation checks shell out to bounded platform tools (`codesign`, Windows PowerShell,
+ * AppImageKit's validator, and related helpers). Per the bound-every-spawn invariant, each run
+ * carries a timeout so a hung tool cannot wedge the dispatch, and the runner NEVER rejects — it
+ * always resolves a {@link CommandResult} classifying the outcome (clean exit, non-zero exit,
+ * command-not-found, or timeout). A missing platform command therefore surfaces as `spawnError`,
+ * which checks map to `unknown` (missing evidence) rather than a failure.
  *
  * @module
  */
@@ -49,7 +49,7 @@ export function makeRunCommand(timeoutMs: number): RunCommand {
             return
           }
           const err = error as NodeJS.ErrnoException & { killed?: boolean; code?: number | string }
-          // ENOENT: the command is not installed (e.g. codesign on a non-macOS host).
+          // ENOENT: the platform command is not installed on this host.
           if (err.code === 'ENOENT') {
             resolve({ ok: false, code: null, stdout, stderr, spawnError: 'command not found' })
             return

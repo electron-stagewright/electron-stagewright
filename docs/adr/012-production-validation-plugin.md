@@ -1,8 +1,8 @@
 # ADR-012: Production validation plugin
 
-Status: Accepted. Current checks cover bundle structure, Info.plist fields, URL scheme
-declarations, the packaged updater feed, the crash-reporter machinery, code signing, notarization
-(`xcrun stapler validate`), and Gatekeeper.
+Status: Accepted. Current checks cover macOS bundle structure, metadata, update/crash machinery,
+code signing, notarization, and Gatekeeper; Windows Authenticode; and AppImage embedded
+signatures.
 
 ## Context
 
@@ -58,8 +58,11 @@ notarization check uses `xcrun stapler validate` to confirm a ticket is stapled 
 `CFBundleURLTypes` entry (RFC-3986 scheme shape, no duplicates across entries, no shadowing of
 well-known system schemes); declaring no schemes is an affirmative `pass`. The updater-feed check
 is pure filesystem: a packaged `Contents/Resources/app-update.yml` (electron-updater) must declare
-a provider with its per-provider required fields and `https` URLs — an ABSENT file is `unknown`,
-because the built-in autoUpdater sets its feed at runtime, which a static scan cannot see. The
+a provider with its per-provider required fields and `https` URLs. An ABSENT file is `unknown`,
+because the built-in autoUpdater can set its feed at runtime, which a static scan cannot see. When
+the app is under electron-builder's conventional `mac` / `mac-<arch>` unpacked output, the
+diagnostic instead explains that this staging layout is also produced by `--dir`, is not itself a
+distributable artifact, and directs validation to the app from the release DMG or ZIP. The
 crash-reporter check is pure filesystem: the crashpad handler must ship intact (and executable)
 under `Electron Framework.framework/Versions/<v>/Helpers/`; a missing framework is `unknown` (not
 an Electron-shaped bundle), while a present framework whose handler is missing or lost its execute
@@ -75,12 +78,61 @@ bit is a `fail` — packaging silently disabled crash capture.
 
 ## Consequences
 
-- New package `@electron-stagewright/plugin-production` with one tool, `production_validate`, and
-  two error codes. No core change.
+- The initial implementation introduced `@electron-stagewright/plugin-production` with one tool,
+  `production_validate`, two namespaced error codes, and no core change. The status updates below
+  record the later optional core CLI route and additive artifact error.
 - The full value (a `pass` on signing/Gatekeeper) needs a real signed app; unit tests use a fake
   `runCommand` (pass/fail/unknown) + a synthetic bundle, and a gated smoke runs the real CLIs.
 - Spawning external processes is a new capability for the plugin surface; it is bounded and
   documented, and runs only when the operator loads this plugin.
+
+## Status update (library and standalone CLI, 2026-07-28)
+
+Consumer dogfooding needed the production checks inside a CI evidence collector where no MCP
+session exists. The check engine is therefore exposed through a transport-neutral
+`validateProductionApp()` API and two equivalent command routes:
+
+```sh
+electron-stagewright production validate --app /path/to/My.app --json
+electron-stagewright-production validate --app /path/to/My.app --json
+```
+
+The root command dynamically delegates to the separately installed production package. Core does
+not depend on a plugin, and the plugin continues to depend on core only for its MCP adapter, so the
+package graph remains acyclic. Both binaries emit the same versioned JSON report and stable CI exit
+codes: `0` for no failed checks, `1` for one or more failed checks, and `2` when validation could not
+start because usage or input was invalid. Unknown evidence remains explicit and does not become a
+failure.
+
+The MCP tool, public API, and CLI all call the same orchestration function. Path checks, timeout
+validation, canonical check ordering, summary aggregation, and the pass/fail/unknown model now have
+one implementation.
+
+## Status update (cross-platform release artifacts, 2026-07-28)
+
+Consumer release matrices now build macOS, Windows, and Linux artifacts from one commit. Validation
+therefore recognizes three artifact families and selects relevant checks when `checks` is omitted:
+
+- a macOS `.app` directory runs the original eight bundle and trust checks;
+- a Windows `.exe` or `.msi` file runs `windows-authenticode`;
+- a Linux `.AppImage` file runs `appimage-signature`.
+
+The report adds `artifact_type` while retaining `app_path` for compatibility. Explicit check
+subsets still use the canonical global order; a platform-specific check selected for an
+inapplicable artifact returns `unknown`, not a false failure. Unsupported regular files fail before
+validation with `production.UNSUPPORTED_ARTIFACT`.
+
+Windows validation invokes the built-in Windows PowerShell
+`Get-AuthenticodeSignature -LiteralPath`. The path is UTF-8/base64 data decoded by a fixed script,
+never interpolated into executable PowerShell. `Valid` is a pass. `NotSigned`, `HashMismatch`,
+`NotTrusted`, and `UnknownError` are verified failures; unsupported/incompatible formats, missing
+PowerShell, command failures, and malformed output remain unknown.
+
+AppImage's `--appimage-signature` flag only prints the embedded signature and would execute the
+untrusted artifact. The plugin deliberately does not use it. It invokes AppImageKit's external
+`validate` helper instead and requires both exit zero and a `Good signature` marker for a pass. A
+missing public key is unknown; an absent, bad, or malformed embedded signature is a failure. This
+keeps the original three-valued evidence rule and never turns tool absence into a defect.
 
 ## Related decisions
 
@@ -91,4 +143,8 @@ bit is a `fail` — packaging silently disabled crash capture.
 
 - `packages/plugin-production/src/checks.ts` — the `CheckResult` model + the production checks.
 - `packages/plugin-production/src/command.ts` — the bounded `runCommand`.
+- `packages/plugin-production/src/validate.ts` — the shared transport-neutral validation API.
+- `packages/plugin-production/src/cli.ts` — the standalone JSON/human CLI and exit contract.
 - `packages/plugin-production/src/index.ts` — the plugin + `production_validate`.
+- [Microsoft Get-AuthenticodeSignature](https://learn.microsoft.com/powershell/module/microsoft.powershell.security/get-authenticodesignature)
+- [AppImage signing and validation](https://docs.appimage.org/packaging-guide/optional/signatures.html)

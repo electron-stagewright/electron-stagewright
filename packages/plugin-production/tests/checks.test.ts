@@ -4,6 +4,7 @@
  * macOS toolchain; the bundle check runs against a synthetic .app on disk.
  */
 
+import { Buffer } from 'node:buffer'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -13,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   checkBundleStructure,
+  checkAppImageSignature,
   checkCodeSigning,
   checkCrashReporter,
   checkGatekeeper,
@@ -20,6 +22,7 @@ import {
   checkNotarization,
   checkProtocolSchemes,
   checkUpdaterFeed,
+  checkWindowsAuthenticode,
   runChecks,
   CHECK_IDS,
 } from '../src/checks.js'
@@ -31,10 +34,16 @@ afterEach(async () => {
 })
 
 /** Build a synthetic `.app` with optional Info.plist / MacOS executable for the structure check. */
-async function makeApp(opts: { info?: boolean; exe?: boolean } = {}): Promise<string> {
+async function makeApp(
+  opts: { info?: boolean; exe?: boolean; parentDirName?: string } = {},
+): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'sw-prod-'))
   created.push(dir)
-  const app = path.join(dir, 'Demo.app')
+  const app = path.join(
+    dir,
+    ...(opts.parentDirName === undefined ? [] : [opts.parentDirName]),
+    'Demo.app',
+  )
   await mkdir(path.join(app, 'Contents', 'MacOS'), { recursive: true })
   if (opts.info ?? true) await writeFile(path.join(app, 'Contents', 'Info.plist'), '<plist/>\n')
   if (opts.exe ?? true) await writeFile(path.join(app, 'Contents', 'MacOS', 'Demo'), '#!/bin/sh\n')
@@ -63,6 +72,8 @@ function fakeRun(plan: {
   staplerValidate?: CommandResult
   plutil?: CommandResult
   spctl?: CommandResult
+  powershell?: CommandResult
+  appimageValidate?: CommandResult
 }): RunCommand {
   return (command, args) => {
     if (command === 'codesign') {
@@ -75,6 +86,8 @@ function fakeRun(plan: {
     }
     if (command === 'plutil') return Promise.resolve(plan.plutil ?? NOT_FOUND)
     if (command === 'spctl') return Promise.resolve(plan.spctl ?? NOT_FOUND)
+    if (command === 'powershell.exe') return Promise.resolve(plan.powershell ?? NOT_FOUND)
+    if (command === 'validate') return Promise.resolve(plan.appimageValidate ?? NOT_FOUND)
     return Promise.resolve(NOT_FOUND)
   }
 }
@@ -303,6 +316,217 @@ describe('checkCodeSigning', () => {
     const result = await checkCodeSigning('/x/Demo.app', fakeRun({}))
     expect(result.status).toBe('unknown')
     expect(result.detail).toContain('macOS')
+  })
+})
+
+describe('checkWindowsAuthenticode', () => {
+  it('passes a valid signature and reports bounded signer identity evidence', async () => {
+    const result = await checkWindowsAuthenticode(
+      'C:\\release\\Demo.exe',
+      fakeRun({
+        powershell: {
+          ok: true,
+          code: 0,
+          stdout:
+            '{"status":"Valid","status_message":"Signature verified.","signer_subject":"CN=Acme","thumbprint":"ABC123"}',
+          stderr: '',
+        },
+      }),
+    )
+
+    expect(result).toMatchObject({
+      id: 'windows-authenticode',
+      status: 'pass',
+      evidence: 'subject=CN=Acme; thumbprint=ABC123',
+    })
+  })
+
+  it.each(['NotSigned', 'HashMismatch', 'NotTrusted', 'UnknownError'])(
+    'fails the verified defect status %s with remediation',
+    async (status) => {
+      const result = await checkWindowsAuthenticode(
+        'C:\\release\\Demo.msi',
+        fakeRun({
+          powershell: {
+            ok: true,
+            code: 0,
+            stdout: JSON.stringify({
+              status,
+              status_message: `Windows reported ${status}`,
+            }),
+            stderr: '',
+          },
+        }),
+      )
+
+      expect(result.status).toBe('fail')
+      expect(result.evidence).toContain(status)
+      expect(result.next_actions?.length).toBeGreaterThan(0)
+    },
+  )
+
+  it('keeps unsupported status and malformed output unknown', async () => {
+    const unsupported = await checkWindowsAuthenticode(
+      'C:\\release\\Demo.exe',
+      fakeRun({
+        powershell: {
+          ok: true,
+          code: 0,
+          stdout: '{"status":"NotSupportedFileFormat","status_message":"unsupported"}',
+          stderr: '',
+        },
+      }),
+    )
+    const malformed = await checkWindowsAuthenticode(
+      'C:\\release\\Demo.exe',
+      fakeRun({
+        powershell: { ok: true, code: 0, stdout: 'not json', stderr: '' },
+      }),
+    )
+
+    expect(unsupported.status).toBe('unknown')
+    expect(malformed.status).toBe('unknown')
+  })
+
+  it('clips untrusted PowerShell failure output', async () => {
+    const result = await checkWindowsAuthenticode(
+      'C:\\release\\Demo.exe',
+      fakeRun({
+        powershell: {
+          ok: false,
+          code: 1,
+          stdout: '',
+          stderr: `inspection failed: ${'x'.repeat(500)}`,
+        },
+      }),
+    )
+
+    expect(result.status).toBe('unknown')
+    expect(result.evidence?.length).toBeLessThanOrEqual(121)
+  })
+
+  it('is unknown when PowerShell is absent or the selected artifact is inapplicable', async () => {
+    expect((await checkWindowsAuthenticode('C:\\release\\Demo.exe', fakeRun({}))).status).toBe(
+      'unknown',
+    )
+    expect((await checkWindowsAuthenticode('/release/Demo.AppImage', fakeRun({}))).status).toBe(
+      'unknown',
+    )
+  })
+
+  it('passes the artifact path as base64 data rather than interpolating it as PowerShell code', async () => {
+    const artifactPath = "C:\\release\\Demo'; Write-Output injected;.exe"
+    let commandArgs: readonly string[] = []
+    await checkWindowsAuthenticode(artifactPath, async (_command, args) => {
+      commandArgs = args
+      return {
+        ok: true,
+        code: 0,
+        stdout: '{"status":"Valid"}',
+        stderr: '',
+      }
+    })
+
+    expect(commandArgs.join(' ')).not.toContain(artifactPath)
+    expect(commandArgs.join(' ')).toContain(Buffer.from(artifactPath, 'utf8').toString('base64'))
+  })
+})
+
+describe('checkAppImageSignature', () => {
+  it('passes only when the validator proves a good signature', async () => {
+    const result = await checkAppImageSignature(
+      '/release/Demo.AppImage',
+      fakeRun({
+        appimageValidate: {
+          ok: true,
+          code: 0,
+          stdout: '',
+          stderr: 'gpg: Good signature from "Acme Releases" [ultimate]',
+        },
+      }),
+    )
+
+    expect(result).toMatchObject({
+      id: 'appimage-signature',
+      status: 'pass',
+      evidence: 'gpg: Good signature from "Acme Releases" [ultimate]',
+    })
+  })
+
+  it.each(['gpg: BAD signature from "Acme Releases"', 'The AppImage does not contain a signature'])(
+    'fails a verified unsigned or invalid artifact: %s',
+    async (message) => {
+      const result = await checkAppImageSignature(
+        '/release/Demo.AppImage',
+        fakeRun({
+          appimageValidate: {
+            ok: false,
+            code: 1,
+            stdout: '',
+            stderr: message,
+          },
+        }),
+      )
+
+      expect(result.status).toBe('fail')
+      expect(result.next_actions?.length).toBeGreaterThan(0)
+    },
+  )
+
+  it('keeps a missing public key unknown rather than rejecting the signature', async () => {
+    const result = await checkAppImageSignature(
+      '/release/Demo.AppImage',
+      fakeRun({
+        appimageValidate: {
+          ok: false,
+          code: 1,
+          stdout: '',
+          stderr: "gpg: Can't check signature: No public key",
+        },
+      }),
+    )
+
+    expect(result.status).toBe('unknown')
+    expect(result.detail).toContain('public key')
+  })
+
+  it('is unknown when the validator is absent, inconclusive, or the artifact is inapplicable', async () => {
+    expect((await checkAppImageSignature('/release/Demo.AppImage', fakeRun({}))).status).toBe(
+      'unknown',
+    )
+    expect(
+      (
+        await checkAppImageSignature(
+          '/release/Demo.AppImage',
+          fakeRun({
+            appimageValidate: {
+              ok: true,
+              code: 0,
+              stdout: 'unrelated validator output',
+              stderr: '',
+            },
+          }),
+        )
+      ).status,
+    ).toBe('unknown')
+    expect((await checkAppImageSignature('/release/Demo.exe', fakeRun({}))).status).toBe('unknown')
+  })
+
+  it('clips inconclusive validator output', async () => {
+    const result = await checkAppImageSignature(
+      '/release/Demo.AppImage',
+      fakeRun({
+        appimageValidate: {
+          ok: false,
+          code: 1,
+          stdout: `validator could not classify: ${'x'.repeat(500)}`,
+          stderr: '',
+        },
+      }),
+    )
+
+    expect(result.status).toBe('unknown')
+    expect(result.evidence?.length).toBeLessThanOrEqual(121)
   })
 })
 
@@ -550,8 +774,8 @@ describe('checkProtocolSchemes', () => {
 
 describe('checkUpdaterFeed', () => {
   /** Build a synthetic app with an optional `Contents/Resources/app-update.yml` body. */
-  async function makeAppWithFeed(yml?: string): Promise<string> {
-    const app = await makeApp()
+  async function makeAppWithFeed(yml?: string, parentDirName?: string): Promise<string> {
+    const app = await makeApp(parentDirName === undefined ? {} : { parentDirName })
     if (yml !== undefined) {
       await mkdir(path.join(app, 'Contents', 'Resources'), { recursive: true })
       await writeFile(path.join(app, 'Contents', 'Resources', 'app-update.yml'), yml)
@@ -562,6 +786,25 @@ describe('checkUpdaterFeed', () => {
   it('is unknown when app-update.yml is absent (runtime feeds are not statically visible)', async () => {
     const result = await checkUpdaterFeed(await makeAppWithFeed())
     expect(result).toMatchObject({ id: 'updater-feed', status: 'unknown' })
+    expect(result.detail).toContain('app-update.yml is absent')
+  })
+
+  it('identifies electron-builder unpacked output instead of implying a release defect', async () => {
+    const result = await checkUpdaterFeed(await makeAppWithFeed(undefined, 'mac-arm64'))
+    expect(result).toMatchObject({
+      id: 'updater-feed',
+      status: 'unknown',
+      evidence: 'electron-builder output=mac-arm64',
+    })
+    expect(result.detail).toContain('unpacked output')
+    expect(result.detail).toContain('--dir')
+    expect(result.detail).toContain('release DMG or ZIP')
+  })
+
+  it('does not classify an arbitrary mac-prefixed directory as electron-builder output', async () => {
+    const result = await checkUpdaterFeed(await makeAppWithFeed(undefined, 'mac-release'))
+    expect(result.status).toBe('unknown')
+    expect(result.evidence).toBeUndefined()
     expect(result.detail).toContain('app-update.yml is absent')
   })
 

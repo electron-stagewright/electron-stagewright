@@ -1,17 +1,17 @@
 /**
- * Production-readiness checks for a packaged macOS app (ADR-012).
+ * Production-readiness checks for packaged macOS, Windows, and Linux artifacts (ADR-012).
  *
  * Each check returns a {@link CheckResult} whose `status` encodes the load-bearing distinction the
  * acceptance criteria demand: `pass` (verified good), `fail` (verified bad — a real packaging or
  * signing defect), and `unknown` (could not be determined — a required CLI is absent, a command
- * times out, or the host is not macOS; i.e. MISSING evidence, not a failure). The shell-out checks
- * derive `unknown` from the command runner's `spawnError` rather than a platform branch, so on a
- * non-macOS host the tools are simply absent (`unknown`) and tests can drive every branch through
- * a fake {@link RunCommand}.
+ * times out, or the matching platform/keyring is unavailable; i.e. MISSING evidence, not a
+ * failure). Shell-out checks derive `unknown` from command outcomes rather than host-name
+ * assumptions, so tests can drive every branch through a fake {@link RunCommand}.
  *
  * @module
  */
 
+import { Buffer } from 'node:buffer'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
@@ -25,7 +25,8 @@ export type CheckStatus = 'pass' | 'fail' | 'unknown'
  * The result of one production-readiness check.
  *
  * - `status` — `pass` (verified good), `fail` (verified bad: a real defect), or `unknown` (missing
- *   evidence — a CLI absent, a command timeout, or a non-macOS host; never conflate with `fail`).
+ *   evidence — a CLI absent, a command timeout, or an unavailable platform/key; never conflate
+ *   with `fail`).
  * - `detail` — one human-readable sentence explaining the outcome.
  * - `evidence` — a short justifying snippet (a tool's output line, the signing authority) when one
  *   is available; omitted otherwise.
@@ -43,8 +44,9 @@ export interface CheckResult {
 /**
  * The checks this plugin runs, in a stable display order that mirrors the real build pipeline
  * (structure → Info.plist metadata → declared URL schemes → updater feed → crash machinery →
- * sign → notarize → the Gatekeeper launch gate): configuration is validated before the signing
- * gates that seal it. Doubles as the `checks` argument enum.
+ * macOS sign → notarize → Gatekeeper → Windows Authenticode → AppImage signature):
+ * configuration is validated before the platform trust gates that seal it. Doubles as the
+ * `checks` argument enum.
  */
 export const CHECK_IDS = [
   'bundle-structure',
@@ -55,6 +57,8 @@ export const CHECK_IDS = [
   'code-signing',
   'notarization',
   'gatekeeper',
+  'windows-authenticode',
+  'appimage-signature',
 ] as const
 
 /** A check identifier — one of {@link CHECK_IDS}. */
@@ -502,6 +506,20 @@ const UPDATER_TITLE = 'Updater feed configuration'
 const APP_UPDATE_YML = path.join('Contents', 'Resources', 'app-update.yml')
 
 /**
+ * electron-builder stages macOS apps under `mac` or `mac-<arch>` before a target turns them into
+ * a distributable artifact. `--dir` stops at this same unpacked output. Keep the accepted names
+ * explicit: a broad `mac-*` match could misclassify an arbitrary consumer directory as builder
+ * output and give misleading release advice.
+ */
+const ELECTRON_BUILDER_MAC_OUTPUT_DIR = /^mac(?:-(?:ia32|x64|armv7l|arm64|universal))?$/
+
+/** Return the conventional electron-builder unpacked-output directory, when the path has one. */
+function electronBuilderMacOutputDir(appPath: string): string | undefined {
+  const parent = path.basename(path.dirname(path.resolve(appPath)))
+  return ELECTRON_BUILDER_MAC_OUTPUT_DIR.test(parent) ? parent : undefined
+}
+
+/**
  * Upper bound for a plausible `app-update.yml` before the check refuses to read it. Real
  * electron-updater configs are under 1 KB; this keeps the pure-fs check bounded (the shell-out
  * checks get the same property from the command timeout) so a corrupted multi-hundred-MB file
@@ -558,9 +576,10 @@ const PROVIDER_REQUIRED_FIELDS: Readonly<Record<string, readonly string[]>> = {
  * is `https://` — macOS App Transport Security blocks plain HTTP at runtime, so an `http://` feed
  * means the app silently never updates.
  *
- * A bundle WITHOUT the file is `unknown`, not `fail`: Electron's built-in autoUpdater
- * (Squirrel.Mac) configures its feed at runtime via `setFeedURL`, which a static scan cannot see —
- * that is missing evidence, never a defect. Pure filesystem: runs on any host.
+ * A bundle WITHOUT the file is `unknown`, not `fail`: an electron-builder unpacked output is not
+ * itself proof that a DMG/ZIP target was built, while Electron's built-in autoUpdater
+ * (Squirrel.Mac) can configure its feed at runtime via `setFeedURL`, which a static scan cannot
+ * see. That is missing evidence, never a defect. Pure filesystem: runs on any host.
  */
 export async function checkUpdaterFeed(appPath: string): Promise<CheckResult> {
   const id = 'updater-feed' as const
@@ -599,6 +618,18 @@ export async function checkUpdaterFeed(appPath: string): Promise<CheckResult> {
       'code' in err &&
       (err as { readonly code?: unknown }).code === 'ENOENT'
     if (missing) {
+      const unpackedOutput = electronBuilderMacOutputDir(appPath)
+      if (unpackedOutput !== undefined) {
+        return {
+          id,
+          title: UPDATER_TITLE,
+          status: 'unknown',
+          detail:
+            `No app-update.yml exists in this electron-builder unpacked output (${unpackedOutput}). ` +
+            'This staging layout is also produced by --dir and is not itself a distributable artifact; validate the app from the release DMG or ZIP before diagnosing auto-update.',
+          evidence: `electron-builder output=${unpackedOutput}`,
+        }
+      }
       return {
         id,
         title: UPDATER_TITLE,
@@ -878,6 +909,258 @@ export async function checkCodeSigning(appPath: string, run: RunCommand): Promis
   }
 }
 
+const WINDOWS_AUTHENTICODE_TITLE = 'Windows Authenticode signature'
+const WINDOWS_ARTIFACT_EXTENSIONS = new Set(['.exe', '.msi'])
+
+/** Whether a file name identifies a Windows release artifact supported by this plugin. */
+export function isWindowsArtifactPath(artifactPath: string): boolean {
+  return WINDOWS_ARTIFACT_EXTENSIONS.has(path.extname(artifactPath).toLowerCase())
+}
+
+interface AuthenticodeReport {
+  readonly status: string
+  readonly statusMessage?: string
+  readonly signerSubject?: string
+  readonly thumbprint?: string
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
+}
+
+function parseAuthenticodeReport(output: string): AuthenticodeReport | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(output.replace(/^\uFEFF/, ''))
+  } catch {
+    return undefined
+  }
+  if (!isPlistDictionary(parsed)) return undefined
+  const status = optionalString(parsed['status'])
+  if (status === undefined) return undefined
+  const statusMessage = optionalString(parsed['status_message'])
+  const signerSubject = optionalString(parsed['signer_subject'])
+  const thumbprint = optionalString(parsed['thumbprint'])
+  return {
+    status,
+    ...(statusMessage === undefined ? {} : { statusMessage }),
+    ...(signerSubject === undefined ? {} : { signerSubject }),
+    ...(thumbprint === undefined ? {} : { thumbprint }),
+  }
+}
+
+/**
+ * Build a fixed PowerShell program whose only artifact-specific value is base64 data. The inspected
+ * path is never interpolated as code, and `-LiteralPath` prevents wildcard interpretation.
+ */
+function authenticodeInspectionScript(artifactPath: string): string {
+  const encodedPath = Buffer.from(artifactPath, 'utf8').toString('base64')
+  return [
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    `$artifact = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${encodedPath}'))`,
+    '$signature = Get-AuthenticodeSignature -LiteralPath $artifact -ErrorAction Stop',
+    '$subject = if ($null -eq $signature.SignerCertificate) { $null } else { $signature.SignerCertificate.Subject }',
+    '$thumbprint = if ($null -eq $signature.SignerCertificate) { $null } else { $signature.SignerCertificate.Thumbprint }',
+    '[pscustomobject]@{ status = [string]$signature.Status; status_message = [string]$signature.StatusMessage; signer_subject = $subject; thumbprint = $thumbprint } | ConvertTo-Json -Compress',
+  ].join('; ')
+}
+
+/**
+ * Verify an Electron Windows installer or executable through Windows' Authenticode implementation.
+ *
+ * `Get-AuthenticodeSignature` is part of Windows PowerShell. Its structured status distinguishes a
+ * valid signature from unsigned, tampered, or untrusted artifacts. Missing PowerShell, an
+ * unsupported host, or an unparseable response is `unknown`, never a false failure.
+ */
+export async function checkWindowsAuthenticode(
+  artifactPath: string,
+  run: RunCommand,
+): Promise<CheckResult> {
+  const id = 'windows-authenticode' as const
+  if (!isWindowsArtifactPath(artifactPath)) {
+    return {
+      id,
+      title: WINDOWS_AUTHENTICODE_TITLE,
+      status: 'unknown',
+      detail: 'Authenticode applies to Windows .exe and .msi release artifacts.',
+    }
+  }
+
+  const res = await run('powershell.exe', [
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    authenticodeInspectionScript(artifactPath),
+  ])
+  if (res.spawnError !== undefined) {
+    return {
+      id,
+      title: WINDOWS_AUTHENTICODE_TITLE,
+      status: 'unknown',
+      detail: `Windows PowerShell could not run (${res.spawnError}); Authenticode is only verifiable on Windows.`,
+    }
+  }
+  if (!res.ok) {
+    const output = res.stderr.trim() !== '' ? res.stderr : res.stdout
+    return {
+      id,
+      title: WINDOWS_AUTHENTICODE_TITLE,
+      status: 'unknown',
+      detail: 'Windows PowerShell ran but could not inspect the Authenticode signature.',
+      ...(output.trim() === '' ? {} : { evidence: clip(firstLine(output)) }),
+    }
+  }
+
+  const report = parseAuthenticodeReport(res.stdout)
+  if (report === undefined) {
+    return {
+      id,
+      title: WINDOWS_AUTHENTICODE_TITLE,
+      status: 'unknown',
+      detail: 'Windows PowerShell exited cleanly but returned an invalid Authenticode report.',
+    }
+  }
+  if (report.status === 'Valid') {
+    const identity = [
+      report.signerSubject === undefined ? undefined : `subject=${clip(report.signerSubject)}`,
+      report.thumbprint === undefined ? undefined : `thumbprint=${clip(report.thumbprint)}`,
+    ].filter((value): value is string => value !== undefined)
+    return {
+      id,
+      title: WINDOWS_AUTHENTICODE_TITLE,
+      status: 'pass',
+      detail: 'Windows reports a valid Authenticode signature for the artifact.',
+      evidence: identity.length === 0 ? 'status=Valid' : identity.join('; '),
+    }
+  }
+
+  if (
+    report.status === 'NotSigned' ||
+    report.status === 'HashMismatch' ||
+    report.status === 'NotTrusted' ||
+    report.status === 'UnknownError'
+  ) {
+    return {
+      id,
+      title: WINDOWS_AUTHENTICODE_TITLE,
+      status: 'fail',
+      detail: `Windows rejected the Authenticode signature with status ${clip(report.status)}.`,
+      evidence:
+        report.statusMessage === undefined
+          ? `status=${clip(report.status)}`
+          : clip(report.statusMessage),
+      next_actions: [
+        'Sign the Windows artifact with a trusted Authenticode certificate and a SHA-256 timestamp, then rebuild and validate it on Windows.',
+      ],
+    }
+  }
+
+  return {
+    id,
+    title: WINDOWS_AUTHENTICODE_TITLE,
+    status: 'unknown',
+    detail: `Windows returned Authenticode status ${clip(report.status)}, which does not prove validity.`,
+    ...(report.statusMessage === undefined ? {} : { evidence: clip(report.statusMessage) }),
+  }
+}
+
+const APPIMAGE_SIGNATURE_TITLE = 'AppImage embedded signature'
+
+/** Whether a file name identifies an AppImage release artifact supported by this plugin. */
+export function isAppImageArtifactPath(artifactPath: string): boolean {
+  return path.extname(artifactPath).toLowerCase() === '.appimage'
+}
+
+function matchingLine(output: string, pattern: RegExp): string | undefined {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => pattern.test(line))
+}
+
+/**
+ * Validate an AppImage's embedded OpenPGP signature with AppImageKit's external `validate` helper.
+ *
+ * Running an AppImage with `--appimage-signature` only displays its signature and executes
+ * untrusted artifact code, so this check deliberately does neither. A pass requires both exit zero
+ * and the validator's `Good signature` marker. Missing public keys remain `unknown`.
+ */
+export async function checkAppImageSignature(
+  artifactPath: string,
+  run: RunCommand,
+): Promise<CheckResult> {
+  const id = 'appimage-signature' as const
+  if (!isAppImageArtifactPath(artifactPath)) {
+    return {
+      id,
+      title: APPIMAGE_SIGNATURE_TITLE,
+      status: 'unknown',
+      detail: 'Embedded AppImage signatures apply only to .AppImage release artifacts.',
+    }
+  }
+
+  const res = await run('validate', [artifactPath])
+  if (res.spawnError !== undefined) {
+    return {
+      id,
+      title: APPIMAGE_SIGNATURE_TITLE,
+      status: 'unknown',
+      detail: `The AppImage validate helper could not run (${res.spawnError}); install AppImageKit's external validator to verify embedded signatures.`,
+    }
+  }
+
+  const output = `${res.stdout}\n${res.stderr}`.trim()
+  const goodSignature = matchingLine(output, /\bgood signature\b/i)
+  if (res.ok && goodSignature !== undefined) {
+    return {
+      id,
+      title: APPIMAGE_SIGNATURE_TITLE,
+      status: 'pass',
+      detail: 'The AppImage embedded OpenPGP signature is valid.',
+      evidence: clip(goodSignature),
+    }
+  }
+
+  const missingKey = matchingLine(output, /no public key|can't check signature/i)
+  if (missingKey !== undefined) {
+    return {
+      id,
+      title: APPIMAGE_SIGNATURE_TITLE,
+      status: 'unknown',
+      detail: 'The AppImage has a signature, but its public key is unavailable for verification.',
+      evidence: clip(missingKey),
+    }
+  }
+
+  const invalidSignature = matchingLine(
+    output,
+    /bad signature|invalid signature|does not contain (?:an? )?signature|not signed|no valid openpgp data/i,
+  )
+  if (invalidSignature !== undefined) {
+    return {
+      id,
+      title: APPIMAGE_SIGNATURE_TITLE,
+      status: 'fail',
+      detail: 'The AppImage is unsigned or its embedded OpenPGP signature is invalid.',
+      evidence: clip(invalidSignature),
+      next_actions: [
+        'Sign the AppImage with appimagetool --sign, publish the corresponding public key, and validate the rebuilt artifact.',
+      ],
+    }
+  }
+
+  return {
+    id,
+    title: APPIMAGE_SIGNATURE_TITLE,
+    status: 'unknown',
+    detail: res.ok
+      ? 'The AppImage validator exited cleanly without proving a good signature.'
+      : 'The AppImage validator could not determine whether the embedded signature is valid.',
+    ...(output === '' ? {} : { evidence: clip(firstLine(output)) }),
+  }
+}
+
 const NOTARIZATION_TITLE = 'Notarization'
 
 /**
@@ -1028,6 +1311,8 @@ const RUNNERS: Readonly<
   'code-signing': (appPath, run) => checkCodeSigning(appPath, run),
   notarization: (appPath, run) => checkNotarization(appPath, run),
   gatekeeper: (appPath, run) => checkGatekeeper(appPath, run),
+  'windows-authenticode': (appPath, run) => checkWindowsAuthenticode(appPath, run),
+  'appimage-signature': (appPath, run) => checkAppImageSignature(appPath, run),
 }
 
 /**
