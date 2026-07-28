@@ -43,6 +43,7 @@ export const expectVisibleTool: AnyToolDefinition = defineTool({
       { body: buildWaitForSelectorBody(), arg: { selector, state: 'visible', timeoutMs } },
       (_raw: WaitRaw) => ({ matched: true }),
       {
+        timeoutMs,
         timeoutMessage: `Element did not become visible within ${timeoutMs}ms.`,
         timeoutCode: 'EXPECTATION_FAILED',
         buildTimeoutDetails: () => ({ expected: 'visible', actual: 'not visible' }),

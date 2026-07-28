@@ -9,6 +9,7 @@
 import { z } from 'zod'
 
 import { makeSuccess } from '../../errors/envelope.js'
+import { withElapsedProgress } from '../../server/progress.js'
 import { sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { MAX_WAIT_TIMEOUT_MS, clampWaitTimeout } from './poll.js'
@@ -31,7 +32,15 @@ export const waitTool: AnyToolDefinition = defineTool({
     const managed = ctx.sessions.resolve(args.sessionId)
     const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
     const ms = clampWaitTimeout(args.ms)
-    await new Promise((resolve) => setTimeout(resolve, ms))
+    await withElapsedProgress(
+      {
+        reporter: ctx.progress,
+        totalMs: ms,
+        message: 'Waiting for fixed duration',
+        now: ctx.now,
+      },
+      () => new Promise((resolve) => setTimeout(resolve, ms)),
+    )
     return makeSuccess({ session_id: managed.id, waited_ms: ms }, meta)
   },
 })

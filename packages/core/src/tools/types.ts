@@ -93,6 +93,34 @@ export interface DispatchGuardCall {
 export type DispatchGuard = (call: DispatchGuardCall) => ToolResult | null
 
 /**
+ * One advisory progress update for a long-running tool call. `progress` is the
+ * completed amount and MUST increase strictly across accepted updates. `total`
+ * is optional at the protocol level; Stagewright supplies it when a bounded
+ * operation has a known budget.
+ */
+export interface ProgressUpdate {
+  readonly progress: number
+  readonly total?: number
+  readonly message?: string
+}
+
+/**
+ * Request-scoped, best-effort progress sink. MCP callers opt in with the
+ * protocol's opaque `progressToken`; without one the dispatcher supplies a
+ * disabled no-op reporter. `report` returns whether the update was accepted
+ * locally (finite, monotonic, within the per-call cap) and never throws.
+ *
+ * Progress is advisory only. A tool's final success/error envelope remains the
+ * authoritative result even when a host ignores or cannot receive updates.
+ */
+export interface ProgressReporter {
+  /** Whether this request currently accepts progress updates. */
+  readonly enabled: boolean
+  /** Accept and send one update best-effort; false means ignored/rejected. */
+  report(update: ProgressUpdate): boolean
+}
+
+/**
  * Per-call execution context handed to every tool handler by the dispatcher.
  * The handler never constructs these collaborators itself; it receives them so
  * the dispatcher stays the single owner of session and logging lifecycle.
@@ -115,6 +143,12 @@ export interface ToolContext {
   readonly status: ServerStatusReader
   /** Structured logger. Writes to stderr only (stdout is the MCP protocol channel). */
   readonly logger: Logger
+  /**
+   * Optional request-scoped MCP progress. Disabled for direct dispatch and for
+   * callers that omit `_meta.progressToken`; reporting is best-effort and never
+   * changes the final tool envelope.
+   */
+  readonly progress: ProgressReporter
   /**
    * Whether the eval policy permits MAIN-process eval. Tools that declare
    * {@link ToolDefinition.requiresEvalFlag} are gated per target at registration, so

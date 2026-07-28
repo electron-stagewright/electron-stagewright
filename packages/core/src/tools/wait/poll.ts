@@ -10,6 +10,7 @@
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import type { ErrorCode } from '../../errors/registry.js'
+import { withElapsedProgress } from '../../server/progress.js'
 import { assertCapability } from '../../transports/index.js'
 import {
   buildMissError,
@@ -49,6 +50,8 @@ export interface WaitRaw {
 
 /** Options for {@link runWait}. */
 export interface RunWaitOptions {
+  /** Clamped operation budget, used as the advisory progress total. */
+  readonly timeoutMs: number
   /** Message used for the timeout envelope (the tool interpolates the budget). */
   readonly timeoutMessage: string
   /**
@@ -63,6 +66,8 @@ export interface RunWaitOptions {
    * `expect_*` tools override this to surface `{ expected, actual }`.
    */
   readonly buildTimeoutDetails?: (raw: WaitRaw) => Record<string, unknown> | undefined
+  /** Stable progress phase. Defaults by wait vs expectation semantics. */
+  readonly progressMessage?: string
 }
 
 /** Default `details` builder: surface the last observed state, as the wait tools do. */
@@ -94,7 +99,19 @@ export async function runWait(
   if (stale !== undefined) return stale
 
   try {
-    const raw = await managed.session.evaluate<WaitRaw>('renderer', call.body, call.arg)
+    const raw = await withElapsedProgress(
+      {
+        reporter: ctx.progress,
+        totalMs: opts.timeoutMs,
+        message:
+          opts.progressMessage ??
+          (opts.timeoutCode === 'EXPECTATION_FAILED'
+            ? 'Checking expectation'
+            : 'Waiting for condition'),
+        now: ctx.now,
+      },
+      () => managed.session.evaluate<WaitRaw>('renderer', call.body, call.arg),
+    )
     if (raw?.invalid_selector === true) {
       const reason = typeof raw.error === 'string' ? `: ${raw.error}` : '.'
       return makeError('BAD_ARGUMENT', { ...meta, message: `Invalid CSS selector${reason}` })

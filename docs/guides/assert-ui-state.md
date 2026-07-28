@@ -63,6 +63,19 @@ times out by design. The expiry is `WAIT_TIMEOUT` (retryable), and `wait_for_sta
 last state it observed so the agent sees how close it got. Typing into that editor has its own
 reliable path — see [Type into code editors](./type-into-code-editors.md).
 
+## Optional MCP progress during bounded waits
+
+When an MCP host requests standard progress for a tool call, fixed waits, predicate waits, and
+polling expectations can emit advisory elapsed-time updates. Each update uses the operation's
+clamped timeout as its total and a stable phase such as `Waiting for condition` or
+`Checking expectation`. Fast calls and checks with `timeoutMs: 0` remain silent.
+
+There is no tool-level progress argument to add. The host opts in through MCP request metadata,
+and it may ignore notifications even when requested. Progress also does not make a wait
+cancellable: aborting the MCP request stops future updates but does not add interruption support
+to the underlying Electron operation. In every host, callers must treat the final success/error
+envelope—not progress—as the authoritative completion and outcome.
+
 ## Watching change: snapshot diffs
 
 After an action, you rarely need the whole tree again:
@@ -92,5 +105,6 @@ A robust act-then-verify beat looks like:
 
 _Design background: stable refs and the snapshot/diff schema are ADR-005; failure envelopes,
 retryability, and `EXPECTATION_FAILED` semantics are ADR-006; the single-round-trip assertion
-principle is ADR-007. The model behind refs, snapshots, and retrying assertions:
+principle is ADR-007; request-scoped MCP progress is ADR-008. The model behind refs, snapshots,
+and retrying assertions:
 [Concepts](./concepts.md)._

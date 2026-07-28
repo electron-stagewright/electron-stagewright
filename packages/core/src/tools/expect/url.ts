@@ -91,6 +91,7 @@ export const expectUrlTool: AnyToolDefinition = defineTool({
       { body: buildExpectUrlBody(), arg: { match, timeoutMs } },
       (raw: WaitRaw) => ({ matched: true, actual: raw['actual'] ?? null }),
       {
+        timeoutMs,
         timeoutMessage: `The URL did not match within ${timeoutMs}ms.`,
         timeoutCode: 'EXPECTATION_FAILED',
         buildTimeoutDetails: (raw: WaitRaw) => ({

@@ -67,6 +67,7 @@ function makeStringContentExpect(spec: StringContentSpec): AnyToolDefinition {
         },
         (raw: WaitRaw) => ({ matched: true, actual: raw['actual'] ?? null }),
         {
+          timeoutMs,
           timeoutMessage: `The ${spec.subject} did not match within ${timeoutMs}ms.`,
           timeoutCode: 'EXPECTATION_FAILED',
           buildTimeoutDetails: (raw: WaitRaw) => ({

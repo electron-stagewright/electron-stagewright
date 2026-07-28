@@ -19,6 +19,7 @@ import {
   MAX_WAIT_TIMEOUT_MS,
 } from '../src/tools/wait/index.js'
 import { WAIT_TOOLS } from '../src/tools/wait/index.js'
+import type { ProgressReporter, ProgressUpdate } from '../src/tools/types.js'
 import type { TransportCapabilities } from '../src/transports/index.js'
 import { FakeSession, FakeTransport, type FakeEvaluate } from './helpers/fake-transport.js'
 
@@ -74,6 +75,23 @@ function capturing(result: unknown): {
   return { evaluate, calls }
 }
 
+function recordingProgress(): {
+  readonly reporter: ProgressReporter
+  readonly updates: ProgressUpdate[]
+} {
+  const updates: ProgressUpdate[] = []
+  return {
+    updates,
+    reporter: {
+      enabled: true,
+      report(update): boolean {
+        updates.push(update)
+        return true
+      },
+    },
+  }
+}
+
 function setup(
   opts: { readonly evaluate?: FakeEvaluate; readonly capabilities?: TransportCapabilities } = {},
 ) {
@@ -109,6 +127,26 @@ describe('electron_wait', () => {
     }
     expect(res).toMatchObject({ ok: true, waited_ms: 1 })
   })
+
+  it('reports elapsed progress for a long fixed wait', async () => {
+    vi.useFakeTimers()
+    try {
+      const { dispatcher } = setup()
+      const { reporter, updates } = recordingProgress()
+      const pending = dispatcher.dispatch('electron_wait', { ms: 1000 }, { progress: reporter })
+
+      await vi.advanceTimersByTimeAsync(250)
+      expect(updates[0]).toEqual({
+        progress: 250,
+        total: 1000,
+        message: 'Waiting for fixed duration',
+      })
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(pending).resolves.toMatchObject({ ok: true, waited_ms: 1000 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('electron_wait_for_selector', () => {
@@ -120,6 +158,33 @@ describe('electron_wait_for_selector', () => {
       selector: '#go',
     })) as SuccessResponse & { matched: boolean; state: string }
     expect(res).toMatchObject({ ok: true, matched: true, state: 'visible' })
+  })
+
+  it('reports elapsed condition progress while the renderer poll is pending', async () => {
+    vi.useFakeTimers()
+    try {
+      let finish!: (value: unknown) => void
+      const evaluate: FakeEvaluate = () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+      const { dispatcher } = setup({ evaluate })
+      const { reporter, updates } = recordingProgress()
+      const pending = dispatcher.dispatch(
+        'electron_wait_for_selector',
+        { selector: '#go', timeoutMs: 1000 },
+        { progress: reporter },
+      )
+
+      await vi.advanceTimersByTimeAsync(250)
+      expect(updates).toEqual([{ progress: 250, total: 1000, message: 'Waiting for condition' }])
+      finish({ satisfied: true, state: 'visible' })
+      await expect(pending).resolves.toMatchObject({ ok: true, matched: true })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(updates).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('resolves a ref to the data-sw-ref selector in the poll arg', async () => {

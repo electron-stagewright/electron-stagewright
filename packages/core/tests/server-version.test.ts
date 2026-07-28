@@ -38,6 +38,10 @@ describe('core version advertisement', () => {
       const serverInfo = client.getServerVersion()
       expect(serverInfo?.name).toBe('@electron-stagewright/core')
       expect(serverInfo?.version).toBe(PACKAGE_VERSION)
+      expect(client.getInstructions()).toContain('optional MCP progress notifications')
+      expect(client.getInstructions()).toContain(
+        'always rely on the final tool response for completion and outcome',
+      )
     } finally {
       await client.close().catch(() => undefined)
       await server.close().catch(() => undefined)

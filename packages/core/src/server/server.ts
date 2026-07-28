@@ -234,7 +234,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
         'thread the returned `session_id` through every later call, and end it with electron_stop.',
         'Read state with electron_snapshot / electron_find and assert with the expect_* family. The',
         'electron_eval_* tools appear only when the eval policy permits their target: --allow-eval',
-        'for both, or --allow-eval=main / --allow-eval=renderer for least privilege.',
+        'for both, or --allow-eval=main / --allow-eval=renderer for least privilege. Long-running',
+        'calls may emit optional MCP progress notifications when the host requests them; hosts may',
+        'ignore those updates, so always rely on the final tool response for completion and outcome.',
       ].join(' '),
     },
   )

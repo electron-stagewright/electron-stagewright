@@ -57,7 +57,10 @@ export const waitForEventTool: AnyToolDefinition = defineTool({
         },
       },
       (_raw: WaitRaw) => ({ fired: true, event: args.eventName }),
-      { timeoutMessage: `Event "${args.eventName}" did not fire within ${timeoutMs}ms.` },
+      {
+        timeoutMs,
+        timeoutMessage: `Event "${args.eventName}" did not fire within ${timeoutMs}ms.`,
+      },
     )
   },
 })
