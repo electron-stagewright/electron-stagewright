@@ -257,4 +257,26 @@ describe('withElapsedProgress', () => {
     expect(vi.getTimerCount()).toBe(0)
     void pending
   })
+
+  it('stops heartbeats at the operation budget when work overruns', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const { reporter, updates } = recordingProgress()
+    const pending = withElapsedProgress(
+      {
+        reporter,
+        totalMs: 1000,
+        message: 'Waiting for condition',
+        now: () => clock,
+      },
+      () => new Promise<never>(() => undefined),
+    )
+
+    clock = 1000
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(updates).toEqual([{ progress: 1000, total: 1000, message: 'Waiting for condition' }])
+    expect(vi.getTimerCount()).toBe(0)
+    void pending
+  })
 })

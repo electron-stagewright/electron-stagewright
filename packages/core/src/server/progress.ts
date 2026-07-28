@@ -170,7 +170,10 @@ export async function withElapsedProgress<T>(
       return
     }
     const elapsed = Math.min(totalMs, Math.max(0, now() - startedAt))
-    if (elapsed > 0) reporter.report({ progress: elapsed, total: totalMs, message })
+    if (elapsed > 0) {
+      reporter.report({ progress: elapsed, total: totalMs, message })
+      if (elapsed >= totalMs) stop()
+    }
   }, intervalMs)
   timer.unref?.()
   const closeListeners = CLOSE_LISTENERS.get(reporter)
