@@ -1,6 +1,6 @@
 # ADR-007: Agent-native UX principles
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-26
 - **Deciders**: johnny4young
 
@@ -281,6 +281,11 @@ discovery, rendering, and model injection to each client. Server instructions, `
 descriptions, and response envelopes remain authoritative when a host neither lists nor reads a
 resource. The resources disclose no session data, logs, prompt text, plugin configuration, or
 operator-local files, and the server does not mutate their set after startup.
+
+## Status update (metadata correction, 2026-07-27)
+
+The public ADR index has identified this decision as Accepted since the architecture record was
+first tracked. The document header now matches that canonical status; no decision text changes.
 
 ## References
 
