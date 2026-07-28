@@ -1,4 +1,4 @@
-import { SourceUnavailableError } from './errors.js'
+import { SourceUnavailableError, type UnavailableReason } from './errors.js'
 import { requestJson } from './http.js'
 import type { DailyCloneAggregate, MetricWindow, RepositoryDiscoveryMetric } from './schema.js'
 import { assertNonNegativeInteger, parseInstant, toDate } from './time.js'
@@ -129,6 +129,22 @@ function pageInfo(value: unknown): GraphQlPageInfo {
   }
 }
 
+function graphQlErrorReason(value: unknown): UnavailableReason {
+  const errors = array(value)
+  const codes = errors.map((error) => {
+    const item = record(error)
+    const extensions = item['extensions']
+    const extensionCode = extensions === undefined ? undefined : record(extensions)['code']
+    const code = extensionCode ?? item['type']
+    return typeof code === 'string' ? code.toUpperCase() : null
+  })
+  if (codes.includes('RATE_LIMITED')) return 'rate_limited'
+  if (codes.includes('FORBIDDEN') || codes.includes('UNAUTHENTICATED')) {
+    return 'permission_denied'
+  }
+  return 'invalid_response'
+}
+
 async function graphQl(
   query: string,
   variables: Readonly<Record<string, string | null>>,
@@ -149,7 +165,10 @@ async function graphQl(
     githubRequestOptions(options),
   )
   const response = record(payload)
-  if (response['errors'] !== undefined || response['data'] === null) {
+  if (response['errors'] !== undefined) {
+    throw new SourceUnavailableError(graphQlErrorReason(response['errors']))
+  }
+  if (response['data'] === null) {
     throw new SourceUnavailableError('invalid_response')
   }
   return record(response['data'])

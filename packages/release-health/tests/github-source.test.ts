@@ -200,4 +200,22 @@ describe('GitHub merged pull request metadata', () => {
     expect(bodies).toHaveLength(2)
     expect(bodies[0]).not.toMatch(/\b(title|body|number|url|labels|reactions)\b/)
   })
+
+  it.each([
+    [{ extensions: { code: 'RATE_LIMITED' } }, 'rate_limited'],
+    [{ type: 'FORBIDDEN' }, 'permission_denied'],
+    [{ extensions: { code: 'UNAUTHENTICATED' } }, 'permission_denied'],
+    [{ extensions: { code: 'UNKNOWN' } }, 'invalid_response'],
+  ] as const)('maps GraphQL error code %o to %s', async (error, reason) => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ data: null, errors: [error] }),
+    ) as typeof fetch
+
+    await expect(
+      loadMergedPullRequests('owner/repository', {
+        token: 'test-token',
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({ reason })
+  })
 })
