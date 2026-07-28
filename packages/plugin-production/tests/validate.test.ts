@@ -106,6 +106,12 @@ describe('validateProductionApp', () => {
     await expect(validateProductionApp(unsupported)).rejects.toMatchObject({
       code: 'UNSUPPORTED_ARTIFACT',
     })
+
+    const unsupportedDirectory = path.join(root, 'unpacked-output')
+    await mkdir(unsupportedDirectory)
+    await expect(validateProductionApp(unsupportedDirectory)).rejects.toMatchObject({
+      code: 'UNSUPPORTED_ARTIFACT',
+    })
   })
 
   it('selects Windows Authenticode by default for .exe and .msi artifacts', async () => {

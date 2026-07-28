@@ -471,6 +471,54 @@ describe('electron_launch', () => {
     expect(res).toMatchObject({ ok: true, renderer_ready: true })
   })
 
+  it('retries transient packaged-target churn within the renderer-ready budget', async () => {
+    let evaluateCount = 0
+    const session = new FakeSession({
+      id: 'packaged',
+      transport: 'cdp',
+      windows: [WIN],
+      evaluate: async () => {
+        evaluateCount += 1
+        if (evaluateCount === 1) {
+          throw new StagewrightError('REF_NOT_FOUND', 'The initial page target was replaced.')
+        }
+        return { ready: true }
+      },
+    })
+    const packagedTransport = new FakeTransport({ id: 'cdp', session })
+    const { dispatcher } = setup({ packagedTransport })
+
+    const res = await dispatcher.dispatch('electron_launch', {
+      executablePath: '/abs/App.app/Contents/MacOS/App',
+      readyTimeoutMs: 1000,
+    })
+
+    expect(res).toMatchObject({ ok: true, renderer_ready: true })
+    expect(evaluateCount).toBe(2)
+  })
+
+  it('does not retry permanent renderer evaluation errors', async () => {
+    let evaluateCount = 0
+    const session = new FakeSession({
+      id: 'launched',
+      windows: [WIN],
+      evaluate: async () => {
+        evaluateCount += 1
+        throw new StagewrightError('EVAL_RUNTIME_ERROR', 'The readiness probe threw.')
+      },
+    })
+    const transport = new FakeTransport({ session })
+    const { dispatcher } = setup({ transport })
+
+    const res = await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      readyTimeoutMs: 1000,
+    })
+
+    expect(res).toMatchObject({ ok: true, renderer_ready: false })
+    expect(evaluateCount).toBe(1)
+  })
+
   it('does not treat an empty app root as renderer-ready', async () => {
     const sessions = new SessionManager()
     const session = new FakeSession({

@@ -35,6 +35,9 @@ import { registerWithWindows } from './session-init.js'
 /** Default budget for the post-launch renderer-ready wait (ms). */
 const DEFAULT_READY_TIMEOUT_MS = 5000
 
+/** Brief retry delay when a renderer target changes during the first readiness probe. */
+const RENDERER_READY_RETRY_INTERVAL_MS = 50
+
 /**
  * Upper bound on `readyTimeoutMs`. The renderer-ready wait runs INSIDE the launch dispatch, so a
  * value above the dispatch operation-timeout backstop (default 120s) would turn a successful launch
@@ -115,18 +118,36 @@ for (;;) {
 /**
  * Wait (up to `timeoutMs`) for the session's active renderer to finish its initial render,
  * returning whether it became ready. Best-effort: a transport that cannot evaluate in the
- * renderer, or a renderer that rejects the probe, yields `false` rather than failing the
- * launch — the session is still usable, the agent just learns the DOM was not confirmed
- * populated. `timeoutMs: 0` performs a single instantaneous check.
+ * renderer, or a renderer that rejects the probe, yields `false` rather than failing the launch —
+ * the session is still usable, the agent just learns the DOM was not confirmed populated. A
+ * transient CDP target/disconnection error is retried within the same budget because packaged apps
+ * can replace their first page target during startup. `timeoutMs: 0` performs a single
+ * instantaneous check.
  */
 async function awaitRendererReady(session: TransportSession, timeoutMs: number): Promise<boolean> {
-  try {
-    const result = await session.evaluate<{ ready?: boolean }>('renderer', RENDERER_READY_BODY, {
-      timeoutMs,
-    })
-    return result?.ready === true
-  } catch {
-    return false
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const remainingMs = Math.max(0, deadline - Date.now())
+    try {
+      const result = await session.evaluate<{ ready?: boolean }>('renderer', RENDERER_READY_BODY, {
+        timeoutMs: remainingMs,
+      })
+      return result?.ready === true
+    } catch (error) {
+      const retryable =
+        error instanceof StagewrightError &&
+        (error.code === 'REF_NOT_FOUND' ||
+          error.code === 'SURFACE_CLOSED' ||
+          error.code === 'CDP_DISCONNECTED' ||
+          error.code === 'CDP_TIMEOUT' ||
+          error.code === 'INTERNAL_ERROR')
+      const retryDelayMs = Math.min(
+        RENDERER_READY_RETRY_INTERVAL_MS,
+        Math.max(0, deadline - Date.now()),
+      )
+      if (!retryable || retryDelayMs === 0) return false
+      await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs))
+    }
   }
 }
 

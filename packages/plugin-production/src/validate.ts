@@ -130,10 +130,11 @@ function classifyArtifact(
   appPath: string,
   info: Awaited<ReturnType<typeof stat>>,
 ): ProductionArtifactType {
-  if (info.isDirectory()) return 'macos-app'
+  const extension = path.extname(appPath).toLowerCase()
+  if (info.isDirectory() && extension === '.app') return 'macos-app'
   if (info.isFile() && isWindowsArtifactPath(appPath)) return 'windows-artifact'
   if (info.isFile() && isAppImageArtifactPath(appPath)) return 'linux-appimage'
-  if (path.extname(appPath).toLowerCase() === '.app') {
+  if (extension === '.app') {
     throw new ProductionValidationError(
       'NOT_A_BUNDLE',
       `${appPath} is not a directory; a macOS .app is a bundle directory.`,

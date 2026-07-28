@@ -1,5 +1,9 @@
 /** Standalone production CLI parser, report, and exit-contract tests. */
 
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -162,6 +166,30 @@ describe('runProductionCli', () => {
       exit_code: 2,
       error: { code: 'USAGE' },
     })
+  })
+
+  it('returns usage exit two for an unsupported directory before running checks', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'stagewright-production-cli-'))
+    try {
+      const unsupportedDirectory = path.join(root, 'unpacked-output')
+      await mkdir(unsupportedDirectory)
+      const { io, stdout, stderr } = captureIo()
+
+      const exitCode = await runProductionCliCommand(
+        ['validate', '--app', unsupportedDirectory, '--json'],
+        io,
+      )
+
+      expect(exitCode).toBe(PRODUCTION_EXIT_CODES.USAGE)
+      expect(stderr).toEqual([])
+      expect(JSON.parse(stdout[0] ?? '')).toMatchObject({
+        passed: false,
+        exit_code: 2,
+        error: { code: 'UNSUPPORTED_ARTIFACT' },
+      })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('writes non-JSON usage diagnostics only to stderr', async () => {

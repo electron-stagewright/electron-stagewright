@@ -7,9 +7,9 @@ const execFile = promisify(execFileCallback)
  * Resolve an npm-installed command for direct child-process execution.
  *
  * Package binaries are native executables or shell scripts on POSIX, but npm creates `.cmd` shims
- * on Windows. Node cannot execute those shims with `execFile()` directly, so Windows calls must go
- * through the command processor. Keeping that policy here prevents each release smoke from fixing
- * only the first package-manager command it happens to reach.
+ * on Windows. Node cannot execute those shims with `execFile()` directly, so Windows shims must go
+ * through the command processor while native `.exe` / `.com` files stay direct. Keeping that
+ * policy here prevents a native runtime such as `process.execPath` from becoming `node.exe.cmd`.
  */
 export function packageCommandInvocation(
   command,
@@ -19,7 +19,12 @@ export function packageCommandInvocation(
 ) {
   if (platform !== 'win32') return { file: command, args }
 
-  const shim = command.toLowerCase().endsWith('.cmd') ? command : `${command}.cmd`
+  const lowerCommand = command.toLowerCase()
+  if (lowerCommand.endsWith('.exe') || lowerCommand.endsWith('.com')) {
+    return { file: command, args }
+  }
+  const shim =
+    lowerCommand.endsWith('.cmd') || lowerCommand.endsWith('.bat') ? command : `${command}.cmd`
   return {
     file: commandProcessor,
     args: ['/d', '/c', shim, ...args],

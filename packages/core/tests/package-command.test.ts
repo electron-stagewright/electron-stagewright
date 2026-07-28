@@ -43,4 +43,13 @@ describe('package command execution', () => {
       args: ['/d', '/c', command, 'replay.json'],
     })
   })
+
+  it('executes native Windows binaries directly without inventing a shim', () => {
+    const command = 'C:\\Program Files\\nodejs\\node.exe'
+
+    expect(packageCommandInvocation(command, ['cli.js'], 'win32', 'cmd.exe')).toEqual({
+      file: command,
+      args: ['cli.js'],
+    })
+  })
 })
