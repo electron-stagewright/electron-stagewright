@@ -136,5 +136,6 @@ Two pieces are deliberately kept behind explicit opt-ins:
 - **Eval gate** — the per-target `--allow-eval` opt-in that must permit a target before its arbitrary-JS tool is registered.
 - **Plugin** — a `@electron-stagewright/plugin-*` package loaded with `--plugin`, adding namespaced tools.
 - **Tool profile** — an explicit core subset selected with `--tool-profile`. `full` is the
-  compatibility default; profiles never grant eval or load plugins. The budget and default-change
-  policy are recorded in [ADR-021](../adr/021-tool-profiles-and-manifest-budgets.md).
+  compatibility default; `testing` includes screenshot evidence capture, and profiles never grant
+  eval or load plugins. The budget and default-change policy are recorded in
+  [ADR-021](../adr/021-tool-profiles-and-manifest-budgets.md).

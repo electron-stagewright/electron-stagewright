@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { type ErrorResponse, type SuccessResponse } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
+import { createServer } from '../src/server/server.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { type Snapshot, walkAccessibilityTree } from '../src/snapshot/index.js'
@@ -257,6 +258,35 @@ describe('electron_screenshot', () => {
       path: string
     }
     expect(path.dirname(res.path)).toBe(serverDir)
+  })
+
+  it('uses the configured screenshot directory through a testing-profile server', async () => {
+    const serverDir = await mkdtemp(path.join(tmpdir(), 'sw-shot-testing-profile-'))
+    created.push(serverDir)
+    const server = await createServer({
+      toolProfile: 'testing',
+      screenshotDir: serverDir,
+    })
+    try {
+      server.sessions.register(
+        new FakeTransport(),
+        new FakeSession({
+          id: 'sess',
+          screenshotResult: pngBuffer(10, 10),
+          windows: [ACTIVE_WINDOW],
+        }),
+      )
+
+      expect(server.dispatcher.has('electron_screenshot')).toBe(true)
+      const res = (await server.dispatcher.dispatch(
+        'electron_screenshot',
+        {},
+      )) as SuccessResponse & { path: string }
+      expect(path.dirname(res.path)).toBe(serverDir)
+      expect(await readFile(res.path)).toHaveLength(24)
+    } finally {
+      await server.close()
+    }
   })
 
   it('resolves a relative server screenshotDir before returning generated paths', async () => {

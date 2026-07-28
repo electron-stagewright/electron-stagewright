@@ -227,8 +227,9 @@ Append flags to `args` (after the package/CLI). The common ones:
   `--allow-eval=renderer` or `--allow-eval=main`. Read the [security model](./security-model.md)
   before enabling it.
 - `--tool-profile essential` starts with the focused launch/snapshot/interact/assert core surface.
-  `testing` adds the broader test-driving tools, `debug` adds attach and diagnostics, and `full`
-  remains the compatibility default. This flag does not enable eval or load plugins.
+  `testing` adds broader test-driving tools and screenshot evidence capture, `debug` adds attach and
+  diagnostics, and `full` remains the compatibility default. This flag does not enable eval or load
+  plugins.
 - `--screenshot-dir <dir>` sets a stable location for captured screenshots.
 - `--app-root <dir>` confines launch/file paths to a project you control. It also enables
   `electron_launch({ main, runtime: "project" })`, which resolves Electron only from that root so
@@ -249,6 +250,17 @@ Append flags to `args` (after the package/CLI). The common ones:
   before the `electron-stagewright` bin; with a global install, install the plugin package globally
   too. Then call `electron_plugins` to see exactly which namespaced tools are enabled and which gate
   (if any) keeps a tool hidden. See [Load, configure, and diagnose plugins](./plugins.md).
+
+| Profile     | Intended surface                              | `electron_screenshot` |
+| ----------- | --------------------------------------------- | --------------------- |
+| `essential` | Focused launch, inspect, interact, and assert | No                    |
+| `testing`   | Broader test driving with screenshot evidence | Yes                   |
+| `debug`     | Attach, inspect, and diagnostics              | Yes                   |
+| `full`      | Complete compatibility surface                | Yes                   |
+
+`--screenshot-dir` supplies the default output directory when the selected profile exposes
+`electron_screenshot`; use `testing`, `debug`, or `full` when stable screenshot artifacts are part
+of the workflow.
 
 With `npx`, server flags follow the `electron-stagewright` bin name:
 

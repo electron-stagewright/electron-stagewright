@@ -78,6 +78,32 @@ from `tools/list`, so it cannot stand in for the host payload.
 - A future proposal to change the default profile, alter profile membership materially, or shorten
   descriptions must amend this record with benchmark evidence.
 
+## Status update (2026-07-28): Screenshot evidence in `testing`
+
+Consumer dogfooding exposed a semantic gap: the profile intended for test authoring omitted
+`electron_screenshot`, even when the operator configured `--screenshot-dir` specifically to retain
+test evidence. The `testing` profile now includes the existing screenshot tool. `essential` remains
+the smaller interaction/assertion surface, while `debug` and `full` continue to include screenshot
+capture as before.
+
+The host-visible manifest runner measured exactly two changed variants:
+
+| Variant        | Tools | BPE before | BPE after | Delta                                        |
+| -------------- | ----: | ---------: | --------: | -------------------------------------------- |
+| `testing-safe` | 48→49 |     16,084 |    16,733 | +649 BPE (+4.0%), adds `electron_screenshot` |
+| `testing-eval` | 50→51 |     16,716 |    17,365 | +649 BPE (+3.9%), adds `electron_screenshot` |
+
+No other manifest variant changed. The increase is accepted because it supplies directly requested
+test evidence rather than description growth, and the baseline records the reason as
+`Testing now includes screenshot evidence capture after consumer dogfooding.` This does not change
+the `full` compatibility default, eval authorization, plugin loading, or screenshot behavior.
+
+Regenerating the complete baseline also reconciled lower `plugin-production-safe`,
+`plugin-production-eval`, `all-safe`, and `all-eval` measurements already present in the merged
+source after the production-validation CLI work. Those variants did not change between this
+slice's before/after measurements; retaining their older inflated values would have weakened the
+future growth gate.
+
 ## References
 
 - [ADR-004](./004-plugin-model.md) — explicitly loaded plugin model.

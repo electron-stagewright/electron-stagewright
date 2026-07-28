@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reason": "Support packaged app launch over CDP",
+  "reason": "Testing now includes screenshot evidence capture after consumer dogfooding.",
   "variants": {
     "core-safe": {
       "toolCount": 55,
@@ -451,10 +451,10 @@
       ]
     },
     "testing-safe": {
-      "toolCount": 48,
-      "characters": 70627,
-      "utf8Bytes": 70709,
-      "bpe": 16084,
+      "toolCount": 49,
+      "characters": 73537,
+      "utf8Bytes": 73621,
+      "bpe": 16733,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -486,6 +486,7 @@
         "electron_keyboard_type",
         "electron_launch",
         "electron_press_sequence",
+        "electron_screenshot",
         "electron_scroll",
         "electron_scroll_into_view",
         "electron_select_option",
@@ -517,6 +518,12 @@
           "characters": 3046,
           "utf8Bytes": 3052,
           "bpe": 664
+        },
+        {
+          "name": "electron_screenshot",
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -559,20 +566,14 @@
           "characters": 1896,
           "utf8Bytes": 1898,
           "bpe": 435
-        },
-        {
-          "name": "electron_keyboard_type",
-          "characters": 1898,
-          "utf8Bytes": 1902,
-          "bpe": 433
         }
       ]
     },
     "testing-eval": {
-      "toolCount": 50,
-      "characters": 73385,
-      "utf8Bytes": 73467,
-      "bpe": 16716,
+      "toolCount": 51,
+      "characters": 76295,
+      "utf8Bytes": 76379,
+      "bpe": 17365,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -606,6 +607,7 @@
         "electron_keyboard_type",
         "electron_launch",
         "electron_press_sequence",
+        "electron_screenshot",
         "electron_scroll",
         "electron_scroll_into_view",
         "electron_select_option",
@@ -637,6 +639,12 @@
           "characters": 3046,
           "utf8Bytes": 3052,
           "bpe": 664
+        },
+        {
+          "name": "electron_screenshot",
+          "characters": 2909,
+          "utf8Bytes": 2911,
+          "bpe": 649
         },
         {
           "name": "electron_expect_count",
@@ -679,12 +687,6 @@
           "characters": 1896,
           "utf8Bytes": 1898,
           "bpe": 435
-        },
-        {
-          "name": "electron_keyboard_type",
-          "characters": 1898,
-          "utf8Bytes": 1902,
-          "bpe": 433
         }
       ]
     },
@@ -2250,9 +2252,9 @@
     },
     "plugin-production-safe": {
       "toolCount": 57,
-      "characters": 84775,
-      "utf8Bytes": 84879,
-      "bpe": 19323,
+      "characters": 84221,
+      "utf8Bytes": 84319,
+      "bpe": 19190,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2338,12 +2340,6 @@
           "bpe": 649
         },
         {
-          "name": "production_validate",
-          "characters": 2285,
-          "utf8Bytes": 2291,
-          "bpe": 532
-        },
-        {
           "name": "electron_expect_count",
           "characters": 2204,
           "utf8Bytes": 2206,
@@ -2372,14 +2368,20 @@
           "characters": 2134,
           "utf8Bytes": 2138,
           "bpe": 480
+        },
+        {
+          "name": "electron_drop_file",
+          "characters": 1940,
+          "utf8Bytes": 1942,
+          "bpe": 448
         }
       ]
     },
     "plugin-production-eval": {
       "toolCount": 59,
-      "characters": 87533,
-      "utf8Bytes": 87637,
-      "bpe": 19955,
+      "characters": 86979,
+      "utf8Bytes": 87077,
+      "bpe": 19822,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2467,12 +2469,6 @@
           "bpe": 649
         },
         {
-          "name": "production_validate",
-          "characters": 2285,
-          "utf8Bytes": 2291,
-          "bpe": 532
-        },
-        {
           "name": "electron_expect_count",
           "characters": 2204,
           "utf8Bytes": 2206,
@@ -2501,6 +2497,12 @@
           "characters": 2134,
           "utf8Bytes": 2138,
           "bpe": 480
+        },
+        {
+          "name": "electron_drop_file",
+          "characters": 1940,
+          "utf8Bytes": 1942,
+          "bpe": 448
         }
       ]
     },
@@ -3315,9 +3317,9 @@
     },
     "all-safe": {
       "toolCount": 99,
-      "characters": 132677,
-      "utf8Bytes": 132855,
-      "bpe": 30131,
+      "characters": 132123,
+      "utf8Bytes": 132295,
+      "bpe": 29998,
       "toolNames": [
         "a11y_audit",
         "clock_advance",
@@ -3463,12 +3465,6 @@
           "bpe": 579
         },
         {
-          "name": "production_validate",
-          "characters": 2285,
-          "utf8Bytes": 2291,
-          "bpe": 532
-        },
-        {
           "name": "network_capture_start",
           "characters": 2303,
           "utf8Bytes": 2307,
@@ -3479,14 +3475,20 @@
           "characters": 2204,
           "utf8Bytes": 2206,
           "bpe": 497
+        },
+        {
+          "name": "electron_assert_pattern",
+          "characters": 2175,
+          "utf8Bytes": 2179,
+          "bpe": 495
         }
       ]
     },
     "all-eval": {
       "toolCount": 118,
-      "characters": 151634,
-      "utf8Bytes": 151826,
-      "bpe": 34482,
+      "characters": 151080,
+      "utf8Bytes": 151266,
+      "bpe": 34349,
       "toolNames": [
         "a11y_audit",
         "clock_advance",
@@ -3651,12 +3653,6 @@
           "bpe": 579
         },
         {
-          "name": "production_validate",
-          "characters": 2285,
-          "utf8Bytes": 2291,
-          "bpe": 532
-        },
-        {
           "name": "network_capture_start",
           "characters": 2303,
           "utf8Bytes": 2307,
@@ -3667,6 +3663,12 @@
           "characters": 2204,
           "utf8Bytes": 2206,
           "bpe": 497
+        },
+        {
+          "name": "electron_assert_pattern",
+          "characters": 2175,
+          "utf8Bytes": 2179,
+          "bpe": 495
         }
       ]
     }

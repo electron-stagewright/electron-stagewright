@@ -46,7 +46,7 @@ export const ESSENTIAL_CORE_TOOL_NAMES = [
   'electron_expect_url',
 ] as const
 
-/** The broad interaction/read/assertion surface used to author automated tests. */
+/** The broad interaction/read/assertion and screenshot-evidence surface for automated tests. */
 export const TESTING_CORE_TOOL_NAMES = [
   ...ESSENTIAL_CORE_TOOL_NAMES,
   'electron_attach',
@@ -67,6 +67,7 @@ export const TESTING_CORE_TOOL_NAMES = [
   'electron_get_computed_style',
   'electron_focused_element',
   'electron_elements_list',
+  'electron_screenshot',
   'electron_wait',
   'electron_wait_for_event',
   'electron_assert_pattern',
