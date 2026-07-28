@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createServer, NOOP_LOGGER } from '@electron-stagewright/core'
+import { waitForTestSurfaces } from '@electron-stagewright/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import visualPlugin from '../src/index.js'
@@ -53,15 +54,13 @@ describe('visual plugin (real Electron)', () => {
       const sessionId = launched.session_id ?? launched._meta?.session_id
       if (typeof sessionId !== 'string') throw new Error('launch returned no session id')
 
-      const listed = (await server.dispatcher.dispatch('electron_surfaces_list', {
+      const listed = await waitForTestSurfaces(
+        server.dispatcher,
         sessionId,
-      })) as unknown as {
-        readonly surfaces: readonly {
-          readonly id: string
-          readonly kind: string
-          readonly url?: string
-        }[]
-      }
+        (result) =>
+          result.surfaces.some((surface) => surface.kind === 'window') &&
+          result.surfaces.some((surface) => surface.kind === 'frame'),
+      )
       const windowSurface = listed.surfaces.find((surface) => surface.kind === 'window')
       const frameSurface = listed.surfaces.find((surface) => surface.kind === 'frame')
       if (windowSurface === undefined || frameSurface === undefined)
