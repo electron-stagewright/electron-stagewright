@@ -58,8 +58,11 @@ notarization check uses `xcrun stapler validate` to confirm a ticket is stapled 
 `CFBundleURLTypes` entry (RFC-3986 scheme shape, no duplicates across entries, no shadowing of
 well-known system schemes); declaring no schemes is an affirmative `pass`. The updater-feed check
 is pure filesystem: a packaged `Contents/Resources/app-update.yml` (electron-updater) must declare
-a provider with its per-provider required fields and `https` URLs — an ABSENT file is `unknown`,
-because the built-in autoUpdater sets its feed at runtime, which a static scan cannot see. The
+a provider with its per-provider required fields and `https` URLs. An ABSENT file is `unknown`,
+because the built-in autoUpdater can set its feed at runtime, which a static scan cannot see. When
+the app is under electron-builder's conventional `mac` / `mac-<arch>` unpacked output, the
+diagnostic instead explains that this staging layout is also produced by `--dir`, is not itself a
+distributable artifact, and directs validation to the app from the release DMG or ZIP. The
 crash-reporter check is pure filesystem: the crashpad handler must ship intact (and executable)
 under `Electron Framework.framework/Versions/<v>/Helpers/`; a missing framework is `unknown` (not
 an Electron-shaped bundle), while a present framework whose handler is missing or lost its execute

@@ -180,11 +180,14 @@ The loader namespaces the tool under the plugin name `production`:
 
 Two `unknown` semantics worth knowing:
 
-- **`updater-feed`** is `unknown` when no `Contents/Resources/app-update.yml` exists — Electron's
-  built-in autoUpdater configures its feed **at runtime** (`setFeedURL`), which a static scan
-  cannot see. The check only turns `fail` when a packaged feed file exists and is incoherent
-  (no provider, missing provider fields, or a non-`https` URL that App Transport Security would
-  block at runtime).
+- **`updater-feed`** is `unknown` when no `Contents/Resources/app-update.yml` exists. If the app is
+  under electron-builder's conventional `mac` / `mac-<arch>` unpacked output, the result explains
+  that this staging layout is also produced by `--dir`, is not itself a distributable artifact,
+  and directs validation to the app from the release DMG or ZIP. Otherwise, Electron's built-in
+  autoUpdater may configure its feed **at runtime** (`setFeedURL`), which a static scan cannot see.
+  The check only turns `fail` when a packaged feed file exists and is incoherent (no provider,
+  missing provider fields, or a non-`https` URL that App Transport Security would block at
+  runtime).
 - **`crash-reporter`** is `unknown` when no `Electron Framework.framework` exists (not an
   Electron-shaped bundle). It is a `fail` when the framework is present but the crashpad handler
   is missing or lost its execute bit (zip-roundtrip repackaging does this) — either condition

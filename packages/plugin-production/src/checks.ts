@@ -506,6 +506,20 @@ const UPDATER_TITLE = 'Updater feed configuration'
 const APP_UPDATE_YML = path.join('Contents', 'Resources', 'app-update.yml')
 
 /**
+ * electron-builder stages macOS apps under `mac` or `mac-<arch>` before a target turns them into
+ * a distributable artifact. `--dir` stops at this same unpacked output. Keep the accepted names
+ * explicit: a broad `mac-*` match could misclassify an arbitrary consumer directory as builder
+ * output and give misleading release advice.
+ */
+const ELECTRON_BUILDER_MAC_OUTPUT_DIR = /^mac(?:-(?:ia32|x64|armv7l|arm64|universal))?$/
+
+/** Return the conventional electron-builder unpacked-output directory, when the path has one. */
+function electronBuilderMacOutputDir(appPath: string): string | undefined {
+  const parent = path.basename(path.dirname(path.resolve(appPath)))
+  return ELECTRON_BUILDER_MAC_OUTPUT_DIR.test(parent) ? parent : undefined
+}
+
+/**
  * Upper bound for a plausible `app-update.yml` before the check refuses to read it. Real
  * electron-updater configs are under 1 KB; this keeps the pure-fs check bounded (the shell-out
  * checks get the same property from the command timeout) so a corrupted multi-hundred-MB file
@@ -562,9 +576,10 @@ const PROVIDER_REQUIRED_FIELDS: Readonly<Record<string, readonly string[]>> = {
  * is `https://` — macOS App Transport Security blocks plain HTTP at runtime, so an `http://` feed
  * means the app silently never updates.
  *
- * A bundle WITHOUT the file is `unknown`, not `fail`: Electron's built-in autoUpdater
- * (Squirrel.Mac) configures its feed at runtime via `setFeedURL`, which a static scan cannot see —
- * that is missing evidence, never a defect. Pure filesystem: runs on any host.
+ * A bundle WITHOUT the file is `unknown`, not `fail`: an electron-builder unpacked output is not
+ * itself proof that a DMG/ZIP target was built, while Electron's built-in autoUpdater
+ * (Squirrel.Mac) can configure its feed at runtime via `setFeedURL`, which a static scan cannot
+ * see. That is missing evidence, never a defect. Pure filesystem: runs on any host.
  */
 export async function checkUpdaterFeed(appPath: string): Promise<CheckResult> {
   const id = 'updater-feed' as const
@@ -603,6 +618,18 @@ export async function checkUpdaterFeed(appPath: string): Promise<CheckResult> {
       'code' in err &&
       (err as { readonly code?: unknown }).code === 'ENOENT'
     if (missing) {
+      const unpackedOutput = electronBuilderMacOutputDir(appPath)
+      if (unpackedOutput !== undefined) {
+        return {
+          id,
+          title: UPDATER_TITLE,
+          status: 'unknown',
+          detail:
+            `No app-update.yml exists in this electron-builder unpacked output (${unpackedOutput}). ` +
+            'This staging layout is also produced by --dir and is not itself a distributable artifact; validate the app from the release DMG or ZIP before diagnosing auto-update.',
+          evidence: `electron-builder output=${unpackedOutput}`,
+        }
+      }
       return {
         id,
         title: UPDATER_TITLE,

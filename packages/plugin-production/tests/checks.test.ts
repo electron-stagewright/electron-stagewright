@@ -34,10 +34,16 @@ afterEach(async () => {
 })
 
 /** Build a synthetic `.app` with optional Info.plist / MacOS executable for the structure check. */
-async function makeApp(opts: { info?: boolean; exe?: boolean } = {}): Promise<string> {
+async function makeApp(
+  opts: { info?: boolean; exe?: boolean; parentDirName?: string } = {},
+): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'sw-prod-'))
   created.push(dir)
-  const app = path.join(dir, 'Demo.app')
+  const app = path.join(
+    dir,
+    ...(opts.parentDirName === undefined ? [] : [opts.parentDirName]),
+    'Demo.app',
+  )
   await mkdir(path.join(app, 'Contents', 'MacOS'), { recursive: true })
   if (opts.info ?? true) await writeFile(path.join(app, 'Contents', 'Info.plist'), '<plist/>\n')
   if (opts.exe ?? true) await writeFile(path.join(app, 'Contents', 'MacOS', 'Demo'), '#!/bin/sh\n')
@@ -768,8 +774,8 @@ describe('checkProtocolSchemes', () => {
 
 describe('checkUpdaterFeed', () => {
   /** Build a synthetic app with an optional `Contents/Resources/app-update.yml` body. */
-  async function makeAppWithFeed(yml?: string): Promise<string> {
-    const app = await makeApp()
+  async function makeAppWithFeed(yml?: string, parentDirName?: string): Promise<string> {
+    const app = await makeApp(parentDirName === undefined ? {} : { parentDirName })
     if (yml !== undefined) {
       await mkdir(path.join(app, 'Contents', 'Resources'), { recursive: true })
       await writeFile(path.join(app, 'Contents', 'Resources', 'app-update.yml'), yml)
@@ -780,6 +786,25 @@ describe('checkUpdaterFeed', () => {
   it('is unknown when app-update.yml is absent (runtime feeds are not statically visible)', async () => {
     const result = await checkUpdaterFeed(await makeAppWithFeed())
     expect(result).toMatchObject({ id: 'updater-feed', status: 'unknown' })
+    expect(result.detail).toContain('app-update.yml is absent')
+  })
+
+  it('identifies electron-builder unpacked output instead of implying a release defect', async () => {
+    const result = await checkUpdaterFeed(await makeAppWithFeed(undefined, 'mac-arm64'))
+    expect(result).toMatchObject({
+      id: 'updater-feed',
+      status: 'unknown',
+      evidence: 'electron-builder output=mac-arm64',
+    })
+    expect(result.detail).toContain('unpacked output')
+    expect(result.detail).toContain('--dir')
+    expect(result.detail).toContain('release DMG or ZIP')
+  })
+
+  it('does not classify an arbitrary mac-prefixed directory as electron-builder output', async () => {
+    const result = await checkUpdaterFeed(await makeAppWithFeed(undefined, 'mac-release'))
+    expect(result.status).toBe('unknown')
+    expect(result.evidence).toBeUndefined()
     expect(result.detail).toContain('app-update.yml is absent')
   })
 

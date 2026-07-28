@@ -15,10 +15,16 @@ afterEach(async () => {
   await Promise.all(created.splice(0).map((entry) => rm(entry, { recursive: true, force: true })))
 })
 
-async function makeBundle(options: { info?: boolean; executable?: boolean } = {}): Promise<string> {
+async function makeBundle(
+  options: { info?: boolean; executable?: boolean; parentDirName?: string } = {},
+): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'stagewright-production-api-'))
   created.push(root)
-  const appPath = path.join(root, 'Demo.app')
+  const appPath = path.join(
+    root,
+    ...(options.parentDirName === undefined ? [] : [options.parentDirName]),
+    'Demo.app',
+  )
   await mkdir(path.join(appPath, 'Contents', 'MacOS'), { recursive: true })
   if (options.info ?? true) {
     await writeFile(path.join(appPath, 'Contents', 'Info.plist'), '<plist/>\n')
@@ -59,6 +65,26 @@ describe('validateProductionApp', () => {
       summary: { pass: 0, fail: 1, unknown: 0 },
       checks: [{ id: 'bundle-structure', status: 'fail' }],
     })
+  })
+
+  it('surfaces electron-builder unpacked output context in the public report', async () => {
+    const appPath = await makeBundle({ parentDirName: 'mac-universal' })
+    const report = await validateProductionApp(appPath, { checks: ['updater-feed'] })
+
+    expect(report).toMatchObject({
+      app_path: appPath,
+      artifact_type: 'macos-app',
+      passed: true,
+      summary: { pass: 0, fail: 0, unknown: 1 },
+      checks: [
+        {
+          id: 'updater-feed',
+          status: 'unknown',
+          evidence: 'electron-builder output=mac-universal',
+        },
+      ],
+    })
+    expect(report.checks[0]?.detail).toContain('release DMG or ZIP')
   })
 
   it('throws stable caller errors before validation starts', async () => {
