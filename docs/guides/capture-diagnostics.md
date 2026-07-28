@@ -113,10 +113,21 @@ context budget: it shows which tools cost the most before the budget bites.
 ## The artifact, not the app
 
 When the thing to diagnose is a **packaged build** rather than a running session — signing,
-notarization, update feed, crash machinery — that is `production_validate` from
-`@electron-stagewright/plugin-production`; see the [tool reference](../../TOOL-REFERENCE.md) and
-the plugin's README. A host that opts into MCP progress receives delayed per-check phases for a
-long validation run, without exposing the inspected path.
+notarization, update feed, crash machinery — run the same production engine directly in CI:
+
+```sh
+electron-stagewright production validate \
+  --app /absolute/path/to/My.app \
+  --json > production-validation.json
+```
+
+Install `@electron-stagewright/plugin-production` beside core before using the root command, or run
+its equivalent `electron-stagewright-production` binary. JSON mode writes one versioned report and
+uses exit `0` for no failed checks, `1` for verified failures, and `2` for invalid usage/input.
+The MCP delivery channel remains `production_validate`; see the
+[tool reference](../../TOOL-REFERENCE.md) and the plugin's README. A host that opts into MCP
+progress receives delayed per-check phases for a long validation run, without exposing the
+inspected path.
 
 **A capture can hold secrets.** Screenshots, console logs, traces, and IPC payloads record whatever
 the app exposed. Configure `redact` for structured trace arguments and IPC payload fields before

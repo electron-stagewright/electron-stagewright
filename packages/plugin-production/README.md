@@ -13,6 +13,47 @@ a required tool is absent, a command times out, or the host is not macOS — ver
 bad)**. A green result with `unknown` checks is never silently mistaken for full verification: the
 summary discloses every category.
 
+## Use it without MCP
+
+The checks are a public library API and a CI-friendly CLI. Install this package beside
+`@electron-stagewright/core`, then run:
+
+```sh
+electron-stagewright production validate \
+  --app /absolute/path/to/My.app \
+  --json
+```
+
+The package also installs a direct binary with the same parser and report contract:
+
+```sh
+electron-stagewright-production validate \
+  --app /absolute/path/to/My.app \
+  --checks bundle-structure,code-signing,notarization \
+  --json
+```
+
+JSON mode writes exactly one `electron-stagewright-production-validation` version-1 report to
+stdout. Diagnostics stay on stderr. Exit codes are stable for CI:
+
+- `0` — validation ran and no check failed (`unknown` remains visible in the summary);
+- `1` — validation ran and at least one check failed;
+- `2` — invalid command usage, path, options, or an unavailable validation entrypoint.
+
+Programmatic consumers use the same engine directly:
+
+```js
+import { validateProductionApp } from '@electron-stagewright/plugin-production'
+
+const report = await validateProductionApp('/absolute/path/to/My.app', {
+  checks: ['bundle-structure', 'code-signing', 'notarization'],
+  commandTimeoutMs: 15_000,
+})
+```
+
+`validateProductionApp()` returns `{ app_path, passed, summary, checks }`. Verified defects remain
+check data; caller errors throw `ProductionValidationError` with a stable `code`.
+
 ## Load it
 
 ```sh
@@ -32,6 +73,9 @@ import productionPlugin from '@electron-stagewright/plugin-production'
 
 const server = await createServer({ plugins: [productionPlugin] })
 ```
+
+The MCP tool delegates to the same `validateProductionApp()` API used by the standalone CLI, so
+check ordering, verdicts, timeouts, and summaries cannot drift between delivery channels.
 
 It needs **no `--allow-eval`** and **no running app session** — it shells out to the macOS toolchain
 (`plutil`, `codesign`, `xcrun stapler`, `spctl`) against a path on disk, not into app code.

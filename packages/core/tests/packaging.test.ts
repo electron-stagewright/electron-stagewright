@@ -293,6 +293,22 @@ describe('publish-readiness — publishable package manifests', () => {
       import: './dist/plugin-sdk/index.js',
     })
   })
+
+  it('publishes the production library plus its standalone CLI entrypoint', async () => {
+    const production = (await loadManifests('packages')).find(
+      (manifest) => manifest.relDir === 'packages/plugin-production',
+    )
+    const exportsObject = production?.pkg['exports'] as
+      Record<string, { readonly types?: unknown; readonly import?: unknown }> | undefined
+
+    expect(production?.pkg['bin']).toEqual({
+      'electron-stagewright-production': './dist/cli.js',
+    })
+    expect(exportsObject?.['./cli']).toEqual({
+      types: './dist/cli.d.ts',
+      import: './dist/cli.js',
+    })
+  })
 })
 
 // --- RELEASING.md "What publishes" drift guard ------------------------------

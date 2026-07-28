@@ -20,9 +20,6 @@
  * @module
  */
 
-import { stat } from 'node:fs/promises'
-import path from 'node:path'
-
 import {
   defineTool,
   makeError,
@@ -36,8 +33,12 @@ import {
 import { createPluginConfigState } from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
-import { CHECK_IDS, runChecks, type CheckStatus } from './checks.js'
-import { makeRunCommand } from './command.js'
+import { CHECK_IDS } from './checks.js'
+import {
+  ProductionValidationError,
+  validateProductionApp,
+  type ProductionValidationReport,
+} from './validate.js'
 
 /** Plugin namespace — must match {@link productionPlugin.name}; the loader prefixes its tools. */
 const PRODUCTION_NAMESPACE = 'production'
@@ -107,51 +108,56 @@ export function createProductionPlugin(): StagewrightPlugin {
     handler: async (args, ctx) =>
       withProgressPhases({ reporter: ctx.progress }, async (phase) => {
         const meta = { startedAt: ctx.startedAt, now: ctx.now }
-        if (!path.isAbsolute(args.appPath)) {
-          return makeError('ABSOLUTE_PATH_REQUIRED', {
-            ...meta,
-            message: 'appPath must be an absolute path to a packaged .app bundle.',
-            details: { app_path: args.appPath },
-          })
-        }
-        const appPath = path.resolve(args.appPath)
-
-        let info
+        let report: ProductionValidationReport
         try {
           phase('Inspecting application bundle')
-          info = await stat(appPath)
-        } catch {
-          return makePluginError('production.APP_NOT_FOUND', {
-            ...meta,
-            message: `No file or directory at ${appPath}; pass the path to the packaged .app.`,
-            details: { app_path: appPath },
+          report = await validateProductionApp(args.appPath, {
+            checks: args.checks ?? CHECK_IDS,
+            commandTimeoutMs: config.current.commandTimeoutMs,
+            onCheckStart: ({ index, total }) => {
+              phase(`Running production check ${index + 1} of ${total}`)
+            },
           })
-        }
-        if (!info.isDirectory()) {
-          return makePluginError('production.NOT_A_BUNDLE', {
+        } catch (error) {
+          if (!(error instanceof ProductionValidationError)) throw error
+          const details = error.appPath === undefined ? {} : { app_path: error.appPath }
+          if (error.code === 'ABSOLUTE_PATH_REQUIRED') {
+            return makeError('ABSOLUTE_PATH_REQUIRED', {
+              ...meta,
+              message: error.message,
+              details,
+            })
+          }
+          if (error.code === 'APP_NOT_FOUND') {
+            return makePluginError('production.APP_NOT_FOUND', {
+              ...meta,
+              message: error.message,
+              details,
+            })
+          }
+          if (error.code === 'NOT_A_BUNDLE') {
+            return makePluginError('production.NOT_A_BUNDLE', {
+              ...meta,
+              message: error.message,
+              details,
+            })
+          }
+          return makeError('BAD_ARGUMENT', {
             ...meta,
-            message: `${appPath} is not a directory; a macOS .app is a bundle directory.`,
-            details: { app_path: appPath },
+            message: error.message,
+            details,
           })
         }
 
-        const run = makeRunCommand(config.current.commandTimeoutMs)
-        const checks = await runChecks(
-          appPath,
-          run,
-          args.checks ?? CHECK_IDS,
-          ({ index, total }) => {
-            phase(`Running production check ${index + 1} of ${total}`)
+        return makeSuccess(
+          {
+            app_path: report.app_path,
+            passed: report.passed,
+            summary: report.summary,
+            checks: report.checks,
           },
+          meta,
         )
-        const tally = (status: CheckStatus): number =>
-          checks.filter((check) => check.status === status).length
-        const summary = { pass: tally('pass'), fail: tally('fail'), unknown: tally('unknown') }
-        // passed = nothing FAILED. unknown checks (missing evidence) do not flip it, but the summary
-        // discloses them so a green result with skipped checks is never mistaken for full verification.
-        const passed = summary.fail === 0
-
-        return makeSuccess({ app_path: appPath, passed, summary, checks }, meta)
       }),
   })
 
@@ -210,5 +216,16 @@ export const productionPlugin: StagewrightPlugin = {
 export default productionPlugin
 
 export { CHECK_IDS } from './checks.js'
-export type { CheckResult, CheckStatus, CheckId } from './checks.js'
+export type { CheckResult, CheckStartObserver, CheckStatus, CheckId } from './checks.js'
 export type { CommandResult, RunCommand } from './command.js'
+export {
+  DEFAULT_COMMAND_TIMEOUT_MS,
+  ProductionValidationError,
+  validateProductionApp,
+} from './validate.js'
+export type {
+  ProductionValidationErrorCode,
+  ProductionValidationOptions,
+  ProductionValidationReport,
+  ProductionValidationSummary,
+} from './validate.js'

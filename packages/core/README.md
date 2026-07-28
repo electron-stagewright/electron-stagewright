@@ -58,6 +58,8 @@ Useful CLI flags:
   doctor imports and briefly sets up those explicitly trusted plugins, validates the server object
   graph, then tears it down. Run it as `electron-stagewright doctor --json`, never as an MCP server
   argument.
+- `production validate --app <path> --json` delegates packaged-app validation to a separately
+  installed `@electron-stagewright/plugin-production` package. It exits without starting MCP stdio.
 
 ## Use with Claude Code
 

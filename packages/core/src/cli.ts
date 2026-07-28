@@ -14,8 +14,10 @@
  *   writes one machine-readable report. Either mode exits non-zero when a
  *   required check fails.
  * - `--help` / `--version` — print standalone CLI output and exit.
+ * - `production validate ...` — delegate artifact validation to the separately installed
+ *   `@electron-stagewright/plugin-production` package and exit without opening MCP stdio.
  *
- * `doctor`, `--help`, and `--version` run to completion and exit before the MCP
+ * `doctor`, `production`, `--help`, and `--version` run to completion and exit before the MCP
  * server starts, so they may write normal text to stdout; server mode never
  * does, reserving stdout for MCP protocol frames.
  *
@@ -66,7 +68,7 @@ import { StderrLogger } from './server/logger.js'
 import { isToolProfile, type ToolProfile } from './tools/index.js'
 import { VERSION } from './version.js'
 
-export type CliCommand = 'serve' | 'help' | 'version' | 'doctor'
+export type CliCommand = 'serve' | 'help' | 'version' | 'doctor' | 'production'
 
 export interface CliOptions {
   readonly command: CliCommand
@@ -79,6 +81,7 @@ export interface CliOptions {
   readonly pluginSpecs: readonly string[]
   readonly pluginConfigs: Readonly<Record<string, unknown>>
   readonly operationTimeoutMs?: number
+  readonly productionArgs?: readonly string[]
 }
 
 function requireValue(argv: readonly string[], index: number, flag: string): string {
@@ -178,6 +181,18 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       toolProfile: 'full',
       pluginSpecs: [],
       pluginConfigs: {},
+    }
+  }
+  if (argv[0] === 'production') {
+    return {
+      command: 'production',
+      doctorJson: false,
+      demo: false,
+      allowEval: { main: false, renderer: false },
+      toolProfile: 'full',
+      pluginSpecs: [],
+      pluginConfigs: {},
+      productionArgs: argv.slice(1),
     }
   }
 
@@ -289,6 +304,7 @@ export function formatCliHelp(): string {
   return [
     'Usage: electron-stagewright [options]',
     '       electron-stagewright doctor [--json] [options]',
+    '       electron-stagewright production validate --app <path> [--json]',
     '',
     'Options:',
     '  --allow-eval[=main,renderer|all]  Enable eval tools (default: disabled).',
@@ -304,6 +320,52 @@ export function formatCliHelp(): string {
   ].join('\n')
 }
 
+interface ProductionCliModule {
+  readonly runProductionCliCommand?: (argv: readonly string[]) => Promise<number>
+}
+
+/** Dynamic loader seam: keeps the production plugin optional and unit tests hermetic. */
+export type ProductionCliModuleLoader = (target: string) => Promise<ProductionCliModule>
+
+const loadOptionalModule: ProductionCliModuleLoader = async (target) =>
+  (await import(target)) as ProductionCliModule
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Delegate the root production subcommand to the optional production package without adding a
+ * core → plugin dependency cycle.
+ */
+export async function runProductionCommand(
+  argv: readonly string[],
+  writeStderr: (text: string) => void = (text) => process.stderr.write(text),
+  loadModule: ProductionCliModuleLoader = loadOptionalModule,
+): Promise<number> {
+  let module: ProductionCliModule
+  try {
+    module = await loadModule('@electron-stagewright/plugin-production/cli')
+  } catch (error) {
+    writeStderr(
+      `fatal: production validation requires @electron-stagewright/plugin-production installed beside @electron-stagewright/core (${messageOf(error)}).\n`,
+    )
+    return 2
+  }
+  if (typeof module.runProductionCliCommand !== 'function') {
+    writeStderr(
+      'fatal: @electron-stagewright/plugin-production does not expose a compatible production CLI; install matching package versions.\n',
+    )
+    return 2
+  }
+  try {
+    return await module.runProductionCliCommand(argv)
+  } catch (error) {
+    writeStderr(`fatal: production validation failed before reporting: ${messageOf(error)}\n`)
+    return 2
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseCliArgs(process.argv.slice(2))
   if (options.command === 'help') {
@@ -312,6 +374,10 @@ async function main(): Promise<void> {
   }
   if (options.command === 'version') {
     process.stdout.write(`${VERSION}\n`)
+    return
+  }
+  if (options.command === 'production') {
+    process.exitCode = await runProductionCommand(options.productionArgs ?? [])
     return
   }
   const { allowEval, toolProfile, screenshotDir, appRoot, demo } = options

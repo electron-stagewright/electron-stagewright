@@ -82,6 +82,28 @@ bit is a `fail` — packaging silently disabled crash capture.
 - Spawning external processes is a new capability for the plugin surface; it is bounded and
   documented, and runs only when the operator loads this plugin.
 
+## Status update (library and standalone CLI, 2026-07-28)
+
+Consumer dogfooding needed the production checks inside a CI evidence collector where no MCP
+session exists. The check engine is therefore exposed through a transport-neutral
+`validateProductionApp()` API and two equivalent command routes:
+
+```sh
+electron-stagewright production validate --app /path/to/My.app --json
+electron-stagewright-production validate --app /path/to/My.app --json
+```
+
+The root command dynamically delegates to the separately installed production package. Core does
+not depend on a plugin, and the plugin continues to depend on core only for its MCP adapter, so the
+package graph remains acyclic. Both binaries emit the same versioned JSON report and stable CI exit
+codes: `0` for no failed checks, `1` for one or more failed checks, and `2` when validation could not
+start because usage or input was invalid. Unknown evidence remains explicit and does not become a
+failure.
+
+The MCP tool, public API, and CLI all call the same orchestration function. Path checks, timeout
+validation, canonical check ordering, summary aggregation, and the pass/fail/unknown model now have
+one implementation.
+
 ## Related decisions
 
 - ADR-004 (plugin model) — the contract this is built on.
@@ -91,4 +113,6 @@ bit is a `fail` — packaging silently disabled crash capture.
 
 - `packages/plugin-production/src/checks.ts` — the `CheckResult` model + the production checks.
 - `packages/plugin-production/src/command.ts` — the bounded `runCommand`.
+- `packages/plugin-production/src/validate.ts` — the shared transport-neutral validation API.
+- `packages/plugin-production/src/cli.ts` — the standalone JSON/human CLI and exit contract.
 - `packages/plugin-production/src/index.ts` — the plugin + `production_validate`.

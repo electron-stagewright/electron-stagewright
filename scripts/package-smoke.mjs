@@ -347,6 +347,22 @@ async function packVisualPlugin(packDir) {
   return path.join(packDir, filename)
 }
 
+async function packProductionPlugin(packDir) {
+  await execPackageCommand(
+    'pnpm',
+    ['--filter', '@electron-stagewright/plugin-production', 'pack', '--pack-destination', packDir],
+    { cwd: ROOT, maxBuffer: 8 * 1024 * 1024 },
+  )
+  const filename = (await readdir(packDir)).find(
+    (entry) =>
+      entry.startsWith('electron-stagewright-plugin-production-') && entry.endsWith('.tgz'),
+  )
+  if (filename === undefined) {
+    throw new Error('pnpm pack did not produce the production plugin tarball')
+  }
+  return path.join(packDir, filename)
+}
+
 async function packDemo(packDir) {
   await execPackageCommand(
     'pnpm',
@@ -365,6 +381,7 @@ async function main() {
   const packDir = path.join(tempRoot, 'pack')
   const a11yPackDir = path.join(tempRoot, 'a11y-pack')
   const visualPackDir = path.join(tempRoot, 'visual-pack')
+  const productionPackDir = path.join(tempRoot, 'production-pack')
   const tracePackDir = path.join(tempRoot, 'trace-pack')
   const demoPackDir = path.join(tempRoot, 'demo-pack')
   const scratchDir = path.join(tempRoot, 'scratch')
@@ -373,6 +390,7 @@ async function main() {
       mkdir(packDir),
       mkdir(a11yPackDir),
       mkdir(visualPackDir),
+      mkdir(productionPackDir),
       mkdir(tracePackDir),
       mkdir(demoPackDir),
       mkdir(scratchDir),
@@ -400,6 +418,7 @@ async function main() {
     const coreTarball = path.join(packDir, filename)
     const a11yTarball = await packA11yPlugin(a11yPackDir)
     const visualTarball = await packVisualPlugin(visualPackDir)
+    const productionTarball = await packProductionPlugin(productionPackDir)
     const traceTarball = await packTracePlugin(tracePackDir)
     const demoTarball = await packDemo(demoPackDir)
     const [playwrightVersion, electronVersion] = await Promise.all([
@@ -418,6 +437,7 @@ async function main() {
         coreTarball,
         a11yTarball,
         visualTarball,
+        productionTarball,
         traceTarball,
         demoTarball,
         `playwright@${playwrightVersion}`,
@@ -435,12 +455,28 @@ async function main() {
     const a11yClientPath = path.join(scratchDir, 'a11y-client-smoke.mjs')
     const visualClientPath = path.join(scratchDir, 'visual-client-smoke.mjs')
     const pluginSdkPath = path.join(scratchDir, 'plugin-sdk-smoke.mjs')
+    const productionApiPath = path.join(scratchDir, 'production-api-smoke.mjs')
+    const productionAppPath = path.join(scratchDir, 'Production.app')
+    await mkdir(path.join(productionAppPath, 'Contents', 'MacOS'), { recursive: true })
     await Promise.all([
       writeFile(clientPath, CLIENT_SMOKE),
       writeFile(demoClientPath, DEMO_CLIENT_SMOKE),
       writeFile(a11yClientPath, A11Y_CLIENT_SMOKE),
       writeFile(visualClientPath, VISUAL_CLIENT_SMOKE),
       writeFile(pluginSdkPath, PLUGIN_SDK_SMOKE),
+      writeFile(
+        productionApiPath,
+        `
+import { validateProductionApp } from '@electron-stagewright/plugin-production'
+
+const report = await validateProductionApp(process.argv[2], { checks: ['bundle-structure'] })
+if (!report.passed || report.summary.pass !== 1 || report.checks[0]?.id !== 'bundle-structure') {
+  throw new Error('published production library API returned an invalid report')
+}
+`,
+      ),
+      writeFile(path.join(productionAppPath, 'Contents', 'Info.plist'), '<plist/>\\n'),
+      writeFile(path.join(productionAppPath, 'Contents', 'MacOS', 'Production'), '#!/bin/sh\\n'),
       writeFile(
         path.join(scratchDir, 'replay.json'),
         `${JSON.stringify(
@@ -488,6 +524,10 @@ async function main() {
       ),
     ])
     await execFile(process.execPath, [pluginSdkPath], {
+      cwd: scratchDir,
+      maxBuffer: 8 * 1024 * 1024,
+    })
+    await execFile(process.execPath, [productionApiPath, productionAppPath], {
       cwd: scratchDir,
       maxBuffer: 8 * 1024 * 1024,
     })
@@ -586,6 +626,45 @@ async function main() {
       },
     )
     const replayBin = path.join(scratchDir, 'node_modules', '.bin', 'electron-stagewright-replay')
+    const productionBin = path.join(
+      scratchDir,
+      'node_modules',
+      '.bin',
+      'electron-stagewright-production',
+    )
+    for (const [command, args] of [
+      [
+        process.execPath,
+        [
+          cliPath,
+          'production',
+          'validate',
+          '--app',
+          productionAppPath,
+          '--checks',
+          'bundle-structure',
+          '--json',
+        ],
+      ],
+      [
+        productionBin,
+        ['validate', '--app', productionAppPath, '--checks', 'bundle-structure', '--json'],
+      ],
+    ]) {
+      const { stdout: productionOutput } = await execPackageCommand(command, args, {
+        cwd: scratchDir,
+        maxBuffer: 8 * 1024 * 1024,
+      })
+      const productionReport = JSON.parse(productionOutput)
+      if (
+        productionReport?.format !== 'electron-stagewright-production-validation' ||
+        productionReport?.passed !== true ||
+        productionReport?.exit_code !== 0 ||
+        productionReport?.checks?.[0]?.id !== 'bundle-structure'
+      ) {
+        throw new Error(`published production CLI failed: ${productionOutput}`)
+      }
+    }
     const { stdout: replayOutput } = await execPackageCommand(
       replayBin,
       [path.join(scratchDir, 'replay.json'), '--json'],
