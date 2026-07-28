@@ -60,8 +60,8 @@ All timestamps and date boundaries use UTC. A report labels its source and windo
 | ------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Package adoption          | npm download range API           | Daily downloads per publishable package; rolling 7-day and 30-day totals                                                                             | Directional package demand. `core` is reported separately; package totals are never summed or called users.                                               |
 | Repository discovery      | GitHub repository traffic API    | Daily clone count and daily GitHub-reported unique cloners plus the as-of-date 14-day totals                                                         | Directional repository discovery. It excludes fetches and is not a unique-user count. Daily unique values are never summed into a multi-day unique count. |
-| Maintainer responsiveness | GitHub issues and issue comments | Eligible-issue count, response coverage within 7 days, and p50/p90 time to first maintainer response for issues opened in the trailing 90-day cohort | Responsiveness to public, non-pull-request issues opened by non-maintainers.                                                                              |
-| Contributor growth        | GitHub merged pull requests      | Non-bot accounts whose first merged pull request falls within 30 or 90 days, plus cumulative non-bot merged-PR authors                               | Growth in contributor accounts with an accepted change. GitHub-classified bots are excluded; maintainers remain contributors.                             |
+| Maintainer responsiveness | GitHub issues and issue comments | Eligible-issue count, response coverage within 7 days, and p50/p90 time to first maintainer response for issues opened in the trailing 90-day cohort | Responsiveness to public issues opened by non-maintainers, excluding pull requests.                                                                       |
+| Contributor growth        | GitHub merged pull requests      | Non-bot accounts whose first merged pull request falls within 30 or 90 days, plus cumulative non-bot merged pull request authors                     | Growth in contributor accounts with an accepted change. GitHub-classified bots are excluded; maintainers remain contributors.                             |
 
 For responsiveness, “maintainer” means a person listed as a maintainer in
 `.github/GOVERNANCE.md` when the relevant event occurred: issue authors are classified at issue
@@ -73,20 +73,20 @@ bot-opened issues, maintainer-opened issues, and private security reports are ex
 qualifying public comment by a maintainer closes the response interval. This cohort prevents a
 newly opened issue from counting as a 7-day coverage failure before its window closes.
 
-A response is within 7 days when its delay is at most 604,800 seconds. Response delays are stored as
+A response is within 7 days when its delay is at most 604800 seconds. Response delays are stored as
 non-negative integer seconds. Percentiles use the nearest-rank method over sorted delays from the
 same cohort for issues with a qualifying response by `generated_at`; p50 is suppressed below five
 such responses and p90 below ten. The eligible count, response count, and 7-day coverage remain
 explicit.
 
-Contributor growth uses merged-pull-request authors instead of Git commit author emails. An actor
+Contributor growth uses merged pull request authors instead of Git commit author emails. An actor
 is counted once, on their first merged pull request, unless GitHub classifies the actor as a bot.
 Maintainers are included because they are contributors too, and excluding someone after a promotion
 would retroactively reduce historical growth. This measures accepted contributor-account growth
 without persisting commit email identities or turning ongoing maintainer activity into repeated
 growth. It does not claim that every account GitHub leaves unclassified as a bot maps to one human.
 An author that lacks a stable actor identity is excluded and increments only an aggregate
-unclassified-author count. Cumulative growth is recomputed from complete merged-pull-request
+unclassified-author count. Cumulative growth is recomputed from complete merged pull request
 history; incomplete pagination makes this metric family `unavailable`.
 
 ### 3. Minimize collection before aggregation
@@ -98,9 +98,9 @@ fields required for the aggregates:
 - GitHub clone UTC day, count, and reported unique count plus the 14-day snapshot totals;
 - issue creation time and comment creation time plus the minimum actor fields needed to recognize
   bots and the public maintainer allowlist;
-- pull-request author type/identity and merge time.
+- pull request author type/identity and merge time.
 
-GitHub GraphQL is preferred for issue and pull-request aggregation because it returns only requested
+GitHub GraphQL is preferred for issue and pull request aggregation because it returns only requested
 fields. Queries must not request issue numbers, titles, bodies, labels, URLs, comment bodies,
 reactions, or profile data. The traffic REST response is already aggregate-only.
 
@@ -113,7 +113,7 @@ or error messages. Tests use synthetic fixtures.
 End-user opt-in is not applicable because the product emits nothing. The opt-in boundary belongs to
 the maintainers who enable a collector, a schedule, storage, or a dashboard.
 
-The npm source is public and unauthenticated. Public issue and pull-request metadata may use the
+The npm source is public and unauthenticated. Public issue and pull request metadata may use the
 repository workflow token with read-only permissions. Clone traffic is different: GitHub requires
 repository `Administration` read permission. A collector must report
 `github_clones: unavailable` when that permission is absent. It must not silently:
@@ -165,7 +165,7 @@ The provider-neutral collector is eligible only if it:
 6. computes overlapping daily windows idempotently and never sums daily unique-cloner counts;
 7. derives and validates the time-indexed maintainer roster from the tracked history of
    `.github/GOVERNANCE.md`;
-8. fails the contributor metric when complete merged-pull-request pagination cannot be proven;
+8. fails the contributor metric when complete merged pull request pagination cannot be proven;
 9. keeps its command absent from published tarballs and runtime startup paths.
 
 Selecting scheduled execution, durable storage, or a dashboard requires a status update to this ADR
