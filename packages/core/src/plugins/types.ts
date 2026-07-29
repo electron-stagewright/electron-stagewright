@@ -50,7 +50,7 @@ export interface PluginServerContext {
  * for additive contract changes, the MAJOR for breaking ones. A plugin can log or assert against
  * it at `setup` time, and `coreVersionRange` remains the enforced compatibility gate.
  */
-export const PLUGIN_API_VERSION = '1.3.0' as const
+export const PLUGIN_API_VERSION = '1.4.0' as const
 
 /**
  * Declarative availability requirements for a plugin. These describe gates required by at

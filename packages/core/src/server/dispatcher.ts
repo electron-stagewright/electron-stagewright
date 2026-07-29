@@ -714,7 +714,13 @@ export class Dispatcher {
    */
   #complete(tool: string, args: unknown, result: ToolResult, startedAt: number): ToolResult {
     const finishedAt = this.#now()
-    this.#status.record(result, finishedAt, (sessionId) => this.#sessions.has(sessionId))
+    // Only registered definitions are safe to echo through a future status response. An unknown
+    // tool name is agent-controlled input, so retain its stable failure code without reflecting
+    // the raw name.
+    const registeredTool = this.#tools.has(tool) ? tool : undefined
+    this.#status.record(registeredTool, result, finishedAt, (sessionId) =>
+      this.#sessions.has(sessionId),
+    )
     if (this.#observers.size > 0) {
       const record: DispatchRecord = { tool, args, result, startedAt, finishedAt }
       for (const observer of this.#observers) {
