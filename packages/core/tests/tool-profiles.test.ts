@@ -58,6 +58,26 @@ describe('core tool profiles', () => {
     )
   })
 
+  it('keeps broader named profiles as explicit supersets of the essential workflow', () => {
+    const essential = safeNames('essential')
+    const testing = safeNames('testing')
+    const debug = safeNames('debug')
+    const full = safeNames('full')
+
+    for (const name of essential) {
+      expect(testing).toContain(name)
+      expect(debug).toContain(name)
+    }
+    for (const name of [...testing, ...debug]) {
+      expect(full).toContain(name)
+    }
+  })
+
+  it('includes screenshot evidence in testing without widening essential', () => {
+    expect(safeNames('testing')).toContain('electron_screenshot')
+    expect(safeNames('essential')).not.toContain('electron_screenshot')
+  })
+
   it('keeps eval definitions orthogonal to every profile', () => {
     const names = resolveCoreToolProfile(DEFAULT_TOOLS, 'essential').map((tool) => tool.name)
     expect(names).toContain('electron_eval_main')
@@ -72,7 +92,7 @@ describe('core tool profiles', () => {
     await expect(server.dispatcher.dispatch('electron_screenshot', {})).resolves.toMatchObject({
       ok: false,
       code: 'BAD_ARGUMENT',
-      next_actions: [expect.stringContaining('--tool-profile debug')],
+      next_actions: [expect.stringContaining('--tool-profile testing')],
     })
     await expect(server.dispatcher.dispatch('electron_eval_renderer', {})).resolves.toMatchObject({
       ok: false,

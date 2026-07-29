@@ -46,7 +46,8 @@ Useful CLI flags:
 - `--allow-eval` registers `electron_eval_main` and `electron_eval_renderer`.
 - `--tool-profile <essential|testing|debug|full>` selects an explicit core tool surface. `full`
   is the default, so existing installations keep the complete core catalog; eval and explicitly
-  loaded plugins compose independently.
+  loaded plugins compose independently. `testing` includes `electron_screenshot` for test-evidence
+  capture without requiring the broader diagnostic profile.
 - `--screenshot-dir <path>` changes where screenshots are written when a tool
   call does not pass an explicit path.
 - `--app-root <path>` confines launch/file paths and enables

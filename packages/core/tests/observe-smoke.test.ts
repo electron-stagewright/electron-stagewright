@@ -24,6 +24,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 
 import { type SuccessResponse } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
+import { createServer } from '../src/server/server.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { clickTool } from '../src/tools/interaction/index.js'
@@ -43,6 +44,39 @@ afterAll(async () => {
 })
 
 describe('observe smoke (real Electron)', () => {
+  it.skipIf(!RUN_E2E)(
+    'captures screenshot evidence through the testing tool profile',
+    async () => {
+      await mkdir(ARTIFACT_DIR, { recursive: true })
+      const server = await createServer({
+        toolProfile: 'testing',
+        screenshotDir: ARTIFACT_DIR,
+        transports: new TransportRegistry({ transports: [new PlaywrightElectronTransport()] }),
+      })
+      try {
+        expect(server.dispatcher.has('electron_screenshot')).toBe(true)
+        const launched = await server.dispatcher.dispatch('electron_launch', {
+          main: FIXTURE_MAIN,
+        })
+        const sessionId = (launched as SuccessResponse & { session_id: string }).session_id
+
+        const shot = (await server.dispatcher.dispatch('electron_screenshot', {
+          sessionId,
+          fullPage: true,
+        })) as SuccessResponse & { path: string; bytes: number }
+        expect(path.dirname(shot.path)).toBe(ARTIFACT_DIR)
+        expect(shot.bytes).toBeGreaterThan(0)
+        expect((await stat(shot.path)).size).toBe(shot.bytes)
+
+        const stopped = await server.dispatcher.dispatch('electron_stop', { sessionId })
+        expect(stopped.ok).toBe(true)
+      } finally {
+        await server.close()
+      }
+    },
+    60_000,
+  )
+
   it.skipIf(!RUN_E2E)(
     'writes a PNG screenshot and captures a console log from a live renderer',
     async () => {
