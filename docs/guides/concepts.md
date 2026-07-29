@@ -60,7 +60,8 @@ more context.
 `electron_status` is the compact orientation call after a failure. Its `server`
 object includes the current instance's `started_at` and `uptime_ms`, plus the most
 recent stable `last_error` that could not be assigned to a live session. Each live
-session keeps its own last stable error. These breadcrumbs intentionally exclude
+session keeps its own last stable error, and when a session ends that error moves to
+the server breadcrumb rather than disappearing. These breadcrumbs intentionally exclude
 messages, arguments, paths, session identifiers, stacks, and plugin configuration,
 and they last only for the current server process.
 

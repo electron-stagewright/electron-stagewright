@@ -108,8 +108,21 @@ export class ServerStatus implements ServerStatusReader {
     }
   }
 
-  /** Forget terminal session state as soon as its owner releases the session. */
+  /**
+   * Forget terminal session state as soon as its owner releases the session, but keep that
+   * session's last stable failure reachable at the server level.
+   *
+   * A session that ends because the app died would otherwise erase the very failure an agent
+   * needs to orient, and whether it survived at all would depend on whether the session-end
+   * event beat the failing dispatch to this store. Promotion keeps only the stable code and
+   * completion time — never the session identifier — and never displaces a newer server-level
+   * failure.
+   */
   clearSession(sessionId: string): void {
+    const ended = this.#lastErrors.get(sessionId)
     this.#lastErrors.delete(sessionId)
+    if (ended === undefined) return
+    if (this.#lastServerError !== undefined && this.#lastServerError.at > ended.at) return
+    this.#lastServerError = { code: ended.code, at: ended.at }
   }
 }

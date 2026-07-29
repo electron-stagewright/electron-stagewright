@@ -267,6 +267,48 @@ describe('electron_status', () => {
     expect(JSON.stringify(result)).not.toContain('released-session')
   })
 
+  it('promotes a live-session failure to the server breadcrumb once its session ends', async () => {
+    const { dispatcher, sessions, advance } = setup()
+    advance(10)
+    await dispatcher.dispatch('test_status_failure', { sessionId: 'session-one' })
+
+    const live = (await dispatcher.dispatch('electron_status', {})) as SuccessResponse & {
+      readonly server: { readonly last_error?: unknown }
+      readonly sessions: readonly Record<string, unknown>[]
+    }
+    expect(live.sessions[0]).toMatchObject({
+      last_error: { code: 'ELEMENT_DISABLED', at: 1_010 },
+    })
+    expect(live.server).not.toHaveProperty('last_error')
+
+    await sessions.remove('session-one')
+    const ended = (await dispatcher.dispatch('electron_status', {})) as SuccessResponse & {
+      readonly server: { readonly last_error?: unknown }
+      readonly sessions: readonly unknown[]
+    }
+    expect(ended.sessions).toEqual([])
+    expect(ended.server.last_error).toEqual({ code: 'ELEMENT_DISABLED', at: 1_010 })
+    expect(JSON.stringify(ended)).not.toContain('session-one')
+  })
+
+  it('does not let an ending session displace a newer server failure', async () => {
+    const { dispatcher, sessions, advance } = setup()
+    advance(10)
+    await dispatcher.dispatch('test_status_failure', { sessionId: 'session-one' })
+    advance(10)
+    await dispatcher.dispatch('test_server_failure', {})
+    await sessions.remove('session-one')
+
+    const result = (await dispatcher.dispatch('electron_status', {})) as SuccessResponse & {
+      readonly server: { readonly last_error?: unknown }
+    }
+    expect(result.server.last_error).toEqual({
+      tool: 'test_server_failure',
+      code: 'FILE_NOT_FOUND',
+      at: 1_020,
+    })
+  })
+
   it('keeps the last completed concurrent server failure', async () => {
     const { advance, dispatcher, firstFailure, secondFailure } = setup()
     const first = dispatcher.dispatch('test_first_controlled_failure', {})

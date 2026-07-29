@@ -215,7 +215,13 @@ for the server instance start time and the most recent stable failed dispatch th
 attributed to a currently live session. Keeping those readers optional preserves structural source
 compatibility for plugin API 1.3 mocks and adapters; the core-owned reader always supplies both.
 `electron_status` projects that record as `server.last_error`; failures against a live session
-remain on that session exactly as before.
+remain on that session for as long as it lives.
+
+When a session ends, its last stable failure moves to the server breadcrumb instead of being
+discarded, carrying only the code and completion time. Without that promotion, a failure would
+survive or vanish depending on whether the session-end event beat the failing dispatch into the
+store — so the crash the agent most needs to see was the one most likely to be lost. A promoted
+record never displaces a newer server-level failure.
 
 The breadcrumb contains only the registered tool name, stable error code, and completion timestamp.
 Unknown tool names are caller-controlled input, so their code is retained without reflecting the
