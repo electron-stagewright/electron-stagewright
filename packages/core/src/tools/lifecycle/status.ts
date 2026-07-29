@@ -56,13 +56,13 @@ async function compactSession(
 }
 
 const DESCRIPTION = [
-  'Return compact orientation for this server: version, start time, uptime, the last stable unscoped',
-  "failure, active-session count, and each live session's transport, renderer readiness, selected",
-  'surface, last stable error code, and non-default dialog policy. It never returns arguments, paths,',
-  'window arrays, logs, stack traces, dialog entries, prompt text, or plugin payloads. Use',
-  'electron_windows_list, electron_surfaces_list, or the relevant plugin tool for detailed state.',
-  'Returns: { ok, server: { version, started_at, uptime_ms, last_error? }, active_sessions, sessions }.',
-  'Errors: none.',
+  'Return compact orientation for this server: version, start time, uptime, the last stable failure',
+  "not tied to a live session, active-session count, and each live session's transport, renderer",
+  'readiness, selected surface, last stable error code, and non-default dialog policy. It never',
+  'returns arguments, paths, window arrays, logs, stack traces, dialog entries, prompt text, or',
+  'plugin payloads. Use electron_windows_list, electron_surfaces_list, or the relevant plugin tool',
+  'for detailed state. Returns: { ok, server: { version, started_at, uptime_ms, last_error? },',
+  'active_sessions, sessions }. Errors: none.',
 ].join(' ')
 
 /** `electron_status` — a bounded orientation response, not a telemetry dump. */

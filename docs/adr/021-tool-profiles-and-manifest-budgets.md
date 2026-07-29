@@ -108,8 +108,8 @@ future growth gate.
 
 The `electron_status` description now names its bounded server-level failure breadcrumb and
 privacy exclusions. Because `electron_status` belongs to every core profile and every plugin
-composition, all 28 measured variants gain the same 89 characters and 22 BPE with no tool-count
-change. The relative increase ranges from 0.06% on `all-eval` to 0.22% on `essential-safe`, well
+composition, all 28 measured variants gain the same 107 characters and 25 BPE with no tool-count
+change. The relative increase ranges from 0.07% on `all-eval` to 0.25% on `essential-safe`, well
 below the 3% regression threshold.
 
 The increase is accepted because it teaches the host-visible contract needed to interpret

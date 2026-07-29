@@ -358,7 +358,7 @@ describe('electron_status', () => {
     })
   })
 
-  it('does not retain an error from a session that had already been released', async () => {
+  it('does not retain an error on the session entry after that session was released', async () => {
     const { dispatcher, sessions, transport } = setup()
     await sessions.remove('session-one')
     await dispatcher.dispatch('test_status_failure', { sessionId: 'session-one' })
