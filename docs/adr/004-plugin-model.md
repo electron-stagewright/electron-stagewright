@@ -208,6 +208,27 @@ window arrays, or plugin-owned state, and it is not a plugin-status contributor 
 need to surface their own operational state must continue to do so through their explicit tools or
 a future dedicated, capability-limited contributor contract.
 
+## Status update (server failure orientation, 2026-07-28)
+
+The plugin contract is now at API `1.4.0`. `ToolContext.status` additively exposes optional readers
+for the server instance start time and the most recent stable failed dispatch that cannot be
+attributed to a currently live session. Keeping those readers optional preserves structural source
+compatibility for plugin API 1.3 mocks and adapters; the core-owned reader always supplies both.
+`electron_status` projects that record as `server.last_error`; failures against a live session
+remain on that session exactly as before.
+
+The breadcrumb contains only the registered tool name, stable error code, and completion timestamp.
+Unknown tool names are caller-controlled input, so their code is retained without reflecting the
+raw name. Messages, arguments, paths, session identifiers, details, stacks, and plugin configuration
+are never copied into status. A successful call does not erase the record; the last qualifying
+completion replaces it.
+
+This state is intentionally process-local. `server.started_at` makes a replacement server instance
+explicit, but a hard process crash cannot preserve its in-memory error record. Durable previous-exit
+reporting would require a separate decision covering state location, multi-instance ownership,
+atomic writes, cleanup, and privacy rather than silently adding host persistence to the plugin
+contract.
+
 ## Status update (first-party aliases and exact doctor preflight, 2026-07-27)
 
 The CLI accepts each shipped first-party suffix as an explicit shorthand: for example,

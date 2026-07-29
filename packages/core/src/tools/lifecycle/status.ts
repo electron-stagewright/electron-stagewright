@@ -56,11 +56,13 @@ async function compactSession(
 }
 
 const DESCRIPTION = [
-  'Return compact orientation for this server: version, uptime, active-session count, and each live',
-  "session's transport, renderer readiness, selected surface, last stable error code, and non-default",
-  'dialog policy. It never returns window arrays, logs, stack traces, dialog entries, prompt text, or',
-  'plugin payloads. Use electron_windows_list, electron_surfaces_list, or the relevant plugin tool for',
-  'detailed state. Returns: { ok, server: { version, uptime_ms }, active_sessions, sessions }. Errors: none.',
+  'Return compact orientation for this server: version, start time, uptime, the last stable unscoped',
+  "failure, active-session count, and each live session's transport, renderer readiness, selected",
+  'surface, last stable error code, and non-default dialog policy. It never returns arguments, paths,',
+  'window arrays, logs, stack traces, dialog entries, prompt text, or plugin payloads. Use',
+  'electron_windows_list, electron_surfaces_list, or the relevant plugin tool for detailed state.',
+  'Returns: { ok, server: { version, started_at, uptime_ms, last_error? }, active_sessions, sessions }.',
+  'Errors: none.',
 ].join(' ')
 
 /** `electron_status` — a bounded orientation response, not a telemetry dump. */
@@ -74,9 +76,19 @@ export const statusTool: AnyToolDefinition = defineTool({
     const sessions = await Promise.all(
       ctx.sessions.list().map((managed) => compactSession(managed, ctx)),
     )
+    const uptimeMs = ctx.status.uptimeMs()
+    const lastServerError = ctx.status.lastServerError?.()
+    // Plugin API 1.3 status-reader mocks expose only uptime. Preserve source/runtime
+    // compatibility while the server-owned reader supplies the exact start timestamp.
+    const startedAt = ctx.status.startedAt?.() ?? Math.max(0, ctx.now() - uptimeMs)
     return makeSuccess(
       {
-        server: { version: VERSION, uptime_ms: ctx.status.uptimeMs() },
+        server: {
+          version: VERSION,
+          started_at: startedAt,
+          uptime_ms: uptimeMs,
+          ...(lastServerError !== undefined ? { last_error: lastServerError } : {}),
+        },
         active_sessions: sessions.length,
         sessions,
       },

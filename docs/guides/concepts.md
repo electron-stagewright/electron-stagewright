@@ -57,6 +57,13 @@ failure is _actionable_: the agent learns what went wrong (`code`), whether retr
 could help (`retryable`), and what to do instead (`next_actions`) without asking for
 more context.
 
+`electron_status` is the compact orientation call after a failure. Its `server`
+object includes the current instance's `started_at` and `uptime_ms`, plus the most
+recent stable `last_error` that could not be assigned to a live session. Each live
+session keeps its own last stable error. These breadcrumbs intentionally exclude
+messages, arguments, paths, session identifiers, stacks, and plugin configuration,
+and they last only for the current server process.
+
 ## Addressing elements: refs vs selectors
 
 You can target an element two ways: a **ref** (a small integer handle from a

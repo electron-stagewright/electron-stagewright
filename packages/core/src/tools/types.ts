@@ -143,8 +143,9 @@ export interface ToolContext {
   /** Per-session last-snapshot store, backing `electron_snapshot({ since: 'last' })`. */
   readonly snapshots: SnapshotStore
   /**
-   * Read-only compact server state for orientation. It exposes uptime and the
-   * last stable error for a live session, never mutation or plugin-private state.
+   * Read-only compact server state for orientation. It exposes instance timing,
+   * the last stable server-level error, and the last stable error for a live
+   * session, never mutation or plugin-private state.
    */
   readonly status: ServerStatusReader
   /** Structured logger. Writes to stderr only (stdout is the MCP protocol channel). */

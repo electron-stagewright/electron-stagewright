@@ -104,6 +104,20 @@ source after the production-validation CLI work. Those variants did not change b
 slice's before/after measurements; retaining their older inflated values would have weakened the
 future growth gate.
 
+## Status update (2026-07-28): Server failure breadcrumb description
+
+The `electron_status` description now names its bounded server-level failure breadcrumb and
+privacy exclusions. Because `electron_status` belongs to every core profile and every plugin
+composition, all 28 measured variants gain the same 89 characters and 22 BPE with no tool-count
+change. The relative increase ranges from 0.06% on `all-eval` to 0.22% on `essential-safe`, well
+below the 3% regression threshold.
+
+The increase is accepted because it teaches the host-visible contract needed to interpret
+`server.started_at` and `server.last_error`; omitting those fields from the manifest would force
+agents to discover them by trial. The baseline records the reason as
+`Document server-level failure breadcrumbs in electron_status.` Exact before/after measurements
+remain available in the ignored review artifacts.
+
 ## References
 
 - [ADR-004](./004-plugin-model.md) — explicitly loaded plugin model.
