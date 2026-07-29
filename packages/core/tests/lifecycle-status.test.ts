@@ -309,6 +309,23 @@ describe('electron_status', () => {
     })
   })
 
+  it('does not let an ending session displace a server failure from the same clock tick', async () => {
+    const { dispatcher, sessions, advance } = setup()
+    advance(10)
+    await dispatcher.dispatch('test_status_failure', { sessionId: 'session-one' })
+    await dispatcher.dispatch('test_server_failure', {})
+    await sessions.remove('session-one')
+
+    const result = (await dispatcher.dispatch('electron_status', {})) as SuccessResponse & {
+      readonly server: { readonly last_error?: unknown }
+    }
+    expect(result.server.last_error).toEqual({
+      tool: 'test_server_failure',
+      code: 'FILE_NOT_FOUND',
+      at: 1_010,
+    })
+  })
+
   it('keeps the last completed concurrent server failure', async () => {
     const { advance, dispatcher, firstFailure, secondFailure } = setup()
     const first = dispatcher.dispatch('test_first_controlled_failure', {})

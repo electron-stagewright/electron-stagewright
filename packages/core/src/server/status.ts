@@ -122,7 +122,7 @@ export class ServerStatus implements ServerStatusReader {
     const ended = this.#lastErrors.get(sessionId)
     this.#lastErrors.delete(sessionId)
     if (ended === undefined) return
-    if (this.#lastServerError !== undefined && this.#lastServerError.at > ended.at) return
+    if (this.#lastServerError !== undefined && this.#lastServerError.at >= ended.at) return
     this.#lastServerError = { code: ended.code, at: ended.at }
   }
 }
