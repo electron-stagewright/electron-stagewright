@@ -144,31 +144,6 @@ describe('production plugin (in-process)', () => {
     }
   })
 
-  it.each([
-    ['Demo.exe', 'windows-artifact', 'windows-authenticode'],
-    ['Demo.AppImage', 'linux-appimage', 'appimage-signature'],
-  ])('selects the artifact-aware default for %s', async (fileName, artifactType, expectedCheck) => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'sw-prod-'))
-    created.push(dir)
-    const artifact = path.join(dir, fileName)
-    await writeFile(artifact, 'synthetic release artifact')
-    const server = await createServer({ plugins: [productionPlugin] })
-    try {
-      const res = (await server.dispatcher.dispatch('production_validate', {
-        appPath: artifact,
-      })) as unknown as ValidateResult
-      expect(res).toMatchObject({
-        ok: true,
-        artifact_type: artifactType,
-        checks: [{ id: expectedCheck }],
-      })
-      expect(res.checks).toHaveLength(1)
-      expect(res.summary.pass + res.summary.fail + res.summary.unknown).toBe(1)
-    } finally {
-      await server.close().catch(() => undefined)
-    }
-  })
-
   it('rejects an empty check subset before reporting a false green result', async () => {
     const app = await makeApp()
     const server = await createServer({ plugins: [productionPlugin] })

@@ -114,6 +114,8 @@ describe('validateProductionApp', () => {
     })
   })
 
+  // Keep artifact-default coverage at the library seam so platform validators stay injected and
+  // deterministic instead of making the MCP adapter suite spawn host tools such as PowerShell.
   it('selects Windows Authenticode by default for .exe and .msi artifacts', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'stagewright-production-api-'))
     created.push(root)
