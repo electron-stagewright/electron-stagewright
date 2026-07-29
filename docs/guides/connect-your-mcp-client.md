@@ -31,7 +31,7 @@ and gives `--app-root` a stable security boundary.
 
   ```sh
   cd /absolute/path/to/your-electron-app
-  pnpm add --save-dev --save-exact @electron-stagewright/core@0.4.1 playwright@1.61.1
+  pnpm add --save-dev --save-exact @electron-stagewright/core@0.5.0 playwright@1.61.1
   # Only when the project does not already pin a compatible Electron:
   pnpm add --save-dev --save-exact electron@42.3.0
   pnpm exec electron-stagewright doctor --json --app-root "$PWD"
@@ -71,7 +71,7 @@ and gives `--app-root` a stable security boundary.
     "args": [
       "-y",
       "--package",
-      "@electron-stagewright/core@0.4.1",
+      "@electron-stagewright/core@0.5.0",
       "--package",
       "playwright@1.61.1",
       "--package",
@@ -97,7 +97,7 @@ and gives `--app-root` a stable security boundary.
       "npx.cmd",
       "-y",
       "--package",
-      "@electron-stagewright/core@0.4.1",
+      "@electron-stagewright/core@0.5.0",
       "--package",
       "playwright@1.61.1",
       "--package",
@@ -115,7 +115,7 @@ and gives `--app-root` a stable security boundary.
   terminal:
 
   ```sh
-  npx -y --package @electron-stagewright/core@0.4.1 --package playwright@1.61.1 \
+  npx -y --package @electron-stagewright/core@0.5.0 --package playwright@1.61.1 \
     --package electron@42.3.0 electron-stagewright doctor --json \
     --app-root /absolute/path/to/your-electron-app
   ```
@@ -131,7 +131,7 @@ and gives `--app-root` a stable security boundary.
   reproduce and upgrade together.
 
   ```sh
-  pnpm add --global --save-exact @electron-stagewright/core@0.4.1 \
+  pnpm add --global --save-exact @electron-stagewright/core@0.5.0 \
     playwright@1.61.1 electron@42.3.0
   ```
 
@@ -269,7 +269,7 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
   "args": [
     "-y",
     "--package",
-    "@electron-stagewright/core@0.4.1",
+    "@electron-stagewright/core@0.5.0",
     "--package",
     "playwright@1.61.1",
     "--package",

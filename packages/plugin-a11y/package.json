@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/plugin-a11y",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Accessibility audit plugin for Electron Stagewright: surface-scoped axe-core checks with bounded, agent-actionable findings.",
   "type": "module",
   "license": "MIT",
