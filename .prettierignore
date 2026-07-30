@@ -10,6 +10,7 @@ site/
 coverage/
 .cache/
 .tsbuildinfo
+.playwright-cli/
 
 # Per-package outputs (pnpm workspaces)
 packages/**/dist/

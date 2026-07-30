@@ -165,12 +165,21 @@ describe('buildDocsSite (full build against the real docs)', () => {
       'tool-reference.html',
       'sitemap.xml',
       'llms.txt',
+      'brand-mark.svg',
+      'favicon.svg',
     ]) {
       await expect(readFile(path.join(outDir, rel), 'utf8')).resolves.toBeTruthy()
     }
 
     const home = await readFile(path.join(outDir, 'index.html'), 'utf8')
+    expect(home).toContain('class="page-home"')
     expect(home).toContain('class="sidebar"')
+    expect(home).toContain('class="home-hero"')
+    expect(home).toContain('Cue the app.')
+    expect(home).toContain('Prove the experience.')
+    expect(home).toContain('electron_trace_stop')
+    expect(home).toContain('class="brand-mark"')
+    expect(home).toContain('aria-current="page"')
     expect(home).toContain('id="what-each-response-looks-like-the-agent-ux-detail"')
     expect(home).toContain('Load, configure, and diagnose plugins')
     expect(home).toContain('Choose an Electron MCP server')
@@ -180,8 +189,17 @@ describe('buildDocsSite (full build against the real docs)', () => {
 
     // SEO chrome: a canonical link + an Open Graph card, and the card image is copied to the root.
     expect(home).toContain('rel="canonical"')
+    expect(home).toContain('rel="icon"')
+    expect(home).toContain('favicon.svg')
     expect(home).toContain('property="og:image"')
     expect(home).toContain('social-card.png')
     expect((await readFile(path.join(outDir, 'social-card.png'))).byteLength).toBeGreaterThan(0)
+    expect(await readFile(path.join(outDir, 'brand-mark.svg'), 'utf8')).toContain(
+      'Electron Stagewright cue frame',
+    )
+
+    const nested = await readFile(path.join(outDir, 'guides/concepts.html'), 'utf8')
+    expect(nested).toContain('href="../favicon.svg"')
+    expect(nested).not.toContain('class="home-hero"')
   }, 15_000)
 })
