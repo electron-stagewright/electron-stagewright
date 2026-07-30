@@ -1,12 +1,22 @@
 # Electron Stagewright
 
-**Agent-native UX from line one. Drive Electron apps the way Playwright drives browsers — but designed for AI agents, not adapted for them.**
+[![npm](https://img.shields.io/npm/v/@electron-stagewright/core?label=npm)](https://www.npmjs.com/package/@electron-stagewright/core)
+[![CI](https://github.com/electron-stagewright/electron-stagewright/actions/workflows/ci.yml/badge.svg)](https://github.com/electron-stagewright/electron-stagewright/actions/workflows/ci.yml)
+[![Real Electron E2E](https://github.com/electron-stagewright/electron-stagewright/actions/workflows/e2e-electron.yml/badge.svg)](https://github.com/electron-stagewright/electron-stagewright/actions/workflows/e2e-electron.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-1f6f5c)](LICENSE)
 
-A Model Context Protocol (MCP) server that lets AI agents — Claude Code, Codex, Cursor, Cline, Aider, and any MCP-compatible host — operate real Electron desktop applications. The current core can launch Electron apps, inspect the renderer accessibility tree, click/type/select by stable refs or selectors, read state, wait on predicates, run opt-in eval, capture screenshots, read console logs, handle native dialogs, and assert expectations with retrying `expect_*` tools.
+**Agentic UX testing for real Electron apps. Cue the app, prove the experience, and return bounded evidence through MCP.**
+
+Electron Stagewright is a Model Context Protocol (MCP) server that lets Claude Code, Codex, Cursor,
+Cline, Aider, and any MCP-compatible agent operate real Electron applications. Launch or attach,
+inspect the accessibility tree, interact through stable refs, assert behavior with retrying
+expectations, and capture diagnostics without turning every check into another agent round-trip.
 
 ## Why this exists
 
-Most MCP servers in the wild are Playwright APIs wrapped in an MCP transport. They work, but their UX is a human's API exposed to an agent — leaving the agent to do all the reasoning, comparisons, and recovery manually. Token budgets evaporate on round-trips that shouldn't need to exist.
+Browser automation already has mature agent tooling. Electron adds a different boundary: the main
+process, renderer surfaces, native menus and dialogs, multiple windows, packaged runtimes, and
+signed release artifacts. A browser API exposed through MCP does not cover that whole product.
 
 Electron Stagewright is designed **agent-first from the primitive level up**:
 
@@ -22,9 +32,9 @@ Electron Stagewright is designed **agent-first from the primitive level up**:
 - **Hot-reload-aware** — snapshot and find responses report when the renderer reloaded since the previous baseline, so agents know refs may need refreshing.
 - **Framework-agnostic snapshot** — built on accessibility roles and ARIA instead of framework-internal properties. Current fixtures cover vanilla, React, Vue, and Angular; the broader renderer matrix is still expanding.
 
-## What competitors don't cover (yet)
+## Electron-deep workflows
 
-The MCP ecosystem for browser automation is mature. The MCP ecosystem for **desktop Electron apps** is fragmented and still missing three structural capabilities this project treats as first-class:
+The server treats three Electron-specific workflows as first-class:
 
 1. **Attach to a running dev server without restarting it.** `electron_attach` connects to apps exposing a loopback CDP endpoint, and `electron_inject` can attach to a running main process via the Node Inspector handshake when no debug flag was arranged up front.
 2. **Session traces with deterministic replay and per-tool token budgets.** Inspired by Playwright's `trace.zip` but designed for LLM agent sessions: a timeline of tool calls, arguments, results, timings, and token estimates — replayable against a fresh app instance, with budgets so agents can cap runaway loops.

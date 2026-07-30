@@ -1,11 +1,18 @@
 # @electron-stagewright/core
 
-The core MCP server for [Electron Stagewright](https://github.com/electron-stagewright/electron-stagewright).
+The core MCP server for [Electron Stagewright](https://github.com/electron-stagewright/electron-stagewright):
+agentic UX testing for real Electron apps.
 
-Drive Electron desktop applications from AI agents via the Model Context Protocol.
+Launch or attach, inspect the accessibility tree, interact through stable refs, assert behavior with
+retrying expectations, and capture bounded evidence through the Model Context Protocol.
 
-> Pre-alpha. The core server is implemented enough to launch and drive a real
-> Electron app. APIs may change quickly.
+> Early release. Published versions are exercised against real Electron on macOS, Windows, and
+> Linux; APIs may still evolve before 1.0.
+
+[Run the packaged demo](https://electron-stagewright.github.io/electron-stagewright/guides/demo.html)
+or read the
+[getting-started guide](https://electron-stagewright.github.io/electron-stagewright/guides/getting-started.html)
+before pointing the server at your own app.
 
 ## Use the published package
 

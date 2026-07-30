@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Workspace root for Electron Stagewright — drive Electron apps the way Playwright drives browsers.",
+  "description": "Agentic UX testing for real Electron apps through the Model Context Protocol.",
   "license": "MIT",
   "author": "johnny4young <asesordeprogramacion@gmail.com>",
   "homepage": "https://github.com/electron-stagewright/electron-stagewright",

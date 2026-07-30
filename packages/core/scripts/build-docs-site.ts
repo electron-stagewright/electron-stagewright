@@ -29,7 +29,7 @@ const DEFAULT_REPO_ROOT = path.resolve(HERE, '..', '..', '..')
 const SITE_BASE_URL = 'https://electron-stagewright.github.io/electron-stagewright/'
 /** Site-wide meta description — the search snippet and the Open Graph / Twitter card description. */
 const SITE_DESCRIPTION =
-  'Agent-native MCP server for driving real Electron apps from AI agents: launch or attach, read the accessibility tree, assert UI state, and capture diagnostics.'
+  'Agentic UX testing for real Electron apps: launch or attach, inspect the accessibility tree, assert behavior, and capture bounded evidence through MCP.'
 /** Social-card image (1200x630) served at the site root; the Open Graph / Twitter card image. */
 const SOCIAL_CARD_URL = `${SITE_BASE_URL}social-card.png`
 /** GitHub blob base for links to tracked repo files that are not rendered into the site. */
@@ -451,11 +451,11 @@ function renderHomePage(bodyHtml: string): string {
   const rationaleStart = bodyHtml.indexOf('<h2 id="why-this-exists">')
   const overview = rationaleStart === -1 ? bodyHtml : bodyHtml.slice(rationaleStart)
   return `<section class="home-hero" aria-labelledby="hero-title">
-<div class="hero-kicker"><span>Agent-native desktop control</span><span class="status-dot" aria-hidden="true"></span><span>v0.5.0</span></div>
+<div class="hero-kicker"><span>Agentic UX testing for Electron</span><span class="status-dot" aria-hidden="true"></span><span>v0.5.0</span></div>
 <div class="hero-grid">
 <div class="hero-copy">
 <h1 id="hero-title">Cue the app.<span>Prove the experience.</span></h1>
-<p class="hero-deck">Launch or attach to real desktop apps, inspect what users can reach, assert behavior, and return bounded evidence to the agent that asked.</p>
+<p class="hero-deck">Launch or attach to real Electron apps, inspect what users can reach, assert behavior, and return bounded evidence to the agent that asked.</p>
 <div class="hero-actions">
 <a class="button-primary" href="guides/demo.html">Run the packaged demo</a>
 <a class="button-secondary" href="guides/getting-started.html">Read the getting-started guide</a>
@@ -470,7 +470,7 @@ function renderHomePage(bodyHtml: string): string {
 <div class="session-row"><span class="step">03</span><span class="tool">electron_expect_text</span><span class="result">matched</span></div>
 <div class="session-row is-proof"><span class="step">04</span><span class="tool">electron_trace_stop</span><span class="result">evidence saved</span></div>
 </div>
-<div class="session-foot"><span class="session-cue">${renderBrandMark('brand-mark mini-mark')}<strong>Agent-native from the primitive up.</strong></span><span>4 calls</span></div>
+<div class="session-foot"><span class="session-cue">${renderBrandMark('brand-mark mini-mark')}<strong>Inspect. Act. Assert. Evidence.</strong></span><span>4 calls</span></div>
 </div>
 </div>
 <div class="proof-rail" aria-label="Core product qualities">
