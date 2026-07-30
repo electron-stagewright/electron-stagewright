@@ -2,7 +2,7 @@
   "name": "@electron-stagewright/core",
   "mcpName": "io.github.electron-stagewright/core",
   "version": "0.5.0",
-  "description": "Core MCP server for Electron Stagewright. Drive Electron apps the way Playwright drives browsers.",
+  "description": "Agentic UX testing for real Electron apps: launch, inspect, interact, assert, and capture evidence through MCP.",
   "type": "module",
   "license": "MIT",
   "author": "johnny4young <johnny.iv.young@gmail.com>",
@@ -27,7 +27,12 @@
     "automation",
     "e2e",
     "playwright",
-    "stagewright"
+    "stagewright",
+    "agentic-ux-testing",
+    "electron-testing",
+    "desktop-testing",
+    "accessibility",
+    "llm"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

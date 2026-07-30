@@ -7,13 +7,14 @@ reasoning behind it. If you want to _do_ something, start with the
 server is shaped the way it is. The decisions referenced here are recorded as
 [ADRs](../adr/README.md).
 
-## The throughline: built for an agent, not a human
+## The throughline: agentic UX testing
 
 Most desktop-automation tools assume a human is watching: they throw stack traces,
 return raw values, and expect you to read the screen between steps. Electron
 Stagewright assumes the caller is an **LLM agent** that has to decide its next move
 from the result alone — no screen, no prior context beyond what the tool returns.
-Every design choice below follows from that. The principles are recorded in
+That inspect-act-assert-evidence loop is what this project means by **agentic UX
+testing**. Every design choice below follows from it. The principles are recorded in
 [ADR-007](../adr/007-agent-native-ux-principles.md).
 
 <!-- stagewright-resource:begin -->
