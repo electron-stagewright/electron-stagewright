@@ -15,6 +15,7 @@ coverage/
 
 # Review / verification artifacts (screenshots, traces captured during validation)
 output/
+.playwright-cli/
 
 # Editor / OS
 .DS_Store

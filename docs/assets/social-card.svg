@@ -1,29 +1,106 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
   <defs>
-    <radialGradient id="spot" cx="27%" cy="36%" r="64%">
-      <stop offset="0%" stop-color="#f0b552" stop-opacity="0.15" />
-      <stop offset="55%" stop-color="#f0b552" stop-opacity="0.04" />
+    <radialGradient id="spot" cx="78%" cy="20%" r="72%">
+      <stop offset="0%" stop-color="#f0b552" stop-opacity="0.2" />
+      <stop offset="48%" stop-color="#f0b552" stop-opacity="0.05" />
       <stop offset="100%" stop-color="#f0b552" stop-opacity="0" />
     </radialGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#ece8dc" stroke-opacity="0.035" />
+    </pattern>
   </defs>
 
   <rect width="1200" height="630" fill="#141310" />
   <rect width="1200" height="630" fill="url(#spot)" />
-  <rect width="1200" height="7" fill="#f0b552" />
+  <rect width="1200" height="630" fill="url(#grid)" />
+  <rect width="1200" height="8" fill="#f0b552" />
 
-  <text x="1150" y="606" font-size="380" fill="#f0b552" fill-opacity="0.05" text-anchor="end">&#9656;</text>
+  <g transform="translate(92 76) scale(1.12)">
+    <path d="M8 27V10a2 2 0 0 1 2-2h17" stroke="#f0b552" stroke-width="6" />
+    <path d="M37 8h17a2 2 0 0 1 2 2v17" stroke="#ece8dc" stroke-width="6" />
+    <path d="M56 37v17a2 2 0 0 1-2 2H37" stroke="#f0b552" stroke-width="6" />
+    <path d="M27 56H10a2 2 0 0 1-2-2V37" stroke="#ece8dc" stroke-width="6" />
+    <path d="m32 23 9 9-9 9-9-9 9-9Z" fill="#f0b552" />
+    <rect x="29" y="29" width="6" height="6" fill="#141310" />
+  </g>
 
-  <text x="96" y="292" font-size="62" font-weight="600" letter-spacing="-1">
-    <tspan fill="#f0b552">&#9656;</tspan><tspan fill="#ece8dc"> Electron Stagewright</tspan>
+  <text
+    x="182"
+    y="119"
+    fill="#ece8dc"
+    font-size="27"
+    font-weight="600"
+    letter-spacing="-0.3"
+    font-family="'Avenir Next', 'Segoe UI', sans-serif"
+  >
+    Electron Stagewright
+  </text>
+  <text
+    x="96"
+    y="277"
+    fill="#ece8dc"
+    font-size="68"
+    font-weight="650"
+    letter-spacing="-2.4"
+    font-family="'Avenir Next', 'Segoe UI', sans-serif"
+  >
+    Cue the app.
+  </text>
+  <text
+    x="96"
+    y="352"
+    fill="#f0b552"
+    font-size="68"
+    font-weight="650"
+    letter-spacing="-2.4"
+    font-family="'Avenir Next', 'Segoe UI', sans-serif"
+  >
+    Prove the experience.
   </text>
 
-  <text x="98" y="372" font-size="33" fill="#cfcabb" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Drive Electron apps the way Playwright drives browsers.</text>
+  <text
+    x="99"
+    y="421"
+    fill="#b7b1a1"
+    font-size="25"
+    font-family="'Avenir Next', 'Segoe UI', sans-serif"
+  >
+    Agent-native control and evidence for real desktop apps.
+  </text>
 
-  <text x="98" y="418" font-size="25" fill="#a09b8d" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">Agent-native MCP server &#8212; launch, inspect, assert, capture, replay.</text>
+  <g
+    transform="translate(98 481)"
+    font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+    font-size="18"
+  >
+    <text x="0" y="0" fill="#6f6a5e">01</text>
+    <text x="42" y="0" fill="#ece8dc">launch</text>
+    <text x="166" y="0" fill="#6f6a5e">02</text>
+    <text x="208" y="0" fill="#ece8dc">inspect</text>
+    <text x="340" y="0" fill="#6f6a5e">03</text>
+    <text x="382" y="0" fill="#ece8dc">assert</text>
+    <text x="502" y="0" fill="#6f6a5e">04</text>
+    <text x="544" y="0" fill="#f0b552">evidence</text>
+  </g>
 
-  <rect x="98" y="486" width="300" height="2" fill="#3a3528" />
-
-  <text x="98" y="528" font-size="23">
-    <tspan fill="#8a8576">electron-stagewright.github.io</tspan><tspan fill="#5a564b">   &#183;   </tspan><tspan fill="#f0b552">npm i @electron-stagewright/core</tspan>
+  <line x1="98" y1="530" x2="1102" y2="530" stroke="#3a3528" />
+  <text
+    x="98"
+    y="574"
+    fill="#8f897a"
+    font-size="20"
+    font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+  >
+    github.com/electron-stagewright
+  </text>
+  <text
+    x="1102"
+    y="574"
+    fill="#f0b552"
+    font-size="20"
+    text-anchor="end"
+    font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+  >
+    @electron-stagewright/core
   </text>
 </svg>
