@@ -470,7 +470,7 @@ function renderHomePage(bodyHtml: string): string {
 <div class="session-row"><span class="step">03</span><span class="tool">electron_expect_text</span><span class="result">matched</span></div>
 <div class="session-row is-proof"><span class="step">04</span><span class="tool">electron_trace_stop</span><span class="result">evidence saved</span></div>
 </div>
-<div class="session-foot"><span class="session-cue">${renderBrandMark('brand-mark mini-mark')}<strong>Agent-native from the primitive up.</strong></span><span>4 calls</span></div>
+<div class="session-foot"><span class="session-cue">${renderBrandMark('brand-mark mini-mark')}<strong>Inspect. Act. Assert. Evidence.</strong></span><span>4 calls</span></div>
 </div>
 </div>
 <div class="proof-rail" aria-label="Core product qualities">

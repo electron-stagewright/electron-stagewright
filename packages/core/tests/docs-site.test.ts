@@ -181,6 +181,7 @@ describe('buildDocsSite (full build against the real docs)', () => {
     expect(home).toContain(
       'Agentic UX testing for real Electron apps: launch or attach, inspect the accessibility tree',
     )
+    expect(home).toContain('Inspect. Act. Assert. Evidence.')
     expect(home).toContain('electron_trace_stop')
     expect(home).toContain('class="brand-mark"')
     expect(home).toContain('aria-current="page"')
