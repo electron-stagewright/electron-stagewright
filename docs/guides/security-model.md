@@ -189,3 +189,16 @@ rejected payload can be correlated with the logs without ever being recorded.
 
 The full per-tool contracts (including which tools require `--allow-eval`) are in the
 generated [TOOL-REFERENCE.md](../../TOOL-REFERENCE.md).
+
+### Discovery and attachment lifecycle
+
+Caller-supplied and discovered CDP/Inspector WebSocket endpoints must use `ws` or `wss` on
+loopback. HTTP discovery does not follow redirects. These checks apply to the browser endpoint and
+to page endpoints opened later, so endpoint discovery cannot widen the configured host boundary.
+For Inspector attachment with a pid, Stagewright checks the connected process id as well as the
+discovery label. Local endpoints remain unauthenticated: these checks do not protect against a
+malicious process already running with the operator's privileges.
+
+Failed attach/inject initialization releases connections without quitting the existing app. Failed
+launch initialization still stops the process Stagewright owns. Explicit stop and force-kill
+operations retain their documented behavior.

@@ -660,6 +660,8 @@ describe('electron_launch', () => {
     // The session must have been deregistered so the agent is not left with an
     // unreachable, never-stoppable session.
     expect(sessions.size).toBe(0)
+    expect(transport.stopCount).toBe(1)
+    expect(transport.session.detachCount).toBe(0)
   })
 })
 

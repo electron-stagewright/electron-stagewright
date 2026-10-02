@@ -837,72 +837,78 @@ describe('CDP stop / dispose lifecycle', () => {
     await expect(session.windowsList()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
   })
 
-  it('closes a pooled connection that finishes opening after dispose (no leaked socket)', async () => {
-    const server = new FakeCdpServer()
-    const fetchJson: FetchJson = async (url) => {
-      if (url.endsWith('/json/version')) return { webSocketDebuggerUrl: BROWSER_WS }
-      if (url.endsWith('/json/list')) {
-        return [
-          {
-            id: 'T1',
-            type: 'page',
-            title: 'Main',
-            url: 'app://x',
-            webSocketDebuggerUrl: PAGE_T1_WS,
-          },
-        ]
-      }
-      throw new Error(`unexpected url ${url}`)
-    }
-    // The first page connection (attach's pre-open) proceeds normally; the
-    // SECOND one's `open` event is held so the session can be disposed while
-    // that open is still in flight.
-    let pageOpens = 0
-    let heldOpen: (() => void) | undefined
-    const transport = new CDPTransport({
-      wsFactory: (url) => {
-        const socket = server.factory(url)
-        if (!url.includes('page/T1')) return socket
-        pageOpens += 1
-        if (pageOpens === 1) return socket
-        const held: typeof socket = {
-          send: (data: string) => socket.send(data),
-          close: () => socket.close(),
-          addEventListener: (type, listener) => {
-            if (type === 'open') {
-              heldOpen = () => listener({})
-              return
-            }
-            socket.addEventListener(type, listener)
-          },
+  it.each(['dispose', 'disconnect'] as const)(
+    'closes a pooled connection that finishes opening after %s',
+    async (end) => {
+      const server = new FakeCdpServer()
+      const fetchJson: FetchJson = async (url) => {
+        if (url.endsWith('/json/version')) return { webSocketDebuggerUrl: BROWSER_WS }
+        if (url.endsWith('/json/list')) {
+          return [
+            {
+              id: 'T1',
+              type: 'page',
+              title: 'Main',
+              url: 'app://x',
+              webSocketDebuggerUrl: PAGE_T1_WS,
+            },
+          ]
         }
-        return held
-      },
-      fetchJson,
-      killProcess: () => {},
-      defaultMethodTimeoutMs: 250,
-    })
+        throw new Error(`unexpected url ${url}`)
+      }
+      // The first page connection (attach's pre-open) proceeds normally; the
+      // SECOND one's `open` event is held so the session can be disposed while
+      // that open is still in flight.
+      let pageOpens = 0
+      let heldOpen: (() => void) | undefined
+      const transport = new CDPTransport({
+        wsFactory: (url) => {
+          const socket = server.factory(url)
+          if (!url.includes('page/T1')) return socket
+          pageOpens += 1
+          if (pageOpens === 1) return socket
+          const held: typeof socket = {
+            send: (data: string) => socket.send(data),
+            close: () => socket.close(),
+            addEventListener: (type, listener) => {
+              if (type === 'open') {
+                heldOpen = () => listener({})
+                return
+              }
+              socket.addEventListener(type, listener)
+            },
+          }
+          return held
+        },
+        fetchJson,
+        killProcess: () => {},
+        defaultMethodTimeoutMs: 250,
+      })
 
-    const session = await transport.attach({ port: 9222 })
-    // Drop the pooled page connection so the next renderer call re-opens it.
-    server.closeSockets('page/T1')
-    const evaluating = session.evaluate('renderer', 'return 1;')
-    await vi.waitFor(() => {
-      if (heldOpen === undefined) throw new Error('second page open not yet requested')
-    })
+      const session = await transport.attach({ port: 9222 })
+      // Drop the pooled page connection so the next renderer call re-opens it.
+      server.closeSockets('page/T1')
+      const evaluating = session.evaluate('renderer', 'return 1;')
+      await vi.waitFor(() => {
+        if (heldOpen === undefined) throw new Error('second page open not yet requested')
+      })
 
-    let closed = false
-    const lateSocket = server.sockets.filter((s) => s.url.includes('page/T1')).at(-1)
-    lateSocket?.addEventListener('close', () => {
-      closed = true
-    })
+      let closed = false
+      const lateSocket = server.sockets.filter((s) => s.url.includes('page/T1')).at(-1)
+      lateSocket?.addEventListener('close', () => {
+        closed = true
+      })
 
-    // Release the open only AFTER dispose — the late connection must be swept,
-    // not silently re-inserted into the cleared pool.
-    await session.dispose()
-    heldOpen?.()
+      // Release the open only AFTER dispose — the late connection must be swept,
+      // not silently re-inserted into the cleared pool.
+      if (end === 'dispose') await session.dispose()
+      else server.closeSockets('browser')
+      heldOpen?.()
 
-    await expect(evaluating).rejects.toMatchObject({ code: 'NOT_RUNNING' })
-    expect(closed).toBe(true)
-  })
+      await expect(evaluating).rejects.toMatchObject({
+        code: end === 'dispose' ? 'NOT_RUNNING' : 'CDP_DISCONNECTED',
+      })
+      expect(closed).toBe(true)
+    },
+  )
 })

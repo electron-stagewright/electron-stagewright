@@ -299,7 +299,11 @@ export class CdpConnection {
     } catch {
       // Closing an already-dead socket is benign.
     }
-    for (const handler of this.#closeHandlers) {
+    const closeHandlers = [...this.#closeHandlers]
+    this.#closeHandlers.clear()
+    this.#eventHandlers.clear()
+    this.#enabling.clear()
+    for (const handler of closeHandlers) {
       try {
         handler()
       } catch {
@@ -314,14 +318,27 @@ export class CdpConnection {
   }
 
   #onMessage(event: WebSocketLikeEvent): void {
-    if (typeof event.data !== 'string') return
+    if (this.#closed || typeof event.data !== 'string') return
     let frame: CdpFrame
     try {
-      frame = JSON.parse(event.data) as CdpFrame
+      const parsed: unknown = JSON.parse(event.data)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return
+      frame = parsed as CdpFrame
     } catch {
       // A malformed frame is dropped; the per-method timeout backstops the caller.
       return
     }
+    // Validate an error before consuming its pending entry: malformed frames must
+    // leave both the resolver and timeout intact for a later valid response.
+    if (
+      frame.error !== undefined &&
+      (typeof frame.error !== 'object' ||
+        frame.error === null ||
+        Array.isArray(frame.error) ||
+        (frame.error.message !== undefined && typeof frame.error.message !== 'string') ||
+        (frame.error.code !== undefined && typeof frame.error.code !== 'number'))
+    )
+      return
     if (typeof frame.id === 'number') {
       const entry = this.#pending.get(frame.id)
       // A response for an id we no longer track (timed out, or never ours) is

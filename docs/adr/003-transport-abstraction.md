@@ -569,3 +569,21 @@ process-preserving on detach.
 (default) adds `--use-mock-keychain` on macOS or `--password-store=basic` on Linux unless the caller
 already selected a Linux store; `system` adds neither. Testing mode prevents OS credential prompts
 from wedging unattended startup, but cannot validate genuine OS-backed `safeStorage` sealing.
+
+## Status Update — 2026-10-02: failure-safe attachment and connection cleanup
+
+Session initialization now fetches the initial window list before publishing a handle. If setup
+fails, launch stops its owned process, while attach and inject only detach their transport
+connection. A cleanup error preserves the original failure and cannot leave an unaddressable
+session in the manager. Explicit stop retains its existing process-termination behavior.
+
+CDP and Inspector discovery reject HTTP redirects and validate discovered WebSocket URLs against
+the same loopback policy as caller-supplied endpoints. Browser and renderer discovery are both
+covered. Inspector discovery labels select candidate targets; when a pid is supplied, the connected
+inspector must also report that pid before the session is returned. This narrows accidental target
+mismatches within the existing trusted-local-process model; it is not endpoint authentication.
+
+The CDP client ignores malformed frames without consuming pending calls or their timeout handles,
+and stops delivering events after close. Page connections completing after browser disconnection
+are closed instead of being added to the pool. A disconnected session refuses further operations
+while preserving the owned-process cleanup path.

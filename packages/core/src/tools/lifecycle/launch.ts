@@ -468,7 +468,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         } catch (err) {
           throw diagnoseLaunchError(err)
         }
-        // registerWithWindows deregisters the session if the window-list call
+        // registerWithWindows stops the owned session if the window-list call
         // fails, so a post-launch error never leaves an orphaned session.
         phase('Registering Electron session')
         const { managed, windows } = await registerWithWindows(ctx, transport, session)

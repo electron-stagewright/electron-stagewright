@@ -18,12 +18,13 @@ import { InjectorTransport } from '../src/transports/injector.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
 function setup(transports?: TransportRegistry) {
+  const sessions = new SessionManager()
   const dispatcher = new Dispatcher({
-    sessions: new SessionManager(),
+    sessions,
     ...(transports !== undefined ? { transports } : {}),
   })
   dispatcher.registerAll([attachTool, injectTool])
-  return { dispatcher }
+  return { dispatcher, sessions }
 }
 
 afterEach(() => {
@@ -140,5 +141,42 @@ describe('electron_inject (default transport)', () => {
     const { dispatcher } = setup()
     const res = await dispatcher.dispatch('electron_inject', {})
     expect((res as ErrorResponse).code).toBe('BAD_ARGUMENT')
+  })
+})
+
+describe('failed attached-session initialization', () => {
+  it.each(['electron_attach', 'electron_inject'])(
+    '%s disconnects without stopping the existing app',
+    async (tool) => {
+      const session = new FakeSession({
+        id: 'existing',
+        windowsError: new Error('discovery failed'),
+      })
+      const transport = new FakeTransport({ session })
+      const { dispatcher, sessions } = setup(new TransportRegistry({ transports: [transport] }))
+      const response = await dispatcher.dispatch(
+        tool,
+        tool === 'electron_attach' ? { port: 9222 } : { pid: 4242 },
+      )
+      expect(response.ok).toBe(false)
+      expect(sessions.size).toBe(0)
+      expect(session.detachCount).toBe(1)
+      expect(transport.stopCount).toBe(0)
+      expect(transport.forceKillCount).toBe(0)
+    },
+  )
+
+  it('preserves the initialization error and leaves no orphan when detach also fails', async () => {
+    const session = new FakeSession({
+      id: 'existing',
+      windowsError: new Error('discovery failed'),
+      detachError: new Error('detach failed'),
+    })
+    const transport = new FakeTransport({ session })
+    const { dispatcher, sessions } = setup(new TransportRegistry({ transports: [transport] }))
+    const response = await dispatcher.dispatch('electron_attach', { port: 9222 })
+    expect(response).toMatchObject({ ok: false, error: 'discovery failed' })
+    expect(sessions.size).toBe(0)
+    expect(transport.stopCount).toBe(0)
   })
 })

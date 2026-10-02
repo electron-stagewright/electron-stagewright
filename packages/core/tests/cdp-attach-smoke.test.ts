@@ -21,6 +21,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { attachTool } from '../src/tools/lifecycle/attach.js'
+import { CDPTransport } from '../src/transports/cdp.js'
 import { detachTool, launchTool, stopTool } from '../src/tools/lifecycle/index.js'
 import { findTool, snapshotTool } from '../src/tools/snapshot/index.js'
 
@@ -68,6 +69,44 @@ async function spawnWithCdp(): Promise<{ readonly cdpUrl: string; readonly proc:
 }
 
 describe('CDP attach smoke (real Electron)', () => {
+  it.skipIf(!RUN_E2E)(
+    'preserves the running app after window discovery fails during attach',
+    async () => {
+      const { cdpUrl, proc } = await spawnWithCdp()
+      const sessions = new SessionManager()
+      const transport = new CDPTransport({
+        fetchJson: async () => {
+          throw new Error('discovery unavailable')
+        },
+      })
+      const dispatcher = new Dispatcher({
+        sessions,
+        transports: new TransportRegistry({ transports: [transport] }),
+      })
+      dispatcher.register(attachTool)
+      try {
+        const response = await dispatcher.dispatch('electron_attach', { cdpUrl })
+        expect(response).toMatchObject({ ok: false, code: 'CDP_DISCONNECTED' })
+        expect(sessions.size).toBe(0)
+        // Reattach and read from the same real process: a pid liveness check alone
+        // could pass while Browser.close is still asynchronously shutting it down.
+        const recovered = await new CDPTransport().attach({ cdpUrl })
+        try {
+          expect((await recovered.windowsList()).length).toBeGreaterThan(0)
+          await expect(recovered.evaluate('renderer', 'return document.title')).resolves.toBeTypeOf(
+            'string',
+          )
+          expect(proc.exitCode).toBeNull()
+        } finally {
+          await recovered.detach()
+        }
+      } finally {
+        if (proc.exitCode === null) proc.kill('SIGKILL')
+      }
+    },
+    30_000,
+  )
+
   it.skipIf(!RUN_E2E)(
     'launches an executable-only app over CDP, snapshots/finds its default page, and reaps it',
     async () => {

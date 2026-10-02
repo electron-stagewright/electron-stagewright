@@ -168,7 +168,7 @@ export type SpawnProcess = (
 export type ReserveLoopbackPort = () => Promise<number>
 
 const defaultFetchJson: FetchJson = async (url, timeoutMs) => {
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' })
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} from ${url}`)
   }
@@ -467,6 +467,7 @@ class CdpSession implements TransportSession {
     if (existing !== undefined && !existing.closed) return existing
     const inFlight = this.#opening.get(target.id)
     if (inFlight !== undefined) return inFlight
+    assertLoopbackAttachTarget(TRANSPORT_ID, { cdpUrl: target.webSocketDebuggerUrl })
     const opening = (async () => {
       const conn = await CdpConnection.open(target.webSocketDebuggerUrl, {
         ...(this.#deps.wsFactory !== undefined ? { factory: this.#deps.wsFactory } : {}),
@@ -476,18 +477,16 @@ class CdpSession implements TransportSession {
       })
       // A dispose that ran while this open was in flight already swept the
       // pool; re-inserting would leak a live socket past the session's end.
-      if (this.#disposed) {
+      if (this.#disposed || this.#browser.closed) {
         conn.close()
-        throw new StagewrightError('NOT_RUNNING', 'CDPTransport session has been disposed.', {
-          transport: TRANSPORT_ID,
-          sessionId: this.id,
-        })
+        this.#requireRunning()
       }
       conn.onClose(() => {
         if (this.#pool.get(target.id) === conn) this.#pool.delete(target.id)
       })
       this.#pool.set(target.id, conn)
       await this.#attachCapture(conn, target.id)
+      this.#requireRunning()
       return conn
     })()
     this.#opening.set(target.id, opening)
@@ -854,6 +853,12 @@ class CdpSession implements TransportSession {
         sessionId: this.id,
       })
     }
+    if (this.#browser.closed) {
+      throw new StagewrightError('CDP_DISCONNECTED', 'CDP browser connection has closed.', {
+        transport: TRANSPORT_ID,
+        sessionId: this.id,
+      })
+    }
   }
 
   /** Current page targets from the discovery endpoint. */
@@ -869,6 +874,7 @@ class CdpSession implements TransportSession {
         { cause: cause instanceof Error ? cause.message : String(cause) },
       )
     }
+    this.#requireRunning()
     return asPageTargets(listed)
   }
 
@@ -1877,7 +1883,7 @@ export class CDPTransport implements ITransport {
           { cause: cause instanceof Error ? cause.message : String(cause) },
         )
       }
-      const wsUrl = (version as { webSocketDebuggerUrl?: unknown }).webSocketDebuggerUrl
+      const wsUrl = (version as { webSocketDebuggerUrl?: unknown } | null)?.webSocketDebuggerUrl
       if (typeof wsUrl !== 'string' || wsUrl === '') {
         throw new StagewrightError(
           'CDP_DISCONNECTED',
@@ -1894,6 +1900,7 @@ export class CDPTransport implements ITransport {
       )
     }
 
+    assertLoopbackAttachTarget(TRANSPORT_ID, { cdpUrl: browserWsUrl })
     const browser = await CdpConnection.open(browserWsUrl, {
       ...(this.#deps.wsFactory !== undefined ? { factory: this.#deps.wsFactory } : {}),
       ...(this.#deps.defaultMethodTimeoutMs !== undefined
@@ -1975,7 +1982,8 @@ export class CDPTransport implements ITransport {
         const versionProbeBudget = Math.min(LAUNCH_PROBE_TIMEOUT_MS, remaining)
         try {
           const version = await this.#deps.fetchJson(`${httpBase}/json/version`, versionProbeBudget)
-          const browserWsUrl = (version as { webSocketDebuggerUrl?: unknown }).webSocketDebuggerUrl
+          const browserWsUrl = (version as { webSocketDebuggerUrl?: unknown } | null)
+            ?.webSocketDebuggerUrl
           if (typeof browserWsUrl !== 'string' || browserWsUrl === '') {
             throw new Error('/json/version returned no webSocketDebuggerUrl')
           }
