@@ -202,3 +202,16 @@ malicious process already running with the operator's privileges.
 Failed attach/inject initialization releases connections without quitting the existing app. Failed
 launch initialization still stops the process Stagewright owns. Explicit stop and force-kill
 operations retain their documented behavior.
+
+## Generated evidence resources
+
+Portable screenshot and trace links are scoped to the connected server instance. The resource
+reader has no file-path input: it serves immutable copies of bytes supplied by evidence producers,
+with an 8 MiB item limit, 32 MiB/32-item total limit and 15-minute expiry. Unknown, expired and
+other-instance URIs are rejected. Replacing an output file or symlink cannot redirect a resource
+read. Shutdown clears retained bytes; expiry does not delete the local artifact.
+
+Clients connected to the same server can read its issued links. The links are not public HTTP
+URLs, authentication tokens for another service, or durable cross-session identifiers. Screenshots
+and traces can contain app data; the existing explicit capture/recording and redaction policies
+remain applicable. A trace's screenshot links expire independently rather than being bundled.

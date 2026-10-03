@@ -48,6 +48,45 @@ function envelopeOf(result: CallToolResult): Record<string, unknown> {
 }
 
 describe('trace plugin (in-process)', () => {
+  it('delivers trace, report and replay evidence through MCP resources and advertised output schemas', async () => {
+    const file = await tmpFile()
+    const server = await createServer({ tools: [demoTool], plugins: [tracePlugin] })
+    const connection = await connectMcpTestClient(server)
+    try {
+      const { client } = connection
+      const listed = await client.listTools()
+      for (const name of ['trace_stop', 'trace_view', 'trace_promote']) {
+        expect(listed.tools.find((tool) => tool.name === name)?.outputSchema).toMatchObject({
+          type: 'object',
+        })
+      }
+      await client.callTool({ name: 'trace_start', arguments: { path: file } })
+      await client.callTool({ name: 'demo_echo', arguments: { value: 'portable' } })
+      for (const [name, args, mimeType] of [
+        ['trace_stop', {}, 'application/x-ndjson'],
+        ['trace_view', { path: file }, 'text/html'],
+        ['trace_promote', { path: file }, 'application/json'],
+      ] as const) {
+        const result = (await client.callTool({ name, arguments: args })) as CallToolResult
+        expect(result.isError).toBe(false)
+        const envelope = envelopeOf(result)
+        expect(envelope).toEqual(result.structuredContent)
+        const link = result.content.find((content) => content.type === 'resource_link')
+        if (link?.type !== 'resource_link') throw new Error('Missing evidence link')
+        expect(link.mimeType).toBe(mimeType)
+        const resource = await client.readResource({ uri: link.uri })
+        const content = resource.contents[0]
+        if (content === undefined || !('text' in content) || typeof content.text !== 'string')
+          throw new Error('Expected text evidence')
+        expect(content.text).toBe(await readFile(String(envelope['path']), 'utf8'))
+        expect(Buffer.byteLength(content.text)).toBe(link.size)
+      }
+    } finally {
+      await connection.close()
+      await server.close()
+    }
+  })
+
   it('advertises its own package version through plugin introspection', async () => {
     const server = await createServer({ plugins: [tracePlugin] })
     try {

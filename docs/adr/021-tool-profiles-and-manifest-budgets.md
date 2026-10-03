@@ -123,3 +123,20 @@ remain available in the ignored review artifacts.
 - [ADR-004](./004-plugin-model.md) — explicitly loaded plugin model.
 - [ADR-007](./007-agent-native-ux-principles.md) — agent-facing tool ergonomics and token economy.
 - [ADR-008](./008-server-and-tool-dispatcher.md) — dispatcher and MCP tool contract.
+
+## Status update (2026-10-03): evidence output schemas
+
+Four existing evidence-producing tools now advertise validated success/error output schemas and
+optional portable-resource metadata. Tool names, counts and profile membership are unchanged.
+The reviewed baseline records this intentional discovery cost without changing the 3% growth gate:
+
+| Variant               | Previous BPE | New BPE | Growth |
+| --------------------- | -----------: | ------: | -----: |
+| Core safe             |       18,645 |  19,108 |  2.48% |
+| Trace plugin safe     |       20,787 |  22,613 |  8.78% |
+| All plugins safe      |       30,023 |  31,849 |  6.08% |
+| All plugins with eval |       34,374 |  36,200 |  5.31% |
+
+The essential profile is unchanged. The reason recorded by `manifest:update` identifies the
+schemas and portable evidence explicitly. This does not authorize adding schemas speculatively to
+the entire catalog; subsequent adoption remains subject to measurement and the existing gate.

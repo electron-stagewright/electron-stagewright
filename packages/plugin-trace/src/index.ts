@@ -35,7 +35,10 @@ import {
   type StagewrightPlugin,
   type ToolResult,
 } from '@electron-stagewright/core'
-import { createPluginConfigState } from '@electron-stagewright/core/plugin-sdk'
+import {
+  artifactOutputFields,
+  createPluginConfigState,
+} from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
 import {
@@ -241,6 +244,7 @@ export function createTracePlugin(): StagewrightPlugin {
         coreVersion: VERSION,
         startedAt: ctx.now(),
         fsync: config.current.fsync,
+        ...(ctx.artifacts === undefined ? {} : { captureBytes: ctx.artifacts.maxArtifactBytes }),
         ...(budget !== undefined ? { budget, warnThreshold } : {}),
       })
       try {
@@ -300,11 +304,29 @@ export function createTracePlugin(): StagewrightPlugin {
     description: [
       'Stop the active recording, flush its JSONL artifact, add a completion footer, atomically',
       'publish the final path, and return a summary.',
+      'Includes expiring artifact metadata and an MCP resource_link when portable size limits allow.',
       'Returns: { ok, path, records, total_estimated_tokens, overflowed, budget? }. Errors:',
       'trace.NOT_RECORDING (no active trace; call trace_start first; not retryable),',
       'trace.ARTIFACT_WRITE_FAILED (artifact could not be written; fix path/permissions and retry).',
     ].join(' '),
     inputSchema: z.object({}),
+    outputSchema: z.object({
+      path: z.string(),
+      records: z.number().int().nonnegative(),
+      total_estimated_tokens: z.number().nonnegative(),
+      overflowed: z.boolean(),
+      budget: z
+        .object({
+          budget_tokens: z.number(),
+          spent: z.number(),
+          remaining: z.number(),
+          over_budget: z.boolean(),
+          near_budget: z.boolean(),
+          warn_threshold: z.number(),
+        })
+        .optional(),
+      ...artifactOutputFields,
+    }),
     operationType: 'command',
     handler: async (_args, ctx) =>
       withProgressPhases({ reporter: ctx.progress }, async (phase) => {
@@ -333,7 +355,15 @@ export function createTracePlugin(): StagewrightPlugin {
         active = undefined
         current.unsubscribe()
         current.unguard?.()
-        return makeSuccess({ ...summary }, meta)
+        const bytes = current.recorder.takeCapturedBytes()
+        ctx.signal?.throwIfAborted()
+        const publication =
+          ctx.artifacts === undefined
+            ? undefined
+            : bytes === undefined
+              ? { artifact_unavailable: 'too_large' as const }
+              : ctx.artifacts.publish(bytes, 'application/x-ndjson', 'trace.jsonl')
+        return makeSuccess({ ...summary, ...publication }, meta)
       }),
   })
 
@@ -520,7 +550,9 @@ export function createTracePlugin(): StagewrightPlugin {
       'total estimated tokens, a budget bar when the trace carries a budget), the largest-response and',
       'per-tool token tables, and an expandable timeline of every call with its args and result. With',
       'no out path the report is written next to the trace with a .html extension. Returns: { ok,',
-      'path, source, calls, bytes } where path is the written HTML file. Errors: trace.ARTIFACT_NOT_FOUND',
+      'path, source, calls, bytes } where path is the written HTML file.',
+      'Portable results also include expiring artifact metadata and an MCP resource_link.',
+      'Errors: trace.ARTIFACT_NOT_FOUND',
       '(no artifact at path), trace.ARTIFACT_INVALID (bad JSONL), trace.ARTIFACT_WRITE_FAILED (the report',
       'could not be written).',
     ].join(' '),
@@ -532,6 +564,13 @@ export function createTracePlugin(): StagewrightPlugin {
         .describe(
           'Output path for the HTML report. Defaults to the trace path with a .html extension.',
         ),
+    }),
+    outputSchema: z.object({
+      path: z.string(),
+      source: z.string(),
+      calls: z.number().int().nonnegative(),
+      bytes: z.number().int().nonnegative(),
+      ...artifactOutputFields,
     }),
     operationType: 'command',
     handler: async (args, ctx) => {
@@ -548,6 +587,7 @@ export function createTracePlugin(): StagewrightPlugin {
           : target.endsWith('.jsonl')
             ? `${target.slice(0, -'.jsonl'.length)}.html`
             : `${target}.html`
+      ctx.signal?.throwIfAborted()
       const html = renderTraceHtml(loaded.parsed, { generatedAt: ctx.now() })
       try {
         await mkdir(path.dirname(out), { recursive: true })
@@ -559,12 +599,14 @@ export function createTracePlugin(): StagewrightPlugin {
           details: { path: out },
         })
       }
+      ctx.signal?.throwIfAborted()
       return makeSuccess(
         {
           path: out,
           source: target,
           calls: loaded.parsed.calls.length,
           bytes: Buffer.byteLength(html, 'utf8'),
+          ...ctx.artifacts?.publish(Buffer.from(html), 'text/html', 'trace.html'),
         },
         meta,
       )
@@ -581,6 +623,7 @@ export function createTracePlugin(): StagewrightPlugin {
       'redactions BEFORE writing. Use it as',
       'the starting point for committed regression checks; add result matchers intentionally rather',
       'than treating every raw response as a brittle oracle. Returns: { ok, path, source, steps }.',
+      'Portable results also include expiring artifact metadata and an MCP resource_link.',
       'Errors: trace.ARTIFACT_NOT_FOUND, trace.ARTIFACT_INVALID, trace.ARTIFACT_WRITE_FAILED.',
     ].join(' '),
     inputSchema: z.object({
@@ -606,6 +649,12 @@ export function createTracePlugin(): StagewrightPlugin {
         .optional()
         .describe('Skip matching calls unless one is required to create a selected session.'),
     }),
+    outputSchema: z.object({
+      path: z.string(),
+      source: z.string(),
+      steps: z.number().int().nonnegative(),
+      ...artifactOutputFields,
+    }),
     operationType: 'command',
     handler: async (args, ctx) => {
       const meta = { startedAt: ctx.startedAt, now: ctx.now }
@@ -623,9 +672,11 @@ export function createTracePlugin(): StagewrightPlugin {
         ...(args.include !== undefined ? { include: args.include } : {}),
         ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
       })
+      ctx.signal?.throwIfAborted()
+      const serialized = serializeReplaySpec(spec)
       try {
         await mkdir(path.dirname(out), { recursive: true })
-        await writeFile(out, serializeReplaySpec(spec), 'utf8')
+        await writeFile(out, serialized, 'utf8')
       } catch (err) {
         return makePluginError('trace.ARTIFACT_WRITE_FAILED', {
           ...meta,
@@ -633,7 +684,16 @@ export function createTracePlugin(): StagewrightPlugin {
           details: { path: out },
         })
       }
-      return makeSuccess({ path: out, source: target, steps: spec.steps.length }, meta)
+      ctx.signal?.throwIfAborted()
+      return makeSuccess(
+        {
+          path: out,
+          source: target,
+          steps: spec.steps.length,
+          ...ctx.artifacts?.publish(Buffer.from(serialized), 'application/json', 'replay.json'),
+        },
+        meta,
+      )
     },
   })
 

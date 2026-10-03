@@ -105,6 +105,37 @@ function envelopeOf(result: CallToolResult): Record<string, unknown> {
 }
 
 describe('dispatcher MCP binding', () => {
+  it('advertises and honors output schemas for large successes and errors while retaining JSON text', async () => {
+    const typed = defineTool({
+      name: 'test_typed',
+      description: 'Typed output.',
+      inputSchema: z.object({ valid: z.boolean() }),
+      outputSchema: z.object({ value: z.string() }),
+      operationType: 'query',
+      handler: async (args) => makeSuccess({ value: args.valid ? 'x'.repeat(60_000) : 123 }),
+    })
+    const client = await connectClient([typed])
+    const listed = await client.listTools()
+    expect(listed.tools[0]?.outputSchema).toMatchObject({
+      type: 'object',
+      anyOf: expect.any(Array),
+    })
+    const result = (await client.callTool({
+      name: 'test_typed',
+      arguments: { valid: true },
+    })) as CallToolResult
+    expect(result.structuredContent).toMatchObject({ ok: true, value: 'x'.repeat(60_000) })
+    expect(envelopeOf(result)).toEqual(result.structuredContent)
+    const invalid = (await client.callTool({
+      name: 'test_typed',
+      arguments: { valid: false },
+    })) as CallToolResult
+    expect(invalid.structuredContent).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+    expect(invalid.isError).toBe(true)
+    const badArgs = (await client.callTool({ name: 'test_typed', arguments: {} })) as CallToolResult
+    expect(badArgs.structuredContent).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+  })
+
   it('propagates SDK request cancellation into handlers without affecting a concurrent call', async () => {
     let enter!: () => void
     let cancel!: () => void
