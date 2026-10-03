@@ -30,6 +30,7 @@ interface SetupOptions {
 
 function setup(opts: SetupOptions = {}) {
   const server = new FakeCdpServer()
+  server.respond('Runtime.evaluate', () => ({ result: { value: 4242 } }))
   const targets = opts.targets ?? [{ title: 'electron[4242]', webSocketDebuggerUrl: NODE_WS }]
   let listCalls = 0
   const fetchCalls: string[] = []
@@ -160,7 +161,9 @@ describe('InjectorSession surface', () => {
     const { server, transport } = setup()
     server.respond('Runtime.evaluate', (params) => {
       expect(params).toMatchObject({ includeCommandLineAPI: true, awaitPromise: true })
-      return { result: { value: 42 } }
+      return {
+        result: { value: String(params?.['expression']).includes('process.pid') ? 4242 : 42 },
+      }
     })
     const session = await transport.inject({ pid: 4242 })
 
@@ -179,6 +182,7 @@ describe('InjectorSession surface', () => {
     const { server, transport } = setup()
     server.respond('Runtime.evaluate', (params) => {
       const expr = String(params?.['expression'] ?? '')
+      if (expr.includes('process.pid')) return { result: { value: 4242 } }
       if (expr.includes('getAllWindows')) {
         return {
           result: {
@@ -254,6 +258,7 @@ describe('InjectorSession stop', () => {
     const quits: string[] = []
     server.respond('Runtime.evaluate', (params) => {
       const expr = String(params?.['expression'] ?? '')
+      if (expr.includes('process.pid')) return { result: { value: 4242 } }
       if (expr.includes('app.quit()')) quits.push(expr)
       return { result: { value: true } }
     })

@@ -81,7 +81,7 @@ export const attachTool: AnyToolDefinition = defineTool({
       phase('Connecting to Electron CDP endpoint')
       const session = await transport.attach(opts)
       phase('Registering Electron session')
-      const { managed, windows } = await registerWithWindows(ctx, transport, session)
+      const { managed, windows } = await registerWithWindows(ctx, transport, session, 'detach')
       return makeSuccess(
         {
           session_id: managed.id,
@@ -127,7 +127,7 @@ export const injectTool: AnyToolDefinition = defineTool({
       phase('Injecting Electron inspector')
       const session = await transport.inject(opts)
       phase('Registering Electron session')
-      const { managed, windows } = await registerWithWindows(ctx, transport, session)
+      const { managed, windows } = await registerWithWindows(ctx, transport, session, 'detach')
       return makeSuccess(
         {
           session_id: managed.id,

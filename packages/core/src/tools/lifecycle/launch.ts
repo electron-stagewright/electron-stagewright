@@ -468,10 +468,10 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         } catch (err) {
           throw diagnoseLaunchError(err)
         }
-        // registerWithWindows deregisters the session if the window-list call
+        // registerWithWindows stops the owned session if the window-list call
         // fails, so a post-launch error never leaves an orphaned session.
         phase('Registering Electron session')
-        const { managed, windows } = await registerWithWindows(ctx, transport, session)
+        const { managed, windows } = await registerWithWindows(ctx, transport, session, 'stop')
         // The transport resolves launch once the first window FRAME exists, which is before
         // the renderer has parsed + populated its DOM — so a naive launch -> snapshot -> find
         // would see a near-empty tree. Wait for the renderer to finish its initial render

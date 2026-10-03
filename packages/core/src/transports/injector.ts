@@ -16,7 +16,8 @@
  * 3. The discovered target must belong to `pid`: the Node inspector embeds the
  *    pid in its target title (`electron[12345]`). Attaching to a DIFFERENT
  *    process's inspector on a shared default port would be a silent
- *    catastrophe, so a pid mismatch is an explicit `INJECT_FAILED`.
+ *    catastrophe, so a pid mismatch is an explicit `INJECT_FAILED`. The label
+ *    selects a candidate; the connected inspector must also report that pid.
  * 4. A {@link CdpConnection} opens to the target's `webSocketDebuggerUrl`. The
  *    session speaks the Node inspector protocol: MAIN-process
  *    `Runtime.evaluate` (with the command-line API so `require` resolves),
@@ -112,7 +113,7 @@ export type DebugProcessTrigger = (pid: number) => void
 export type ProcessAliveProbe = (pid: number) => boolean
 
 const defaultFetchJson: FetchJson = async (url, timeoutMs) => {
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' })
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} from ${url}`)
   }
@@ -638,6 +639,7 @@ export class InjectorTransport implements ITransport {
       )
     }
     const conn = await this.#open(first.webSocketDebuggerUrl, opts.timeoutMs)
+    await this.#verifyConnectedPid(conn, opts.pid)
     return new InjectorSession(conn, this.#sessionDeps, opts.pid)
   }
 
@@ -674,6 +676,7 @@ export class InjectorTransport implements ITransport {
       const owned = targets.find((t) => t.title.includes(`[${opts.pid}]`))
       if (owned !== undefined) {
         const conn = await this.#open(owned.webSocketDebuggerUrl, undefined)
+        await this.#verifyConnectedPid(conn, opts.pid)
         return new InjectorSession(conn, this.#sessionDeps, opts.pid)
       }
       lastSeenTitles = targets.map((t) => t.title)
@@ -705,6 +708,7 @@ export class InjectorTransport implements ITransport {
   }
 
   #open(wsUrl: string, timeoutMs: number | undefined): Promise<CdpConnection> {
+    assertLoopbackAttachTarget(TRANSPORT_ID, { cdpUrl: wsUrl })
     return CdpConnection.open(wsUrl, {
       ...(this.#wsFactory !== undefined ? { factory: this.#wsFactory } : {}),
       ...(timeoutMs !== undefined ? { connectTimeoutMs: timeoutMs } : {}),
