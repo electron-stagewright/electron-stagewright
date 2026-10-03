@@ -846,13 +846,18 @@ class CdpSession implements TransportSession {
     }
   }
 
-  #requireRunning(): void {
+  #requireNotDisposed(): void {
     if (this.#disposed) {
       throw new StagewrightError('NOT_RUNNING', 'CDPTransport session has been disposed.', {
         transport: TRANSPORT_ID,
         sessionId: this.id,
       })
     }
+  }
+
+  // Buffered diagnostics stay readable after a disconnect; anything touching the app does not.
+  #requireRunning(): void {
+    this.#requireNotDisposed()
     if (this.#browser.closed) {
       throw new StagewrightError('CDP_DISCONNECTED', 'CDP browser connection has closed.', {
         transport: TRANSPORT_ID,
@@ -1052,7 +1057,7 @@ class CdpSession implements TransportSession {
   }
 
   async consoleLogs(): Promise<ConsoleLogsResult> {
-    this.#requireRunning()
+    this.#requireNotDisposed()
     return { entries: [...this.#consoleBuffer], overflowed: this.#consoleOverflow }
   }
 
@@ -1062,7 +1067,7 @@ class CdpSession implements TransportSession {
   }
 
   async dialogEvents(opts: DialogEventsOptions = {}): Promise<DialogEventsResult> {
-    this.#requireRunning()
+    this.#requireNotDisposed()
     const result: DialogEventsResult = {
       entries: [...this.#dialogBuffer],
       overflowed: this.#dialogOverflow,
@@ -1095,7 +1100,7 @@ class CdpSession implements TransportSession {
   }
 
   async networkEvents(opts: NetworkEventsOptions = {}): Promise<NetworkEventsResult> {
-    this.#requireRunning()
+    this.#requireNotDisposed()
     const result: NetworkEventsResult = {
       events: [...this.#networkBuffer],
       overflowed: this.#networkOverflow,
