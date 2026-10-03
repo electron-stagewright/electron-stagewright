@@ -11,12 +11,14 @@
  * @module
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { definePluginsInfoTool, loadPlugins } from '../plugins/index.js'
 import type { LoadedPluginInfo, StagewrightPlugin } from '../plugins/index.js'
 import { registerAgentResources } from '../resources/index.js'
+import { ArtifactStore, registerArtifactResources } from '../resources/artifacts.js'
+import { EvidenceMcpServer } from './evidence-mcp-server.js'
 import {
   DEFAULT_TOOLS,
   excludedCoreToolProfileHints,
@@ -131,10 +133,12 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
   const coreTools = [...(opts.tools ?? resolveCoreToolProfile(DEFAULT_TOOLS, toolProfile))]
   const logger = opts.logger ?? new StderrLogger({ level: opts.logLevel ?? 'info' })
   const sessions = new SessionManager()
+  const artifacts = new ArtifactStore()
   const transports = opts.transports ?? new TransportRegistry()
   const snapshots = new SnapshotStore()
   const dispatcher = new Dispatcher({
     sessions,
+    artifacts,
     transports,
     snapshots,
     logger,
@@ -221,7 +225,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
   // agent-UX envelopes, not raw -32602), bypassing registerTool — which is what would
   // otherwise declare this capability. listChanged is false: the tool set is fixed once
   // plugins are loaded, before any transport connects.
-  const mcp = new McpServer(
+  const mcp = new EvidenceMcpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       capabilities: { tools: { listChanged: false } },
@@ -237,10 +241,13 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
         'for both, or --allow-eval=main / --allow-eval=renderer for least privilege. Long-running',
         'calls may emit optional MCP progress notifications when the host requests them; hosts may',
         'ignore those updates, so always rely on the final tool response for completion and outcome.',
+        'Screenshots and trace exports may include an artifact and resource_link. Read that MCP',
+        'resource before artifact.expires_at; the local path remains available after the link expires.',
       ].join(' '),
     },
   )
-  dispatcher.bindToMcpServer(mcp)
+  dispatcher.bindToMcpServer(mcp, () => mcp.supportsResourceLinks)
+  registerArtifactResources(mcp, artifacts)
   registerAgentResources(mcp, {
     activeProfile: opts.tools === undefined ? toolProfile : 'custom',
     visibleCoreToolCount: coreTools.filter((tool) => dispatcher.has(tool.name)).length,
@@ -263,6 +270,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
       try {
         await mcp.close()
       } finally {
+        artifacts.close()
         snapshots.clearAll()
         await sessions.disposeAll()
         if (pluginResult) await pluginResult.teardownAll()

@@ -48,6 +48,8 @@ import {
 } from '../errors/operation-type.js'
 import { StagewrightError } from '../errors/registry.js'
 import { runWithSessionContext } from '../errors/session-context.js'
+import type { ArtifactStore } from '../resources/artifacts.js'
+import { describeResponseIssues, toolResponseSchema } from '../tools/output-schema.js'
 import type {
   AnyToolDefinition,
   DispatchGuard,
@@ -103,6 +105,8 @@ const MIN_SAFE_OPERATION_TIMEOUT_MS = 60_000
 
 /** Options for constructing a {@link Dispatcher}. */
 export interface DispatcherOptions {
+  /** Server-owned generated evidence; omitted for path-only direct embedders. */
+  readonly artifacts?: ArtifactStore
   /** Session registry threaded into every tool context. */
   readonly sessions: SessionManager
   /** Transport registry threaded into every tool context. Defaults to the built-in set. */
@@ -167,6 +171,7 @@ export interface ToolManifestEntry {
   readonly description: string
   readonly operationType: OperationType
   readonly inputJsonSchema: Record<string, unknown>
+  readonly outputJsonSchema?: Record<string, unknown>
   /**
    * True when the tool is eval-gated (`requiresEvalFlag`) and therefore registers only when the
    * server's eval policy permits the tool's target. Absent for ordinary tools. Surfaced so offline
@@ -189,6 +194,7 @@ export interface McpToolManifestEntry {
   readonly title?: string
   readonly description: string
   readonly inputSchema: { type: 'object' } & Record<string, unknown>
+  readonly outputSchema?: { type: 'object' } & Record<string, unknown>
   readonly annotations: ToolAnnotations
 }
 
@@ -229,7 +235,7 @@ function readSessionId(args: unknown): string | undefined {
 }
 
 /**
- * Above this serialised size (chars), `structuredContent` is omitted from the tool result. The
+ * Above this serialised size (chars), tools without output schemas omit `structuredContent`. The
  * envelope ships BOTH as a text block and as structured content, so the wire carries the payload
  * twice; for a snapshot-sized response that doubles stdio traffic and the client's parse cost for
  * no benefit (a host consuming a huge envelope re-parses the text block just as fast). 50k chars
@@ -243,14 +249,41 @@ const MAX_STRUCTURED_CONTENT_CHARS = 50_000
  * JSON text block (for clients that read text, and for backwards compatibility as the spec asks
  * when structured content is present) AND as `structuredContent`, so a 2025-06-18 host can consume
  * the machine-readable envelope (ok/code/retryable/next_actions/_meta) natively without re-parsing
- * — except above {@link MAX_STRUCTURED_CONTENT_CHARS}, where the duplicate copy is dropped to
- * halve the wire bytes of a huge payload (structuredContent is optional per the spec).
+ * — except above {@link MAX_STRUCTURED_CONTENT_CHARS}, where tools without an output schema omit the duplicate copy. A declared output schema
+ * always retains structuredContent, including for large results, as required by MCP.
  */
-function toCallToolResult(envelope: ToolResult): CallToolResult {
+function toCallToolResult(
+  envelope: ToolResult,
+  hasOutputSchema: boolean,
+  artifacts?: ArtifactStore,
+  supportsResourceLinks = false,
+): CallToolResult {
   const text = JSON.stringify(envelope)
+  const candidate = envelope.ok ? envelope['artifact'] : undefined
+  const descriptor =
+    supportsResourceLinks &&
+    typeof candidate === 'object' &&
+    candidate !== null &&
+    'uri' in candidate &&
+    typeof candidate.uri === 'string'
+      ? artifacts?.describe(candidate.uri)
+      : undefined
   return {
-    content: [{ type: 'text', text }],
-    ...(text.length <= MAX_STRUCTURED_CONTENT_CHARS
+    content: [
+      { type: 'text', text },
+      ...(descriptor === undefined
+        ? []
+        : [
+            {
+              type: 'resource_link' as const,
+              uri: descriptor.uri,
+              name: descriptor.name,
+              mimeType: descriptor.mimeType,
+              size: descriptor.size,
+            },
+          ]),
+    ],
+    ...(hasOutputSchema || text.length <= MAX_STRUCTURED_CONTENT_CHARS
       ? { structuredContent: envelope as Record<string, unknown> }
       : {}),
     isError: !envelope.ok,
@@ -259,6 +292,7 @@ function toCallToolResult(envelope: ToolResult): CallToolResult {
 
 export class Dispatcher {
   readonly #tools = new Map<string, AnyToolDefinition>()
+  readonly #artifacts: ArtifactStore | undefined
   readonly #sessions: SessionManager
   readonly #transports: TransportRegistry
   readonly #snapshots: SnapshotStore
@@ -291,6 +325,7 @@ export class Dispatcher {
 
   constructor(opts: DispatcherOptions) {
     this.#sessions = opts.sessions
+    this.#artifacts = opts.artifacts
     this.#transports = opts.transports ?? new TransportRegistry()
     this.#snapshots = opts.snapshots ?? new SnapshotStore()
     this.#logger = opts.logger ?? NOOP_LOGGER
@@ -468,6 +503,14 @@ export class Dispatcher {
       description: def.description,
       operationType: def.operationType,
       inputJsonSchema: z.toJSONSchema(def.inputSchema) as Record<string, unknown>,
+      ...(def.outputSchema === undefined
+        ? {}
+        : {
+            outputJsonSchema: {
+              type: 'object',
+              ...z.toJSONSchema(toolResponseSchema(def.outputSchema)),
+            },
+          }),
       ...(def.requiresEvalFlag === true ? { requiresEvalFlag: true } : {}),
       ...(def.evalTarget !== undefined ? { evalTarget: def.evalTarget } : {}),
       annotations: annotationsFor(def),
@@ -485,6 +528,14 @@ export class Dispatcher {
       ...(def.title !== undefined ? { title: def.title } : {}),
       description: def.description,
       inputSchema: z.toJSONSchema(def.inputSchema) as { type: 'object' } & Record<string, unknown>,
+      ...(def.outputSchema === undefined
+        ? {}
+        : {
+            outputSchema: {
+              ...z.toJSONSchema(toolResponseSchema(def.outputSchema)),
+              type: 'object' as const,
+            },
+          }),
       annotations: annotationsFor(def),
     }))
   }
@@ -640,9 +691,24 @@ export class Dispatcher {
     const operation = new RequestOperation(options.signal, this.#operationTimeoutMs, this.#logger)
     const progress = scopeProgressReporter(options.progress ?? NOOP_PROGRESS_REPORTER)
     operation.onCancel(() => progress.close())
+    const artifacts = this.#artifacts
     const sessionId = readSessionId(args)
     const ctx: ToolContext = {
       sessions: this.#sessions,
+      ...(artifacts === undefined
+        ? {}
+        : {
+            artifacts: {
+              maxArtifactBytes: artifacts.maxArtifactBytes,
+              publish(bytes, mimeType, artifactName) {
+                operation.signal.throwIfAborted()
+                const publication = artifacts.publish(bytes, mimeType, artifactName)
+                if ('artifact' in publication)
+                  operation.onCancel(() => artifacts.remove(publication.artifact.uri))
+                return publication
+              },
+            },
+          }),
       transports: this.#transports,
       snapshots: this.#snapshots,
       status: this.#status,
@@ -696,12 +762,30 @@ export class Dispatcher {
   }
 
   /**
-   * Finalise a dispatch: notify observers (best-effort) with the completed {@link
-   * DispatchRecord}, then return the envelope unchanged. The single funnel for every dispatch
+   * Finalise a dispatch: validate any declared output contract, notify observers (best-effort)
+   * with the completed {@link DispatchRecord}, then return the validated envelope. The single funnel for every dispatch
    * outcome, so observers see ALL calls — success, validation failure, or thrown-and-mapped —
    * exactly once. A throwing observer is caught and logged; it never affects the agent result.
    */
   #complete(tool: string, args: unknown, result: ToolResult, startedAt: number): ToolResult {
+    const schema = this.#tools.get(tool)?.outputSchema
+    const parsed = schema === undefined ? undefined : toolResponseSchema(schema).safeParse(result)
+    if (parsed?.success === false) {
+      this.#logger.warn('Tool result did not match its declared output schema', {
+        tool,
+        issues: describeResponseIssues(parsed.error, result.ok),
+      })
+      // The agent never receives this result, so its portable evidence must not hold capacity.
+      const artifact = result.ok ? result['artifact'] : undefined
+      if (typeof artifact === 'object' && artifact !== null && 'uri' in artifact) {
+        if (typeof artifact.uri === 'string') this.#artifacts?.remove(artifact.uri)
+      }
+      result = makeError('INTERNAL_ERROR', {
+        message: 'Tool result did not match its declared output schema.',
+        startedAt,
+        now: this.#now,
+      })
+    }
     const finishedAt = this.#now()
     // Only registered definitions are safe to echo through a future status response. An unknown
     // tool name is agent-controlled input, so retain its stable failure code without reflecting
@@ -740,7 +824,7 @@ export class Dispatcher {
    * The server must declare the `tools` capability at construction (see `createServer`)
    * since this path does not go through `registerTool`, which would declare it.
    */
-  bindToMcpServer(server: McpServer): void {
+  bindToMcpServer(server: McpServer, supportsResourceLinks: () => boolean = () => false): void {
     // Read the tool map LIVE on each tools/list (not a bind-time snapshot) so that
     // tools/list and tools/call — which routes through dispatch(), also live — can never
     // disagree if a tool is registered after binding.
@@ -772,7 +856,12 @@ export class Dispatcher {
             progress,
             signal: extra.signal,
           })
-          return toCallToolResult(result)
+          return toCallToolResult(
+            result,
+            this.#tools.get(request.params.name)?.outputSchema !== undefined,
+            this.#artifacts,
+            supportsResourceLinks(),
+          )
         } finally {
           progress.close()
         }

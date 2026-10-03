@@ -16,10 +16,13 @@
  * @module
  */
 
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, stat, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import { type SuccessResponse } from '../src/errors/envelope.js'
@@ -53,24 +56,41 @@ describe('observe smoke (real Electron)', () => {
         screenshotDir: ARTIFACT_DIR,
         transports: new TransportRegistry({ transports: [new PlaywrightElectronTransport()] }),
       })
+      const client = new Client({ name: 'portable-screenshot-smoke', version: '1.0.0' })
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+      await Promise.all([server.mcp.connect(serverTransport), client.connect(clientTransport)])
       try {
+        await client.listTools()
         expect(server.dispatcher.has('electron_screenshot')).toBe(true)
         const launched = await server.dispatcher.dispatch('electron_launch', {
           main: FIXTURE_MAIN,
         })
         const sessionId = (launched as SuccessResponse & { session_id: string }).session_id
 
-        const shot = (await server.dispatcher.dispatch('electron_screenshot', {
-          sessionId,
-          fullPage: true,
-        })) as SuccessResponse & { path: string; bytes: number }
-        expect(path.dirname(shot.path)).toBe(ARTIFACT_DIR)
-        expect(shot.bytes).toBeGreaterThan(0)
-        expect((await stat(shot.path)).size).toBe(shot.bytes)
+        for (const format of ['png', 'jpeg'] as const) {
+          const result = (await client.callTool({
+            name: 'electron_screenshot',
+            arguments: { sessionId, fullPage: true, format },
+          })) as CallToolResult
+          const shot = result.structuredContent as { path: string; bytes: number }
+          expect(result.isError).toBe(false)
+          expect(path.dirname(shot.path)).toBe(ARTIFACT_DIR)
+          expect(shot.bytes).toBeGreaterThan(0)
+          expect((await stat(shot.path)).size).toBe(shot.bytes)
+          const link = result.content.find((content) => content.type === 'resource_link')
+          if (link?.type !== 'resource_link') throw new Error('Expected portable screenshot')
+          expect(link.mimeType).toBe(`image/${format}`)
+          const resource = await client.readResource({ uri: link.uri })
+          const content = resource.contents[0]
+          if (content === undefined || !('blob' in content) || typeof content.blob !== 'string')
+            throw new Error('Expected image content')
+          expect(Buffer.from(content.blob, 'base64')).toEqual(await readFile(shot.path))
+        }
 
         const stopped = await server.dispatcher.dispatch('electron_stop', { sessionId })
         expect(stopped.ok).toBe(true)
       } finally {
+        await client.close()
         await server.close()
       }
     },

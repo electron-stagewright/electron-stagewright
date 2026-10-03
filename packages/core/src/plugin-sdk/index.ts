@@ -18,3 +18,9 @@ export {
 export { createSessionCleanup, type PluginSessionCleanup } from './lifecycle.js'
 export { requireTransportCapability, type TransportCapabilityCheck } from './capability.js'
 export { sessionIdField } from './schemas.js'
+export { artifactOutputFields } from '../tools/output-schema.js'
+export type {
+  ArtifactDescriptor,
+  ArtifactPublication,
+  ArtifactPublisher,
+} from '../resources/artifacts.js'
