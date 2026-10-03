@@ -79,6 +79,15 @@ interface CdpFrame {
   readonly params?: unknown
 }
 
+function isCdpErrorShape(value: unknown): value is CdpFrame['error'] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const { code, message } = value as { code?: unknown; message?: unknown }
+  return (
+    (code === undefined || typeof code === 'number') &&
+    (message === undefined || typeof message === 'string')
+  )
+}
+
 /** Options accepted by {@link CdpConnection.open}. */
 export interface CdpConnectionOptions {
   /** Socket factory override (tests). Defaults to the global WebSocket. */
@@ -330,15 +339,7 @@ export class CdpConnection {
     }
     // Validate an error before consuming its pending entry: malformed frames must
     // leave both the resolver and timeout intact for a later valid response.
-    if (
-      frame.error !== undefined &&
-      (typeof frame.error !== 'object' ||
-        frame.error === null ||
-        Array.isArray(frame.error) ||
-        (frame.error.message !== undefined && typeof frame.error.message !== 'string') ||
-        (frame.error.code !== undefined && typeof frame.error.code !== 'number'))
-    )
-      return
+    if (frame.error !== undefined && !isCdpErrorShape(frame.error)) return
     if (typeof frame.id === 'number') {
       const entry = this.#pending.get(frame.id)
       // A response for an id we no longer track (timed out, or never ours) is

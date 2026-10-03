@@ -4,12 +4,12 @@ import { z } from 'zod'
 import { makeSuccess } from '../src/errors/envelope.js'
 import { StagewrightError } from '../src/errors/registry.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
-import { withElapsedProgress } from '../src/server/progress.js'
+import { NOOP_PROGRESS_REPORTER, withElapsedProgress } from '../src/server/progress.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { attachTool, injectTool } from '../src/tools/lifecycle/attach.js'
 import { makeLaunchTool } from '../src/tools/lifecycle/launch.js'
-import { defineTool } from '../src/tools/types.js'
+import { defineTool, type ToolContext } from '../src/tools/types.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
 function deferred<T>() {
@@ -259,6 +259,31 @@ describe('request cancellation', () => {
     gate.reject(new StagewrightError('CDP_DISCONNECTED', 'closed'))
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(evaluate).toHaveBeenCalledTimes(1)
+    expect(transport.stopCount).toBe(1)
+  })
+
+  it('rejects with the request reason when cancelled during a renderer retry delay', async () => {
+    const evaluate = vi.fn(() =>
+      Promise.reject(new StagewrightError('REF_NOT_FOUND', 'renderer not ready')),
+    )
+    const transport = new FakeTransport({ session: new FakeSession({ evaluate }) })
+    const controller = new AbortController()
+    const reason = new StagewrightError('OPERATION_CANCELLED', 'The request was cancelled.')
+    const ctx = {
+      sessions: new SessionManager(),
+      transports: new TransportRegistry({ transports: [transport] }),
+      progress: NOOP_PROGRESS_REPORTER,
+      now: Date.now,
+      startedAt: Date.now(),
+      signal: controller.signal,
+    } as unknown as ToolContext
+    const pending = makeLaunchTool({ fileExists: () => true }).handler(
+      { main: '/app/main.js', readyTimeoutMs: 5_000 },
+      ctx,
+    )
+    await vi.waitFor(() => expect(evaluate).toHaveBeenCalled())
+    controller.abort(reason)
+    await expect(pending).rejects.toBe(reason)
     expect(transport.stopCount).toBe(1)
   })
 
