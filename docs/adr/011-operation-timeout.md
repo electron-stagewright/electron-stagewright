@@ -1,6 +1,43 @@
-# ADR-011: Operation-timeout backstop at the dispatch boundary
+# ADR-011: Request cancellation and operation-timeout backstop
 
 Status: Accepted
+
+## Status update (2026-10-03): cooperative request cancellation
+
+Cancellation now reaches handlers through `ToolContext.signal`. This supersedes the original
+abandon-only handler policy: the dispatcher still cannot interrupt JavaScript already sent to
+Electron, but it can stop subsequent work and reclaim resources acquired by cancelled initialization.
+A controlled regression demonstrated a launch handler registering a session after its dispatcher
+had already returned `OPERATION_TIMEOUT`.
+
+Each dispatch owns an AbortController. MCP request cancellation and the operation timeout both
+abort it. Nested dispatches inherit the active parent's signal; unrelated requests remain isolated.
+`DispatchOptions.signal` provides the same behavior to direct callers. Cancellation returns the
+non-retryable `OPERATION_CANCELLED` envelope to direct callers and dispatch observers. For MCP,
+the SDK handles the cancelled request's protocol response; no replacement response is sent by this
+layer. Client cancellation reasons are not copied into errors or logs. A timeout retains the
+existing retryable `OPERATION_TIMEOUT` code. Disabling the timeout does not disable cancellation.
+
+`ToolContext.onCancel` registers idempotent, cancellation-only resource cleanup. A registration made
+after cancellation runs immediately, which handles transports that resolve late. Completion clears
+callbacks, timers and parent listeners; cleanup failure is logged without blocking the cancelled
+response. Progress scopes close their heartbeat and phase timers even if the handler never settles.
+The signal and cleanup hook are optional in the interface for existing manually constructed contexts;
+the dispatcher always supplies both.
+
+Launch/attach/inject keep cleanup armed until dispatch completion. Windows and launch renderer
+readiness are prepared before registration. Cancellation stops only an app owned by launch;
+attach/inject release their connection without asking an existing app to quit, even when a PID was
+supplied. A cancelled initialization's handle is removed even if disconnect fails. Successful
+requests transfer the session to the registry and later client cancellation does not reclaim it.
+Renderer readiness retries check cancellation and their delay is abortable.
+
+This is cooperative cancellation, not atomic rollback. Already-dispatched evaluations and renderer
+polls may finish; completed actions and previously completed nested calls are not undone. Plugins
+must check `ctx.signal` between asynchronous steps and register their own resource cleanup.
+A launch handshake that never yields a session remains bounded by its transport's startup timeout;
+the dispatcher can only clean up the session once that transport returns it. No arbitrary process
+is killed to force cancellation.
 
 ## Context
 
@@ -31,10 +68,10 @@ retryable `OPERATION_TIMEOUT` envelope (`details.timeout_ms` carries the budget)
   construction-time warning; `0` disables the backstop entirely (opt-out).
 - **Configurable** via `DispatcherOptions.operationTimeoutMs` → `createServer({ operationTimeoutMs })`
   → CLI `--operation-timeout-ms <n>`.
-- **Abandon, do not cancel.** A Playwright `evaluate` cannot be cancelled. When the timer wins, the
-  pending handler promise is ABANDONED: a no-op `.catch` swallows its eventual rejection (no
-  unhandledRejection after we have returned), and the timer is `unref`-ed and cleared so it never
-  keeps the process alive. The agent is unblocked; the orphaned op settles or dies with the session.
+- **Cooperative cancellation.** The timeout aborts the request signal and runs registered cleanup.
+  An already-dispatched Playwright `evaluate` cannot be interrupted; the losing promise remains
+  observed by the race so its eventual rejection cannot become an `unhandledRejection`. Timers are
+  unreferenced and cleared. See the status update above for ownership and plugin obligations.
 
 ## Rationale
 
@@ -43,8 +80,8 @@ retryable `OPERATION_TIMEOUT` envelope (`details.timeout_ms` carries the budget)
   (the discovery scan already bounds its probes) to the tool surface.
 - A retryable `OPERATION_TIMEOUT` is actionable: the agent can retry, raise the budget, or stop the
   session — far better than an indefinite hang.
-- Abandon-not-cancel is the honest trade-off: the alternative (true cancellation) is not available
-  from the transport, and blocking until the op settles is exactly the failure we are removing.
+- Cooperatively stop later work without waiting for an uninterruptible operation: the transport
+  cannot promise rollback, and waiting for it to settle would reintroduce the hang.
 
 ## Alternatives considered
 
@@ -63,8 +100,8 @@ retryable `OPERATION_TIMEOUT` envelope (`details.timeout_ms` carries the budget)
 - A genuinely hung app now yields a clean retryable envelope; a unit test drives a never-settling
   handler against a short budget so a real timer fires, and the resilience suite's "hung app" gap
   is closed.
-- The backstop does not free the underlying resource; a wedged renderer still needs a stop/relaunch
-  to reclaim it. This is documented, not hidden.
+- The backstop reclaims cancelled initialization resources when available. A wedged operation on
+  an existing session may still need an explicit stop/relaunch; cancellation does not quit that app.
 
 ## Related decisions
 
@@ -76,8 +113,9 @@ retryable `OPERATION_TIMEOUT` envelope (`details.timeout_ms` carries the budget)
 
 ## References
 
-- `packages/core/src/server/dispatcher.ts` — `#withTimeout`, `operationTimeoutMs`,
+- `packages/core/src/server/dispatcher.ts` — `operationTimeoutMs`,
   `DEFAULT_OPERATION_TIMEOUT_MS`, the construction-time warning.
+- `packages/core/src/server/request-operation.ts` — cancellation lifetime and cleanup.
 - `packages/core/src/errors/registry.ts` — the `OPERATION_TIMEOUT` definition.
 - `packages/core/src/cli.ts` — `--operation-timeout-ms` parsing.
 - `packages/core/tests/dispatcher.test.ts`, `packages/core/tests/resilience.test.ts` — the

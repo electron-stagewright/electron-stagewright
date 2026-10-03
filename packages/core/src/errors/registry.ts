@@ -204,6 +204,11 @@ export const ERROR_CODES = {
   },
 
   // Dispatch backstop (ADR-011)
+  OPERATION_CANCELLED: {
+    http: 499,
+    retryable: false,
+    hint: 'The caller cancelled this request. Inspect app state before explicitly starting another operation; already-dispatched JavaScript may still finish.',
+  },
   OPERATION_TIMEOUT: {
     http: 408,
     retryable: true,

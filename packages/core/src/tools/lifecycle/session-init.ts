@@ -10,19 +10,39 @@ import type { ToolContext } from '../types.js'
 
 /** Fetch initial windows and register only a session the caller can successfully address. */
 export async function registerWithWindows(
-  ctx: Pick<ToolContext, 'sessions'>,
+  ctx: Pick<ToolContext, 'sessions' | 'signal' | 'onCancel'>,
   transport: ITransport,
   session: TransportSession,
   failureCleanup: 'stop' | 'detach',
+  prepare?: () => Promise<void>,
 ): Promise<{ readonly managed: ManagedSession; readonly windows: readonly WindowDescriptor[] }> {
+  let managed: ManagedSession | undefined
+  let cleanupPromise: Promise<unknown> | undefined
+  const cleanup = (): Promise<void> => {
+    cleanupPromise ??= (async () => {
+      if (managed !== undefined && ctx.sessions.get(managed.id) === managed) {
+        await ctx.sessions.remove(managed.id, { detach: failureCleanup === 'detach' })
+      } else if (managed === undefined) {
+        if (failureCleanup === 'detach') await session.detach()
+        else await transport.stop(session)
+      }
+    })()
+    return cleanupPromise.then(() => undefined)
+  }
+  // Keep rollback armed until the dispatcher completes, covering cancellation just after register.
+  const unregister = ctx.onCancel?.(cleanup)
   try {
+    ctx.signal?.throwIfAborted()
     const windows = await session.windowsList()
-    const managed = ctx.sessions.register(transport, session)
+    ctx.signal?.throwIfAborted()
+    await prepare?.()
+    ctx.signal?.throwIfAborted()
+    managed = ctx.sessions.register(transport, session)
     return { managed, windows }
   } catch (err) {
+    unregister?.()
     try {
-      if (failureCleanup === 'detach') await session.detach()
-      else await transport.stop(session)
+      await cleanup()
     } catch {
       // A cleanup error must neither mask initialization failure nor stop an attached app.
     }

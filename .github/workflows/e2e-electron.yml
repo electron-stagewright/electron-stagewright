@@ -21,8 +21,8 @@ name: E2E (real Electron)
 on:
   push:
     branches: [main]
+  # Also validate stacked PRs whose base is another review branch.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: e2e-electron-${{ github.ref }}

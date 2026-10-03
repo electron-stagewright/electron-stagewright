@@ -263,3 +263,11 @@ not target-readiness timeouts or internal Stagewright defects:
   configuration, and logs. It carries only bounded path/process facts (`executable_path`,
   `exit_code`, or `signal` when available), never unbounded application stderr. A process that stays
   alive but never exposes a page remains the retryable `LAUNCH_TIMEOUT`.
+
+## Status Update (2026-10-03) — added `OPERATION_CANCELLED`
+
+ADR-011 now propagates client cancellation to tool handlers and lifecycle cleanup. Direct dispatch
+callers and observers receive `OPERATION_CANCELLED` (`http: 499`, `retryable: false`); the MCP SDK
+owns response suppression for cancelled protocol requests. The hint asks callers to inspect app
+state before explicitly starting another operation, since already-dispatched JavaScript may finish.
+Client-provided cancellation reasons are not exposed. The dispatch timeout keeps `OPERATION_TIMEOUT`.

@@ -61,7 +61,12 @@ import type {
 } from '../tools/types.js'
 import { anyEvalAllowed, type EvalPolicy, normalizeEvalPolicy } from './eval-policy.js'
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
-import { createProgressReporter, NOOP_PROGRESS_REPORTER } from './progress.js'
+import {
+  createProgressReporter,
+  NOOP_PROGRESS_REPORTER,
+  scopeProgressReporter,
+} from './progress.js'
+import { RequestOperation } from './request-operation.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
 import { ServerStatus } from './status.js'
@@ -142,6 +147,8 @@ export interface DispatcherOptions {
 
 /** Request-scoped collaborators supplied by the transport-facing dispatcher entry point. */
 export interface DispatchOptions {
+  /** Client cancellation; nested dispatches inherit their parent request lifetime. */
+  readonly signal?: AbortSignal
   /**
    * Advisory MCP progress sink. Direct callers may omit it; nested dispatches reuse the same
    * instance so ordering and the per-request notification budget remain global to the call.
@@ -567,7 +574,12 @@ export class Dispatcher {
    * {@link MAX_REDISPATCH_DEPTH} it returns a `BAD_ARGUMENT` envelope instead of recursing, so an
    * accidental dispatch cycle cannot blow the stack. Never throws.
    */
-  #redispatch(tool: string, args: unknown, progress: ProgressReporter): Promise<ToolResult> {
+  #redispatch(
+    tool: string,
+    args: unknown,
+    progress: ProgressReporter,
+    signal: AbortSignal,
+  ): Promise<ToolResult> {
     const depth = (REDISPATCH_DEPTH.getStore() ?? 0) + 1
     if (depth > MAX_REDISPATCH_DEPTH) {
       return Promise.resolve(
@@ -578,7 +590,7 @@ export class Dispatcher {
         }),
       )
     }
-    return REDISPATCH_DEPTH.run(depth, () => this.dispatch(tool, args, { progress }))
+    return REDISPATCH_DEPTH.run(depth, () => this.dispatch(tool, args, { progress, signal }))
   }
 
   /**
@@ -591,7 +603,6 @@ export class Dispatcher {
     options: DispatchOptions = {},
   ): Promise<ToolResult> {
     const startedAt = this.#now()
-    const progress = options.progress ?? NOOP_PROGRESS_REPORTER
     const def = this.#tools.get(name)
     if (def === undefined) {
       return this.#complete(name, rawArgs, this.#unknownToolError(name, startedAt), startedAt)
@@ -626,6 +637,9 @@ export class Dispatcher {
       return this.#complete(name, args, veto, startedAt)
     }
 
+    const operation = new RequestOperation(options.signal, this.#operationTimeoutMs, this.#logger)
+    const progress = scopeProgressReporter(options.progress ?? NOOP_PROGRESS_REPORTER)
+    operation.onCancel(() => progress.close())
     const sessionId = readSessionId(args)
     const ctx: ToolContext = {
       sessions: this.#sessions,
@@ -634,6 +648,8 @@ export class Dispatcher {
       status: this.#status,
       logger: this.#logger,
       progress,
+      signal: operation.signal,
+      onCancel: operation.onCancel,
       allowEval: this.#evalPolicy.main,
       allowEvalRenderer: this.#evalPolicy.renderer,
       ...(this.#screenshotDir !== undefined ? { screenshotDir: this.#screenshotDir } : {}),
@@ -644,7 +660,8 @@ export class Dispatcher {
       startedAt,
       now: this.#now,
       addDispatchObserver: (observer) => this.addObserver(observer),
-      dispatch: (tool, dispatchArgs) => this.#redispatch(tool, dispatchArgs, progress),
+      dispatch: (tool, dispatchArgs) =>
+        this.#redispatch(tool, dispatchArgs, progress, operation.signal),
       validate: (tool, validateArgs) => this.validate(tool, validateArgs),
       addDispatchGuard: (guard) => this.addGuard(guard),
     }
@@ -656,7 +673,10 @@ export class Dispatcher {
       // would leave the catch in the outer context, dropping the correlation id on every throw.
       return await runWithSessionContext(sessionId, async () => {
         try {
-          const result = await this.#withTimeout(() => def.handler(args, ctx))
+          const result = await operation.run(() => def.handler(args, ctx))
+          operation.signal.throwIfAborted()
+          // Commit completion before notifying observers; a later client abort must not roll it back.
+          operation.close()
           this.#warnIfSlow(name, this.#now() - startedAt)
           return this.#complete(name, args, result, startedAt)
         } catch (err) {
@@ -669,40 +689,9 @@ export class Dispatcher {
       // handler throws), but if it did, still return an envelope rather than escaping to the transport.
       this.#warnIfSlow(name, this.#now() - startedAt)
       return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
-    }
-  }
-
-  /**
-   * Race a handler against the operation-timeout backstop (ADR-011): resolve to the handler's
-   * result if it settles first, otherwise throw a retryable `OPERATION_TIMEOUT` (mapped to an
-   * envelope by {@link Dispatcher.#mapThrown}). A budget of `0` disables the backstop. The losing
-   * (hung) promise is ABANDONED — a Playwright `evaluate` cannot be cancelled — so a no-op `catch`
-   * swallows its eventual rejection to avoid an unhandledRejection after we have already returned;
-   * the timer is `unref`-ed and cleared so it never keeps the process alive.
-   */
-  async #withTimeout<T>(run: () => Promise<T>): Promise<T> {
-    const budget = this.#operationTimeoutMs
-    const work = run()
-    if (budget <= 0) return work
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        reject(
-          new StagewrightError(
-            'OPERATION_TIMEOUT',
-            `Operation exceeded the ${budget}ms dispatch timeout; the app may be hung.`,
-            { timeout_ms: budget },
-          ),
-        )
-      }, budget)
-      timer.unref?.()
-    })
-    try {
-      return await Promise.race([work, timeout])
     } finally {
-      if (timer !== undefined) clearTimeout(timer)
-      // The handler may still be pending (it lost the race); swallow its eventual rejection.
-      void work.catch(() => undefined)
+      progress.close()
+      operation.close()
     }
   }
 
@@ -781,6 +770,7 @@ export class Dispatcher {
         try {
           const result = await this.dispatch(request.params.name, request.params.arguments, {
             progress,
+            signal: extra.signal,
           })
           return toCallToolResult(result)
         } finally {

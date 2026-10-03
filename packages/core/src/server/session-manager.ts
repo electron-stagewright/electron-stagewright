@@ -167,11 +167,13 @@ export class SessionManager {
    * `dispose`. `force` routes to `transport.forceKill` (SIGKILL) instead of a
    * graceful stop; `timeoutMs` bounds the graceful close before the transport
    * escalates to SIGKILL on its own. The result reports whether escalation
-   * happened, so callers can tell a graceful close from a forced reap.
+   * happened, so callers can tell a graceful close from a forced reap. `detach` releases only
+   * the connection and takes precedence over `force`; unlike the explicit detach tool it never
+   * restores a failed initialization handle when disconnect rejects.
    */
   async remove(
     id: SessionId,
-    opts: { readonly force?: boolean; readonly timeoutMs?: number } = {},
+    opts: { readonly force?: boolean; readonly timeoutMs?: number; readonly detach?: boolean } = {},
   ): Promise<StopResult> {
     const managed = this.#sessions.get(id)
     if (managed === undefined) return { escalated: false }
@@ -180,6 +182,12 @@ export class SessionManager {
     // front can no longer orphan a process without a handle.
     this.#sessions.delete(id)
     try {
+      // Cancelled initialization must forget its unpublished handle even if disconnect fails.
+      // The explicit detach tool keeps its separate restore-on-failure semantics.
+      if (opts.detach === true) {
+        await managed.session.detach()
+        return { escalated: false }
+      }
       if (opts.force === true) {
         await managed.transport.forceKill(managed.session)
         return { escalated: false }
@@ -189,7 +197,10 @@ export class SessionManager {
         opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : undefined,
       )
     } finally {
-      await this.#notifySessionEnd(id, opts.force === true ? 'force_kill' : 'stop')
+      await this.#notifySessionEnd(
+        id,
+        opts.detach === true ? 'detach' : opts.force === true ? 'force_kill' : 'stop',
+      )
     }
   }
 
