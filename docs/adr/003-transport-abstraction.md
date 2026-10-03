@@ -585,5 +585,6 @@ mismatches within the existing trusted-local-process model; it is not endpoint a
 
 The CDP client ignores malformed frames without consuming pending calls or their timeout handles,
 and stops delivering events after close. Page connections completing after browser disconnection
-are closed instead of being added to the pool. A disconnected session refuses further operations
-while preserving the owned-process cleanup path.
+are closed instead of being added to the pool. A disconnected session refuses operations that reach
+the app, keeps already-buffered console, dialog, and network diagnostics readable, and preserves the
+owned-process cleanup path.

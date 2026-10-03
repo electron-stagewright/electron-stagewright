@@ -13,7 +13,7 @@ export async function registerWithWindows(
   ctx: Pick<ToolContext, 'sessions'>,
   transport: ITransport,
   session: TransportSession,
-  failureCleanup: 'stop' | 'detach' = 'stop',
+  failureCleanup: 'stop' | 'detach',
 ): Promise<{ readonly managed: ManagedSession; readonly windows: readonly WindowDescriptor[] }> {
   try {
     const windows = await session.windowsList()

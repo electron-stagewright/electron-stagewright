@@ -731,6 +731,26 @@ describe('CDP console + dialog capture', () => {
     ).toEqual([{ type: 'log', text: 'hello 42 DOMObject', windowId: 'T1' }])
   })
 
+  it('keeps buffered diagnostics readable after the browser disconnects', async () => {
+    const { server, transport } = setup()
+    const session = await transport.attach({ port: 9222 })
+    server.emit('page/T1', 'Runtime.consoleAPICalled', {
+      type: 'error',
+      args: [{ value: 'crash' }],
+    })
+
+    server.closeSockets('browser')
+
+    await expect(session.consoleLogs()).resolves.toMatchObject({
+      entries: [{ type: 'error', text: 'crash' }],
+    })
+    await expect(session.dialogEvents()).resolves.toMatchObject({ entries: [] })
+    await expect(session.networkEvents()).resolves.toMatchObject({ events: [] })
+    await expect(session.evaluate('renderer', 'return 1;')).rejects.toMatchObject({
+      code: 'CDP_DISCONNECTED',
+    })
+  })
+
   it('auto-responds to javascriptDialogOpening per the policy and records the event', async () => {
     const { server, transport } = setup()
     const handled: Json[] = []

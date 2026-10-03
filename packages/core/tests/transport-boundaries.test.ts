@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CdpConnection } from '../src/transports/cdp-connection.js'
 import { CDPTransport } from '../src/transports/cdp.js'
 import { InjectorTransport } from '../src/transports/injector.js'
-import { FakeCdpServer } from './helpers/fake-cdp.js'
+import { FakeCdpServer, FakeSocket } from './helpers/fake-cdp.js'
 
 const BROWSER_WS = 'ws://127.0.0.1:9222/devtools/browser/test'
 const PAGE_WS = 'ws://127.0.0.1:9222/devtools/page/test'
@@ -153,8 +153,35 @@ describe('inspector identity verification', () => {
         operation === 'attach'
           ? transport.attach({ port: 9229, pid: 4242 })
           : transport.inject({ pid: 4242 })
-      await expect(pending).rejects.toMatchObject({ code: 'INJECT_FAILED' })
-      expect(server.sent.every((frame) => frame.method !== 'Browser.close')).toBe(true)
+      const closeSpy = vi.spyOn(FakeSocket.prototype, 'close')
+      try {
+        await expect(pending).rejects.toMatchObject({ code: 'INJECT_FAILED' })
+        expect(server.sent.every((frame) => frame.method !== 'Browser.close')).toBe(true)
+        expect(closeSpy).toHaveBeenCalledTimes(1)
+      } finally {
+        closeSpy.mockRestore()
+      }
     },
   )
+
+  it('closes the inspector socket and reports INJECT_FAILED when the pid probe fails', async () => {
+    const server = new FakeCdpServer()
+    server.respond('Runtime.evaluate', () => {
+      throw new Error('probe failed')
+    })
+    const transport = new InjectorTransport({
+      wsFactory: server.factory,
+      fetchJson: async () => [{ title: 'electron[4242]', webSocketDebuggerUrl: PAGE_WS }],
+    })
+    const closeSpy = vi.spyOn(FakeSocket.prototype, 'close')
+    try {
+      await expect(transport.attach({ port: 9229, pid: 4242 })).rejects.toMatchObject({
+        code: 'INJECT_FAILED',
+        details: { pid: 4242, cause: expect.stringContaining('probe failed') },
+      })
+      expect(closeSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      closeSpy.mockRestore()
+    }
+  })
 })

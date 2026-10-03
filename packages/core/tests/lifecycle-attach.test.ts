@@ -166,6 +166,18 @@ describe('failed attached-session initialization', () => {
     },
   )
 
+  it('detaches without stopping when registration rejects the session', async () => {
+    const session = new FakeSession({ id: 'existing' })
+    const transport = new FakeTransport({ session })
+    const { dispatcher, sessions } = setup(new TransportRegistry({ transports: [transport] }))
+    sessions.register(transport, new FakeSession({ id: 'existing' }))
+    const response = await dispatcher.dispatch('electron_attach', { port: 9222 })
+    expect(response).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+    expect(sessions.size).toBe(1)
+    expect(session.detachCount).toBe(1)
+    expect(transport.stopCount).toBe(0)
+  })
+
   it('preserves the initialization error and leaves no orphan when detach also fails', async () => {
     const session = new FakeSession({
       id: 'existing',
