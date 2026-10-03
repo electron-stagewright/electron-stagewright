@@ -153,7 +153,11 @@ async function awaitRendererReady(
         Math.max(0, deadline - Date.now()),
       )
       if (!retryable || retryDelayMs === 0) return false
-      await delay(retryDelayMs, undefined, { signal })
+      // An aborted delay rejects with a generic AbortError; surface the request's own reason.
+      await delay(retryDelayMs, undefined, { signal }).catch((error: unknown) => {
+        signal?.throwIfAborted()
+        throw error
+      })
     }
   }
 }

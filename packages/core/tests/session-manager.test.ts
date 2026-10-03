@@ -158,6 +158,32 @@ describe('SessionManager teardown', () => {
     expect(transport.stopCount).toBe(0)
   })
 
+  it('remove with detach releases only the connection, wins over force, and reports detach', async () => {
+    const { manager, transport } = setup()
+    const session = new FakeSession({ id: 'x' })
+    manager.register(transport, session)
+    const reasons: string[] = []
+    manager.onSessionEnd((event) => {
+      reasons.push(event.reason)
+    })
+    await expect(manager.remove('x', { detach: true, force: true })).resolves.toEqual({
+      escalated: false,
+    })
+    expect(session.detachCount).toBe(1)
+    expect(transport.forceKillCount).toBe(0)
+    expect(transport.stopCount).toBe(0)
+    expect(reasons).toEqual(['detach'])
+    expect(manager.has('x')).toBe(false)
+  })
+
+  it('remove with detach forgets the handle even when disconnect fails', async () => {
+    const { manager, transport } = setup()
+    manager.register(transport, new FakeSession({ id: 'x', detachError: new Error('gone') }))
+    await expect(manager.remove('x', { detach: true })).rejects.toThrow('gone')
+    expect(manager.has('x')).toBe(false)
+    expect(transport.stopCount).toBe(0)
+  })
+
   it('disposeAll stops every session and is idempotent', async () => {
     const { manager, transport } = setup()
     const s1 = new FakeSession({ id: 'a' })
