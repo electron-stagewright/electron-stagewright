@@ -7,7 +7,6 @@
  * @module
  */
 
-import { artifactOutputFields } from '../output-schema.js'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -17,6 +16,7 @@ import { z } from 'zod'
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import type { ScreenshotOptions, TransportSession, WindowRef } from '../../transports/index.js'
+import { artifactOutputFields } from '../output-schema.js'
 import { refField, selectorField, sessionIdField } from '../schema.js'
 import { loadInjectedWalker, runProbe } from '../snapshot/inject.js'
 import {

@@ -48,6 +48,8 @@ import {
 } from '../errors/operation-type.js'
 import { StagewrightError } from '../errors/registry.js'
 import { runWithSessionContext } from '../errors/session-context.js'
+import type { ArtifactStore } from '../resources/artifacts.js'
+import { describeResponseIssues, toolResponseSchema } from '../tools/output-schema.js'
 import type {
   AnyToolDefinition,
   DispatchGuard,
@@ -67,8 +69,6 @@ import {
   scopeProgressReporter,
 } from './progress.js'
 import { RequestOperation } from './request-operation.js'
-import type { ArtifactStore } from '../resources/artifacts.js'
-import { toolResponseSchema } from '../tools/output-schema.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
 import { ServerStatus } from './status.js'
@@ -769,7 +769,17 @@ export class Dispatcher {
    */
   #complete(tool: string, args: unknown, result: ToolResult, startedAt: number): ToolResult {
     const schema = this.#tools.get(tool)?.outputSchema
-    if (schema !== undefined && !toolResponseSchema(schema).safeParse(result).success) {
+    const parsed = schema === undefined ? undefined : toolResponseSchema(schema).safeParse(result)
+    if (parsed?.success === false) {
+      this.#logger.warn('Tool result did not match its declared output schema', {
+        tool,
+        issues: describeResponseIssues(parsed.error, result.ok),
+      })
+      // The agent never receives this result, so its portable evidence must not hold capacity.
+      const artifact = result.ok ? result['artifact'] : undefined
+      if (typeof artifact === 'object' && artifact !== null && 'uri' in artifact) {
+        if (typeof artifact.uri === 'string') this.#artifacts?.remove(artifact.uri)
+      }
       result = makeError('INTERNAL_ERROR', {
         message: 'Tool result did not match its declared output schema.',
         startedAt,

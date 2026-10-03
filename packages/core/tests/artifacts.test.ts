@@ -5,13 +5,18 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
+import { makeSuccess } from '../src/errors/envelope.js'
 import { ArtifactStore, type ArtifactPublication } from '../src/resources/artifacts.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { createServer, type StagewrightServer } from '../src/server/server.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { screenshotTool } from '../src/tools/observe/screenshot.js'
+import { artifactOutputFields } from '../src/tools/output-schema.js'
+import { defineTool } from '../src/tools/types.js'
+import { NOOP_LOGGER } from '../src/server/logger.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
 const stores: ArtifactStore[] = []
@@ -187,6 +192,41 @@ describe('portable screenshot over MCP', () => {
     ).toMatchObject({ code: 'OPERATION_CANCELLED' })
     expect(uri).not.toBe('')
     expect(artifacts.read(uri)).toBeUndefined()
+  })
+
+  it('logs an output-schema violation and revokes the evidence the agent never receives', async () => {
+    const artifacts = store()
+    const warn = vi.fn()
+    let uri: string | undefined
+    const tool = defineTool({
+      name: 'test_bad_evidence',
+      description: 'Publishes evidence, then returns an invalid payload.',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ path: z.string(), ...artifactOutputFields }),
+      operationType: 'command',
+      handler: async (_args, ctx) => {
+        const publication = ctx.artifacts?.publish(Buffer.from('{}'), 'application/json', 'x.json')
+        if (publication !== undefined && 'artifact' in publication) uri = publication.artifact.uri
+        return makeSuccess({ path: 42, ...publication })
+      },
+    })
+    const dispatcher = new Dispatcher({
+      sessions: new SessionManager(),
+      artifacts,
+      logger: { ...NOOP_LOGGER, warn },
+    })
+    dispatcher.registerAll([tool])
+
+    expect(await dispatcher.dispatch('test_bad_evidence', {})).toMatchObject({
+      ok: false,
+      code: 'INTERNAL_ERROR',
+    })
+    expect(uri).toBeDefined()
+    expect(artifacts.describe(uri ?? '')).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith('Tool result did not match its declared output schema', {
+      tool: 'test_bad_evidence',
+      issues: [expect.stringMatching(/^path: /)],
+    })
   })
 
   it('preserves the legacy JSON/path and serves original bytes after the output file is replaced', async () => {
