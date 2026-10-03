@@ -13,7 +13,7 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 
 import { type SuccessResponse } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
@@ -69,6 +69,74 @@ async function spawnWithCdp(): Promise<{ readonly cdpUrl: string; readonly proc:
 }
 
 describe('CDP attach smoke (real Electron)', () => {
+  it.skipIf(!RUN_E2E)(
+    'disconnects a late cancelled attach while the existing app stays usable',
+    async () => {
+      const { cdpUrl, proc } = await spawnWithCdp()
+      const sessions = new SessionManager()
+      const transport = new CDPTransport()
+      const attach = transport.attach.bind(transport)
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let connected!: () => void
+      const ready = new Promise<void>((resolve) => {
+        connected = resolve
+      })
+      let live: Awaited<ReturnType<typeof attach>> | undefined
+      vi.spyOn(transport, 'attach').mockImplementation(async (opts) => {
+        live = await attach(opts)
+        vi.spyOn(live, 'detach')
+        connected()
+        await gate
+        return live
+      })
+      const stopped = vi.spyOn(transport, 'stop')
+      const dispatcher = new Dispatcher({
+        sessions,
+        transports: new TransportRegistry({ transports: [transport] }),
+      })
+      dispatcher.register(attachTool)
+      const controller = new AbortController()
+      const pending = dispatcher.dispatch(
+        'electron_attach',
+        { cdpUrl, pid: proc.pid },
+        { signal: controller.signal },
+      )
+      try {
+        await Promise.race([
+          ready,
+          pending.then((result) => {
+            throw new Error(`Attach ended before the test gate: ${JSON.stringify(result)}`)
+          }),
+        ])
+        controller.abort()
+        expect(await pending).toMatchObject({ code: 'OPERATION_CANCELLED' })
+        release()
+        await vi.waitFor(() => expect(live?.detach).toHaveBeenCalledTimes(1))
+        expect(sessions.size).toBe(0)
+        expect(stopped).not.toHaveBeenCalled()
+        const recovered = await new CDPTransport().attach({ cdpUrl })
+        try {
+          await expect(recovered.evaluate('renderer', 'return document.title')).resolves.toBeTypeOf(
+            'string',
+          )
+          expect(proc.exitCode).toBeNull()
+        } finally {
+          await recovered.detach()
+        }
+      } finally {
+        release()
+        controller.abort()
+        await pending
+        await live?.detach()
+        if (proc.exitCode === null) proc.kill('SIGKILL')
+      }
+    },
+    60000,
+  )
+
   it.skipIf(!RUN_E2E)(
     'preserves the running app after window discovery fails during attach',
     async () => {

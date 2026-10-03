@@ -210,3 +210,16 @@ app state. See [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) for full namespace
 
 For trace workflows, continue with [Capture diagnostics](./capture-diagnostics.md). For trust
 boundaries, read the [security model](./security-model.md).
+
+## Cancellation in plugin handlers
+
+The dispatcher supplies `ctx.signal` for client cancellation and operation timeouts. Check
+`ctx.signal?.throwIfAborted()` before starting another step after an `await`, and pass the signal
+to APIs that support it. `ctx.dispatch(...)` inherits the current request's cancellation.
+
+Register cleanup for resources acquired by the current call with `ctx.onCancel?.(cleanup)`.
+It returns an unregister function; successful dispatch completion discards pending callbacks.
+A callback registered after cancellation runs immediately. Cleanup must be idempotent and must
+preserve applications the request did not launch. Its failure is logged without delaying the
+cancelled response. Do not rely on cancellation to reverse mutations or interrupt JavaScript
+already sent to Electron; completed nested calls are not rolled back.

@@ -12,6 +12,7 @@
 
 import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 
 import { z } from 'zod'
 
@@ -124,9 +125,14 @@ for (;;) {
  * can replace their first page target during startup. `timeoutMs: 0` performs a single
  * instantaneous check.
  */
-async function awaitRendererReady(session: TransportSession, timeoutMs: number): Promise<boolean> {
+async function awaitRendererReady(
+  session: TransportSession,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
+    signal?.throwIfAborted()
     const remainingMs = Math.max(0, deadline - Date.now())
     try {
       const result = await session.evaluate<{ ready?: boolean }>('renderer', RENDERER_READY_BODY, {
@@ -134,6 +140,7 @@ async function awaitRendererReady(session: TransportSession, timeoutMs: number):
       })
       return result?.ready === true
     } catch (error) {
+      signal?.throwIfAborted()
       const retryable =
         error instanceof StagewrightError &&
         (error.code === 'REF_NOT_FOUND' ||
@@ -146,7 +153,7 @@ async function awaitRendererReady(session: TransportSession, timeoutMs: number):
         Math.max(0, deadline - Date.now()),
       )
       if (!retryable || retryDelayMs === 0) return false
-      await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs))
+      await delay(retryDelayMs, undefined, { signal })
     }
   }
 }
@@ -367,6 +374,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
               next_actions: ['Run electron_doctor to inspect the configured project runtime.'],
             })
           }
+          ctx.signal?.throwIfAborted()
           executablePath = resolution.electron.executablePath
           resolvedProjectRoot = resolution.rootPath
           runtimeSource = 'project'
@@ -452,6 +460,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           }
         }
 
+        ctx.signal?.throwIfAborted()
         const transport = packagedLaunch
           ? ctx.transports.requireById('cdp', 'canLaunch')
           : ctx.transports.requireCapability('canLaunch')
@@ -468,18 +477,23 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         } catch (err) {
           throw diagnoseLaunchError(err)
         }
-        // registerWithWindows stops the owned session if the window-list call
-        // fails, so a post-launch error never leaves an orphaned session.
+        // Keep the session unpublished until preparation completes. Cancellation closes an
+        // owned app even if its window/renderer probe never returns.
         phase('Registering Electron session')
-        const { managed, windows } = await registerWithWindows(ctx, transport, session)
-        // The transport resolves launch once the first window FRAME exists, which is before
-        // the renderer has parsed + populated its DOM — so a naive launch -> snapshot -> find
-        // would see a near-empty tree. Wait for the renderer to finish its initial render
-        // (best-effort, bounded) and report renderer_ready so the agent need not guess.
-        phase('Waiting for initial renderer')
-        const renderer_ready = await awaitRendererReady(
-          managed.session,
-          args.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+        let renderer_ready = false
+        const { managed, windows } = await registerWithWindows(
+          ctx,
+          transport,
+          session,
+          'stop',
+          async () => {
+            phase('Waiting for initial renderer')
+            renderer_ready = await awaitRendererReady(
+              session,
+              args.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+              ctx.signal,
+            )
+          },
         )
         return makeSuccess(
           {

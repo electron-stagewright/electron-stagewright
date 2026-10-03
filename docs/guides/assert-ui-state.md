@@ -76,10 +76,17 @@ capturing, comparing, or replaying. Pre-threshold transitions coalesce, and the 
 notification cap applies across nested calls.
 
 There is no tool-level progress argument to add. The host opts in through MCP request metadata,
-and it may ignore notifications even when requested. Progress also does not make a wait
-cancellable: aborting the MCP request stops future updates but does not add interruption support
-to the underlying Electron operation. In every host, callers must treat the final success/error
-envelope—not progress—as the authoritative completion and outcome.
+and it may ignore notifications even when requested. Cancelling the request stops progress,
+propagates cancellation to handlers and nested calls, and cleans up pending session initialization.
+The dispatch timeout triggers the same cleanup. Apps started by a cancelled launch are stopped;
+existing apps being attached or injected remain running.
+
+Cancellation cannot interrupt or undo JavaScript already sent to Electron, including a renderer
+poll. An operation on an existing session may still finish, so inspect app state before retrying a
+mutation. A cancelled launch handshake is cleaned up when its transport returns a session. Plugin
+handlers must cooperate with the cancellation signal between steps. Direct dispatch reports
+`OPERATION_CANCELLED`; the MCP client handles its own cancelled request. Progress is advisory and
+never proves that an operation completed.
 
 ## Watching change: snapshot diffs
 

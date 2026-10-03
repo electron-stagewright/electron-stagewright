@@ -132,6 +132,18 @@ export interface ProgressReporter {
  * the dispatcher stays the single owner of session and logging lifecycle.
  */
 export interface ToolContext {
+  /**
+   * Per-request cancellation, including the dispatch timeout. The dispatcher always supplies it;
+   * optional for source compatibility with manually constructed plugin/test contexts. Check it
+   * before starting later work. Already-dispatched JavaScript cannot be interrupted or rolled back.
+   */
+  readonly signal?: AbortSignal
+  /**
+   * Register cancellation-only cleanup for resources acquired by this request. It runs immediately
+   * if already cancelled, and is discarded on completion. Returns an idempotent unregister.
+   * Cleanup must be idempotent and must not stop an app the request did not launch.
+   */
+  readonly onCancel?: (cleanup: () => void | Promise<void>) => () => void
   /** The session registry — tools resolve, create, or remove sessions through this. */
   readonly sessions: SessionManager
   /**

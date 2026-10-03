@@ -105,6 +105,46 @@ function envelopeOf(result: CallToolResult): Record<string, unknown> {
 }
 
 describe('dispatcher MCP binding', () => {
+  it('propagates SDK request cancellation into handlers without affecting a concurrent call', async () => {
+    let enter!: () => void
+    let cancel!: () => void
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve
+    })
+    const cancelled = new Promise<void>((resolve) => {
+      cancel = resolve
+    })
+    const blockedTool = defineTool({
+      name: 'test_cancel',
+      description: 'Wait for cancellation.',
+      inputSchema: z.object({}),
+      operationType: 'query',
+      handler: async (_args, ctx) => {
+        ctx.onCancel?.(cancel)
+        enter()
+        return new Promise(() => undefined)
+      },
+    })
+    const client = await connectClient([blockedTool, echoTool])
+    const controller = new AbortController()
+    const pending = client.callTool({ name: 'test_cancel', arguments: {} }, CallToolResultSchema, {
+      signal: controller.signal,
+    })
+    const rejected = expect(pending).rejects.toBeDefined()
+    await entered
+    controller.abort()
+    await rejected
+    await cancelled
+    expect(
+      envelopeOf(
+        (await client.callTool({
+          name: 'test_echo',
+          arguments: { value: 'still alive' },
+        })) as CallToolResult,
+      ),
+    ).toMatchObject({ ok: true, echo: 'still alive' })
+  })
+
   it('advertises each tool input schema in tools/list', async () => {
     const client = await connectClient([echoTool])
     const { tools } = await client.listTools()

@@ -50,6 +50,27 @@ export const NOOP_PROGRESS_REPORTER: ManagedProgressReporter = Object.freeze({
   close() {},
 })
 
+/** Give each dispatch its own close subscriptions without closing a shared parent's reporter. */
+export function scopeProgressReporter(source: ProgressReporter): ManagedProgressReporter {
+  let closed = false
+  const listeners = new Set<() => void>()
+  const reporter: ManagedProgressReporter = {
+    get enabled() {
+      return !closed && source.enabled
+    },
+    report: (update) => !closed && source.report(update),
+    phase: (message) => !closed && (source.phase?.(message) ?? false),
+    close() {
+      if (closed) return
+      closed = true
+      for (const listener of listeners) listener()
+      listeners.clear()
+    },
+  }
+  CLOSE_LISTENERS.set(reporter, listeners)
+  return reporter
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

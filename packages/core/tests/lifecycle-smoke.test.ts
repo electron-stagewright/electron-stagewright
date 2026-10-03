@@ -16,7 +16,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 
 import { type SuccessResponse } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
@@ -48,6 +48,71 @@ afterAll(async () => {
 })
 
 describe('lifecycle smoke (real Electron)', () => {
+  it.skipIf(!RUN_E2E)(
+    'reaps an owned process when its launch resolves after cancellation',
+    async () => {
+      const transport = new PlaywrightElectronTransport()
+      const registry = new SessionManager()
+      const dispatcher = new Dispatcher({
+        sessions: registry,
+        transports: new TransportRegistry({ transports: [transport] }),
+      })
+      dispatcher.register(launchTool)
+      const launch = transport.launch.bind(transport)
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let launched!: () => void
+      const ready = new Promise<void>((resolve) => {
+        launched = resolve
+      })
+      let pid: number | undefined
+      let live: Awaited<ReturnType<typeof launch>> | undefined
+      vi.spyOn(transport, 'launch').mockImplementation(async (opts) => {
+        live = await launch(opts)
+        pid = await live.evaluate<number>('main', 'return process.pid')
+        launched()
+        await gate
+        return live
+      })
+      const stopped = vi.spyOn(transport, 'stop')
+      const controller = new AbortController()
+      const pending = dispatcher.dispatch(
+        'electron_launch',
+        { main: FIXTURE_MAIN },
+        { signal: controller.signal },
+      )
+      try {
+        await Promise.race([
+          ready,
+          pending.then((result) => {
+            throw new Error(`Launch ended before the test gate: ${JSON.stringify(result)}`)
+          }),
+        ])
+        controller.abort()
+        expect(await pending).toMatchObject({ code: 'OPERATION_CANCELLED' })
+        release()
+        await vi.waitFor(
+          () => {
+            const processId = pid
+            if (processId === undefined) throw new Error('Expected the launched process id')
+            expect(() => process.kill(processId, 0)).toThrow()
+          },
+          { timeout: 15000, interval: 50 },
+        )
+        expect(stopped).toHaveBeenCalledTimes(1)
+        expect(registry.size).toBe(0)
+      } finally {
+        release()
+        controller.abort()
+        await pending
+        await live?.dispose()
+      }
+    },
+    60000,
+  )
+
   it.skipIf(!RUN_E2E)(
     'launches the fixture, reports compact status and info, lists windows, and stops',
     async () => {
