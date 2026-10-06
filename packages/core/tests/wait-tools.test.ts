@@ -128,6 +128,25 @@ describe('electron_wait', () => {
     expect(res).toMatchObject({ ok: true, waited_ms: 1 })
   })
 
+  it('clears the fixed-wait timer immediately on cancellation', async () => {
+    vi.useFakeTimers()
+    try {
+      const { dispatcher } = setup()
+      const controller = new AbortController()
+      const pending = dispatcher.dispatch(
+        'electron_wait',
+        { ms: 60_000 },
+        { signal: controller.signal },
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      controller.abort()
+      await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('reports elapsed progress for a long fixed wait', async () => {
     vi.useFakeTimers()
     try {

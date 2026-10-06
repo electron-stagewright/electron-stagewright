@@ -1,5 +1,5 @@
 /**
- * Unit tests for the injected-walker body builders (performance follow-up H3).
+ * Unit tests for the injected-walker body builders.
  *
  * The marker-first protocol sends a compact invocation on warm calls and ships
  * the ~30KB bundle only when a renderer lacks the matching installation.
@@ -66,6 +66,28 @@ describe('buildWalkBody / buildProbeBody', () => {
     expect(calls[0]).not.toContain(BUNDLE)
     expect(calls[1]).toContain(BUNDLE)
     expect(calls[2]).not.toContain(BUNDLE)
+  })
+
+  it('does not install a missing walker after cancellation during the warm probe', async () => {
+    const controller = new AbortController()
+    const reason = new Error('cancelled')
+    let finish!: (value: null) => void
+    let calls = 0
+    const session = {
+      evaluate<T>(): Promise<T> {
+        calls += 1
+        if (calls > 1) return Promise.resolve({} as T)
+        return new Promise<T>((resolve) => {
+          finish = (value) => resolve(value as T)
+        })
+      },
+    }
+    const pending = runWalk(session, BUNDLE, {}, controller.signal)
+    const assertion = expect(pending).rejects.toBe(reason)
+    controller.abort(reason)
+    finish(null)
+    await assertion
+    expect(calls).toBe(1)
   })
 
   it('reinstalls when the marker survives but its expected global does not', async () => {

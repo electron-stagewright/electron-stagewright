@@ -30,6 +30,7 @@ import { reconcileRetagAndStore } from '../snapshot/refs.js'
 import { handleTargetFailure } from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { type WaitRaw, clampWaitTimeout, runWait } from '../wait/poll.js'
+import { sleep } from '../wait/sleep.js'
 import { buildExpectCountBody } from './body.js'
 import {
   type CountMatch,
@@ -198,6 +199,7 @@ async function pollRoleCount(
   const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
   assertCapability(managed.transport, 'supportsRendererEval')
   const surface = await managed.session.activeSurface()
+  ctx.signal?.throwIfAborted()
   const bundle = loadBundle()
   return withElapsedProgress(
     {
@@ -209,9 +211,11 @@ async function pollRoleCount(
     async () => {
       const startedAt = ctx.now()
       for (;;) {
+        ctx.signal?.throwIfAborted()
         let actual: number
         try {
-          const walked = await runWalk<Snapshot>(managed.session, bundle, {})
+          const walked = await runWalk<Snapshot>(managed.session, bundle, {}, ctx.signal)
+          ctx.signal?.throwIfAborted()
           // The walker CLEARS and renumbers every data-sw-ref in document order. Without
           // reconciling and re-tagging (as snapshot/find do), the DOM tags would silently
           // diverge from the stored baseline, so a later click({ ref }) resolved against the
@@ -224,9 +228,11 @@ async function pollRoleCount(
             surfaceId: surface.id,
             prev: ctx.snapshots.get(managed.id, surface.id),
             walked,
+            ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
           })
           actual = findEntries(curr, query).length
         } catch (err) {
+          ctx.signal?.throwIfAborted()
           return handleTargetFailure(err, { ctx, session: managed.session, meta })
         }
         if (countSatisfied(actual, match)) {
@@ -241,9 +247,7 @@ async function pollRoleCount(
             details: { expected: describeCount(match), actual },
           })
         }
-        await new Promise((resolve) =>
-          setTimeout(resolve, Math.min(ROLE_POLL_INTERVAL_MS, remaining)),
-        )
+        await sleep(Math.min(ROLE_POLL_INTERVAL_MS, remaining), ctx.signal)
       }
     },
   )

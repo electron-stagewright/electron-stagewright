@@ -103,6 +103,60 @@ function recordingProgress(): {
   }
 }
 
+describe('role count cancellation', () => {
+  it('does not walk again after cancellation during the poll interval', async () => {
+    vi.useFakeTimers()
+    try {
+      const evaluate = vi.fn(canned(snap('<main></main>')))
+      const { dispatcher } = setup({ evaluate })
+      const controller = new AbortController()
+      const pending = dispatcher.dispatch(
+        'electron_expect_count',
+        { role: 'button', equals: 1, timeoutMs: 1000 },
+        { signal: controller.signal },
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      expect(evaluate).toHaveBeenCalledTimes(1)
+      controller.abort()
+      await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(evaluate).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not store or retag a walk returned after cancellation', async () => {
+    let finish!: (value: unknown) => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const evaluate = vi.fn<FakeEvaluate>(() => {
+      entered()
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    const { dispatcher, snapshots } = setup({ evaluate })
+    const store = vi.spyOn(snapshots, 'set')
+    const controller = new AbortController()
+    const pending = dispatcher.dispatch(
+      'electron_expect_count',
+      { role: 'button', equals: 1, timeoutMs: 1000 },
+      { signal: controller.signal },
+    )
+    await started
+    controller.abort()
+    await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
+    finish(snap('<button>Late</button>'))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(store).not.toHaveBeenCalled()
+    expect(evaluate).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('electron_expect_text', () => {
   it('returns matched with the observed value when the predicate holds', async () => {
     const { dispatcher } = setup({ evaluate: canned({ satisfied: true, actual: 'Welcome back' }) })

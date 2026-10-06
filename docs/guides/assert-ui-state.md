@@ -79,7 +79,8 @@ There is no tool-level progress argument to add. The host opts in through MCP re
 and it may ignore notifications even when requested. Cancelling the request stops progress,
 propagates cancellation to handlers and nested calls, and cleans up pending session initialization.
 The dispatch timeout triggers the same cleanup. Apps started by a cancelled launch are stopped;
-existing apps being attached or injected remain running.
+existing apps being attached or injected remain running. Fixed-wait timers are released immediately,
+and role-count expectations stop scheduling accessibility re-walks or storing late results.
 
 Cancellation cannot interrupt or undo JavaScript already sent to Electron, including a renderer
 poll. An operation on an existing session may still finish, so inspect app state before retrying a
