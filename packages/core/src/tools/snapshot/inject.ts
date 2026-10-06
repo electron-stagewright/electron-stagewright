@@ -118,8 +118,11 @@ async function runInjected<T extends object>(
 ): Promise<T> {
   signal?.throwIfAborted()
   const warm = await session.evaluate<T | null>('renderer', buildInvocation(bundle), arg)
-  signal?.throwIfAborted()
+  // A warm result already ran in the renderer (a walk has renumbered the DOM tags), so it
+  // must reach the caller even when the request was cancelled meanwhile. Only the not-yet-
+  // started install is skipped.
   if (warm !== null) return warm
+  signal?.throwIfAborted()
   return session.evaluate<T>('renderer', buildInstall(bundle), arg)
 }
 
