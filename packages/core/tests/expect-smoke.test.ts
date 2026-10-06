@@ -8,7 +8,7 @@
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (and `electron` + `playwright` are
  * installed with their binaries). Skipped by default. Run it locally with:
  *
- *   STAGEWRIGHT_E2E=1 pnpm test expect-smoke
+ *   pnpm test:real
  *
  * @module
  */
