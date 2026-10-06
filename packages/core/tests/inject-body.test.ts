@@ -90,6 +90,25 @@ describe('buildWalkBody / buildProbeBody', () => {
     expect(calls).toBe(1)
   })
 
+  it('returns a warm walk that already ran even when cancelled meanwhile', async () => {
+    const controller = new AbortController()
+    let finish!: (value: { readonly walked: true }) => void
+    let calls = 0
+    const session = {
+      evaluate<T>(): Promise<T> {
+        calls += 1
+        return new Promise<T>((resolve) => {
+          finish = (value) => resolve(value as T)
+        })
+      },
+    }
+    const pending = runWalk<{ readonly walked: true }>(session, BUNDLE, {}, controller.signal)
+    controller.abort(new Error('cancelled'))
+    finish({ walked: true })
+    await expect(pending).resolves.toEqual({ walked: true })
+    expect(calls).toBe(1)
+  })
+
   it('reinstalls when the marker survives but its expected global does not', async () => {
     const { global, session, calls } = makeRenderer()
     await runWalk<{ readonly value: number }>(session, BUNDLE, { value: 1 })
