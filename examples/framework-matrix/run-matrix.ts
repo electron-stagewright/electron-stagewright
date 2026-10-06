@@ -86,12 +86,14 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (err: unknown) => {
-  await writeMatrixReport(
-    REPORT_PATH,
-    [],
-    SOURCE_SHA,
-    err instanceof Error ? err.message : String(err),
-  )
-  log(`Matrix runner crashed: ${err instanceof Error ? err.message : String(err)}`)
+  const message = err instanceof Error ? err.message : String(err)
+  log(`Matrix runner crashed: ${message}`)
   process.exitCode = 1
+  try {
+    await writeMatrixReport(REPORT_PATH, [], SOURCE_SHA, message)
+  } catch (reportError: unknown) {
+    log(
+      `Could not write the matrix report: ${reportError instanceof Error ? reportError.message : String(reportError)}`,
+    )
+  }
 })
