@@ -29,8 +29,8 @@ does not promote a combination to real-runtime verified compatibility.
   Electron 42 / Playwright 1.61
 - Last qualified SHA and hosted run: **not recorded in the previous guide**. The source SHA above
   identifies the historical wording, not a recovered exact-head qualification certificate
-- Current Electron 42.11.10 / Playwright 1.63.0 refresh: **pending qualification**. The cloud
-  maintenance checks have not launched a real Electron process successfully
+- Current Electron 42.11.10 / Playwright 1.63.0 refresh: **pending qualification**. No hosted
+  real-Electron qualification has been recorded for this exact tuple yet
 
 Before promoting the current source tuple, record the tested commit, required Ubuntu/macOS/Windows
 real-Electron results, packed-CLI evidence on those lanes, and the four-framework real-MCP result.
