@@ -6,6 +6,15 @@ import { describe, expect, it } from 'vitest'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
+/** Windows checkouts may use CRLF; the field comparison is about content, not line endings. */
+function toLf(text: string): string {
+  return text.replace(/\r\n/g, '\n')
+}
+
+async function readText(relative: string): Promise<string> {
+  return toLf(await readFile(path.join(root, relative), 'utf8'))
+}
+
 function sourceTuple(lock: string): { electron: string; playwright: string } {
   const importer = lock.match(/^  packages\/core:\n([\s\S]*?)(?=^  [^ ]|$(?![\s\S]))/m)?.[1]
   if (importer === undefined) throw new Error('Missing packages/core lock importer')
@@ -31,17 +40,30 @@ function assertDocumentSource(lock: string, guide: string): void {
 
 describe('source resolution is distinct from compatibility qualification', () => {
   it('checks only the documented source field against the core lock importer', async () => {
-    const lock = await readFile(path.join(root, 'pnpm-lock.yaml'), 'utf8')
-    const guide = await readFile(path.join(root, 'docs/guides/compatibility.md'), 'utf8')
+    const lock = await readText('pnpm-lock.yaml')
+    const guide = await readText('docs/guides/compatibility.md')
+    const { playwright } = sourceTuple(lock)
     expect(() => assertDocumentSource(lock, guide)).not.toThrow()
     expect(() =>
       assertDocumentSource(lock, guide.replace('Source-resolved Electron:', 'Hidden Electron:')),
     ).toThrow('differs')
     expect(() =>
-      assertDocumentSource(lock, guide.replace('Playwright: `1.63.0`', 'Playwright: `0.0.0`')),
+      assertDocumentSource(
+        lock,
+        guide.replace(`Playwright: \`${playwright}\``, 'Playwright: `0.0.0`'),
+      ),
     ).toThrow('differs')
     expect(guide).toContain('pending qualification')
     expect(guide).toContain('not recorded in the previous guide')
+  })
+
+  it('reads CRLF checkouts the same as LF checkouts', async () => {
+    const lock = await readText('pnpm-lock.yaml')
+    const guide = await readText('docs/guides/compatibility.md')
+    const crlfLock = lock.replace(/\n/g, '\r\n')
+    const crlfGuide = guide.replace(/\n/g, '\r\n')
+    expect(() => sourceTuple(crlfLock)).toThrow('Missing')
+    expect(() => assertDocumentSource(toLf(crlfLock), toLf(crlfGuide))).not.toThrow()
   })
 
   it('refuses an absent importer instead of looking at unrelated package snapshots', () => {
