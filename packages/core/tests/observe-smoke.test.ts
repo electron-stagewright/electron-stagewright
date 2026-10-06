@@ -8,7 +8,7 @@
  * installed with their binaries). Skipped by default. Run it locally with:
  *
  *   pnpm -F @electron-stagewright/core add -D electron playwright
- *   STAGEWRIGHT_E2E=1 pnpm test
+ *   pnpm test:real
  *
  * The captured PNG is written under output/review/observe-smoke/ (gitignored) so
  * the operator can open it during review.

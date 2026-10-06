@@ -8,7 +8,7 @@
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (with `electron` + `playwright` installed). Skipped by
  * default so `pnpm test` stays fast and headless-CI-safe. Run locally with:
  *
- *   STAGEWRIGHT_E2E=1 pnpm test
+ *   pnpm test:real
  *
  * @module
  */

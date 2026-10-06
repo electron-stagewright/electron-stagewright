@@ -45,7 +45,7 @@ Renovate opens a weekly grouped pull request for non-breaking npm maintenance; u
 automergeable and still require the normal review and CI gates. Major updates are separate, require
 Dependency Dashboard approval, and must not mix platform upgrades in one pull request. Before merging a
 major Electron, Playwright, TypeScript, or framework update, run `pnpm verify`, `pnpm matrix`,
-`STAGEWRIGHT_E2E=1 pnpm test`, and `pnpm package:smoke` against the proposed version.
+`pnpm test:real`, and `pnpm package:smoke` against the proposed version.
 
 ## Project structure
 
