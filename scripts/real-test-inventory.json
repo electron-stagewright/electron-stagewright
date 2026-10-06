@@ -1,0 +1,122 @@
+[
+  {
+    "path": "packages/core/tests/cdp-attach-smoke.test.ts",
+    "tests": 6,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/demo-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/dropfile-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/eval-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/expect-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/interaction-smoke.test.ts",
+    "tests": 2,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/lifecycle-multi-window-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/lifecycle-smoke.test.ts",
+    "tests": 2,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/native-addon-runtime-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": ["win32"]
+  },
+  {
+    "path": "packages/core/tests/observe-smoke.test.ts",
+    "tests": 2,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/project-runtime-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/read-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/surface-targeting-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/tutorial-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/core/tests/wait-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-a11y/tests/a11y-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-clock/tests/clock-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-ipc/tests/ipc-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-native-ui/tests/native-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-network/tests/network-smoke.test.ts",
+    "tests": 3,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-production/tests/smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-storage/tests/storage-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-trace/tests/replay-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
+    "path": "packages/plugin-visual/tests/visual-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  }
+]

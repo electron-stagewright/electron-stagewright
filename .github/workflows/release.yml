@@ -92,6 +92,19 @@ jobs:
           pnpm verify
           xvfb-run --auto-servernum pnpm package:smoke
 
+      - name: Qualify vanilla, React, Vue and Angular through real MCP
+        run: xvfb-run --auto-servernum pnpm matrix
+        env:
+          STAGEWRIGHT_MATRIX_REPORT: ${{ github.workspace }}/output/framework-matrix/results.json
+
+      - name: Preserve per-framework qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: framework-matrix-${{ github.sha }}-${{ github.run_attempt }}
+          path: output/framework-matrix/results.json
+          if-no-files-found: error
+
       - name: Pack and dry-run every unpublished selected package
         run: node scripts/release-publish.mjs --packages "$RELEASE_PACKAGES"
 

@@ -13,14 +13,24 @@
  * @module
  */
 
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { type FrameworkFixture, runFixture, type ScenarioResult } from './harness.js'
+import { type FrameworkFixture, runFixture } from './harness.js'
+
+import { qualifyMatrix, writeMatrixReport } from './matrix.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 /** The fixtures in the matrix. Add a row + a `fixtures/<name>/` directory to extend it. */
+const REPORT_PATH =
+  process.env['STAGEWRIGHT_MATRIX_REPORT'] ??
+  path.join(HERE, '../../output/framework-matrix/results.json')
+const SOURCE_SHA =
+  process.env['GITHUB_SHA'] ??
+  execFileSync('git', ['rev-parse', 'HEAD'], { cwd: HERE, encoding: 'utf8' }).trim()
+
 const FIXTURES: ReadonlyArray<FrameworkFixture> = [
   {
     name: 'vanilla',
@@ -51,11 +61,11 @@ function log(line: string): void {
 
 async function main(): Promise<void> {
   log(`Running the framework matrix (${FIXTURES.length} fixtures)...`)
-  const results: ScenarioResult[] = []
-  for (const fixture of FIXTURES) {
+  const results = await qualifyMatrix(FIXTURES, async (fixture) => {
     log(`\n• ${fixture.name} — ${fixture.notes}`)
-    results.push(await runFixture(fixture))
-  }
+    return runFixture(fixture)
+  })
+  await writeMatrixReport(REPORT_PATH, results, SOURCE_SHA)
 
   // Summary table.
   log('\nFramework matrix results')
@@ -75,7 +85,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  await writeMatrixReport(
+    REPORT_PATH,
+    [],
+    SOURCE_SHA,
+    err instanceof Error ? err.message : String(err),
+  )
   log(`Matrix runner crashed: ${err instanceof Error ? err.message : String(err)}`)
   process.exitCode = 1
 })

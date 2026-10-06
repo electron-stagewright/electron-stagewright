@@ -4,5 +4,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["harness.ts", "run-matrix.ts"]
+  "include": ["harness.ts", "run-matrix.ts", "matrix.ts"]
 }
