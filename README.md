@@ -268,10 +268,6 @@ The server is a **privileged local tool, not a sandbox**: it drives a real app a
 
 This project is in its earliest days. Issues and discussions welcome. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the workflow, and [GOVERNANCE.md](.github/GOVERNANCE.md) for how the project is run and the path to becoming a co-maintainer.
 
-## License
-
-MIT — see [LICENSE](LICENSE).
-
 ### Selecting test projects
 
 `pnpm test` and `pnpm test:coverage` select the ordinary `unit` project, retained across
@@ -281,4 +277,8 @@ and checks actual JSON results against `scripts/real-test-inventory.json` (24 re
 missing, skipped or zero execution. Prepare Linux/macOS native inputs with
 `node scripts/prepare-native-addon-fixture.mjs` and export the two variables it prints.
 Windows explicitly omits the one unsupported native-addon recovery scenario.
-Packed CLI qualification stays separate; no timing saving is claimed without measurement.
+Packed CLI qualification stays separate.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -9,7 +9,7 @@
  * and headless-CI-safe. Run it locally with:
  *
  *   pnpm -F @electron-stagewright/core add -D electron playwright
- *   STAGEWRIGHT_E2E=1 pnpm test
+ *   pnpm test:real
  *
  * @module
  */
