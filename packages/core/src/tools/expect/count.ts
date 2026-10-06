@@ -215,12 +215,14 @@ async function pollRoleCount(
         let actual: number
         try {
           const walked = await runWalk<Snapshot>(managed.session, bundle, {}, ctx.signal)
-          ctx.signal?.throwIfAborted()
           // The walker CLEARS and renumbers every data-sw-ref in document order. Without
           // reconciling and re-tagging (as snapshot/find do), the DOM tags would silently
           // diverge from the stored baseline, so a later click({ ref }) resolved against the
           // stored snapshot would hit the wrong element. Reconcile + retag + store so the
           // baseline and the DOM stay consistent, then count against the reconciled view.
+          // This must run even if the request was cancelled while the walk was in flight: the
+          // renderer has already renumbered its tags, so dropping the result would leave the
+          // stored refs pointing at different elements.
           const { curr } = await reconcileRetagAndStore({
             session: managed.session,
             store: ctx.snapshots,
@@ -228,7 +230,6 @@ async function pollRoleCount(
             surfaceId: surface.id,
             prev: ctx.snapshots.get(managed.id, surface.id),
             walked,
-            ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
           })
           actual = findEntries(curr, query).length
         } catch (err) {

@@ -29,11 +29,16 @@ describe('host-side sleep', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('does not allocate a timer when already cancelled', () => {
+  it('rejects without allocating a timer when already cancelled', async () => {
     vi.useFakeTimers()
     const controller = new AbortController()
-    controller.abort()
-    expect(() => sleep(60_000, controller.signal)).toThrow()
+    const reason = new Error('cancelled')
+    controller.abort(reason)
+    let pending: Promise<void> | undefined
+    expect(() => {
+      pending = sleep(60_000, controller.signal)
+    }).not.toThrow()
+    await expect(pending).rejects.toBe(reason)
     expect(vi.getTimerCount()).toBe(0)
   })
 

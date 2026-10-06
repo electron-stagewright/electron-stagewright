@@ -127,20 +127,27 @@ describe('role count cancellation', () => {
     }
   })
 
-  it('does not store or retag a walk returned after cancellation', async () => {
+  it('reconciles and stores a walk that was already applied when cancellation arrives', async () => {
     let finish!: (value: unknown) => void
     let entered!: () => void
     const started = new Promise<void>((resolve) => {
       entered = resolve
     })
-    const evaluate = vi.fn<FakeEvaluate>(() => {
+    const bodies: string[] = []
+    const evaluate = vi.fn<FakeEvaluate>((_target, body) => {
+      bodies.push(body)
+      if (body === 'RETAG') return Promise.resolve(1)
       entered()
       return new Promise((resolve) => {
         finish = resolve
       })
     })
-    const { dispatcher, snapshots } = setup({ evaluate })
-    const store = vi.spyOn(snapshots, 'set')
+    const { dispatcher, snapshots, session } = setup({ evaluate })
+    const surface = await session.activeSurface()
+    const prev = snap('<button>Save</button>')
+    snapshots.set('sess', prev, surface.id)
+    const savedRef = prev.entries.find((entry) => entry.name === 'Save')?.ref
+    expect(savedRef).toBe(1)
     const controller = new AbortController()
     const pending = dispatcher.dispatch(
       'electron_expect_count',
@@ -150,10 +157,18 @@ describe('role count cancellation', () => {
     await started
     controller.abort()
     await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
-    finish(snap('<button>Late</button>'))
+    // The walker has already cleared and renumbered the DOM: "New" now carries ref 1.
+    const renumbered = snap('<button>New</button><button>Save</button>')
+    finish({
+      ...renumbered,
+      meta: { ...renumbered.meta, navigation_started_at_ms: prev.meta.navigation_started_at_ms },
+    })
+    await vi.waitFor(() => expect(bodies).toContain('RETAG'))
     await new Promise<void>((resolve) => setImmediate(resolve))
-    expect(store).not.toHaveBeenCalled()
-    expect(evaluate).toHaveBeenCalledTimes(1)
+    const stored = snapshots.get('sess', surface.id)
+    expect(stored?.entries.find((entry) => entry.name === 'Save')?.ref).toBe(savedRef)
+    expect(stored?.entries.find((entry) => entry.name === 'New')?.ref).not.toBe(savedRef)
+    expect(bodies.filter((body) => body === 'WALK')).toHaveLength(1)
   })
 })
 

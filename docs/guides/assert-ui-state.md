@@ -80,7 +80,9 @@ and it may ignore notifications even when requested. Cancelling the request stop
 propagates cancellation to handlers and nested calls, and cleans up pending session initialization.
 The dispatch timeout triggers the same cleanup. Apps started by a cancelled launch are stopped;
 existing apps being attached or injected remain running. Fixed-wait timers are released immediately,
-and role-count expectations stop scheduling accessibility re-walks or storing late results.
+and role-count expectations stop scheduling accessibility re-walks. A walk that was already running
+in the renderer when the request was cancelled has renumbered the element refs, so its result is
+still reconciled and stored; this keeps later `ref` targets pointing at the elements they name.
 
 Cancellation cannot interrupt or undo JavaScript already sent to Electron, including a renderer
 poll. An operation on an existing session may still finish, so inspect app state before retrying a
