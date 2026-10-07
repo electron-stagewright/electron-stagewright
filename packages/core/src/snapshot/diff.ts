@@ -261,7 +261,7 @@ export function compactDiff(diff: SnapshotDiff): SnapshotDiffCompact {
 interface DroppableItem {
   readonly kind: 'added' | 'removed' | 'changed'
   readonly index: number
-  readonly tokens: number
+  readonly characters: number
   readonly interactive: boolean
 }
 
@@ -290,8 +290,18 @@ export function truncateDiffToBudget<T extends SnapshotDiff | SnapshotDiffCompac
   diff: T,
   budgetTokens: number,
 ): { readonly diff: T; readonly dropped: number } {
-  let total = estimateTokens({ added: diff.added, removed: diff.removed, changed: diff.changed })
-  if (total <= budgetTokens) return { diff, dropped: 0 }
+  const payload = { added: diff.added, removed: diff.removed, changed: diff.changed }
+  // estimateTokens uses ceil(JSON character count / 4). Subtracting separately
+  // rounded item estimates loses fractions at every removal. Track exact JSON
+  // lengths instead, including the comma lost while a bucket is nonempty.
+  let characters = JSON.stringify(payload).length
+  const budgetCharacters = budgetTokens * 4
+  if (characters <= budgetCharacters) return { diff, dropped: 0 }
+  const remaining = {
+    added: diff.added.length,
+    removed: diff.removed.length,
+    changed: diff.changed.length,
+  }
 
   const items: DroppableItem[] = []
   const collect = (kind: DroppableItem['kind'], list: readonly unknown[]): void => {
@@ -300,7 +310,7 @@ export function truncateDiffToBudget<T extends SnapshotDiff | SnapshotDiffCompac
       items.push({
         kind,
         index,
-        tokens: estimateTokens(value),
+        characters: JSON.stringify(value).length,
         interactive: isInteractiveDiffItem(value),
       })
     }
@@ -325,9 +335,10 @@ export function truncateDiffToBudget<T extends SnapshotDiff | SnapshotDiffCompac
   }
   let dropped = 0
   for (const item of dropOrder) {
-    if (total <= budgetTokens) break
+    if (characters <= budgetCharacters) break
     droppedByKind[item.kind].add(item.index)
-    total -= item.tokens
+    characters -= item.characters + (remaining[item.kind] > 1 ? 1 : 0)
+    remaining[item.kind]--
     dropped += 1
   }
   if (dropped === 0) return { diff, dropped: 0 }
