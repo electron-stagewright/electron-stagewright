@@ -7,7 +7,13 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { formatCliHelp, parseCliArgs, runProductionCommand } from '../src/cli.js'
+import {
+  CliUsageError,
+  formatCliFailure,
+  formatCliHelp,
+  parseCliArgs,
+  runProductionCommand,
+} from '../src/cli.js'
 
 describe('parseCliArgs — value-bearing flags fail closed on a missing value', () => {
   it('throws when --app-root is followed by another flag (would silently disable confinement)', () => {
@@ -172,5 +178,27 @@ describe('runProductionCommand', () => {
     expect(exitCode).toBe(2)
     expect(stderr.join('')).toContain('@electron-stagewright/plugin-production')
     expect(stderr.join('')).toContain('installed beside @electron-stagewright/core')
+  })
+})
+
+describe('CLI failure classification', () => {
+  it.each([
+    ['--not-a-real-option'],
+    ['--app-root'],
+    ['--plugin-config', 'invalid'],
+    ['--plugin-config', 'plugin={'],
+    ['--tool-profile', 'unknown'],
+    ['--operation-timeout-ms', '-1'],
+    ['--allow-eval=unknown'],
+    ['--demo', '--demo'],
+    ['unexpected'],
+  ])('classifies rejected arguments %j as usage failures', (...args) => {
+    expect(() => parseCliArgs(args)).toThrow(CliUsageError)
+  })
+
+  it('retains internal failure stacks and non-Error diagnostics', () => {
+    const internal = new Error('Unexpected startup failure')
+    expect(formatCliFailure(internal)).toBe(`fatal: ${internal.stack}\n`)
+    expect(formatCliFailure('startup unavailable')).toBe('fatal: startup unavailable\n')
   })
 })

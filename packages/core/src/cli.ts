@@ -68,6 +68,20 @@ import { StderrLogger } from './server/logger.js'
 import { isToolProfile, type ToolProfile } from './tools/index.js'
 import { VERSION } from './version.js'
 
+/** A rejected command line, before any server or standalone command starts. */
+export class CliUsageError extends Error {
+  override readonly name = 'CliUsageError'
+}
+
+/** Keep usage recovery concise while retaining existing diagnostics for internal failures. */
+export function formatCliFailure(error: unknown): string {
+  if (error instanceof CliUsageError) {
+    return `fatal: ${error.message}\nRun electron-stagewright --help for usage.\n`
+  }
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+  return `fatal: ${detail}\n`
+}
+
 export type CliCommand = 'serve' | 'help' | 'version' | 'doctor' | 'production'
 
 export interface CliOptions {
@@ -87,7 +101,7 @@ export interface CliOptions {
 function requireValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index + 1]
   if (value === undefined || value.startsWith('--')) {
-    throw new Error(
+    throw new CliUsageError(
       `${flag} expects a value, got ${value === undefined ? 'nothing' : `"${value}"`}`,
     )
   }
@@ -96,12 +110,12 @@ function requireValue(argv: readonly string[], index: number, flag: string): str
 
 function parsePluginConfig(pair: string): readonly [string, unknown] {
   const eq = pair.indexOf('=')
-  if (eq <= 0) throw new Error(`--plugin-config expects <name>=<json>, got "${pair}"`)
+  if (eq <= 0) throw new CliUsageError(`--plugin-config expects <name>=<json>, got "${pair}"`)
   const name = pair.slice(0, eq)
   try {
     return [name, JSON.parse(pair.slice(eq + 1))]
   } catch (cause) {
-    throw new Error(
+    throw new CliUsageError(
       `--plugin-config for "${name}" is not valid JSON: ${
         cause instanceof Error ? cause.message : String(cause)
       }`,
@@ -113,7 +127,7 @@ function parseOperationTimeout(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined
   const value = Number(raw)
   if (!Number.isInteger(value) || value < 0) {
-    throw new Error(
+    throw new CliUsageError(
       `--operation-timeout-ms expects a non-negative integer number of milliseconds, got "${raw}"`,
     )
   }
@@ -126,7 +140,7 @@ function parseEvalTargets(value: string): EvalPolicy {
     .map((target) => target.trim())
     .filter((target) => target.length > 0)
   if (targets.length === 0) {
-    throw new Error(
+    throw new CliUsageError(
       '--allow-eval= expects main, renderer, or all (comma-separated), or a bare --allow-eval for both',
     )
   }
@@ -138,7 +152,7 @@ function parseEvalTargets(value: string): EvalPolicy {
       policy.main = true
       policy.renderer = true
     } else {
-      throw new Error(`--allow-eval target must be main, renderer, or all, got "${target}"`)
+      throw new CliUsageError(`--allow-eval target must be main, renderer, or all, got "${target}"`)
     }
   }
   return policy
@@ -157,7 +171,7 @@ export function parseAllowEval(argv: readonly string[]): EvalPolicy {
 }
 
 function onlyOnce(value: string | undefined, flag: string): void {
-  if (value !== undefined) throw new Error(`${flag} may be specified only once`)
+  if (value !== undefined) throw new CliUsageError(`${flag} may be specified only once`)
 }
 
 export function parseCliArgs(argv: readonly string[]): CliOptions {
@@ -226,7 +240,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       continue
     }
     if (arg === '--demo') {
-      if (demo) throw new Error('--demo may be specified only once')
+      if (demo) throw new CliUsageError('--demo may be specified only once')
       demo = true
       continue
     }
@@ -252,7 +266,7 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       onlyOnce(toolProfileRaw, arg)
       toolProfileRaw = requireValue(argv, i, arg)
       if (!isToolProfile(toolProfileRaw)) {
-        throw new Error(
+        throw new CliUsageError(
           `--tool-profile must be essential, testing, debug, or full, got "${toolProfileRaw}"`,
         )
       }
@@ -265,7 +279,8 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
         .split(',')
         .map((spec) => spec.trim())
         .filter((spec) => spec.length > 0)
-      if (values.length === 0) throw new Error('--plugin expects at least one non-empty spec')
+      if (values.length === 0)
+        throw new CliUsageError('--plugin expects at least one non-empty spec')
       pluginSpecs.push(...values)
       i += 1
       continue
@@ -280,8 +295,8 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
       doctorJson = true
       continue
     }
-    if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`)
-    throw new Error(`Unexpected argument: ${arg}`)
+    if (arg.startsWith('-')) throw new CliUsageError(`Unknown option: ${arg}`)
+    throw new CliUsageError(`Unexpected argument: ${arg}`)
   }
 
   const operationTimeoutMs =
@@ -455,8 +470,7 @@ export function isMainEntryPoint(moduleUrl: string, entryPath: string | undefine
 // when it is imported — so tests can import `parseCliArgs` without spawning a server.
 if (isMainEntryPoint(import.meta.url, process.argv[1])) {
   main().catch((err: unknown) => {
-    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
-    process.stderr.write(`fatal: ${detail}\n`)
+    process.stderr.write(formatCliFailure(err))
     process.exit(1)
   })
 }
