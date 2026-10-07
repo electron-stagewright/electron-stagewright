@@ -30,6 +30,9 @@ artifact**, **32 MiB total**, and **32 artifacts**. Live links are not evicted t
 limit is reached, the tool still succeeds with its local path and `artifact_unavailable`
 (`too_large` or `capacity`). Links expire on time or server shutdown/restart; local files remain. Cancellation before dispatch
 completion revokes a newly published resource without deleting its local file.
+Failed dispatch completion also releases that request's generated resources, including a returned
+error, handler throw, invalid output schema or JSON serialization failure. Successfully completed
+requests and completed nested calls retain their own links independently.
 Clients should download useful evidence before `expires_at`. Links belong to one server instance
 and are returned by tools rather than enumerated in `resources/list`.
 

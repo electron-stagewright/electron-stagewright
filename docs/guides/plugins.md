@@ -238,3 +238,19 @@ A tool's optional `outputSchema: z.object({...})` describes its success payload 
 and retains both structured content and legacy JSON text regardless of response size. Omit this
 property until the tool's success contract is specified accurately; an invalid declared result
 becomes `INTERNAL_ERROR`.
+
+Results must be JSON-serialisable. The dispatcher validates the serialized representation before
+recording completion; circular values, `BigInt` and throwing serialization hooks return
+`INTERNAL_ERROR`. Additive JSON fields remain compatible. Dispatch observers receive completion
+records for diagnostics and must treat those records as read-only.
+The actual JSON must satisfy the advertised schema without coercion or field removal. Optional fields
+may be omitted even when they have a default annotation; required fields must be constructed by the
+handler. Explicitly allow nested additional fields with a loose object when those fields are part of
+the contract. Custom tools that previously depended on Zod accepting a wrong wire type or stripping
+forbidden nested fields now receive `INTERNAL_ERROR` for those invalid results.
+
+Publication is owned by the current dispatch rather than by the URI fields in its result. A returned
+error, thrown error, schema violation or serialization failure releases every portable snapshot
+created by that dispatch. A valid success commits them. This never deletes local artifacts, another
+request's snapshots or a completed nested call's snapshots. Do not retain a request's publisher for
+background work: after completion it returns `artifact_unavailable: "closed"`.
