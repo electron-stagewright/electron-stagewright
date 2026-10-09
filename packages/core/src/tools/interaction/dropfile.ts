@@ -22,6 +22,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
+import { TARGET_RESOLVER_FN } from '../../snapshot/resolve-target.js'
 import { StagewrightError } from '../../errors/registry.js'
 import { assertPathsWithinAppRoot } from '../app-root.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -116,10 +117,10 @@ function validateDropPaths(paths: readonly string[]): void {
  * dispatch the dragenter/dragover/drop sequence on the resolved target.
  * Returns a discriminated result so the tool maps failures to registered codes.
  */
-const DROP_BODY = `
+const DROP_BODY = `${TARGET_RESOLVER_FN}
 let target = null;
 try {
-  target = document.querySelector(String(arg.selector));
+  target = __swQueryTarget(String(arg.selector));
 } catch {
   return { ok: false, reason: 'bad-selector' };
 }

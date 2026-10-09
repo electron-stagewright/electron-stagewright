@@ -9,6 +9,7 @@
 
 import { z } from 'zod'
 
+import { TARGET_RESOLVER_FN } from '../../snapshot/resolve-target.js'
 import { ACCESSIBLE_TEXT_FN } from '../accessible-text.js'
 import { refField, selectorField, sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -19,7 +20,7 @@ const MAX_STYLE_PROPERTIES = 50
 
 /** Wrap a `return …` body with the standard "resolve selector or report a miss" preamble. */
 function inlineRead(returnExpr: string): string {
-  return `let el;\ntry {\n  el = document.querySelector(arg.selector);\n} catch (err) {\n  return { found: false, invalid_selector: true, error: err instanceof Error ? err.message : String(err) };\n}\nif (el === null) return { found: false };\n${returnExpr}`
+  return `${TARGET_RESOLVER_FN}\nlet el;\ntry {\n  el = __swQueryTarget(arg.selector);\n} catch (err) {\n  return { found: false, invalid_selector: true, error: err instanceof Error ? err.message : String(err) };\n}\nif (el === null) return { found: false };\n${returnExpr}`
 }
 
 /** `electron_get_text` — the element's trimmed text content. */
@@ -187,7 +188,7 @@ export const existsTool: AnyToolDefinition = defineTool({
         // Emit `exists` explicitly (not via the `found` sentinel) so this tool
         // follows the same body shape as the others and a no-match stays a
         // success (treatMissAsError: false), never a SELECTOR_NO_MATCH.
-        body: 'try {\n  return { found: true, exists: document.querySelector(arg.selector) !== null };\n} catch (err) {\n  return { found: false, invalid_selector: true, error: err instanceof Error ? err.message : String(err) };\n}',
+        body: `${TARGET_RESOLVER_FN}\ntry {\n  return { found: true, exists: __swQueryTarget(arg.selector) !== null };\n} catch (err) {\n  return { found: false, invalid_selector: true, error: err instanceof Error ? err.message : String(err) };\n}`,
         arg: { selector },
       }),
       (raw: ReadRaw) => ({ exists: raw['exists'] === true }),

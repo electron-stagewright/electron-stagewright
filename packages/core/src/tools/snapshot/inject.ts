@@ -15,6 +15,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { fnv1a32 } from '../../hash.js'
+import { visitTargetElements } from '../../snapshot/resolve-target.js'
+import { MAX_SHADOW_DEPTH } from '../../snapshot/walker.js'
 import type { TransportSession } from '../../transports/types.js'
 
 let cachedBundle: string | undefined
@@ -151,7 +153,7 @@ export function runProbe<T extends object>(
  * reconciliation reuses previous refs, the DOM tags must be swapped to match the
  * refs returned to the agent.
  *
- * ONE `querySelectorAll('[data-sw-ref]')` scan builds a ref→element map, then all
+ * One scan per reachable document/shadow root builds a ref→element map, then all
  * writes apply from it — O(n + retags) instead of a full-document `querySelector`
  * per assignment (O(retags x n), which bites exactly when it matters: a list
  * prepend or dialog open shifts document order and most refs move at once). The
@@ -162,9 +164,13 @@ export function buildRetagBody(): string {
   return `
 const assignments = Array.isArray(arg) ? arg : [];
 const byRef = new Map();
-for (const element of document.querySelectorAll('[data-sw-ref]')) {
-  byRef.set(element.getAttribute('data-sw-ref'), element);
-}
+// Index tags in exactly the roots queryTarget resolves, so retags follow reads. Invoked as an
+// expression so the body does not depend on the compiled function's declared name.
+(${visitTargetElements.toString()})(document, ${MAX_SHADOW_DEPTH}, (element) => {
+  const ref = element.getAttribute('data-sw-ref');
+  if (ref !== null) byRef.set(ref, element);
+  return false;
+});
 const pairs = [];
 for (const assignment of assignments) {
   const from = Number(assignment?.from);

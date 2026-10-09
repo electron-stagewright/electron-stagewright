@@ -17,6 +17,8 @@
  * @module
  */
 
+import { TARGET_RESOLVER_FN } from '../../snapshot/resolve-target.js'
+
 import { ACCESSIBLE_TEXT_FN } from '../accessible-text.js'
 import { POLL_PREAMBLE, pollTail } from '../wait/body.js'
 import { COUNT_MATCH_FN, STRING_MATCH_FN } from './match.js'
@@ -37,7 +39,8 @@ import { COUNT_MATCH_FN, STRING_MATCH_FN } from './match.js'
  *   retryable value-mismatch.
  */
 export function buildExpectTextBody(): string {
-  return `${STRING_MATCH_FN}
+  return `${TARGET_RESOLVER_FN}
+${STRING_MATCH_FN}
 ${ACCESSIBLE_TEXT_FN}
 const selector = String(arg.selector);
 const source = arg.source === 'value' ? 'value' : (arg.source === 'attribute' ? 'attribute' : 'text');
@@ -47,7 +50,7 @@ ${POLL_PREAMBLE}
 for (;;) {
   let el;
   try {
-    el = document.querySelector(selector);
+    el = __swQueryTarget(selector);
   } catch (err) {
     return { satisfied: false, invalid_selector: true, error: err instanceof Error ? err.message : String(err) };
   }

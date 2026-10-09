@@ -81,7 +81,7 @@ ADR-002 deliberately does **not** decide the following — those are out-of-scop
 
 - **Bundler / build orchestration beyond `tsc`.** The current per-package build is `tsc` against `tsconfig.json`. Whether to introduce Vite, Rollup, esbuild, or tsup at the package level is a future decision driven by package-specific needs (e.g. browser-loadable trace viewer in `plugin-trace`). Not blocked by ADR-002.
 - **CI provider commitment beyond "GitHub Actions for now".** GitHub Actions is the chosen CI today; nothing here forecloses moving (or duplicating) to a different provider if the project grows. Workflow files are isolated to `.github/workflows/`.
-- **Documentation site stack.** Whether the docs site (planned for the next public release) runs on VitePress, Astro, Docusaurus, or plain GitHub Pages is decided when that ticket lands. The ADR for that decision will reference this one as the runtime baseline.
+- **Documentation site stack.** This was outside the original runtime decision. The site now ships through the core documentation builder and GitHub Pages workflow; its public layout is recorded in [ADR-013](013-public-documentation-layout.md).
 - **Database / persistence layer.** The MCP server is stateless across sessions; this ADR is not where session-trace storage formats are decided.
 
 ## Rationale

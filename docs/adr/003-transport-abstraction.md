@@ -4,6 +4,11 @@
 - **Date**: 2026-05-27
 - **Deciders**: johnny4young
 
+> Current implementation: all three transports are implemented. The original decision and
+> matrices below are historical; later amendments in this record describe their evolution.
+> Use the [compatibility guide](../guides/compatibility.md#transport-matrix) and runtime
+> capability flags for the current supported surface.
+
 ## Context
 
 Electron Stagewright is an MCP server that drives Electron desktop applications. Before any tool can be written (click, type, snapshot, eval, etc.), the project needs a settled answer to "how does the server actually talk to the running Electron process?"
