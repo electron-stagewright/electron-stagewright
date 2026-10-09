@@ -29,13 +29,23 @@ does not promote a combination to real-runtime verified compatibility.
   Electron 42 / Playwright 1.61
 - Last qualified SHA and hosted run: **not recorded in the previous guide**. The source SHA above
   identifies the historical wording, not a recovered exact-head qualification certificate
-- Current source-resolved tuple (above): **pending qualification**. No hosted real-Electron
-  qualification has been recorded for this exact tuple yet
+- Qualified review head: `fbb7e6af10de50e07bd1741b281e4573615ffc36` (PR #86),
+  Electron 42.11.10 / Playwright 1.63.0. Hosted checkout
+  `8a10fa13e4b57846e60a6333b340ceed9fed7291` has the same tree
+  `e34dccac316ff807b971601b31c8c678dee4a49f` as that head.
+- [Real-Electron run 37556388351](https://github.com/electron-stagewright/electron-stagewright/actions/runs/37556388351)
+  passed: Linux/macOS each executed 34 scenarios; Windows executed 33 and explicitly skipped
+  the native-addon scenario. Packed CLI passed on all three platforms. The Linux framework
+  matrix passed vanilla, React, Vue and Angular with 10 MCP round-trips each.
+- [CI run 37556388404](https://github.com/electron-stagewright/electron-stagewright/actions/runs/37556388404)
+  and [docs run 37556388443](https://github.com/electron-stagewright/electron-stagewright/actions/runs/37556388443)
+  also passed. These results certify that review tree, not every later edit, sibling-PR
+  combination, or release. PR #86 was subsequently merged.
 
-Before promoting the current source tuple, record the tested commit, required Ubuntu/macOS/Windows
-real-Electron results, packed-CLI evidence on those lanes, and the four-framework real-MCP result.
-Link the exact runs/artifacts and retain native-addon platform limitations. No successful unit
-result, fixture build, or peer-range declaration replaces those checks.
+For a new tree, qualification remains pending until its own required Ubuntu/macOS/Windows
+real-Electron results, packed-CLI evidence and four-framework real-MCP result are recorded.
+Retain native-addon platform limitations. No successful unit result, fixture build or peer-range
+declaration replaces those checks.
 
 Published peer ranges remain broader to allow compatible applications, but those ranges are not a
 claim that every Electron/Playwright pair has been exercised. Run `electron-stagewright doctor --json`
@@ -78,8 +88,9 @@ boolean cannot express.
 
 ## Platform-specific capabilities
 
-- `@electron-stagewright/plugin-production` validates packaged macOS `.app` bundles. Windows signing
-  and Linux signing are not currently implemented.
+- `@electron-stagewright/plugin-production` validates packaged macOS `.app` bundles, Windows
+  Authenticode signatures and AppImage embedded signatures. Platform tools and artifact type
+  determine which checks can execute; unavailable prerequisites produce an explicit unknown result.
 - Native-addon ABI recovery is real-runtime verified on Linux and macOS, not Windows.
 - `@electron-stagewright/plugin-native-ui` follows Electron's application menu, notification, and
   tray APIs; operating-system presentation and behavior can still differ.

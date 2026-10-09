@@ -16,6 +16,7 @@ import process from 'node:process'
 
 import { z } from 'zod'
 
+import { TARGET_RESOLVER_FN } from '../../snapshot/resolve-target.js'
 import { StagewrightError } from '../../errors/registry.js'
 import type { PressOptions, TransportSession } from '../../transports/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
@@ -65,12 +66,12 @@ const MAX_KEYSTROKE_TEXT_LENGTH = 10_000
 const MAX_KEY_SEQUENCE = 100
 
 /** Renderer body returning a visible editor area's text signature, or null if it cannot be read. */
-const EDITOR_SIGNATURE_BODY = `
+const EDITOR_SIGNATURE_BODY = `${TARGET_RESOLVER_FN}
 const settleMs = typeof arg.settleMs === 'number' ? arg.settleMs : 0;
 if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
 let el = null;
 try {
-  el = document.querySelector(String(arg.selector));
+  el = __swQueryTarget(String(arg.selector));
 } catch {
   return null;
 }
@@ -235,20 +236,25 @@ export const typeIntoEditorTool: AnyToolDefinition = defineTool({
       // Click the visible content area to focus the editor's real input (the path that engages
       // an EditContext editor), then type into the active element with no selector.
       const before = await readEditorSignature(session, selector, 0)
+      ctx.signal?.throwIfAborted()
       await session.click(selector, opts)
+      ctx.signal?.throwIfAborted()
       if (args.replace === true) {
         // Select all against the ACTIVE element — re-targeting the selector here
         // would click again and collapse the selection (the dogfooded failure
         // this option exists to prevent).
         await session.press(selectAllChord())
+        ctx.signal?.throwIfAborted()
         if (args.text.length === 0) {
           // replace with empty text = clear the editor.
           await session.press('Delete')
+          ctx.signal?.throwIfAborted()
           await assertEditorChanged(session, selector, before)
           return { target: selector, typed: 0, replaced: true }
         }
       }
       await session.typeText(args.text)
+      ctx.signal?.throwIfAborted()
       await assertEditorTyped(session, selector, args.text, before)
       return { target: selector, typed: args.text.length, replaced: args.replace === true }
     }),
@@ -318,6 +324,7 @@ export const pressSequenceTool: AnyToolDefinition = defineTool({
       const focusOncePerSequence = opts.selector !== undefined && opts.force === true
       let pressed = 0
       for (const key of args.keys) {
+        ctx.signal?.throwIfAborted()
         await session.press(key, focusOncePerSequence && pressed > 0 ? {} : opts)
         pressed += 1
       }

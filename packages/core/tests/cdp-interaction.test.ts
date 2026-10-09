@@ -310,6 +310,77 @@ describe('CDP value-setting interaction', () => {
     expect(setFiles[0]?.params).toEqual({ files: ['/abs/a.txt'], nodeId: 42 })
   })
 
+  it.each(['open', 'closed'] as const)(
+    'sets a %s shadow ref through a released remote object',
+    async (mode) => {
+      const dom = new JSDOM('<div id="host"></div>', { runScripts: 'outside-only' })
+      try {
+        const host = dom.window.document.querySelector('#host')
+        if (host === null) throw new Error('Missing shadow host fixture')
+        const root = host.attachShadow({ mode })
+        root.innerHTML = '<input type="file" data-sw-ref="1">'
+        if (mode === 'closed') {
+          Object.assign(dom.window, { __stagewright_closedShadowRoots: [root] })
+        }
+        const { transport, server } = setup()
+        server.respond('Runtime.evaluate', (params) => {
+          const element: unknown = dom.window.eval(String(params?.['expression']))
+          expect(element).toBe(root.querySelector('input'))
+          expect(params?.['returnByValue']).toBe(false)
+          return { result: { objectId: 'shadow-input' } }
+        })
+        const session = await transport.attach({ port: 9222 })
+        await session.setInputFiles('[data-sw-ref="1"]', ['/abs/a.txt'])
+        expect(server.sentTo('page/T1', 'DOM.setFileInputFiles')[0]?.params).toEqual({
+          files: ['/abs/a.txt'],
+          objectId: 'shadow-input',
+        })
+        expect(server.sentTo('page/T1', 'Runtime.releaseObject')[0]?.params).toEqual({
+          objectId: 'shadow-input',
+        })
+        expect(server.sentTo('page/T1', 'DOM.querySelector')).toHaveLength(0)
+      } finally {
+        dom.window.close()
+      }
+    },
+  )
+
+  it('does not set files when a ref resolves to null or evaluation fails', async () => {
+    for (const result of [
+      { result: { value: null } },
+      { exceptionDetails: { text: 'evaluation failed' } },
+    ]) {
+      const { transport, server } = setup()
+      server.respond('Runtime.evaluate', () => result)
+      const session = await transport.attach({ port: 9222 })
+      await expect(
+        session.setInputFiles('[data-sw-ref="1"]', ['/abs/a.txt']),
+      ).rejects.toMatchObject({
+        code: 'exceptionDetails' in result ? 'EVAL_RUNTIME_ERROR' : 'SELECTOR_NO_MATCH',
+      })
+      expect(server.sentTo('page/T1', 'DOM.setFileInputFiles')).toHaveLength(0)
+      expect(server.sentTo('page/T1', 'Runtime.releaseObject')).toHaveLength(0)
+    }
+  })
+
+  it('releases the ref handle even when setting files fails', async () => {
+    const { transport, server } = setup()
+    server.respond('Runtime.evaluate', () => ({ result: { objectId: 'shadow-input' } }))
+    server.respond('DOM.setFileInputFiles', () => {
+      throw new Error('Not a file input')
+    })
+    server.respond('Runtime.releaseObject', () => {
+      throw new Error('Page closed')
+    })
+    const session = await transport.attach({ port: 9222 })
+    await expect(session.setInputFiles('[data-sw-ref="1"]', ['/abs/a.txt'])).rejects.toThrow(
+      'Not a file input',
+    )
+    expect(server.sentTo('page/T1', 'Runtime.releaseObject')[0]?.params).toEqual({
+      objectId: 'shadow-input',
+    })
+  })
+
   it('maps a zero nodeId from DOM.querySelector to SELECTOR_NO_MATCH', async () => {
     const { transport, server } = setup()
     server.respond('DOM.getDocument', () => ({ root: { nodeId: 1 } }))

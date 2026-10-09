@@ -6,7 +6,8 @@
 - **Note**: Public ADR. Committed artifacts may cite `ADR-008`; this file is the canonical design record.
 - **Status note 2026-06-01**: server, dispatcher, lifecycle, interaction,
   read/wait/eval, observe, dialog, and expect tool families have landed. Plugin
-  loading remains future work.
+  loading was still future work at that checkpoint. It is now implemented by
+  `src/plugins/loader.ts` and server assembly; see [ADR-004](004-plugin-model.md).
 
 ## Context
 

@@ -7,6 +7,8 @@
  * @module
  */
 
+import { TARGET_RESOLVER_FN } from '../snapshot/resolve-target.js'
+
 /**
  * Settle delay (ms) before re-reading an element's editable content for the type-effect check.
  * Editors like Monaco process input asynchronously (read + clear their hidden textarea on the
@@ -20,12 +22,12 @@ export const TYPE_EFFECT_SETTLE_MS = 10
  * `textContent`), or `null` when the element is absent. Optionally settles first (see
  * {@link TYPE_EFFECT_SETTLE_MS}). Used to verify a type actually landed.
  */
-export const EDITABLE_SIGNATURE_BODY = `
+export const EDITABLE_SIGNATURE_BODY = `${TARGET_RESOLVER_FN}
 const settleMs = typeof arg.settleMs === 'number' ? arg.settleMs : 0;
 if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
 let el = null;
 try {
-  el = document.querySelector(String(arg.selector));
+  el = __swQueryTarget(String(arg.selector));
 } catch {
   return null;
 }
@@ -35,7 +37,7 @@ return typeof el.value === 'string' ? el.value : (el.textContent || '');
 
 /** Renderer body for selector-based scroll. Waits only when `timeoutMs` is set. */
 export function buildScrollIntoViewBody(): string {
-  return `
+  return `${TARGET_RESOLVER_FN}
 const selector = String(arg.selector);
 const timeoutMs =
   typeof arg.timeoutMs === 'number' && Number.isFinite(arg.timeoutMs)
@@ -45,7 +47,7 @@ const startedAt = Date.now();
 for (;;) {
   let element = null;
   try {
-    element = document.querySelector(selector);
+    element = __swQueryTarget(selector);
   } catch {
     return false;
   }

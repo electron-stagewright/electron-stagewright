@@ -3,8 +3,8 @@
  *
  * Three implementations sit behind this contract: PlaywrightElectronTransport
  * (default, uses Playwright's experimental _electron API), CDPTransport (raw
- * Chrome DevTools Protocol, deferred implementation), and InjectorTransport
- * (Node Inspector injection into a running process, deferred implementation).
+ * Chrome DevTools Protocol for packaged launches and loopback attach), and
+ * InjectorTransport (Node Inspector injection for main-process capabilities).
  * Each transport declares a capability matrix at load time so the dispatcher
  * refuses unsupported operations with a registered error code from the central
  * registry instead of crashing into the underlying SDK.

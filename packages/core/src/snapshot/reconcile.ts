@@ -30,7 +30,7 @@
  *   their composed context; those refs will be reported as `dropped` (old) +
  *   `fresh` (new) rather than `reused`. Apps that need ref stability under
  *   reorder must give items a stable identity the fingerprint can latch onto
- *   (a future enhancement — see the snapshot backlog).
+ *   (an unsupported case; fingerprint changes intentionally allocate fresh refs).
  * - **Non-interactive entries (ref === null) are untouched.** Landmarks keep
  *   `ref: null`; they do not participate in reuse, fresh allocation, or the
  *   dropped count.

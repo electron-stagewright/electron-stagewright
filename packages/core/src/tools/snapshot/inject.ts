@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { fnv1a32 } from '../../hash.js'
+import { MAX_SHADOW_DEPTH } from '../../snapshot/walker.js'
 import type { TransportSession } from '../../transports/types.js'
 
 let cachedBundle: string | undefined
@@ -151,7 +152,7 @@ export function runProbe<T extends object>(
  * reconciliation reuses previous refs, the DOM tags must be swapped to match the
  * refs returned to the agent.
  *
- * ONE `querySelectorAll('[data-sw-ref]')` scan builds a ref→element map, then all
+ * One scan per reachable document/shadow root builds a ref→element map, then all
  * writes apply from it — O(n + retags) instead of a full-document `querySelector`
  * per assignment (O(retags x n), which bites exactly when it matters: a list
  * prepend or dialog open shifts document order and most refs move at once). The
@@ -162,8 +163,34 @@ export function buildRetagBody(): string {
   return `
 const assignments = Array.isArray(arg) ? arg : [];
 const byRef = new Map();
-for (const element of document.querySelectorAll('[data-sw-ref]')) {
-  byRef.set(element.getAttribute('data-sw-ref'), element);
+const roots = [{ root: document, depth: 0 }];
+const seenDepth = new Map();
+const view = document.defaultView;
+if (Array.isArray(view?.__stagewright_closedShadowRoots)) {
+  roots.push(...view.__stagewright_closedShadowRoots.map((root) => ({ root, depth: 0 })));
+}
+try {
+  const exposed = view?.__stagewright_inspectShadow?.();
+  if (Array.isArray(exposed)) roots.push(...exposed.map((root) => ({ root, depth: 0 })));
+} catch { /* Match the walker's best-effort opt-in hook. */ }
+for (let index = 0; index < roots.length; index++) {
+  const { root, depth } = roots[index];
+  if (root !== document && (typeof root !== 'object' || root === null ||
+      root.ownerDocument !== document || typeof root.host !== 'object' || root.host === null ||
+      typeof root.host.tagName !== 'string' || typeof root.host.getAttribute !== 'function' ||
+      root.host.isConnected === false || typeof root.querySelectorAll !== 'function')) continue;
+  // Explicitly exposed roots restart the same depth budget as the walker. Revisit a root
+  // reached with a smaller depth so deduplication cannot exclude eligible descendants.
+  const previousDepth = seenDepth.get(root);
+  if (previousDepth !== undefined && previousDepth <= depth) continue;
+  seenDepth.set(root, depth);
+  for (const element of root.querySelectorAll('*')) {
+    const ref = element.getAttribute('data-sw-ref');
+    if (ref !== null) byRef.set(ref, element);
+    if (depth < ${MAX_SHADOW_DEPTH} && element.shadowRoot !== null) {
+      roots.push({ root: element.shadowRoot, depth: depth + 1 });
+    }
+  }
 }
 const pairs = [];
 for (const assignment of assignments) {

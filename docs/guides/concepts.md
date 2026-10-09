@@ -81,6 +81,25 @@ brittle selector breaks the moment the UI shifts. The snapshot schema, fingerpri
 reconciliation, and the reload signal are
 [ADR-005](../adr/005-snapshot-schema-v1.md).
 
+### Shadow DOM boundaries
+
+Ref-targeted reads, waits and assertions resolve through open shadow roots, up to
+10 shadow boundaries, and through closed roots explicitly exposed by the app via
+`window.__stagewright_closedShadowRoots` or `window.__stagewright_inspectShadow()`.
+Each exposed root starts its own depth budget. Detached, foreign-document and
+malformed exposed roots are ignored, matching snapshot eligibility. Ref reconciliation
+retags those same eligible roots, so reads can use the stable refs returned by a
+snapshot after an insertion or reorder.
+
+This applies to snapshot refs and their canonical `[data-sw-ref="N"]` selectors.
+Ordinary CSS in renderer reads, waits, assertions and CDP helpers keeps its
+existing document-only behavior; list/count selectors are unchanged. CDP ref
+interactions use the same root-aware lookup, including file inputs. Playwright's
+native interaction selectors retain Playwright's strict matching and actionability
+checks: they can pierce open roots but cannot target opted-in closed roots. Exposing
+a closed root for snapshots and reads does not add closed-root support to those
+native Playwright actions.
+
 ## Snapshots and diffs
 
 `electron_snapshot` returns an accessibility-tree view of the renderer — roles,
