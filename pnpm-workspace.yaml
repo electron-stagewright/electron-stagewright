@@ -3,7 +3,9 @@ packages:
   - 'examples/*'
 
 # Force patched transitive versions while their direct parents remain on compatible ranges.
-# Hono and Undici cover the runtime graph; Vite covers the local test tooling.
+# - hono: pulled in by @modelcontextprotocol/sdk, directly and through @hono/node-server.
+# - undici: optional dependency of @electron/get (Electron's downloader); jsdom uses it in tests.
+# - vite: peer of vitest, so it only reaches the local test tooling.
 # Keep these within the existing major versions and recheck the audit when updating.
 overrides:
   hono: 4.13.7
