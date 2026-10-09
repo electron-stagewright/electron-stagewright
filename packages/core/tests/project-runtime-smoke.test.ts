@@ -5,6 +5,9 @@
  * launches the fixture through a real Playwright transport.
  */
 
+import { mkdtemp, rm } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -18,26 +21,38 @@ import { doctorTool, launchTool, stopTool } from '../src/tools/lifecycle/index.j
 import { snapshotTool } from '../src/tools/snapshot/index.js'
 import { PlaywrightElectronTransport } from '../src/transports/index.js'
 
+import { prepareProjectRuntimeFixture } from './helpers/project-runtime-fixture.js'
+
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url))
-const REPOSITORY_ROOT = path.resolve(TEST_DIRECTORY, '../../..')
-const FIXTURE_MAIN = path.join(TEST_DIRECTORY, 'fixtures', 'minimal-electron', 'main.js')
+const requireCore = createRequire(path.join(TEST_DIRECTORY, '..', 'package.json'))
+const temporaryRoots: string[] = []
 const managers = new Set<SessionManager>()
 
 afterEach(async () => {
   await Promise.all([...managers].map((sessions) => sessions.disposeAll()))
   managers.clear()
+  await Promise.all(
+    temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+  )
 })
 
 describe('project Electron runtime smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
     'diagnoses and launches an app with its app-root Electron binary',
     async () => {
+      const root = await mkdtemp(path.join(tmpdir(), 'stagewright-project-runtime-'))
+      temporaryRoots.push(root)
+      const fixture = await prepareProjectRuntimeFixture(
+        root,
+        path.dirname(requireCore.resolve('electron/package.json')),
+        path.join(TEST_DIRECTORY, 'fixtures', 'minimal-electron'),
+      )
       const sessions = new SessionManager()
       managers.add(sessions)
       const dispatcher = new Dispatcher({
         sessions,
-        appRoot: REPOSITORY_ROOT,
+        appRoot: fixture.root,
         transports: new TransportRegistry({ transports: [new PlaywrightElectronTransport()] }),
       })
       dispatcher.registerAll([doctorTool, launchTool, snapshotTool, stopTool])
@@ -53,12 +68,13 @@ describe('project Electron runtime smoke (real Electron)', () => {
         }
       }
       expect(doctor.doctor_ok).toBe(true)
-      expect(doctor.checks.find((check) => check.id === 'project_runtime')?.status).toBe('pass')
+      const runtimeCheck = doctor.checks.find((check) => check.id === 'project_runtime')
+      expect(runtimeCheck?.status, JSON.stringify(runtimeCheck)).toBe('pass')
       expect(doctor.runtime.project?.installedElectron).toBeTruthy()
       expect(doctor.runtime.project?.target?.nodeModuleVersion).toBeTruthy()
 
       const launched = (await dispatcher.dispatch('electron_launch', {
-        main: FIXTURE_MAIN,
+        main: fixture.main,
         runtime: 'project',
       })) as SuccessResponse & { readonly runtime_source: string; readonly session_id: string }
       expect(launched.ok).toBe(true)
