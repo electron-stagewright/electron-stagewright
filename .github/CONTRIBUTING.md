@@ -58,7 +58,7 @@ electron-stagewright/
 └── .github/workflows/        # CI
 ```
 
-Future plugin packages live under `packages/plugin-*/` and publish as `@electron-stagewright/plugin-*`.
+First-party plugin packages live under `packages/plugin-*/` and publish as `@electron-stagewright/plugin-*`.
 
 ## Code style
 

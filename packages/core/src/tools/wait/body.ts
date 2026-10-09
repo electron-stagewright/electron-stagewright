@@ -16,6 +16,8 @@
  * @module
  */
 
+import { TARGET_RESOLVER_FN } from '../../snapshot/resolve-target.js'
+
 /** Shared loop preamble: read a finite, non-negative `timeoutMs` and start the clock. */
 export const POLL_PREAMBLE = `
 const timeoutMs =
@@ -36,7 +38,7 @@ export function pollTail(timedOutReturn: string): string {
  * non-`visibility:hidden` element (matching the snapshot walker's notion).
  */
 export function buildWaitForSelectorBody(): string {
-  return `
+  return `${TARGET_RESOLVER_FN}
 const selector = String(arg.selector);
 const want = String(arg.state || 'visible');
 ${POLL_PREAMBLE}
@@ -56,7 +58,7 @@ function satisfies(el) {
 for (;;) {
   let el = null;
   try {
-    el = document.querySelector(selector);
+    el = __swQueryTarget(selector);
   } catch (err) {
     return { satisfied: false, invalid_selector: true, error: err instanceof Error ? err.message : String(err) };
   }
@@ -101,7 +103,7 @@ ${pollTail('{ satisfied: false, state: last }')}
  * fires or `timeoutMs` elapses. The listener and timer are always cleaned up.
  */
 export function buildWaitForEventBody(): string {
-  return `
+  return `${TARGET_RESOLVER_FN}
 const eventName = String(arg.eventName);
 const selector = (typeof arg.selector === 'string' && arg.selector.length > 0) ? arg.selector : null;
 const timeoutMs =
@@ -109,7 +111,7 @@ const timeoutMs =
 let target;
 if (selector !== null) {
   try {
-    target = document.querySelector(selector);
+    target = __swQueryTarget(selector);
   } catch (err) {
     return { satisfied: false, invalid_selector: true, error: err instanceof Error ? err.message : String(err) };
   }
