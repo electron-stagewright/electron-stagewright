@@ -2,3 +2,5 @@
 # (packages/core/tests/tool-reference.test.ts). Pin LF on every platform so a Windows checkout
 # (git core.autocrlf=true) cannot rewrite them to CRLF and break that comparison.
 TOOL-REFERENCE.md text eol=lf
+# The lockfile is parsed line-by-line by compatibility-source.test.ts; keep it LF everywhere.
+pnpm-lock.yaml text eol=lf
