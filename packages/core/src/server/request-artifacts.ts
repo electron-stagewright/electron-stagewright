@@ -11,7 +11,7 @@ export class RequestArtifacts implements ArtifactPublisher {
   readonly #store: ArtifactStore
   readonly #operation: RequestOperation
   readonly #uris = new Set<string>()
-  readonly #unregister: () => void
+  readonly #unregister: (() => void) | undefined
   #closed = false
 
   constructor(store: ArtifactStore, operation: RequestOperation) {
