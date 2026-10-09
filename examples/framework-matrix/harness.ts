@@ -149,17 +149,20 @@ async function greetingScenario(client: Client, rt: RoundTrips, sessionId: strin
   await call(client, rt, 'electron_console_logs', { sessionId, match: 'greeted' })
 }
 
+/** Runtime inputs the SDK's default child environment omits but Electron launches need. */
+export const FORWARDED_RUNTIME_ENV = [
+  'DISPLAY',
+  'XAUTHORITY',
+  'WAYLAND_DISPLAY',
+  'XDG_RUNTIME_DIR',
+  'ELECTRON_DISABLE_SANDBOX',
+  'ELECTRON_OVERRIDE_DIST_PATH',
+] as const
+
 /** Forward only the runtime inputs the SDK's default child environment omits. */
 function runtimeEnvironment(): Record<string, string> {
   const env: Record<string, string> = {}
-  for (const name of [
-    'DISPLAY',
-    'XAUTHORITY',
-    'WAYLAND_DISPLAY',
-    'XDG_RUNTIME_DIR',
-    'ELECTRON_DISABLE_SANDBOX',
-    'ELECTRON_OVERRIDE_DIST_PATH',
-  ]) {
+  for (const name of FORWARDED_RUNTIME_ENV) {
     const value = process.env[name]
     if (value !== undefined) env[name] = value
   }

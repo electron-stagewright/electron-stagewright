@@ -12,7 +12,6 @@
 
 import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 
 import { z } from 'zod'
 
@@ -30,6 +29,7 @@ import {
 import type { LaunchOptions, TransportSession } from '../../transports/index.js'
 import { isWithinRoot } from '../app-root.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
+import { sleep } from '../wait/sleep.js'
 import { diagnoseLaunchError } from './diagnose.js'
 import { registerWithWindows } from './session-init.js'
 
@@ -153,11 +153,7 @@ async function awaitRendererReady(
         Math.max(0, deadline - Date.now()),
       )
       if (!retryable || retryDelayMs === 0) return false
-      // An aborted delay rejects with a generic AbortError; surface the request's own reason.
-      await delay(retryDelayMs, undefined, { signal }).catch((error: unknown) => {
-        signal?.throwIfAborted()
-        throw error
-      })
+      await sleep(retryDelayMs, signal)
     }
   }
 }

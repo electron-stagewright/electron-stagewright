@@ -163,8 +163,12 @@ describe('role count cancellation', () => {
       ...renumbered,
       meta: { ...renumbered.meta, navigation_started_at_ms: prev.meta.navigation_started_at_ms },
     })
-    await vi.waitFor(() => expect(bodies).toContain('RETAG'))
-    await new Promise<void>((resolve) => setImmediate(resolve))
+    await vi.waitFor(() => {
+      expect(bodies).toContain('RETAG')
+      expect(snapshots.get('sess', surface.id)?.entries.some((entry) => entry.name === 'New')).toBe(
+        true,
+      )
+    })
     const stored = snapshots.get('sess', surface.id)
     expect(stored?.entries.find((entry) => entry.name === 'Save')?.ref).toBe(savedRef)
     expect(stored?.entries.find((entry) => entry.name === 'New')?.ref).not.toBe(savedRef)
