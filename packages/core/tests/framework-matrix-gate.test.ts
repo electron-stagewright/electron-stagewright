@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import {
   qualifyMatrix,
   REQUIRED_FRAMEWORKS,
+  SCENARIO_ROUND_TRIPS,
   writeMatrixReport,
 } from '../../../examples/framework-matrix/matrix.js'
 
@@ -20,7 +21,7 @@ const fixtures = REQUIRED_FRAMEWORKS.map((name) => ({
 
 describe('four-framework qualification gate', () => {
   it('rejects zero, missing and duplicate framework rows', async () => {
-    const run = async () => ({ name: 'vanilla', ok: true, roundTrips: 9 })
+    const run = async () => ({ name: 'vanilla', ok: true, roundTrips: SCENARIO_ROUND_TRIPS })
     for (const inventory of [
       [],
       fixtures.slice(1),
@@ -41,7 +42,7 @@ describe('four-framework qualification gate', () => {
     const results = await qualifyMatrix(rows, async (fixture) => {
       visited.push(fixture.name)
       if (fixture.name === 'react') throw new Error('Greeting no longer reflects controlled input')
-      return { name: fixture.name, ok: true, roundTrips: 9 }
+      return { name: fixture.name, ok: true, roundTrips: SCENARIO_ROUND_TRIPS }
     })
     expect(visited).toEqual(['vanilla', 'react', 'vue'])
     expect(results.map((r) => r.name)).toEqual(REQUIRED_FRAMEWORKS)
@@ -63,13 +64,15 @@ describe('four-framework qualification gate', () => {
     }
   })
 
-  it('requires scenario execution rather than an empty successful row', async () => {
-    const results = await qualifyMatrix(fixtures, async (fixture) => ({
-      name: fixture.name,
-      ok: true,
-      roundTrips: 0,
-    }))
-    expect(results.every((r) => !r.ok)).toBe(true)
+  it('requires scenario execution rather than an empty or partial successful row', async () => {
+    for (const roundTrips of [0, SCENARIO_ROUND_TRIPS - 1]) {
+      const results = await qualifyMatrix(fixtures, async (fixture) => ({
+        name: fixture.name,
+        ok: true,
+        roundTrips,
+      }))
+      expect(results.every((r) => !r.ok)).toBe(true)
+    }
   })
 
   it('gates both dependency PR runtime qualification and release validation', async () => {
