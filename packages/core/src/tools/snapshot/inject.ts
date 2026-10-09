@@ -114,9 +114,15 @@ async function runInjected<T extends object>(
   arg: unknown,
   buildInvocation: (bundle: string) => string,
   buildInstall: (bundle: string) => string,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted()
   const warm = await session.evaluate<T | null>('renderer', buildInvocation(bundle), arg)
+  // A warm result already ran in the renderer (a walk has renumbered the DOM tags), so it
+  // must reach the caller even when the request was cancelled meanwhile. Only the not-yet-
+  // started install is skipped.
   if (warm !== null) return warm
+  signal?.throwIfAborted()
   return session.evaluate<T>('renderer', buildInstall(bundle), arg)
 }
 
@@ -125,8 +131,9 @@ export function runWalk<T extends object>(
   session: RendererEvaluator,
   bundle: string,
   arg: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
-  return runInjected(session, bundle, arg, buildWalkBody, buildWalkInstallBody)
+  return runInjected(session, bundle, arg, buildWalkBody, buildWalkInstallBody, signal)
 }
 
 /** Run one element/read probe, transferring the bundle only when its renderer lacks it. */
