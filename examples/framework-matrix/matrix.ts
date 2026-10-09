@@ -5,6 +5,9 @@ import type { FrameworkFixture, ScenarioResult } from './harness.js'
 
 export const REQUIRED_FRAMEWORKS = ['vanilla', 'react', 'vue', 'angular'] as const
 
+/** A complete scenario makes the launch call plus the nine shared greeting steps. */
+export const SCENARIO_ROUND_TRIPS = 10
+
 export async function qualifyMatrix(
   fixtures: readonly FrameworkFixture[],
   run: (fixture: FrameworkFixture) => Promise<ScenarioResult>,
@@ -22,7 +25,7 @@ export async function qualifyMatrix(
     try {
       await access(fixture.main)
       const result = await run(fixture)
-      if (result.name !== fixture.name || (result.ok && result.roundTrips < 9)) {
+      if (result.name !== fixture.name || (result.ok && result.roundTrips < SCENARIO_ROUND_TRIPS)) {
         throw new Error(`Incomplete scenario evidence for ${fixture.name}`)
       }
       results.push(result)
