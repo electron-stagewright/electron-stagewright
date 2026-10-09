@@ -26,7 +26,9 @@ describe('reviewed real-runtime inventory', () => {
     const discovered = []
     for (const file of await testFiles(path.join(root, 'packages'))) {
       const source = await readFile(file, 'utf8')
-      if (/const RUN_E2E = process\.env\['STAGEWRIGHT_E2E'\] === '1'/.test(source)) {
+      // Any read of the opt-in variable, however it is spelled, must be a reviewed real-runtime
+      // file; otherwise the unit project would skip it forever and no lane would execute it.
+      if (/process\.env(?:\.STAGEWRIGHT_E2E\b|\[\s*['"]STAGEWRIGHT_E2E['"]\s*\])/.test(source)) {
         discovered.push({
           path: path.relative(root, file).split(path.sep).join('/'),
           tests: source.split('it.skipIf(').length - 1,
