@@ -83,6 +83,8 @@ export async function runTargetedInteraction(
     const payload = await perform(managed.session, selector, opts)
     return makeSuccess({ session_id: managed.id, ...payload }, meta)
   } catch (err) {
+    // The dispatcher already answered a cancelled request; skip the diagnosis round-trips.
+    if (ctx.signal?.aborted === true) throw err
     return handleTargetFailure(err, {
       ctx,
       session: managed.session,
@@ -125,6 +127,7 @@ export async function runDragInteraction(ctx: ToolContext, args: DragArgs): Prom
     await managed.session.dragTo(source, target, resolveActionOptions(args))
     return makeSuccess({ session_id: managed.id, source, target }, meta)
   } catch (err) {
+    if (ctx.signal?.aborted === true) throw err
     return handleTargetFailure(err, {
       ctx,
       session: managed.session,
@@ -162,6 +165,7 @@ export async function runInteraction(
     const payload = await perform(managed.session, meta)
     return makeSuccess({ session_id: managed.id, ...payload }, meta)
   } catch (err) {
+    if (ctx.signal?.aborted === true) throw err
     return handleTargetFailure(err, { ctx, session: managed.session, meta })
   }
 }

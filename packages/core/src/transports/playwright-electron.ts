@@ -1847,9 +1847,10 @@ class PlaywrightSession implements TransportSession {
    * Deliberately errs toward NOT throwing — a missed swallow is cheaper than a false rejection
    * that blocks a type that actually worked:
    * - empty text is a no-op (clearing / typing nothing is a legitimate no-change);
-   * - an unreadable signature (`null`: the element is gone, or not reachable via
-   *   `document.querySelector` — e.g. inside a shadow root Playwright pierced but our eval cannot)
-   *   skips the check rather than risk a spurious failure;
+   * - an unreadable signature (`null`: the element is gone, or not reachable by the eval's
+   *   resolver — e.g. a plain CSS selector matching inside a shadow root Playwright pierced, since
+   *   only snapshot-ref selectors cross shadow boundaries in the eval) skips the check rather than
+   *   risk a spurious failure;
    * - an editor whose model updates asynchronously gets {@link TYPE_EFFECT_SETTLE_MS} to settle
    *   before the re-read. A model slower than that settle is the residual false-negative this
    *   check accepts to keep the common (synchronous) case honest.
