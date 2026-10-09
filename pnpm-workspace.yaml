@@ -3,11 +3,14 @@ packages:
   - 'examples/*'
 
 # Force patched transitive versions while their direct parents remain on compatible ranges.
-# These pins remediate the production advisories reported for Hono via the MCP SDK and Undici via
-# Electron's downloader without taking an SDK or Electron major upgrade.
+# - hono: pulled in by @modelcontextprotocol/sdk, directly and through @hono/node-server.
+# - undici: optional dependency of @electron/get (Electron's downloader); jsdom uses it in tests.
+# - vite: peer of vitest, so it only reaches the local test tooling.
+# Keep these within the existing major versions and recheck the audit when updating.
 overrides:
-  hono: 4.12.29
-  undici: 7.28.0
+  hono: 4.13.7
+  undici: 7.29.1
+  vite: 8.0.16
 
 # Approve native postinstall builds for trusted packages. pnpm 11+ blocks all
 # postinstall scripts by default as a supply-chain safeguard; `allowBuilds` opts
