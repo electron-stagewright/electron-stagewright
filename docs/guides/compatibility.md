@@ -15,10 +15,31 @@ verified” means a required hosted job launches Electron and drives the complet
 The package requires Node 24 or newer. CI exercises Node 24 and 26; versions newer than 26 may work
 but are not yet part of the maintained matrix.
 
-The repository currently develops and validates against Electron 42 and Playwright 1.61. Published
-peer ranges remain broader to allow compatible applications, but those ranges are not a claim that
-every Electron/Playwright pair has been exercised. Run `electron-stagewright doctor --json` against
-your installation and keep Electron and Playwright aligned with your target app.
+### Source resolution (not a qualification claim)
+
+Source-resolved Electron: `42.11.10`; Playwright: `1.63.0`.
+
+These exact development versions come from the `packages/core` importer in the frozen lockfile.
+A unit consistency test checks only this source-resolution field. Installation or source checking
+does not promote a combination to real-runtime verified compatibility.
+
+### Qualified compatibility evidence
+
+- Previous guide assertion at source `6598c945a126eaf7cff40c9e816897ba044eaaac`:
+  Electron 42 / Playwright 1.61
+- Last qualified SHA and hosted run: **not recorded in the previous guide**. The source SHA above
+  identifies the historical wording, not a recovered exact-head qualification certificate
+- Current source-resolved tuple (above): **pending qualification**. No hosted real-Electron
+  qualification has been recorded for this exact tuple yet
+
+Before promoting the current source tuple, record the tested commit, required Ubuntu/macOS/Windows
+real-Electron results, packed-CLI evidence on those lanes, and the four-framework real-MCP result.
+Link the exact runs/artifacts and retain native-addon platform limitations. No successful unit
+result, fixture build, or peer-range declaration replaces those checks.
+
+Published peer ranges remain broader to allow compatible applications, but those ranges are not a
+claim that every Electron/Playwright pair has been exercised. Run `electron-stagewright doctor --json`
+against your installation and keep Electron and Playwright aligned with your target app.
 
 ## Transport matrix
 
