@@ -39,7 +39,7 @@ import { createServer } from 'node:net'
 import process from 'node:process'
 
 import { StagewrightError } from '../errors/registry.js'
-import { TARGET_RESOLVER_FN } from '../snapshot/resolve-target.js'
+import { isRefSelector, TARGET_RESOLVER_FN } from '../snapshot/resolve-target.js'
 import {
   CdpConnection,
   evaluateExpression,
@@ -1482,7 +1482,7 @@ class CdpSession implements TransportSession {
     const conn = await this.#pageConnection()
     // DOM.querySelector cannot cross a shadow boundary. Resolve snapshot refs
     // to a remote element instead; ordinary CSS keeps its existing DOM path.
-    if (/^\[data-sw-ref="[1-9]\d*"\]$/.test(selector)) {
+    if (isRefSelector(selector)) {
       const result = await conn.send<{
         readonly result?: { readonly objectId?: string }
         readonly exceptionDetails?: { readonly text?: string }
@@ -1495,10 +1495,8 @@ class CdpSession implements TransportSession {
         if (result.exceptionDetails !== undefined) {
           throw new StagewrightError(
             'EVAL_RUNTIME_ERROR',
-            'Could not resolve the file input ref.',
-            {
-              selector,
-            },
+            `Could not resolve the file input ref: ${result.exceptionDetails.text ?? 'evaluation threw'}`,
+            { selector },
           )
         }
         if (objectId === undefined) throw statusToError('no-match', selector)

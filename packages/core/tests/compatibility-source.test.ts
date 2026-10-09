@@ -75,6 +75,7 @@ describe('source resolution is distinct from compatibility qualification', () =>
       assertDocumentSource(lock, `${guide}\n${FIELD_PREFIX} \`0.0.0\`; Playwright: \`0.0.0\`.\n`),
     ).toThrow('differs')
     expect(guide).toContain('Qualified compatibility evidence')
+    expect(guide).toContain('qualification remains pending until')
     expect(guide).toContain('No successful unit result')
     expect(guide).toContain('not recorded in the previous guide')
   })
