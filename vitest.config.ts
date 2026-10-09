@@ -1,17 +1,34 @@
 import { defineConfig } from 'vitest/config'
 
-const runE2E = process.env['STAGEWRIGHT_E2E'] === '1'
+import inventory from './scripts/real-test-inventory.json' with { type: 'json' }
+
+const allTests = ['packages/*/tests/**/*.test.ts', 'packages/*/src/**/*.test.ts']
+const realTests = inventory.map((row) => row.path)
 
 export default defineConfig({
   test: {
     globals: false,
     environment: 'node',
-    passWithNoTests: true,
-    // The opt-in suite launches many full Chromium processes. Run its files serially so renderer
-    // startup stays representative instead of starving unrelated time-sensitive unit tests on the
-    // same host. The default unit suite keeps Vitest's normal parallelism.
-    ...(runE2E ? { fileParallelism: false } : {}),
-    include: ['packages/*/tests/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
+    passWithNoTests: false,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: allTests,
+          exclude: [...realTests, '**/node_modules/**'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'real-electron',
+          include: realTests,
+          fileParallelism: false,
+          env: { STAGEWRIGHT_E2E: '1' },
+        },
+      },
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],

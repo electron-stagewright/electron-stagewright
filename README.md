@@ -268,6 +268,17 @@ The server is a **privileged local tool, not a sandbox**: it drives a real app a
 
 This project is in its earliest days. Issues and discussions welcome. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the workflow, and [GOVERNANCE.md](.github/GOVERNANCE.md) for how the project is run and the path to becoming a co-maintainer.
 
+### Selecting test projects
+
+`pnpm test` and `pnpm test:coverage` select the ordinary `unit` project, retained across
+all six OS/Node CI cells. `pnpm test:real` selects the serialized `real-electron` project
+and checks actual JSON results against `scripts/real-test-inventory.json` (24 reviewed files,
+34 scenarios). It refuses missing binaries/required native-addon fixture inputs and rejects
+missing, skipped or zero execution. Prepare Linux/macOS native inputs with
+`node scripts/prepare-native-addon-fixture.mjs` and export the two variables it prints.
+Windows explicitly omits the one unsupported native-addon recovery scenario.
+Packed CLI qualification stays separate.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

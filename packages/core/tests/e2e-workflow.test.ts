@@ -25,7 +25,7 @@ describe('real-Electron workflow', () => {
     expect(windows).toContain('node-version: 24')
     expect(windows).toContain("require('electron')")
     expect(windows).toContain("STAGEWRIGHT_E2E: '1'")
-    expect(windows).toContain('run: pnpm test')
+    expect(windows).toContain('run: pnpm test:real')
     expect(windows).toContain('run: pnpm package:smoke')
     expect(windows).not.toMatch(/^\s+continue-on-error:/m)
   })

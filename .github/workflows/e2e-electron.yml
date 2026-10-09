@@ -106,16 +106,37 @@ jobs:
       - run: pnpm build
 
       - name: Run the gated real-Electron smokes under Xvfb
-        run: xvfb-run --auto-servernum pnpm test
+        run: xvfb-run --auto-servernum pnpm test:real
         env:
           STAGEWRIGHT_E2E: '1'
+
+      - name: Qualify vanilla, React, Vue and Angular through real MCP
+        run: xvfb-run --auto-servernum pnpm matrix
+        env:
+          STAGEWRIGHT_MATRIX_REPORT: ${{ github.workspace }}/output/framework-matrix/results.json
+
+      - name: Preserve per-framework qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: framework-matrix-${{ github.sha }}-${{ github.run_attempt }}
+          path: output/framework-matrix/results.json
+          if-no-files-found: error
+
+      - name: Preserve real-runtime execution inventory
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-electron-tests-${{ runner.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: output/real-electron/results.json
+          if-no-files-found: error
 
       - name: Verify the packed CLI from an isolated install
         run: xvfb-run --auto-servernum pnpm package:smoke
 
-  # The Linux job above owns the Xvfb setup and Linux-only native-addon fixture.
-  # macOS runs the same complete suite natively, proving the launch, CDP, surface,
-  # plugin, and packed-install paths against Apple's process/window environment.
+  # The Linux job above owns the Xvfb setup. macOS runs the same complete suite natively,
+  # including the native-addon recovery fixture, proving the launch, CDP, surface, plugin,
+  # and packed-install paths against Apple's process/window environment.
   e2e-macos:
     name: Real-Electron smokes (macos)
     runs-on: macos-latest
@@ -128,6 +149,12 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Cache native addon fixture inputs
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/electron-stagewright/native-addon-fixture
+          key: native-addon-fixture-${{ runner.os }}-41.7.1
+
       - run: pnpm install --frozen-lockfile
 
       # Fail at a direct, actionable binary probe rather than allowing every
@@ -136,12 +163,23 @@ jobs:
         run: node -e "console.log('Electron resolved to:', require('electron'))"
         working-directory: packages/core
 
+      - name: Prepare native addon fixture inputs
+        run: node scripts/prepare-native-addon-fixture.mjs >> "$GITHUB_ENV"
+
       - run: pnpm build
 
       - name: Run the gated real-Electron smokes
-        run: pnpm test
+        run: pnpm test:real
         env:
           STAGEWRIGHT_E2E: '1'
+
+      - name: Preserve real-runtime execution inventory
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-electron-tests-${{ runner.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: output/real-electron/results.json
+          if-no-files-found: error
 
       - name: Verify the packed CLI from an isolated install
         run: pnpm package:smoke
@@ -173,9 +211,17 @@ jobs:
       - run: pnpm build
 
       - name: Run the gated real-Electron smokes
-        run: pnpm test
+        run: pnpm test:real
         env:
           STAGEWRIGHT_E2E: '1'
+
+      - name: Preserve real-runtime execution inventory
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-electron-tests-${{ runner.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: output/real-electron/results.json
+          if-no-files-found: error
 
       - name: Verify the packed CLI from an isolated install
         run: pnpm package:smoke
