@@ -25,7 +25,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   },
 }))
 
-import { runFixture } from '../../../examples/framework-matrix/harness.js'
+import { FORWARDED_RUNTIME_ENV, runFixture } from '../../../examples/framework-matrix/harness.js'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -52,15 +52,7 @@ describe('framework matrix runtime environment', () => {
   })
 
   it('does not invent optional runtime settings when they are absent', async () => {
-    for (const name of [
-      'DISPLAY',
-      'XAUTHORITY',
-      'WAYLAND_DISPLAY',
-      'XDG_RUNTIME_DIR',
-      'ELECTRON_DISABLE_SANDBOX',
-      'ELECTRON_OVERRIDE_DIST_PATH',
-    ])
-      vi.stubEnv(name, undefined)
+    for (const name of FORWARDED_RUNTIME_ENV) vi.stubEnv(name, undefined)
     await runFixture({ name: 'vanilla', main: '/fixture/main.js', notes: 'unit' })
     expect(capture.options?.['env']).toEqual({})
   })
