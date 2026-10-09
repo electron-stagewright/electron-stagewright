@@ -23,6 +23,7 @@
  * @module
  */
 
+import { TARGET_RESOLVER_FN } from '../snapshot/resolve-target.js'
 import { StagewrightError } from '../errors/registry.js'
 
 /** Modifier bit values per the CDP `Input` domain. */
@@ -153,10 +154,10 @@ export interface ResolvedPoint {
  * actionability snapshot (visible + disabled), scrolling it into view first
  * so the synthesized pointer event lands inside the viewport.
  */
-export const RESOLVE_POINT_BODY = `
+export const RESOLVE_POINT_BODY = `${TARGET_RESOLVER_FN}
 let el = null;
 try {
-  el = document.querySelector(String(arg.selector));
+  el = __swQueryTarget(String(arg.selector));
 } catch {
   return { status: 'bad-selector' };
 }
@@ -179,10 +180,10 @@ return {
 `
 
 /** Renderer body: focus a selector (focus tolerates offscreen/hidden elements). */
-export const FOCUS_BODY = `
+export const FOCUS_BODY = `${TARGET_RESOLVER_FN}
 let el = null;
 try {
-  el = document.querySelector(String(arg.selector));
+  el = __swQueryTarget(String(arg.selector));
 } catch {
   return { status: 'bad-selector' };
 }
@@ -195,10 +196,10 @@ return { status: 'ok' };
  * Renderer body: set an input/textarea/contenteditable value through the
  * native setter (so framework value-tracking sees it) and fire input/change.
  */
-export const FILL_BODY = `
+export const FILL_BODY = `${TARGET_RESOLVER_FN}
 let el = null;
 try {
-  el = document.querySelector(String(arg.selector));
+  el = __swQueryTarget(String(arg.selector));
 } catch {
   return { status: 'bad-selector' };
 }
@@ -221,10 +222,10 @@ return { status: 'ok' };
 `
 
 /** Renderer body: select option(s) by value in a <select> and fire input/change. */
-export const SELECT_OPTION_BODY = `
+export const SELECT_OPTION_BODY = `${TARGET_RESOLVER_FN}
 let el = null;
 try {
-  el = document.querySelector(String(arg.selector));
+  el = __swQueryTarget(String(arg.selector));
 } catch {
   return { status: 'bad-selector' };
 }
@@ -247,10 +248,10 @@ return { status: 'ok', selected };
 `
 
 /** Renderer body: read a checkbox/radio's live checked + disabled state. */
-export const CHECKED_STATE_BODY = `
+export const CHECKED_STATE_BODY = `${TARGET_RESOLVER_FN}
 let el = null;
 try {
-  el = document.querySelector(String(arg.selector));
+  el = __swQueryTarget(String(arg.selector));
 } catch {
   return { status: 'bad-selector' };
 }

@@ -48,7 +48,7 @@ import type { Snapshot, SnapshotBbox, SnapshotEntry, SnapshotMeta, SnapshotRole 
 import { extractState, isVisible } from './state.js'
 
 /** Maximum shadow-root recursion depth — guards against pathological nesting. */
-const MAX_SHADOW_DEPTH = 10
+export const MAX_SHADOW_DEPTH = 10
 
 /**
  * Shape of the optional global hooks an app author uses to expose closed

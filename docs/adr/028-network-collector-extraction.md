@@ -22,8 +22,9 @@ prediction of future work.
 
 There is no current review-coupling cost, defect, or measured performance benefit that would
 justify taking lifecycle risk now. As of the reviewed commit, exact-head real-Electron network
-qualification for the current dependency tuple had not been recorded (see the
-[compatibility guide](../guides/compatibility.md)).
+qualification for the current dependency tuple had not been recorded. The
+[compatibility guide](../guides/compatibility.md) now records subsequent exact-tree qualification;
+that evidence does not by itself justify a collector extraction.
 
 ## Decision
 

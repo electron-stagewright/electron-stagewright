@@ -39,6 +39,7 @@ import { createServer } from 'node:net'
 import process from 'node:process'
 
 import { StagewrightError } from '../errors/registry.js'
+import { isRefSelector, TARGET_RESOLVER_FN } from '../snapshot/resolve-target.js'
 import {
   CdpConnection,
   evaluateExpression,
@@ -1479,6 +1480,35 @@ class CdpSession implements TransportSession {
   ): Promise<void> {
     this.#requireRunning()
     const conn = await this.#pageConnection()
+    // DOM.querySelector cannot cross a shadow boundary. Resolve snapshot refs
+    // to a remote element instead; ordinary CSS keeps its existing DOM path.
+    if (isRefSelector(selector)) {
+      const result = await conn.send<{
+        readonly result?: { readonly objectId?: string }
+        readonly exceptionDetails?: { readonly text?: string }
+      }>('Runtime.evaluate', {
+        expression: `(() => { ${TARGET_RESOLVER_FN} return __swQueryTarget(${JSON.stringify(selector)}); })()`,
+        returnByValue: false,
+      })
+      const objectId = result.result?.objectId
+      try {
+        if (result.exceptionDetails !== undefined) {
+          throw new StagewrightError(
+            'EVAL_RUNTIME_ERROR',
+            `Could not resolve the file input ref: ${result.exceptionDetails.text ?? 'evaluation threw'}`,
+            { selector },
+          )
+        }
+        if (objectId === undefined) throw statusToError('no-match', selector)
+        await conn.send('DOM.setFileInputFiles', { files: [...paths], objectId })
+      } finally {
+        if (objectId !== undefined) {
+          // Cleanup must not replace a set-files failure when a page is closing.
+          await conn.send('Runtime.releaseObject', { objectId }).catch(() => {})
+        }
+      }
+      return
+    }
     try {
       await conn.enable('DOM')
     } catch {

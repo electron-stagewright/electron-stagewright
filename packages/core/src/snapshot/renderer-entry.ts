@@ -24,10 +24,11 @@
  */
 
 import { computeAccessibleName } from './accname.js'
+import { queryTarget } from './resolve-target.js'
 import { resolveRole } from './roles.js'
 import type { Snapshot, SnapshotBbox, SnapshotRole, SnapshotState } from './schema.js'
 import { extractState } from './state.js'
-import { type WalkerOptions, walkAccessibilityTree } from './walker.js'
+import { MAX_SHADOW_DEPTH, type WalkerOptions, walkAccessibilityTree } from './walker.js'
 
 /** Attribute each interactive element is tagged with, keyed to its ref number. */
 export const REF_ATTRIBUTE = 'data-sw-ref'
@@ -178,7 +179,7 @@ target.__stagewrightProbe = (
 
   let element: Element | null
   try {
-    element = document.querySelector(String(arg.selector))
+    element = queryTarget(document, String(arg.selector), MAX_SHADOW_DEPTH)
   } catch (err) {
     return invalidSelectorMiss(err)
   }
