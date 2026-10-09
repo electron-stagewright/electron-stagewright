@@ -49,6 +49,7 @@
  * @module
  */
 
+import { estimateTokensForLength } from '../errors/envelope.js'
 import { estimateTokens } from '../errors/index.js'
 import type {
   ChangedField,
@@ -265,6 +266,9 @@ interface DroppableItem {
   readonly interactive: boolean
 }
 
+/** JSON length of the diff payload with all three buckets empty. */
+const PAYLOAD_SKELETON_LENGTH = JSON.stringify({ added: [], removed: [], changed: [] }).length
+
 /** Whether a diff payload item refers to an interactive entry (any encoding). */
 function isInteractiveDiffItem(
   item:
@@ -290,34 +294,30 @@ export function truncateDiffToBudget<T extends SnapshotDiff | SnapshotDiffCompac
   diff: T,
   budgetTokens: number,
 ): { readonly diff: T; readonly dropped: number } {
-  const payload = { added: diff.added, removed: diff.removed, changed: diff.changed }
-  // estimateTokens uses ceil(JSON character count / 4). Subtracting separately
-  // rounded item estimates loses fractions at every removal. Track exact JSON
-  // lengths instead, including the comma lost while a bucket is nonempty.
-  let characters = JSON.stringify(payload).length
-  const budgetCharacters = budgetTokens * 4
-  if (characters <= budgetCharacters) return { diff, dropped: 0 }
-  const remaining = {
-    added: diff.added.length,
-    removed: diff.removed.length,
-    changed: diff.changed.length,
-  }
-
   const items: DroppableItem[] = []
+  const remaining = { added: 0, removed: 0, changed: 0 }
+  // The payload's JSON length is the fixed `{"added":[],...}` skeleton plus every
+  // item plus one comma between neighbours in each nonempty bucket. Summing exact
+  // item lengths (instead of subtracting separately rounded token estimates)
+  // keeps the accounting exact and serializes the payload only once.
+  let characters = PAYLOAD_SKELETON_LENGTH
   const collect = (kind: DroppableItem['kind'], list: readonly unknown[]): void => {
     for (let index = 0; index < list.length; index++) {
       const value = list[index] as Parameters<typeof isInteractiveDiffItem>[0]
-      items.push({
-        kind,
-        index,
-        characters: JSON.stringify(value).length,
-        interactive: isInteractiveDiffItem(value),
-      })
+      // Arrays serialize an unrepresentable element as `null`.
+      const length = (JSON.stringify(value) ?? 'null').length
+      characters += length + (index > 0 ? 1 : 0)
+      items.push({ kind, index, characters: length, interactive: isInteractiveDiffItem(value) })
     }
+    remaining[kind] = list.length
   }
   collect('removed', diff.removed)
   collect('changed', diff.changed)
   collect('added', diff.added)
+  // Compare in token space through the shared heuristic so a fractional budget
+  // cannot admit a payload whose (integer) estimate exceeds it.
+  const fits = (): boolean => estimateTokensForLength(characters) <= budgetTokens
+  if (fits()) return { diff, dropped: 0 }
 
   // Drop order: non-interactive before interactive; removed → changed → added
   // within each tier; later document-order items first within a bucket.
@@ -335,7 +335,7 @@ export function truncateDiffToBudget<T extends SnapshotDiff | SnapshotDiffCompac
   }
   let dropped = 0
   for (const item of dropOrder) {
-    if (characters <= budgetCharacters) break
+    if (fits()) break
     droppedByKind[item.kind].add(item.index)
     characters -= item.characters + (remaining[item.kind] > 1 ? 1 : 0)
     remaining[item.kind]--
@@ -359,7 +359,7 @@ export function truncateDiffToBudget<T extends SnapshotDiff | SnapshotDiffCompac
       changed,
       _meta: {
         ...diff._meta,
-        estimated_tokens: estimateTokens({ added, removed, changed }),
+        estimated_tokens: estimateTokensForLength(characters),
         truncated_entries: dropped,
       },
     } as T,

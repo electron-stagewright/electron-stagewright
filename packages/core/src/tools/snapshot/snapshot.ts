@@ -75,7 +75,8 @@ const inputSchema = z.object({
     .min(50)
     .optional()
     .describe(
-      "Server-side token cap for a since:'last' diff payload. Lowest-value entries" +
+      "Server-side token cap for a since:'last' diff payload: the char/4 estimate of the" +
+        ' added/removed/changed arrays (ref_map and _meta are not counted). Lowest-value entries' +
         ' (non-interactive removed/changed first) are dropped until the estimate fits;' +
         ' _meta.truncated_entries reports how many were omitted.',
     ),

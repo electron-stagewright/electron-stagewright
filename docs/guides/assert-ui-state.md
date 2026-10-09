@@ -107,8 +107,8 @@ compact encoding that carries only the fields that actually changed (pass
 JSON cost of the `added`, `removed`, and `changed` arrays together, including their keys,
 brackets, and commas. It uses the server's character-count / 4 heuristic, not a model-specific
 tokenizer, and excludes `ref_map`, metadata, and the response envelope. The server drops
-lowest-value entries first and reports how many under `_meta.truncated_entries`. Over a multi-turn session this is the difference between re-reading
-thousands of tokens per turn and reading tens.
+lowest-value entries first and reports how many under `_meta.truncated_entries`. Over a multi-turn
+session this is the difference between re-reading thousands of tokens per turn and reading tens.
 
 ## Putting it together
 

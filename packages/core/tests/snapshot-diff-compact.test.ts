@@ -213,6 +213,24 @@ describe('truncateDiffToBudget', () => {
     }
   })
 
+  it('never admits a payload whose integer estimate exceeds a fractional budget', () => {
+    for (let padding = 0; padding < 8; padding++) {
+      const prev = snapshotOf(
+        Array.from({ length: 5 }, (_, i) =>
+          entry({ fingerprint: `f${i}`, ref: i + 1, name: 'x'.repeat(padding) }),
+        ),
+      )
+      const diff = compactDiff(diffSnapshots(prev, snapshotOf([])))
+      for (let budget = 20; budget < diff._meta.estimated_tokens; budget += 0.25) {
+        const { diff: kept } = truncateDiffToBudget(diff, budget)
+        expect(kept._meta.estimated_tokens).toBeLessThanOrEqual(budget)
+        expect(kept._meta.estimated_tokens).toBe(
+          estimateTokens({ added: kept.added, removed: kept.removed, changed: kept.changed }),
+        )
+      }
+    }
+  })
+
   it('accounts for commas independently across added, removed, and changed buckets', () => {
     const prev = snapshotOf([
       entry({ fingerprint: 'removed', interactive: false }),
