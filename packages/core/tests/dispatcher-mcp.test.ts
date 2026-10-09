@@ -105,6 +105,105 @@ function envelopeOf(result: CallToolResult): Record<string, unknown> {
 }
 
 describe('dispatcher MCP binding', () => {
+  it('returns a typed error instead of a success that violates the advertised numeric output', async () => {
+    const tool = defineTool({
+      name: 'test_coercion',
+      description: 'Return the wrong wire type.',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ value: z.coerce.number() }),
+      operationType: 'query',
+      handler: async () => makeSuccess({ value: '42' }),
+    })
+    const client = await connectClient([tool])
+    expect((await client.listTools()).tools[0]?.outputSchema).toMatchObject({ type: 'object' })
+    const result = (await client.callTool({
+      name: 'test_coercion',
+      arguments: {},
+    })) as CallToolResult
+    expect(result.isError).toBe(true)
+    expect(result.structuredContent).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+    expect(envelopeOf(result)).toEqual(result.structuredContent)
+  })
+
+  it.each([false, true])(
+    'returns an encodable error for cyclic/bigint results with outputSchema=%s',
+    async (typed) => {
+      const bad = defineTool({
+        name: 'test_bad_json',
+        description: 'Return a JSON-unsafe field.',
+        inputSchema: z.object({ bigint: z.boolean() }),
+        ...(typed ? { outputSchema: z.object({ value: z.string() }) } : {}),
+        operationType: 'query',
+        handler: async (args) => {
+          const extra: Record<string, unknown> = {}
+          extra['value'] = args.bigint ? 1n : extra
+          return makeSuccess({ value: 'typed field', extra })
+        },
+      })
+      const client = await connectClient([bad, echoTool])
+      for (const bigint of [false, true]) {
+        const result = (await client.callTool({
+          name: 'test_bad_json',
+          arguments: { bigint },
+        })) as CallToolResult
+        expect(result.isError).toBe(true)
+        expect(result.structuredContent).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+        expect(envelopeOf(result)).toEqual(result.structuredContent)
+      }
+      expect(
+        envelopeOf(
+          (await client.callTool({
+            name: 'test_echo',
+            arguments: { value: 'still connected' },
+          })) as CallToolResult,
+        ),
+      ).toMatchObject({ ok: true })
+    },
+  )
+
+  it('validates the JSON representation and invokes a result serialization hook only once', async () => {
+    let calls = 0
+    const tool = defineTool({
+      name: 'test_wire',
+      description: 'Exercise the serialized schema.',
+      inputSchema: z.object({ valid: z.boolean() }),
+      outputSchema: z.object({ value: z.object({ label: z.string() }) }),
+      operationType: 'query',
+      handler: async (args) => {
+        const result = makeSuccess({
+          value: {
+            label: 'valid before serialization',
+            toJSON: () => {
+              calls += 1
+              return { label: args.valid ? 'wire value' : 42 }
+            },
+          },
+          additive: 'preserved',
+        })
+        calls = 0 // makeSuccess's token estimate serializes the payload separately.
+        return result
+      },
+    })
+    const client = await connectClient([tool])
+    const valid = (await client.callTool({
+      name: 'test_wire',
+      arguments: { valid: true },
+    })) as CallToolResult
+    expect(calls).toBe(1)
+    expect(valid.structuredContent).toMatchObject({
+      ok: true,
+      value: { label: 'wire value' },
+      additive: 'preserved',
+    })
+    expect(envelopeOf(valid)).toEqual(valid.structuredContent)
+    const invalid = (await client.callTool({
+      name: 'test_wire',
+      arguments: { valid: false },
+    })) as CallToolResult
+    expect(calls).toBe(1)
+    expect(invalid.structuredContent).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+  })
+
   it('advertises and honors output schemas for large successes and errors while retaining JSON text', async () => {
     const typed = defineTool({
       name: 'test_typed',
