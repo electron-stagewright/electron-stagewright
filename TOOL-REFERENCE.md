@@ -799,7 +799,7 @@ Capture the selected renderer surface accessibility tree: interactive elements (
 | `maxEntries` | integer | no | Cap the number of entries returned. Defaults to 2000. |
 | `format` | string | no | Payload encoding. 'json' (default) returns the structured snapshot/diff objects. 'text' returns a compact one-line-per-entry rendering (5-10x fewer tokens): ref, role, quoted name, non-empty value/placeholder, and only NON-default state flags; ~ prefixes recently-changed entries, [-] marks non-targetable landmarks. |
 | `diffFormat` | string | no | Encoding for since:'last' diffs. 'compact' (default) carries only the changed fields per entry; 'full' carries complete prev/curr entries. Ignored when format:'text'. |
-| `budgetTokens` | integer | no | Server-side token cap for a since:'last' diff payload. Lowest-value entries (non-interactive removed/changed first) are dropped until the estimate fits; _meta.truncated_entries reports how many were omitted. |
+| `budgetTokens` | integer | no | Server-side token cap for a since:'last' diff payload: the char/4 estimate of the added/removed/changed arrays (ref_map and _meta are not counted). Lowest-value entries (non-interactive removed/changed first) are dropped until the estimate fits; _meta.truncated_entries reports how many were omitted. |
 
 ### `electron_status`
 

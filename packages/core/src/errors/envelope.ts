@@ -83,6 +83,18 @@ export type ToolResponse<T extends object = Record<string, never>> =
   ErrorResponse | SuccessResponse<T>
 
 /**
+ * Token estimate for a serialized payload of `length` UTF-16 code units — the
+ * char/4 heuristic {@link estimateTokens} applies. Exposed so callers that track
+ * exact serialized lengths (e.g. diff budget truncation) stay in lockstep with it.
+ *
+ * @returns Estimated token count, minimum 1 for a non-empty payload, 0 for an empty one.
+ */
+export function estimateTokensForLength(length: number): number {
+  if (length <= 0) return 0
+  return Math.max(1, Math.ceil(length / 4))
+}
+
+/**
  * Char/4 token estimate. The heuristic is within ~10-20% on English prose for
  * GPT-class and Claude-class tokenizers. Floor at 1 so tiny payloads never report
  * a 0-token cost (which would be misleading for budget tracking).
@@ -108,8 +120,7 @@ export function estimateTokens(payload: unknown): number {
     // Circular references and BigInt throw; fall back to String() for those too.
     text = String(payload)
   }
-  if (text.length === 0) return 0
-  return Math.max(1, Math.ceil(text.length / 4))
+  return estimateTokensForLength(text.length)
 }
 
 /**
