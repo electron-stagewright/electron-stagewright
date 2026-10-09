@@ -430,4 +430,43 @@ describe('dispatch completion owns its evidence and wire result', () => {
     expect(records).toHaveLength(1)
     expect(records[0]?.result).toEqual(result)
   })
+  it.each([
+    ['a non-Unicode escape', /^[a-z\_]+$/, 'snake_case'],
+    ['a regex flag', /^[a-z]+$/i, 'MixedCase'],
+  ] as const)(
+    'accepts a result Zod validates against a pattern with %s',
+    async (_kind, regex, value) => {
+      const { dispatcher } = setup()
+      dispatcher.register(
+        defineTool({
+          name: 'test_pattern',
+          description: 'Return a value constrained by a regex.',
+          inputSchema: z.object({}),
+          outputSchema: z.object({ value: z.string().regex(regex) }),
+          operationType: 'query',
+          handler: async () => makeSuccess({ value }),
+        }),
+      )
+      expect(await dispatcher.dispatch('test_pattern', {})).toMatchObject({ ok: true, value })
+    },
+  )
+
+  it('returns a genuine tool error unchanged when its output contract cannot be compiled', async () => {
+    const { dispatcher } = setup()
+    dispatcher.register(
+      defineTool({
+        name: 'test_contract_error',
+        description: 'Return an error from a tool with an unsupported schema conversion.',
+        inputSchema: z.object({}),
+        outputSchema: z.object({ value: z.string().transform((value) => value.toUpperCase()) }),
+        operationType: 'query',
+        handler: async () => makeError('BAD_ARGUMENT', { message: 'Bad input.' }),
+      }),
+    )
+    expect(await dispatcher.dispatch('test_contract_error', {})).toMatchObject({
+      ok: false,
+      code: 'BAD_ARGUMENT',
+      error: 'Bad input.',
+    })
+  })
 })

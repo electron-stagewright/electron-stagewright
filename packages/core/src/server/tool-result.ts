@@ -15,9 +15,28 @@ import type { Logger } from './logger.js'
 const EMPTY_PAYLOAD_SCHEMA = z.object({})
 const MAX_STRUCTURED_CONTENT_CHARS = 50_000
 
+/** The retained wire text plus the fields MCP encoding reads, captured before observers run. */
+interface PreparedWire {
+  readonly text: string
+  readonly ok: boolean
+  readonly artifactUri: string | undefined
+}
+
+function preparedWire(result: ToolResult, text: string): PreparedWire {
+  const candidate = result.ok ? result['artifact'] : undefined
+  const artifactUri =
+    typeof candidate === 'object' &&
+    candidate !== null &&
+    'uri' in candidate &&
+    typeof candidate.uri === 'string'
+      ? candidate.uri
+      : undefined
+  return { text, ok: result.ok, artifactUri }
+}
+
 /** Validate the actual JSON envelope before recording completion, and reuse its wire snapshot. */
 export class ToolResultCodec {
-  readonly #texts = new WeakMap<ToolResult, string>()
+  readonly #texts = new WeakMap<ToolResult, PreparedWire>()
   readonly #validators = new WeakMap<z.ZodObject, ValidateFunction>()
   #ajv: Ajv2020 | undefined
   readonly #logger: Logger
@@ -56,17 +75,22 @@ export class ToolResultCodec {
         })
         return this.#failure(`${message}.`, startedAt)
       }
-      if (schema !== undefined) {
+      // The error branch of the advertised schema is the same loose envelope Zod just checked, so
+      // only successes need the exact JSON check; a tool's genuine error is never masked by it.
+      if (schema !== undefined && result.ok) {
         let validate = this.#validators.get(schema)
         if (validate === undefined) {
-          // The advertised schema is draft 2020-12. Keep defaults, coercion and removal disabled;
-          // format constraints have already been checked by Zod on the JSON snapshot above.
-          this.#ajv ??= new Ajv2020({ strict: false, validateFormats: false })
+          this.#ajv ??= ToolResultCodec.#createAjv()
           validate = this.#ajv.compile(toolResponseJsonSchema(schema))
           this.#validators.set(schema, validate)
         }
         if (!validate(result)) {
-          this.#logger.warn('Tool result did not match its advertised JSON output schema', { tool })
+          this.#logger.warn('Tool result did not match its advertised JSON output schema', {
+            tool,
+            issues: (validate.errors ?? []).map(
+              (issue) => `${issue.instancePath || '(root)'}: ${issue.message ?? issue.keyword}`,
+            ),
+          })
           return this.#failure('Tool result did not match its declared output schema.', startedAt)
         }
       }
@@ -76,13 +100,25 @@ export class ToolResultCodec {
     }
     // Return the JSON snapshot rather than a handler object with getters or a toJSON hook.
     // Preserve all additive fields, not Zod's parsed/transformed projection.
-    this.#texts.set(result, text)
+    this.#texts.set(result, preparedWire(result, text))
     return result
+  }
+
+  /**
+   * The advertised schema is draft 2020-12. Keep defaults, coercion and removal disabled. Format
+   * and pattern constraints have already been checked by Zod on the same JSON snapshot: Zod's
+   * JSON Schema drops regex flags, and Ajv compiles patterns in Unicode mode, so re-checking them
+   * here would reject values Zod accepts or fail to compile an ordinary non-Unicode regex.
+   */
+  static #createAjv(): Ajv2020 {
+    const ajv = new Ajv2020({ strict: false, validateFormats: false })
+    ajv.removeKeyword('pattern')
+    return ajv
   }
 
   #failure(message: string, startedAt: number): ToolResult {
     const result = makeError('INTERNAL_ERROR', { message, startedAt, now: this.#now })
-    this.#texts.set(result, JSON.stringify(result))
+    this.#texts.set(result, preparedWire(result, JSON.stringify(result)))
     return result
   }
 
@@ -93,19 +129,14 @@ export class ToolResultCodec {
     artifacts?: ArtifactStore,
     supportsResourceLinks = false,
   ): CallToolResult {
-    const text = this.#texts.get(envelope)
-    if (text === undefined) throw new Error('Tool result was not prepared before MCP encoding.')
+    const prepared = this.#texts.get(envelope)
+    if (prepared === undefined) throw new Error('Tool result was not prepared before MCP encoding.')
     // Observers receive the completion snapshot. Encode from the retained text so a faulty
     // observer cannot change the response or reintroduce a serialization failure.
-    const wire = JSON.parse(text) as ToolResult
-    const candidate = wire.ok ? wire['artifact'] : undefined
+    const { text, ok, artifactUri } = prepared
     const descriptor =
-      supportsResourceLinks &&
-      typeof candidate === 'object' &&
-      candidate !== null &&
-      'uri' in candidate &&
-      typeof candidate.uri === 'string'
-        ? artifacts?.describe(candidate.uri)
+      supportsResourceLinks && artifactUri !== undefined
+        ? artifacts?.describe(artifactUri)
         : undefined
     return {
       content: [
@@ -122,10 +153,11 @@ export class ToolResultCodec {
               },
             ]),
       ],
+      // Parse only when the structured copy ships; a huge schema-less payload is not re-parsed.
       ...(hasOutputSchema || text.length <= MAX_STRUCTURED_CONTENT_CHARS
-        ? { structuredContent: wire as Record<string, unknown> }
+        ? { structuredContent: JSON.parse(text) as Record<string, unknown> }
         : {}),
-      isError: !wire.ok,
+      isError: !ok,
     }
   }
 }

@@ -185,6 +185,9 @@ coercion, default insertion or field removal. A missing field is rejected only w
 it required; an optional default is an annotation and need not appear in the result. Additional
 properties remain valid wherever the schema allows them. Use a loose nested object when additional
 fields are part of that declared contract, and construct required fields in the handler.
+Format and pattern keywords are checked by Zod on the same snapshot, because the advertised
+pattern omits regex flags and need not compile as a Unicode expression. Error envelopes are checked
+against the shared envelope only, so an output contract never masks a tool's own error.
 
 The request commits its outcome and closes progress/cancellation observation before dispatch observers
 run. Observers are advisory and must treat records as read-only. MCP text and structured content are
