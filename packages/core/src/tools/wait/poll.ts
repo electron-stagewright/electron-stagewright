@@ -97,6 +97,8 @@ export async function runWait(
 
   const stale = await refFreshnessError(ctx, managed.session, meta, args.ref)
   if (stale !== undefined) return stale
+  // A renderer poll cannot be interrupted once sent, so never start one for a cancelled request.
+  ctx.signal?.throwIfAborted()
 
   try {
     const raw = await withElapsedProgress(
