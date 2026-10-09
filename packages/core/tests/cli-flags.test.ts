@@ -192,8 +192,14 @@ describe('CLI failure classification', () => {
     ['--allow-eval=unknown'],
     ['--demo', '--demo'],
     ['unexpected'],
+    ['doctor', '--help'],
+    ['--version', '--demo'],
   ])('classifies rejected arguments %j as usage failures', (...args) => {
     expect(() => parseCliArgs(args)).toThrow(CliUsageError)
+  })
+
+  it('names a misplaced --help instead of calling it an unknown option', () => {
+    expect(() => parseCliArgs(['doctor', '--help'])).toThrow('--help must be used on its own')
   })
 
   it('retains internal failure stacks and non-Error diagnostics', () => {

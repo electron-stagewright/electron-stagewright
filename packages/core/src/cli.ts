@@ -63,15 +63,16 @@ import { pathToFileURL } from 'node:url'
 
 import { runDoctorChecks } from './doctor.js'
 import type { EvalPolicy } from './server/eval-policy.js'
-import { createConfiguredServer, inspectServerConfiguration } from './server/configuration.js'
+import {
+  CliUsageError,
+  createConfiguredServer,
+  inspectServerConfiguration,
+} from './server/configuration.js'
 import { StderrLogger } from './server/logger.js'
 import { isToolProfile, type ToolProfile } from './tools/index.js'
 import { VERSION } from './version.js'
 
-/** A rejected command line, before any server or standalone command starts. */
-export class CliUsageError extends Error {
-  override readonly name = 'CliUsageError'
-}
+export { CliUsageError }
 
 /** Keep usage recovery concise while retaining existing diagnostics for internal failures. */
 export function formatCliFailure(error: unknown): string {
@@ -294,6 +295,9 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     if (arg === '--json' && command === 'doctor') {
       doctorJson = true
       continue
+    }
+    if (arg === '--help' || arg === '-h' || arg === '--version' || arg === '-V') {
+      throw new CliUsageError(`${arg} must be used on its own`)
     }
     if (arg.startsWith('-')) throw new CliUsageError(`Unknown option: ${arg}`)
     throw new CliUsageError(`Unexpected argument: ${arg}`)

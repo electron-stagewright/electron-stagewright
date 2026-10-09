@@ -3,7 +3,10 @@ import { z } from 'zod'
 
 import { StagewrightError } from '../src/errors/registry.js'
 import type { StagewrightPlugin } from '../src/plugins/types.js'
+import { NOOP_LOGGER } from '../src/server/logger.js'
 import {
+  CliUsageError,
+  createConfiguredServer,
   inspectServerConfiguration,
   type ServerConfigurationInput,
 } from '../src/server/configuration.js'
@@ -153,5 +156,11 @@ describe('inspectServerConfiguration', () => {
       ok: false,
       message: expect.stringContaining('--demo cannot be combined with --app-root'),
     })
+  })
+
+  it('reports the demo and app-root conflict to serve as a usage error', async () => {
+    await expect(
+      createConfiguredServer({ ...BASE_CONFIGURATION, demo: true, appRoot: '/app' }, NOOP_LOGGER),
+    ).rejects.toBeInstanceOf(CliUsageError)
   })
 })

@@ -17,6 +17,14 @@ import type { EvalPolicy } from './eval-policy.js'
 import { type Logger, NOOP_LOGGER } from './logger.js'
 import { createServer, type CreateServerOptions, type StagewrightServer } from './server.js'
 
+/**
+ * A rejected command line (bad flag, value, or flag combination), raised before any server or
+ * standalone command starts. The CLI prints it without a stack, followed by a --help pointer.
+ */
+export class CliUsageError extends Error {
+  override readonly name = 'CliUsageError'
+}
+
 /** CLI-controlled values that determine the server object graph. */
 export interface ServerConfigurationInput {
   readonly demo: boolean
@@ -90,7 +98,7 @@ export async function createConfiguredServer(
   deps: ServerConfigurationDeps = {},
 ): Promise<ConfiguredServer> {
   if (input.demo && input.appRoot !== undefined) {
-    throw new Error(
+    throw new CliUsageError(
       '--demo cannot be combined with --app-root; the packaged demo is outside that root',
     )
   }
