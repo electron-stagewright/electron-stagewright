@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from 'vitest'
 
+import { estimateTokens } from '../src/errors/envelope.js'
+
 import {
   compactDiff,
   diffSnapshots,
@@ -174,6 +176,86 @@ describe('truncateDiffToBudget', () => {
     )
     expect(dropped).toBeGreaterThan(0)
     expect(kept.removed.every((e) => e.ref !== null)).toBe(true)
+  })
+
+  it('does not undercount rounded compact entries at the budget boundary', () => {
+    const prev = snapshotOf(
+      Array.from({ length: 5 }, (_, i) => entry({ fingerprint: `f00${i}`, ref: i, name: 'x' })),
+    )
+    const diff = compactDiff(diffSnapshots(prev, snapshotOf([])))
+    const { diff: kept } = truncateDiffToBudget(diff, 52)
+    expect(kept._meta.estimated_tokens).toBeLessThanOrEqual(52)
+    expect(kept.removed).toHaveLength(2)
+  })
+
+  it('keeps the largest permitted prefix at every full and compact budget boundary', () => {
+    // Different lengths exercise every rounding remainder, array commas, and
+    // the final item in a bucket. All entries share one drop-priority tier.
+    for (let padding = 0; padding < 8; padding++) {
+      const prev = snapshotOf(
+        Array.from({ length: 6 }, (_, i) =>
+          entry({ fingerprint: `f${i}`, ref: i + 1, name: 'x'.repeat(padding) }),
+        ),
+      )
+      const full = diffSnapshots(prev, snapshotOf([]))
+      for (const diff of [full, compactDiff(full)]) {
+        for (let budget = 50; budget < diff._meta.estimated_tokens; budget++) {
+          const { diff: kept } = truncateDiffToBudget(diff, budget)
+          expect(kept._meta.estimated_tokens).toBeLessThanOrEqual(budget)
+          const next = diff.removed[kept.removed.length]
+          if (next !== undefined) {
+            expect(
+              estimateTokens({ added: [], removed: [...kept.removed, next], changed: [] }),
+            ).toBeGreaterThan(budget)
+          }
+        }
+      }
+    }
+  })
+
+  it('never admits a payload whose integer estimate exceeds a fractional budget', () => {
+    for (let padding = 0; padding < 8; padding++) {
+      const prev = snapshotOf(
+        Array.from({ length: 5 }, (_, i) =>
+          entry({ fingerprint: `f${i}`, ref: i + 1, name: 'x'.repeat(padding) }),
+        ),
+      )
+      const diff = compactDiff(diffSnapshots(prev, snapshotOf([])))
+      for (let budget = 20; budget < diff._meta.estimated_tokens; budget += 0.25) {
+        const { diff: kept } = truncateDiffToBudget(diff, budget)
+        expect(kept._meta.estimated_tokens).toBeLessThanOrEqual(budget)
+        expect(kept._meta.estimated_tokens).toBe(
+          estimateTokens({ added: kept.added, removed: kept.removed, changed: kept.changed }),
+        )
+      }
+    }
+  })
+
+  it('accounts for commas independently across added, removed, and changed buckets', () => {
+    const prev = snapshotOf([
+      entry({ fingerprint: 'removed', interactive: false }),
+      entry({ fingerprint: 'changed', ref: 1, value: 'old' }),
+    ])
+    const curr = snapshotOf([
+      entry({ fingerprint: 'changed', ref: 1, value: '日本語 "new"\\value' }),
+      entry({ fingerprint: 'added', ref: 2 }),
+    ])
+    const full = diffSnapshots(prev, curr)
+    for (const diff of [full, compactDiff(full)]) {
+      for (let budget = 50; budget < diff._meta.estimated_tokens; budget++) {
+        const { diff: kept, dropped } = truncateDiffToBudget(diff, budget)
+        expect(kept._meta.estimated_tokens).toBeLessThanOrEqual(budget)
+        expect(kept._meta.estimated_tokens).toBe(
+          estimateTokens({ added: kept.added, removed: kept.removed, changed: kept.changed }),
+        )
+        expect(kept._meta.truncated_entries).toBe(dropped)
+        expect(kept._meta).toMatchObject({
+          entries_added: 1,
+          entries_removed: 1,
+          entries_changed: 1,
+        })
+      }
+    }
   })
 
   it('preserves the original relative order among the kept entries', () => {
