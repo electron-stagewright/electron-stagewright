@@ -12,23 +12,19 @@ export default defineConfig({
     passWithNoTests: false,
     projects: [
       {
+        extends: true,
         test: {
           name: 'unit',
-          globals: false,
-          environment: 'node',
           include: allTests,
           exclude: [...realTests, '**/node_modules/**'],
-          passWithNoTests: false,
         },
       },
       {
+        extends: true,
         test: {
           name: 'real-electron',
-          globals: false,
-          environment: 'node',
           include: realTests,
           fileParallelism: false,
-          passWithNoTests: false,
           env: { STAGEWRIGHT_E2E: '1' },
         },
       },

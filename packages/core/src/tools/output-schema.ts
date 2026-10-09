@@ -32,6 +32,13 @@ export function toolResponseSchema(payload: z.ZodObject) {
   return schema
 }
 
+/** The exact object schema advertised to MCP clients and checked against JSON completion. */
+export function toolResponseJsonSchema(
+  payload: z.ZodObject,
+): { type: 'object' } & Record<string, unknown> {
+  return { ...z.toJSONSchema(toolResponseSchema(payload)), type: 'object' }
+}
+
 /** Readable issues from the envelope branch that matches the result's `ok` flag. */
 export function describeResponseIssues(error: z.ZodError, ok: boolean): string[] {
   return error.issues

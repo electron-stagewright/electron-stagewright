@@ -49,7 +49,7 @@ import {
 import { StagewrightError } from '../errors/registry.js'
 import { runWithSessionContext } from '../errors/session-context.js'
 import type { ArtifactStore } from '../resources/artifacts.js'
-import { describeResponseIssues, toolResponseSchema } from '../tools/output-schema.js'
+import { toolResponseJsonSchema } from '../tools/output-schema.js'
 import type {
   AnyToolDefinition,
   DispatchGuard,
@@ -68,11 +68,13 @@ import {
   NOOP_PROGRESS_REPORTER,
   scopeProgressReporter,
 } from './progress.js'
+import { RequestArtifacts } from './request-artifacts.js'
 import { RequestOperation } from './request-operation.js'
 import type { SessionManager } from './session-manager.js'
 import { SnapshotStore } from './snapshot-store.js'
 import { ServerStatus } from './status.js'
 import { TransportRegistry } from './transport-registry.js'
+import { ToolResultCodec } from './tool-result.js'
 
 /**
  * Re-dispatch depth, carried through the async call chain (ADR-009). A top-level dispatch runs at
@@ -234,62 +236,6 @@ function readSessionId(args: unknown): string | undefined {
   return undefined
 }
 
-/**
- * Above this serialised size (chars), tools without output schemas omit `structuredContent`. The
- * envelope ships BOTH as a text block and as structured content, so the wire carries the payload
- * twice; for a snapshot-sized response that doubles stdio traffic and the client's parse cost for
- * no benefit (a host consuming a huge envelope re-parses the text block just as fast). 50k chars
- * ≈ 12.5k estimated tokens — far above every routine response, so the dual encoding remains for
- * the common case and only genuinely huge payloads drop the duplicate.
- */
-const MAX_STRUCTURED_CONTENT_CHARS = 50_000
-
-/**
- * Serialise a response envelope into the MCP tool-result shape. The envelope is returned BOTH as a
- * JSON text block (for clients that read text, and for backwards compatibility as the spec asks
- * when structured content is present) AND as `structuredContent`, so a 2025-06-18 host can consume
- * the machine-readable envelope (ok/code/retryable/next_actions/_meta) natively without re-parsing
- * — except above {@link MAX_STRUCTURED_CONTENT_CHARS}, where tools without an output schema omit the duplicate copy. A declared output schema
- * always retains structuredContent, including for large results, as required by MCP.
- */
-function toCallToolResult(
-  envelope: ToolResult,
-  hasOutputSchema: boolean,
-  artifacts?: ArtifactStore,
-  supportsResourceLinks = false,
-): CallToolResult {
-  const text = JSON.stringify(envelope)
-  const candidate = envelope.ok ? envelope['artifact'] : undefined
-  const descriptor =
-    supportsResourceLinks &&
-    typeof candidate === 'object' &&
-    candidate !== null &&
-    'uri' in candidate &&
-    typeof candidate.uri === 'string'
-      ? artifacts?.describe(candidate.uri)
-      : undefined
-  return {
-    content: [
-      { type: 'text', text },
-      ...(descriptor === undefined
-        ? []
-        : [
-            {
-              type: 'resource_link' as const,
-              uri: descriptor.uri,
-              name: descriptor.name,
-              mimeType: descriptor.mimeType,
-              size: descriptor.size,
-            },
-          ]),
-    ],
-    ...(hasOutputSchema || text.length <= MAX_STRUCTURED_CONTENT_CHARS
-      ? { structuredContent: envelope as Record<string, unknown> }
-      : {}),
-    isError: !envelope.ok,
-  }
-}
-
 export class Dispatcher {
   readonly #tools = new Map<string, AnyToolDefinition>()
   readonly #artifacts: ArtifactStore | undefined
@@ -298,6 +244,7 @@ export class Dispatcher {
   readonly #snapshots: SnapshotStore
   readonly #status: ServerStatus
   readonly #logger: Logger
+  readonly #resultCodec: ToolResultCodec
   /** The per-target eval authorization policy (ADR-014); normalised from the option. */
   readonly #evalPolicy: EvalPolicy
   readonly #screenshotDir?: string
@@ -342,6 +289,7 @@ export class Dispatcher {
     if (opts.appRoot !== undefined) this.#appRoot = path.resolve(opts.appRoot)
     if (opts.launchDefaultMain !== undefined) this.#launchDefaultMain = opts.launchDefaultMain
     this.#now = opts.now ?? Date.now
+    this.#resultCodec = new ToolResultCodec(this.#logger, this.#now)
     this.#status = opts.status ?? new ServerStatus({ now: this.#now })
     this.#sessions.onSessionEnd((event) => {
       this.#status.clearSession(event.sessionId)
@@ -506,10 +454,7 @@ export class Dispatcher {
       ...(def.outputSchema === undefined
         ? {}
         : {
-            outputJsonSchema: {
-              type: 'object',
-              ...z.toJSONSchema(toolResponseSchema(def.outputSchema)),
-            },
+            outputJsonSchema: toolResponseJsonSchema(def.outputSchema),
           }),
       ...(def.requiresEvalFlag === true ? { requiresEvalFlag: true } : {}),
       ...(def.evalTarget !== undefined ? { evalTarget: def.evalTarget } : {}),
@@ -531,10 +476,7 @@ export class Dispatcher {
       ...(def.outputSchema === undefined
         ? {}
         : {
-            outputSchema: {
-              ...z.toJSONSchema(toolResponseSchema(def.outputSchema)),
-              type: 'object' as const,
-            },
+            outputSchema: toolResponseJsonSchema(def.outputSchema),
           }),
       annotations: annotationsFor(def),
     }))
@@ -691,24 +633,21 @@ export class Dispatcher {
     const operation = new RequestOperation(options.signal, this.#operationTimeoutMs, this.#logger)
     const progress = scopeProgressReporter(options.progress ?? NOOP_PROGRESS_REPORTER)
     operation.onCancel(() => progress.close())
-    const artifacts = this.#artifacts
+    const artifacts =
+      this.#artifacts === undefined ? undefined : new RequestArtifacts(this.#artifacts, operation)
+    const commit = (result: ToolResult): void => {
+      // Serialization and output refinements may run user code. Re-check cancellation at the
+      // commit boundary so an aborted snapshot cannot become a late success. Error completion
+      // must still be allowed through after the surrounding catch maps the cancellation.
+      if (result.ok) operation.signal.throwIfAborted()
+      artifacts?.finish(result.ok)
+      progress.close()
+      operation.close()
+    }
     const sessionId = readSessionId(args)
     const ctx: ToolContext = {
       sessions: this.#sessions,
-      ...(artifacts === undefined
-        ? {}
-        : {
-            artifacts: {
-              maxArtifactBytes: artifacts.maxArtifactBytes,
-              publish(bytes, mimeType, artifactName) {
-                operation.signal.throwIfAborted()
-                const publication = artifacts.publish(bytes, mimeType, artifactName)
-                if ('artifact' in publication)
-                  operation.onCancel(() => artifacts.remove(publication.artifact.uri))
-                return publication
-              },
-            },
-          }),
+      ...(artifacts === undefined ? {} : { artifacts }),
       transports: this.#transports,
       snapshots: this.#snapshots,
       status: this.#status,
@@ -741,21 +680,20 @@ export class Dispatcher {
         try {
           const result = await operation.run(() => def.handler(args, ctx))
           operation.signal.throwIfAborted()
-          // Commit completion before notifying observers; a later client abort must not roll it back.
-          operation.close()
           this.#warnIfSlow(name, this.#now() - startedAt)
-          return this.#complete(name, args, result, startedAt)
+          return this.#complete(name, args, result, startedAt, commit)
         } catch (err) {
           this.#warnIfSlow(name, this.#now() - startedAt)
-          return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
+          return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt, commit)
         }
       })
     } catch (err) {
       // Belt-and-braces: runWithSessionContext itself should never throw (the inner catch handles
       // handler throws), but if it did, still return an envelope rather than escaping to the transport.
       this.#warnIfSlow(name, this.#now() - startedAt)
-      return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
+      return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt, commit)
     } finally {
+      artifacts?.finish(false)
       progress.close()
       operation.close()
     }
@@ -767,25 +705,16 @@ export class Dispatcher {
    * outcome, so observers see ALL calls — success, validation failure, or thrown-and-mapped —
    * exactly once. A throwing observer is caught and logged; it never affects the agent result.
    */
-  #complete(tool: string, args: unknown, result: ToolResult, startedAt: number): ToolResult {
-    const schema = this.#tools.get(tool)?.outputSchema
-    const parsed = schema === undefined ? undefined : toolResponseSchema(schema).safeParse(result)
-    if (parsed?.success === false) {
-      this.#logger.warn('Tool result did not match its declared output schema', {
-        tool,
-        issues: describeResponseIssues(parsed.error, result.ok),
-      })
-      // The agent never receives this result, so its portable evidence must not hold capacity.
-      const artifact = result.ok ? result['artifact'] : undefined
-      if (typeof artifact === 'object' && artifact !== null && 'uri' in artifact) {
-        if (typeof artifact.uri === 'string') this.#artifacts?.remove(artifact.uri)
-      }
-      result = makeError('INTERNAL_ERROR', {
-        message: 'Tool result did not match its declared output schema.',
-        startedAt,
-        now: this.#now,
-      })
-    }
+  #complete(
+    tool: string,
+    args: unknown,
+    result: ToolResult,
+    startedAt: number,
+    commit?: (result: ToolResult) => void,
+  ): ToolResult {
+    result = this.#resultCodec.prepare(tool, result, this.#tools.get(tool)?.outputSchema, startedAt)
+    // Commit the validated wire outcome before observers; their cancellation cannot roll it back.
+    commit?.(result)
     const finishedAt = this.#now()
     // Only registered definitions are safe to echo through a future status response. An unknown
     // tool name is agent-controlled input, so retain its stable failure code without reflecting
@@ -856,7 +785,7 @@ export class Dispatcher {
             progress,
             signal: extra.signal,
           })
-          return toCallToolResult(
+          return this.#resultCodec.toMcp(
             result,
             this.#tools.get(request.params.name)?.outputSchema !== undefined,
             this.#artifacts,

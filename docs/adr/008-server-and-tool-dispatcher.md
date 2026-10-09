@@ -164,3 +164,45 @@ encoding for unusually large typed responses; image and trace bytes are fetched 
 Clients negotiating a protocol older than 2025-06-18 receive text-only tool content, with
 `artifact.uri` still available in the JSON envelope for `resources/read`. The server observes the
 SDK initialization response to gate `resource_link` blocks without replacing the SDK handshake.
+
+## Dispatch completion and evidence ownership
+
+Completion has two internal collaborators with separate responsibilities:
+
+- `ToolResultCodec` serializes a handler result into a JSON snapshot, validates that snapshot against
+  the shared envelope and any declared success schema, and retains the text for MCP encoding.
+- `RequestArtifacts` records every publication made through that dispatch's producer capability. A
+  valid success commits its publications; any failed outcome releases them, including handler throws,
+  returned errors, cancellation, timeout, schema violations and JSON serialization failures.
+
+Validation precedes status recording and observer notification. A circular value, `BigInt` or throwing
+serialization hook becomes `INTERNAL_ERROR` in the ordinary envelope rather than a later JSON-RPC
+encoding failure after observers have recorded success. Declared schemas validate the representation
+that will actually reach the client, including any `toJSON` conversion. Additional JSON fields remain
+intact; the dispatcher does not replace the result with Zod's transformed projection.
+The JSON snapshot must also satisfy the exact advertised draft-2020-12 schema, checked without
+coercion, default insertion or field removal. A missing field is rejected only when that schema marks
+it required; an optional default is an annotation and need not appear in the result. Additional
+properties remain valid wherever the schema allows them. Use a loose nested object when additional
+fields are part of that declared contract, and construct required fields in the handler.
+Format and pattern keywords are checked by Zod on the same snapshot, because the advertised
+pattern omits regex flags and need not compile as a Unicode expression. Error envelopes are checked
+against the shared envelope only, so an output contract never masks a tool's own error.
+
+The request commits its outcome and closes progress/cancellation observation before dispatch observers
+run. Observers are advisory and must treat records as read-only. MCP text and structured content are
+built from the retained JSON snapshot, so an observer cannot introduce a second serialization failure
+or make those two representations disagree.
+
+Evidence cleanup uses the request's own publication set, never a URI supplied in its result. Failed
+requests cannot revoke another concurrent request's resource or a previously committed resource.
+Completed nested dispatches retain their own publication lifetime if a parent later fails; this is
+consistent with the existing rule that completed nested calls are not rolled back. After completion,
+the request's publisher returns `artifact_unavailable: "closed"`; cancellation still throws the
+request's cancellation reason before further work.
+
+This adds JSON snapshot construction to direct dispatch completion. It makes no latency improvement
+claim. Tool names, discovery schemas, profile membership, portable byte/count/TTL limits and the
+50,000-character structured-content rule are unchanged. Ordinary tests and in-memory MCP tests cover
+the completion contract; actual Electron clients and native framework qualification remain separate
+validation stages.

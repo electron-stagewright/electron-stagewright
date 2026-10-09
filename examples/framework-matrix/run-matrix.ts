@@ -23,14 +23,24 @@ import { qualifyMatrix, writeMatrixReport } from './matrix.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
-/** The fixtures in the matrix. Add a row + a `fixtures/<name>/` directory to extend it. */
 const REPORT_PATH =
   process.env['STAGEWRIGHT_MATRIX_REPORT'] ??
   path.join(HERE, '../../output/framework-matrix/results.json')
-const SOURCE_SHA =
-  process.env['GITHUB_SHA'] ??
-  execFileSync('git', ['rev-parse', 'HEAD'], { cwd: HERE, encoding: 'utf8' }).trim()
 
+/** Resolve the evidence SHA without letting a missing git checkout bypass the crash report. */
+function resolveSourceSha(): string {
+  const fromEnvironment = process.env['GITHUB_SHA']
+  if (fromEnvironment) return fromEnvironment
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: HERE, encoding: 'utf8' }).trim()
+  } catch {
+    return 'unknown'
+  }
+}
+
+const SOURCE_SHA = resolveSourceSha()
+
+/** The fixtures in the matrix. Add a row + a `fixtures/<name>/` directory to extend it. */
 const FIXTURES: ReadonlyArray<FrameworkFixture> = [
   {
     name: 'vanilla',
