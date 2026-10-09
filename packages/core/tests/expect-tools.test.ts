@@ -103,6 +103,79 @@ function recordingProgress(): {
   }
 }
 
+describe('role count cancellation', () => {
+  it('does not walk again after cancellation during the poll interval', async () => {
+    vi.useFakeTimers()
+    try {
+      const evaluate = vi.fn(canned(snap('<main></main>')))
+      const { dispatcher } = setup({ evaluate })
+      const controller = new AbortController()
+      const pending = dispatcher.dispatch(
+        'electron_expect_count',
+        { role: 'button', equals: 1, timeoutMs: 1000 },
+        { signal: controller.signal },
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      expect(evaluate).toHaveBeenCalledTimes(1)
+      controller.abort()
+      await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(evaluate).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reconciles and stores a walk that was already applied when cancellation arrives', async () => {
+    let finish!: (value: unknown) => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const bodies: string[] = []
+    const evaluate = vi.fn<FakeEvaluate>((_target, body) => {
+      bodies.push(body)
+      if (body === 'RETAG') return Promise.resolve(1)
+      entered()
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    const { dispatcher, snapshots, session } = setup({ evaluate })
+    const surface = await session.activeSurface()
+    const prev = snap('<button>Save</button>')
+    snapshots.set('sess', prev, surface.id)
+    const savedRef = prev.entries.find((entry) => entry.name === 'Save')?.ref
+    expect(savedRef).toBe(1)
+    const controller = new AbortController()
+    const pending = dispatcher.dispatch(
+      'electron_expect_count',
+      { role: 'button', equals: 1, timeoutMs: 1000 },
+      { signal: controller.signal },
+    )
+    await started
+    controller.abort()
+    await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
+    // The walker has already cleared and renumbered the DOM: "New" now carries ref 1.
+    const renumbered = snap('<button>New</button><button>Save</button>')
+    finish({
+      ...renumbered,
+      meta: { ...renumbered.meta, navigation_started_at_ms: prev.meta.navigation_started_at_ms },
+    })
+    await vi.waitFor(() => {
+      expect(bodies).toContain('RETAG')
+      expect(snapshots.get('sess', surface.id)?.entries.some((entry) => entry.name === 'New')).toBe(
+        true,
+      )
+    })
+    const stored = snapshots.get('sess', surface.id)
+    expect(stored?.entries.find((entry) => entry.name === 'Save')?.ref).toBe(savedRef)
+    expect(stored?.entries.find((entry) => entry.name === 'New')?.ref).not.toBe(savedRef)
+    expect(bodies.filter((body) => body === 'WALK')).toHaveLength(1)
+  })
+})
+
 describe('electron_expect_text', () => {
   it('returns matched with the observed value when the predicate holds', async () => {
     const { dispatcher } = setup({ evaluate: canned({ satisfied: true, actual: 'Welcome back' }) })

@@ -13,6 +13,7 @@ import { withElapsedProgress } from '../../server/progress.js'
 import { sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { MAX_WAIT_TIMEOUT_MS, clampWaitTimeout } from './poll.js'
+import { sleep } from './sleep.js'
 
 /** `electron_wait` — sleep `ms` milliseconds (clamped), then resolve. */
 export const waitTool: AnyToolDefinition = defineTool({
@@ -39,7 +40,7 @@ export const waitTool: AnyToolDefinition = defineTool({
         message: 'Waiting for fixed duration',
         now: ctx.now,
       },
-      () => new Promise((resolve) => setTimeout(resolve, ms)),
+      () => sleep(ms, ctx.signal),
     )
     return makeSuccess({ session_id: managed.id, waited_ms: ms }, meta)
   },
