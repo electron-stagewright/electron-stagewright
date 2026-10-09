@@ -244,6 +244,26 @@ describe('electron_wait_for_selector', () => {
     expect(res.code).toBe('BAD_ARGUMENT')
   })
 
+  it('does not start a renderer poll once the request is cancelled', async () => {
+    const cap = capturing({ satisfied: true, state: 'visible' })
+    const { dispatcher, session } = setup({ evaluate: cap.evaluate })
+    const controller = new AbortController()
+    const activeSurface = session.activeSurface.bind(session)
+    // Cancel while the ref-freshness guard is resolving the surface, just before the poll.
+    session.activeSurface = async () => {
+      controller.abort()
+      return activeSurface()
+    }
+    const res = await dispatcher.dispatch(
+      'electron_wait_for_selector',
+      { ref: 2 },
+      { signal: controller.signal },
+    )
+    expect(res).toMatchObject({ ok: false, code: 'OPERATION_CANCELLED' })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(cap.calls).toEqual([])
+  })
+
   it('guards stale refs before absence can satisfy hidden/detached waits', async () => {
     const cap = capturing({ satisfied: true, state: 'hidden' })
     const { dispatcher, snapshots } = setup({ evaluate: cap.evaluate })
