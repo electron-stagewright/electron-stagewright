@@ -9,7 +9,6 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     const timer = setTimeout(finish, ms)
     const cancel = (): void => {
       clearTimeout(timer)
-      signal?.removeEventListener('abort', cancel)
       reject(signal?.reason)
     }
     signal?.addEventListener('abort', cancel, { once: true })
