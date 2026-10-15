@@ -154,6 +154,7 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       // diff stays accurate even if this call (or the previous one) filtered.
       const { prev, curr, comparable, reloaded } = await ctx.snapshots.withRefLock(
         managed.id,
+        surface.id,
         async () => {
           const baseline = ctx.snapshots.get(managed.id, surface.id)
           const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})

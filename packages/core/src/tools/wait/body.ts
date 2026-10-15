@@ -12,23 +12,43 @@
  * - `{ satisfied: false, invalid_selector: true, error }` — malformed CSS selector.
  * - `{ satisfied: false, missing_target: true }` — a selector-targeted event wait
  *   whose target element is not present.
+ * - `{ satisfied: false, generation_changed: true }` — a ref poll pinned to
+ *   `arg.walkGeneration` saw a walk or retag rewrite the ref tags, so it stopped
+ *   before resolving its target against them.
  *
  * @module
  */
 
-import { TARGET_RESOLVER_FN } from '../../snapshot/resolve-target.js'
+import { TARGET_RESOLVER_FN, WALK_GENERATION_GLOBAL } from '../../snapshot/resolve-target.js'
+
+/** Stop a ref poll pinned to `arg.walkGeneration` once a walk or retag has moved past it. */
+export const GENERATION_GUARD = `if (typeof arg.walkGeneration === 'number' && (globalThis.${WALK_GENERATION_GLOBAL} ?? 0) !== arg.walkGeneration) return { satisfied: false, generation_changed: true };`
 
 /** Shared loop preamble: read a finite, non-negative `timeoutMs` and start the clock. */
 export const POLL_PREAMBLE = `
 const timeoutMs =
   typeof arg.timeoutMs === 'number' && Number.isFinite(arg.timeoutMs) ? Math.max(0, arg.timeoutMs) : 0;
-const startedAt = Date.now();`
+const startedAt = Date.now();
+${GENERATION_GUARD}`
 
 /** Shared loop tail: sleep up to 50ms, or bail when the budget is exhausted. */
 export function pollTail(timedOutReturn: string): string {
   return `  const remaining = timeoutMs - (Date.now() - startedAt);
   if (remaining <= 0) return ${timedOutReturn};
-  await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));`
+  await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));
+  ${GENERATION_GUARD}`
+}
+
+/**
+ * Wrap a poll body so its result also reports the walk generation it started under. Ref waits
+ * run this single check under the ref lock, then pin the remaining poll to that generation.
+ */
+export function withWalkGeneration(body: string): string {
+  return `const walkGeneration = globalThis.${WALK_GENERATION_GLOBAL} ?? 0;
+const result = await (async () => {
+${body}
+})();
+return result !== null && typeof result === 'object' ? { ...result, walk_generation: walkGeneration } : result;`
 }
 
 /**
@@ -108,6 +128,7 @@ const eventName = String(arg.eventName);
 const selector = (typeof arg.selector === 'string' && arg.selector.length > 0) ? arg.selector : null;
 const timeoutMs =
   typeof arg.timeoutMs === 'number' && Number.isFinite(arg.timeoutMs) ? Math.max(0, arg.timeoutMs) : 0;
+${GENERATION_GUARD}
 let target;
 if (selector !== null) {
   try {

@@ -77,7 +77,7 @@ export async function runTargetedInteraction(
   assertCapability(managed.transport, 'supportsInteraction')
 
   try {
-    const run = await withFreshRefs(ctx, managed.session, managed.id, [args.ref], () => {
+    const run = await withFreshRefs(ctx, managed.session, managed.id, [args], () => {
       ctx.signal?.throwIfAborted()
       return perform(managed.session, selector, opts)
     })
@@ -119,7 +119,7 @@ export async function runDragInteraction(ctx: ToolContext, args: DragArgs): Prom
   assertCapability(managed.transport, 'supportsInteraction')
 
   try {
-    const refs = [args.ref, args.targetRef]
+    const refs = [args, { ref: args.targetRef, selector: args.targetSelector }]
     const run = await withFreshRefs(ctx, managed.session, managed.id, refs, () => {
       ctx.signal?.throwIfAborted()
       return managed.session.dragTo(source, target, resolveActionOptions(args))
@@ -158,7 +158,7 @@ export async function runInteraction(
   assertCapability(managed.transport, 'supportsInteraction')
 
   try {
-    const run = await withFreshRefs(ctx, managed.session, managed.id, [args.ref], () => {
+    const run = await withFreshRefs(ctx, managed.session, managed.id, [args], () => {
       ctx.signal?.throwIfAborted()
       return perform(managed.session, meta)
     })

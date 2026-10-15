@@ -84,6 +84,7 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
       // on ref numbers and the DOM tags stay consistent.
       const { curr: snapshot, reloaded } = await ctx.snapshots.withRefLock(
         managed.id,
+        surface.id,
         async () =>
           reconcileRetagAndStore({
             session: managed.session,

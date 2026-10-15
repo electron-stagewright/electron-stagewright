@@ -10,7 +10,9 @@ import { makeExpectCountTool } from '../src/tools/expect/count.js'
 import { clickTool } from '../src/tools/interaction/pointer.js'
 import { getTextTool } from '../src/tools/read/value.js'
 import { makeFindTool } from '../src/tools/snapshot/find.js'
+import { buildRetagBody } from '../src/tools/snapshot/inject.js'
 import { makeSnapshotTool } from '../src/tools/snapshot/snapshot.js'
+import { buildWaitForSelectorBody, withWalkGeneration } from '../src/tools/wait/body.js'
 import { waitForSelectorTool } from '../src/tools/wait/selector.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
@@ -83,9 +85,11 @@ function fakeRenderer(
   }
 }
 
-async function setup(renderer: ReturnType<typeof fakeRenderer>) {
+async function setup(
+  renderer: ReturnType<typeof fakeRenderer>,
+  snapshots: SnapshotStore = new SnapshotStore(),
+) {
   const sessions = new SessionManager()
-  const snapshots = new SnapshotStore()
   const session = new FakeSession({ id: 'sess', evaluate: renderer.evaluate })
   const clicked: (string | undefined)[] = []
   session.click = async (selector) => {
@@ -97,6 +101,7 @@ async function setup(renderer: ReturnType<typeof fakeRenderer>) {
   dispatcher.register(makeSnapshotTool({ loadBundle: () => '' }))
   dispatcher.register(clickTool)
   dispatcher.register(getTextTool)
+  dispatcher.register(waitForSelectorTool)
   const surface = await session.activeSurface()
   // The agent's baseline: A=1, B=2, matching the renderer's current tags.
   snapshots.set('sess', snap('<button>A</button><button>B</button>'), surface.id)
@@ -211,19 +216,20 @@ describe('ref walk serialization', () => {
     const store = new SnapshotStore()
     const holder = deferred()
     const ran: string[] = []
-    const first = store.withRefLock('sess', async () => {
+    const first = store.withRefLock('sess', 'main', async () => {
       ran.push('first')
       await holder.promise
     })
     const controller = new AbortController()
     const queued = store.withRefLock(
       'sess',
+      'main',
       async () => {
         ran.push('cancelled')
       },
       controller.signal,
     )
-    const third = store.withRefLock('sess', async () => {
+    const third = store.withRefLock('sess', 'main', async () => {
       ran.push('third')
     })
     controller.abort(new Error('cancelled'))
@@ -254,8 +260,9 @@ describe('ref walk serialization', () => {
     const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
     dispatcher.register(makeFindTool({ loadBundle: () => '' }))
     dispatcher.register(getTextTool)
+    const surface = await session.activeSurface()
     const holder = deferred()
-    const held = snapshots.withRefLock('sess', () => holder.promise)
+    const held = snapshots.withRefLock('sess', surface.id, () => holder.promise)
 
     const pending = dispatcher.dispatch(tool, args)
     for (let i = 0; i < 4; i++) await flush()
@@ -304,7 +311,7 @@ describe('ref walk serialization', () => {
     const surface = await session.activeSurface()
     snapshots.set('sess', snap('<button>A</button>'), surface.id)
     const holder = deferred()
-    const held = snapshots.withRefLock('sess', () => holder.promise)
+    const held = snapshots.withRefLock('sess', surface.id, () => holder.promise)
 
     const waiting = dispatcher.dispatch('electron_wait_for_selector', { ref: 1, state: 'attached' })
     for (let i = 0; i < 4; i++) await flush()
@@ -313,5 +320,178 @@ describe('ref walk serialization', () => {
     await held
     expect(await waiting).toMatchObject({ ok: true })
     expect(polls).toBe(1)
+  })
+
+  it('lets a parallel ref click satisfy a pending ref wait', async () => {
+    const sessions = new SessionManager()
+    const snapshots = new SnapshotStore()
+    const clicked = deferred()
+    let isClicked = false
+    const polled = deferred()
+    const session = new FakeSession({
+      id: 'sess',
+      evaluate: async (_target, _body, arg) => {
+        const poll = arg as { timeoutMs: number; walkGeneration?: number }
+        if (poll.walkGeneration === undefined && poll.timeoutMs === 0) {
+          return { satisfied: isClicked, state: 'detached', walk_generation: 0 }
+        }
+        polled.resolve()
+        await Promise.race([clicked.promise, new Promise((resolve) => setTimeout(resolve, 200))])
+        return { satisfied: isClicked, state: 'detached' }
+      },
+    })
+    session.click = async () => {
+      isClicked = true
+      clicked.resolve()
+    }
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
+    dispatcher.register(waitForSelectorTool)
+    dispatcher.register(clickTool)
+    const surface = await session.activeSurface()
+    snapshots.set('sess', snap('<button>A</button>'), surface.id)
+
+    const waiting = dispatcher.dispatch('electron_wait_for_selector', {
+      ref: 1,
+      state: 'detached',
+      timeoutMs: 1000,
+    })
+    await polled.promise
+    expect(await dispatcher.dispatch('electron_click', { ref: 1 })).toMatchObject({ ok: true })
+    expect(await waiting).toMatchObject({ ok: true, state: 'detached' })
+  })
+
+  it('resumes a ref wait under the lock after a walk changes the generation', async () => {
+    const sessions = new SessionManager()
+    const snapshots = new SnapshotStore()
+    const polls: { timeoutMs: number; walkGeneration?: number }[] = []
+    const walk = deferred()
+    let held: Promise<void> | undefined
+    let generation = 0
+    const session = new FakeSession({
+      id: 'sess',
+      evaluate: async (_target, _body, arg) => {
+        const poll = arg as { timeoutMs: number; walkGeneration?: number }
+        polls.push(poll)
+        if (poll.walkGeneration === undefined) {
+          return { satisfied: generation > 0, walk_generation: generation }
+        }
+        // A walk takes the lock and bumps the generation while this poll is pending.
+        held = snapshots.withRefLock('sess', surface.id, () => walk.promise)
+        generation++
+        return { satisfied: false, generation_changed: true }
+      },
+    })
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
+    dispatcher.register(waitForSelectorTool)
+    const surface = await session.activeSurface()
+    snapshots.set('sess', snap('<button>A</button>'), surface.id)
+
+    const waiting = dispatcher.dispatch('electron_wait_for_selector', {
+      ref: 1,
+      state: 'attached',
+      timeoutMs: 1000,
+    })
+    for (let i = 0; i < 6; i++) await flush()
+    expect(polls).toHaveLength(2)
+    expect(polls[1]).toMatchObject({ walkGeneration: 0 })
+    walk.resolve()
+    await held
+    expect(await waiting).toMatchObject({ ok: true })
+    expect(polls).toHaveLength(3)
+    expect(polls[2]).toMatchObject({ timeoutMs: 0 })
+  })
+
+  it('holds a canonical ref selector until an orphaned walk restores the stable tags', async () => {
+    const orphanWalk = deferred()
+    const renderer = fakeRenderer([orphanWalk.promise])
+    const { dispatcher, clicked } = await setup(renderer)
+    await orphanRoleCount(dispatcher, renderer)
+
+    const clicking = dispatcher.dispatch('electron_click', { selector: '[data-sw-ref="1"]' })
+    await flush()
+    expect(clicked).toEqual([])
+    orphanWalk.resolve()
+
+    expect(await clicking).toMatchObject({ ok: true })
+    expect(clicked).toEqual(['A'])
+  })
+
+  it('fails queued ref targets with RENDERER_BUSY while a hung walk holds the lock', async () => {
+    const hungWalk = deferred()
+    const renderer = fakeRenderer([hungWalk.promise])
+    const { dispatcher, clicked } = await setup(
+      renderer,
+      new SnapshotStore({ refLockBudgetMs: 20 }),
+    )
+    await orphanRoleCount(dispatcher, renderer)
+
+    expect(await dispatcher.dispatch('electron_click', { ref: 1 })).toMatchObject({
+      ok: false,
+      code: 'RENDERER_BUSY',
+      retryable: true,
+    })
+    expect(await dispatcher.dispatch('electron_snapshot', {})).toMatchObject({
+      ok: false,
+      code: 'RENDERER_BUSY',
+    })
+    expect(clicked).toEqual([])
+    // The hung holder keeps the lock: its walk order is still on the DOM.
+    expect(renderer.tags.get('B')).toBe(1)
+
+    hungWalk.resolve()
+    for (let i = 0; i < 6; i++) await flush()
+    expect(await dispatcher.dispatch('electron_click', { ref: 1 })).toMatchObject({ ok: true })
+    expect(clicked).toEqual(['A'])
+  })
+
+  it('runs walks on two surfaces of one session concurrently', async () => {
+    const sessions = new SessionManager()
+    const snapshots = new SnapshotStore()
+    const capabilities = { snapshot: true, interaction: true, rendererEval: true }
+    const firstWalk = deferred()
+    let walks = 0
+    const session = new FakeSession({
+      id: 'sess',
+      surfaces: [
+        { id: 'main', kind: 'window', active: true, capabilities },
+        { id: 'side', kind: 'window', active: false, capabilities },
+      ],
+      evaluate: async () => {
+        walks++
+        if (walks === 1) await firstWalk.promise
+        return snap('<button>A</button>')
+      },
+    })
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
+    dispatcher.register(makeSnapshotTool({ loadBundle: () => '' }))
+
+    const first = dispatcher.dispatch('electron_snapshot', {})
+    for (let i = 0; i < 4; i++) await flush()
+    expect(walks).toBe(1)
+    await session.activateSurface('side')
+    const blocked = new Promise((resolve) => setTimeout(() => resolve('blocked'), 200))
+    expect(
+      await Promise.race([dispatcher.dispatch('electron_snapshot', {}), blocked]),
+    ).toMatchObject({ ok: true })
+    firstWalk.resolve()
+    expect(await first).toMatchObject({ ok: true })
+  })
+
+  it('stops a pinned renderer poll once a retag moves the walk generation', async () => {
+    const dom = new JSDOM('<button data-sw-ref="1">A</button>', { runScripts: 'outside-only' })
+    const run = (body: string, arg: unknown): Promise<unknown> =>
+      (dom.window.eval(`(async (arg) => { ${body} })`) as (arg: unknown) => Promise<unknown>)(arg)
+    const selector = '[data-sw-ref="1"]'
+    const body = buildWaitForSelectorBody()
+
+    const check = await run(withWalkGeneration(body), { selector, state: 'detached', timeoutMs: 0 })
+    expect(check).toMatchObject({ satisfied: false, walk_generation: 0 })
+    const polling = run(body, { selector, state: 'detached', timeoutMs: 1000, walkGeneration: 0 })
+    await run(buildRetagBody(), [{ from: 1, to: 2 }])
+    // Tag 1 is gone after the retag, which would satisfy "detached" if the poll resolved it.
+    expect(await polling).toEqual({ satisfied: false, generation_changed: true })
   })
 })
