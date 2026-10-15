@@ -40,7 +40,7 @@ describe('reviewed real-runtime inventory', () => {
         .map(({ path: file, tests }) => ({ path: file, tests }))
         .sort((a, b) => a.path.localeCompare(b.path)),
     )
-    expect(inventory).toHaveLength(24)
+    expect(inventory).toHaveLength(25)
   })
 
   it('fails if discovery or opt-in silently leaves every test pending', () => {

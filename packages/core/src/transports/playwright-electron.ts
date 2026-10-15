@@ -74,6 +74,7 @@ import {
   TYPE_EFFECT_SETTLE_MS,
   buildScrollIntoViewBody,
 } from './playwright-electron-bodies.js'
+import { originRelation } from './surface-origin.js'
 import type {
   AttachOptions,
   ClickOptions,
@@ -2253,22 +2254,6 @@ class PlaywrightSession implements TransportSession {
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-/** Describe a child frame's origin relative to its immediate parent without treating file/data as same-origin. */
-function originRelation(
-  parentUrl: string | undefined,
-  childUrl: string,
-): 'same-origin' | 'cross-origin' | 'opaque' {
-  if (parentUrl === undefined) return 'opaque'
-  try {
-    const parent = new URL(parentUrl)
-    const child = new URL(childUrl)
-    if (parent.origin === 'null' || child.origin === 'null') return 'opaque'
-    return parent.origin === child.origin ? 'same-origin' : 'cross-origin'
-  } catch {
-    return 'opaque'
-  }
 }
 
 export class PlaywrightElectronTransport implements ITransport {

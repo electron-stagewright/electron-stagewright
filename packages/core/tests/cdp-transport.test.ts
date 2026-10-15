@@ -115,12 +115,13 @@ describe('CDPTransport.attach', () => {
     ])
   })
 
-  it('exposes the selected page as the default renderer surface without claiming hierarchy targeting', async () => {
+  it('exposes the selected page as the default renderer surface under an opaque id', async () => {
     const { transport } = setup()
     const session = await transport.attach({ port: 9222 })
 
-    await expect(session.activeSurface()).resolves.toEqual({
-      id: 'T1',
+    const active = await session.activeSurface()
+    expect(active).toEqual({
+      id: expect.stringMatching(new RegExp(`^${session.id}-surface-\\d+$`)),
       kind: 'other',
       title: 'Main',
       url: 'app://index.html',
@@ -131,10 +132,7 @@ describe('CDPTransport.attach', () => {
         rendererEval: true,
       },
     })
-    await expect(session.surfacesList()).rejects.toMatchObject({
-      code: 'TRANSPORT_UNSUPPORTED',
-    })
-    expect(transport.capabilities.supportsSurfaceTargeting).toBe(false)
+    await expect(session.surfacesList()).resolves.toEqual([active])
   })
 
   it('formats IPv6 loopback hosts correctly for port-based discovery', async () => {

@@ -141,12 +141,13 @@ loopback `host`) or a full loopback `cdpUrl`. Two notes:
 
 - A `pid` alone is **not** attachable over CDP — but passing it alongside `port` lets a later
   `electron_stop` escalate to SIGKILL if the app ignores the graceful close.
-- The CDP transport supports snapshot/find against its selected root page, renderer evaluation,
-  reads, observation (console/dialogs), screenshots, and the core interaction surface. Explicit
-  iframe/webview/WebContentsView hierarchy discovery remains unavailable, so
-  `electron_surfaces_list` reports `TRANSPORT_UNSUPPORTED` on CDP. Pointer and keyboard input are
-  synthesised through the protocol, so there is no Playwright-style actionability auto-wait. On
-  macOS, key chords carry Chromium's editing commands, so `Meta+A`, `Meta+C`/`V`/`X`, `Meta+Z`,
+- The CDP transport supports snapshot/find, renderer evaluation, reads, observation
+  (console/dialogs), screenshots, and the core interaction surface on the selected renderer
+  surface. `electron_surfaces_list` and `electron_switch_surface` reach iframes (same- and
+  cross-origin), webview guests and `WebContentsView` contents. CDP cannot tell a
+  `BrowserWindow` from a `WebContentsView`, so both are listed as `kind: "other"`. Pointer and
+  keyboard input are synthesised through the protocol, so there is no Playwright-style
+  actionability auto-wait. On macOS, key chords carry Chromium's editing commands, so `Meta+A`, `Meta+C`/`V`/`X`, `Meta+Z`,
   `Alt+Backspace` and the other standard text-editing shortcuts behave as they do in the app. That
   includes the native bindings for plain `Home`/`End` (scroll the document) and `Control+` letter
   chords (`Control+A` moves to the paragraph start); use `Meta+ArrowLeft`/`Meta+ArrowRight` for the
