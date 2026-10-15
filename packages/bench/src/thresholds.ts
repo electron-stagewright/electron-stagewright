@@ -67,6 +67,11 @@ export const DEFAULT_CONTRASTS: ReadonlyArray<Contrast> = [
     optimized: 'observe-change-diff',
   },
   {
+    label: 'inspect one region — full snapshot vs root-scoped snapshot (saves tokens)',
+    baseline: 'inspect-region-full',
+    optimized: 'inspect-region-scoped',
+  },
+  {
     label: 'react over 30 turns — full re-scan vs snapshot diff (savings at session scale)',
     baseline: 'multi-turn-rescan-30',
     optimized: 'multi-turn-diff-30',
@@ -117,6 +122,8 @@ export const DEFAULT_THRESHOLDS: BenchThresholds = {
     'verify-greeting-expect': { toolCalls: 5 },
     'observe-change-rescan': { toolCalls: 4 },
     'observe-change-diff': { toolCalls: 4 },
+    'inspect-region-full': { toolCalls: 1 },
+    'inspect-region-scoped': { toolCalls: 1 },
     'multi-turn-rescan-30': { toolCalls: 62 },
     'multi-turn-diff-30': { toolCalls: 62 },
     'assert-storage-snapshot': { toolCalls: 1 },
@@ -133,6 +140,10 @@ export const DEFAULT_THRESHOLDS: BenchThresholds = {
     'see what changed — full re-scan vs snapshot diff (saves tokens)': {
       minToolCallsSaved: 0,
       minTokenSavingRatio: 0.3,
+    },
+    'inspect one region — full snapshot vs root-scoped snapshot (saves tokens)': {
+      minToolCallsSaved: 0,
+      minTokenSavingRatio: 0.8,
     },
     'react over 30 turns — full re-scan vs snapshot diff (savings at session scale)': {
       minToolCallsSaved: 0,

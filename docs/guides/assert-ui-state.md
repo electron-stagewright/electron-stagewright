@@ -110,6 +110,20 @@ tokenizer, and excludes `ref_map`, metadata, and the response envelope. The serv
 lowest-value entries first and reports how many under `_meta.truncated_entries`. Over a multi-turn
 session this is the difference between re-reading thousands of tokens per turn and reading tens.
 
+## Looking at one region: scoped snapshots
+
+When only a dialog, panel, or list matters, scope the snapshot to it:
+
+```json
+electron_snapshot { "root": { "selector": "[role=dialog]" } }
+```
+
+Only entries inside that element are returned; refs are the same ones a full snapshot would
+show, so they work with every other tool. Pass `root: { "ref": N }` for an interactive container
+such as a listbox (landmarks and dialogs have no ref, so use a selector). `root` combines with
+`since: "last"`, `interactiveOnly`, `maxEntries`, and `format: "text"`. On the bench app, scoping
+to the greeting form returns about 10% of the full snapshot's tokens.
+
 ## Putting it together
 
 A robust act-then-verify beat looks like:
