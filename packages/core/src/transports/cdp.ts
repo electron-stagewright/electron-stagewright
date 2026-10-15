@@ -402,6 +402,7 @@ interface CdpSessionDeps {
   readonly fetchJson: FetchJson
   readonly killProcess: KillProcess
   readonly defaultMethodTimeoutMs: number | undefined
+  readonly platform: NodeJS.Platform
 }
 
 class CdpSession implements TransportSession {
@@ -1361,6 +1362,7 @@ class CdpSession implements TransportSession {
       code: parsed.code,
       windowsVirtualKeyCode: parsed.windowsVirtualKeyCode,
       ...(parsed.text !== undefined ? { text: parsed.text, unmodifiedText: parsed.text } : {}),
+      ...(parsed.commands !== undefined ? { commands: parsed.commands } : {}),
     })
     await conn.send('Input.dispatchKeyEvent', {
       type: 'keyUp',
@@ -1415,7 +1417,7 @@ class CdpSession implements TransportSession {
     this.#requireRunning()
     const conn = await this.#pageConnection()
     if (opts.selector !== undefined) await this.#focus(conn, opts.selector)
-    await this.#pressParsed(conn, parseKeyChord(key))
+    await this.#pressParsed(conn, parseKeyChord(key, this.#deps.platform))
   }
 
   async typeText(text: string, opts: PressOptions = {}): Promise<void> {
@@ -1424,7 +1426,7 @@ class CdpSession implements TransportSession {
     if (opts.selector !== undefined) await this.#focus(conn, opts.selector)
     for (const ch of text) {
       if (ch === '\n' || ch === '\r') {
-        await this.#pressParsed(conn, parseKeyChord('Enter'))
+        await this.#pressParsed(conn, parseKeyChord('Enter', this.#deps.platform))
         continue
       }
       await conn.send('Input.dispatchKeyEvent', {
@@ -1721,7 +1723,7 @@ export interface CDPTransportOptions {
   readonly spawnProcess?: SpawnProcess
   /** Loopback-port reservation override. Defaults to a short-lived IPv4 TCP listener. */
   readonly reserveLoopbackPort?: ReserveLoopbackPort
-  /** Platform override for credential-store defaults. Defaults to `process.platform`. */
+  /** Platform override for credential-store and editing-command defaults. Defaults to `process.platform`. */
   readonly platform?: NodeJS.Platform
   /** Packaged-launch poll interval override. */
   readonly launchPollIntervalMs?: number
@@ -1752,7 +1754,6 @@ export class CDPTransport implements ITransport {
   readonly #deps: CdpSessionDeps
   readonly #spawnProcess: SpawnProcess
   readonly #reserveLoopbackPort: ReserveLoopbackPort
-  readonly #platform: NodeJS.Platform
   readonly #launchPollIntervalMs: number
 
   constructor(opts: CDPTransportOptions = {}) {
@@ -1761,10 +1762,10 @@ export class CDPTransport implements ITransport {
       fetchJson: opts.fetchJson ?? defaultFetchJson,
       killProcess: opts.killProcess ?? defaultKillProcess,
       defaultMethodTimeoutMs: opts.defaultMethodTimeoutMs,
+      platform: opts.platform ?? process.platform,
     }
     this.#spawnProcess = opts.spawnProcess ?? defaultSpawnProcess
     this.#reserveLoopbackPort = opts.reserveLoopbackPort ?? defaultReserveLoopbackPort
-    this.#platform = opts.platform ?? process.platform
     this.#launchPollIntervalMs = opts.launchPollIntervalMs ?? LAUNCH_POLL_INTERVAL_MS
   }
 
@@ -1965,10 +1966,10 @@ export class CDPTransport implements ITransport {
     mode: NonNullable<LaunchOptions['credentialStore']>,
   ): readonly string[] {
     if (mode === 'system') return []
-    if (this.#platform === 'darwin' && !hasSwitch(callerArgs, 'use-mock-keychain')) {
+    if (this.#deps.platform === 'darwin' && !hasSwitch(callerArgs, 'use-mock-keychain')) {
       return ['--use-mock-keychain']
     }
-    if (this.#platform === 'linux' && !hasSwitch(callerArgs, 'password-store')) {
+    if (this.#deps.platform === 'linux' && !hasSwitch(callerArgs, 'password-store')) {
       return ['--password-store=basic']
     }
     return []
