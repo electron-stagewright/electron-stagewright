@@ -33,7 +33,10 @@ afterEach(async () => {
   await Promise.all([...managers].map((sessions) => sessions.disposeAll()))
   managers.clear()
   await Promise.all(
-    temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+    // Windows can keep the copied electron.exe locked briefly after the app exits.
+    temporaryRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
   )
 })
 
