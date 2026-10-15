@@ -696,6 +696,23 @@ describe('diagnoseLaunchError', () => {
     expect(diagnoseLaunchError(new Error('ENOENT: no such file')).code).toBe('FILE_NOT_FOUND')
   })
 
+  it('keeps a native-addon ABI mismatch internal despite missing-file noise in the log', () => {
+    const err = new StagewrightError(
+      'INTERNAL_ERROR',
+      [
+        'Playwright launch failed: Process failed to launch!',
+        '[err] ERROR: The system cannot find the file specified. (0x2)',
+        "[err] Error: The module 'addon.node' was compiled against a different Node.js version",
+        '[err] using NODE_MODULE_VERSION 145. This version of Node.js requires NODE_MODULE_VERSION 146.',
+      ].join('\n'),
+      { transport: 'playwright-electron' },
+    )
+    const diagnosed = diagnoseLaunchError(err)
+    expect(diagnosed.code).toBe('INTERNAL_ERROR')
+    expect(diagnosed.message).toContain('NODE_MODULE_VERSION 145')
+    expect(diagnosed.details).toEqual({ transport: 'playwright-electron' })
+  })
+
   it('defaults to INTERNAL_ERROR', () => {
     expect(diagnoseLaunchError(new Error('something weird')).code).toBe('INTERNAL_ERROR')
   })
