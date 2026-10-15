@@ -216,8 +216,9 @@ async function gatherSimilarRefs(cx: {
   let source = cx.ctx.snapshots.get(cx.sessionId, surface.id)
   const hadSnapshot = source !== undefined
   try {
-    const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {})
-    if (walked !== undefined && Array.isArray(walked.entries)) {
+    const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {}, cx.ctx.signal)
+    // A cancellation that lands during the walk must not retag the DOM or replace the snapshot.
+    if (walked !== undefined && Array.isArray(walked.entries) && cx.ctx.signal?.aborted !== true) {
       const stabilised = await reconcileRetagAndStore({
         session: cx.session,
         store: cx.ctx.snapshots,
@@ -273,6 +274,8 @@ export async function buildMissError(
     readonly nameHint?: string | undefined
   },
 ): Promise<ErrorResponse> {
+  // The dispatcher already answered a cancelled request; skip the diagnosis round-trips.
+  cx.ctx.signal?.throwIfAborted()
   const { similar, hadSnapshot } = await gatherSimilarRefs({
     ctx: cx.ctx,
     session: cx.session,
