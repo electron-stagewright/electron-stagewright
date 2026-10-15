@@ -70,6 +70,7 @@ import {
   createConfiguredServer,
   inspectServerConfiguration,
 } from './server/configuration.js'
+import { MAX_OPERATION_TIMEOUT_MS } from './server/dispatcher.js'
 import { StderrLogger } from './server/logger.js'
 import { isToolProfile, type ToolProfile } from './tools/index.js'
 import { VERSION } from './version.js'
@@ -132,9 +133,9 @@ function parseOperationTimeout(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined
   // Number('') is 0, which would silently disable the backstop when "$VAR" expands empty.
   const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
-  if (!Number.isSafeInteger(value)) {
+  if (Number.isNaN(value) || value > MAX_OPERATION_TIMEOUT_MS) {
     throw new CliUsageError(
-      `--operation-timeout-ms expects a non-negative integer number of milliseconds, got "${raw}"`,
+      `--operation-timeout-ms expects a non-negative integer number of milliseconds up to ${MAX_OPERATION_TIMEOUT_MS}, got "${raw}"`,
     )
   }
   return value

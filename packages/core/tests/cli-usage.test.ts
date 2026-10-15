@@ -76,6 +76,15 @@ describe('built CLI usage recovery', () => {
     expect(result.stderr).not.toMatch(/\n\s+at /)
   })
 
+  it('reports a misspelled --plugin as one typed line without a stack', () => {
+    const result = runCli(['--plugin', 'stagewright-no-such-plugin'], '')
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toMatch(/^fatal: PLUGIN_LOAD_FAILED: Could not import plugin /)
+    expect(result.stderr).not.toMatch(/\n\s+at /)
+  })
+
   // The preload's interval stands in for a launched app holding the event loop open.
   it.each([
     ['the host closes stdin', 'setInterval(() => {}, 1_000)', true],

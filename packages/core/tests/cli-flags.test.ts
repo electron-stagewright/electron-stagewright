@@ -194,6 +194,7 @@ describe('CLI failure classification', () => {
     ['--operation-timeout-ms', ' '],
     ['--operation-timeout-ms', '0x10'],
     ['--operation-timeout-ms', '1e3'],
+    ['--operation-timeout-ms', '2147483648'],
     ['--allow-eval=unknown'],
     ['--demo', '--demo'],
     ['unexpected'],
