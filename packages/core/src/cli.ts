@@ -52,8 +52,9 @@
  * silently ignored. This keeps a typo from weakening a requested confinement or
  * changing the tool set without the operator noticing.
  *
- * On SIGINT / SIGTERM the server is closed and every live session disposed, so a
- * Ctrl-C never leaves a launched Electron process orphaned.
+ * On SIGINT / SIGTERM, or when the MCP host closes stdin, the server is closed and
+ * every live session disposed, so a host exit never leaves a launched Electron
+ * process orphaned.
  *
  * @module
  */
@@ -425,10 +426,10 @@ async function main(): Promise<void> {
   const { server } = configured
 
   let shuttingDown = false
-  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+  const shutdown = async (reason: string): Promise<void> => {
     if (shuttingDown) return
     shuttingDown = true
-    logger.info('Shutting down', { signal })
+    logger.info('Shutting down', { reason })
     try {
       await server.close()
     } catch (err) {
@@ -441,6 +442,9 @@ async function main(): Promise<void> {
   }
   process.on('SIGINT', () => void shutdown('SIGINT'))
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
+  // The SDK stdio transport ignores end-of-input; a launched app would keep the process alive.
+  process.stdin.once('end', () => void shutdown('stdin closed'))
+  process.stdin.once('close', () => void shutdown('stdin closed'))
 
   await server.connectStdio()
   logger.info('electron-stagewright MCP server ready (stdio)', {

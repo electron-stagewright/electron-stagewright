@@ -141,7 +141,7 @@ export const ERROR_CODES = {
   CDP_DISCONNECTED: {
     http: 503,
     retryable: true,
-    hint: 'The CDP connection dropped; the dispatcher will attempt reconnection.',
+    hint: 'The CDP connection dropped and is not restored automatically; launch or attach again.',
   },
   CDP_TIMEOUT: {
     http: 408,
