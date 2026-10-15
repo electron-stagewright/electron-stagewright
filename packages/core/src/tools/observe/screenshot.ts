@@ -21,9 +21,10 @@ import { refField, selectorField, sessionIdField } from '../schema.js'
 import { loadInjectedWalker, runProbe } from '../snapshot/inject.js'
 import {
   buildMissError,
-  refFreshnessError,
   refNameForActiveSurface,
   resolveTarget,
+  staleRefError,
+  withFreshRefs,
 } from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 
@@ -290,10 +291,16 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
               'Element screenshots are not available for an iframe surface; select its root window or capture the window without ref/selector.',
           })
         }
-        const stale = await refFreshnessError(ctx, managed.session, meta, args.ref)
-        if (stale !== undefined) return stale
-
-        const resolved = await elementClip(managed.session, selector, loadBundle())
+        const run = await withFreshRefs(
+          ctx,
+          managed.session,
+          managed.id,
+          [args.ref],
+          () => elementClip(managed.session, selector, loadBundle()),
+          { readOnly: true },
+        )
+        if ('staleRef' in run) return staleRefError(ctx, managed.session, meta, run.staleRef)
+        const resolved = run.value
         if (resolved.kind === 'invalid-selector') {
           return makeError('BAD_ARGUMENT', {
             ...meta,

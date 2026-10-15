@@ -15,8 +15,9 @@ import { assertCapability } from '../../transports/index.js'
 import {
   buildMissError,
   handleTargetFailure,
-  refFreshnessError,
   refNameForActiveSurface,
+  staleRefError,
+  withFreshRefs,
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
 
@@ -95,25 +96,33 @@ export async function runWait(
   const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
   assertCapability(managed.transport, 'supportsRendererEval')
 
-  const stale = await refFreshnessError(ctx, managed.session, meta, args.ref)
-  if (stale !== undefined) return stale
-  // A renderer poll cannot be interrupted once sent, so never start one for a cancelled request.
-  ctx.signal?.throwIfAborted()
-
   try {
-    const raw = await withElapsedProgress(
-      {
-        reporter: ctx.progress,
-        totalMs: opts.timeoutMs,
-        message:
-          opts.progressMessage ??
-          (opts.timeoutCode === 'EXPECTATION_FAILED'
-            ? 'Checking expectation'
-            : 'Waiting for condition'),
-        now: ctx.now,
+    const run = await withFreshRefs(
+      ctx,
+      managed.session,
+      managed.id,
+      [args.ref],
+      () => {
+        // A renderer poll cannot be interrupted once sent, so never start one for a cancelled request.
+        ctx.signal?.throwIfAborted()
+        return withElapsedProgress(
+          {
+            reporter: ctx.progress,
+            totalMs: opts.timeoutMs,
+            message:
+              opts.progressMessage ??
+              (opts.timeoutCode === 'EXPECTATION_FAILED'
+                ? 'Checking expectation'
+                : 'Waiting for condition'),
+            now: ctx.now,
+          },
+          () => managed.session.evaluate<WaitRaw>('renderer', call.body, call.arg),
+        )
       },
-      () => managed.session.evaluate<WaitRaw>('renderer', call.body, call.arg),
+      { readOnly: true },
     )
+    if ('staleRef' in run) return staleRefError(ctx, managed.session, meta, run.staleRef)
+    const raw = run.value
     if (raw?.invalid_selector === true) {
       const reason = typeof raw.error === 'string' ? `: ${raw.error}` : '.'
       return makeError('BAD_ARGUMENT', { ...meta, message: `Invalid CSS selector${reason}` })
@@ -138,6 +147,7 @@ export async function runWait(
       ...(details !== undefined ? { details } : {}),
     })
   } catch (err) {
+    if (ctx.signal?.aborted === true) throw err
     return handleTargetFailure(err, {
       ctx,
       session: managed.session,

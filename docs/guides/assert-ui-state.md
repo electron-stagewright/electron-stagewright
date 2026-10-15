@@ -83,7 +83,8 @@ existing apps being attached or injected remain running. Fixed-wait timers are r
 and role-count expectations stop scheduling accessibility re-walks. A walk that was already running
 in the renderer when the request was cancelled has renumbered the element refs, so its result is
 still reconciled and stored once it returns. Walks on one session are serialized, so a snapshot,
-find or ref diagnosis started in the meantime waits for that reconciliation and its refs stay valid.
+find, ref diagnosis or `ref`-targeted action, read, wait or expectation started in the meantime waits
+for that reconciliation and its refs stay valid. Selector targets do not wait.
 
 Cancellation cannot interrupt or undo JavaScript already sent to Electron, including a renderer
 poll. An operation on an existing session may still finish, so inspect app state before retrying a
