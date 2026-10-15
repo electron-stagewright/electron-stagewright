@@ -1137,6 +1137,8 @@ class CdpSession implements TransportSession {
         : (targets.find(
             (target) => target.url === previous.url && target.title === previous.title,
           ) ?? targets.find((target) => target.url === previous.url)))
+    // A window restored under a new id belongs to a restarted app, so its old frames are gone.
+    if (restored?.id !== this.#activeTargetId) this.#activeSurfaceId = undefined
     this.#activeTargetId = restored?.id
     await Promise.allSettled(targets.map((target) => this.connectionFor(target)))
   }

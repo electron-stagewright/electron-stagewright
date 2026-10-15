@@ -351,4 +351,18 @@ describe('CDP surface lifecycle', () => {
       active: true,
     })
   })
+
+  it('drops a stale frame selection when a reconnect restores the window under a new id', async () => {
+    const { server, transport, setTargets, setHostTree } = setup()
+    const session = await transport.attach({ port: 9222 })
+    const surfaces = await session.surfacesList()
+    await session.activateSurface(byUrl(surfaces, 'same.html').id)
+
+    // The app restarted: same window url, new target and frame ids, frames not loaded yet.
+    setTargets([target('H2', 'page', HOST)])
+    setHostTree({ frame: { id: 'H2', url: HOST } })
+    server.closeSockets('browser')
+
+    await expect(session.activeSurface()).resolves.toMatchObject({ url: HOST, active: true })
+  })
 })
