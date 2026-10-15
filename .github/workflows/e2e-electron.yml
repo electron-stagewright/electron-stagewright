@@ -106,17 +106,20 @@ jobs:
       - run: pnpm build
 
       - name: Run the gated real-Electron smokes under Xvfb
+        id: real_tests
         run: xvfb-run --auto-servernum pnpm test:real
         env:
           STAGEWRIGHT_E2E: '1'
 
       - name: Qualify vanilla, React, Vue and Angular through real MCP
+        id: matrix
         run: xvfb-run --auto-servernum pnpm matrix
         env:
           STAGEWRIGHT_MATRIX_REPORT: ${{ github.workspace }}/output/framework-matrix/results.json
 
       - name: Preserve per-framework qualification evidence
-        if: always()
+        # A passing step must have written its report; a failed one uploads whatever it left.
+        if: always() && (steps.matrix.outcome == 'success' || hashFiles('output/framework-matrix/results.json') != '')
         uses: actions/upload-artifact@v7
         with:
           name: framework-matrix-${{ github.sha }}-${{ github.run_attempt }}
@@ -124,7 +127,7 @@ jobs:
           if-no-files-found: error
 
       - name: Preserve real-runtime execution inventory
-        if: always()
+        if: always() && (steps.real_tests.outcome == 'success' || hashFiles('output/real-electron/results.json') != '')
         uses: actions/upload-artifact@v7
         with:
           name: real-electron-tests-${{ runner.os }}-${{ github.sha }}-${{ github.run_attempt }}
@@ -169,12 +172,13 @@ jobs:
       - run: pnpm build
 
       - name: Run the gated real-Electron smokes
+        id: real_tests
         run: pnpm test:real
         env:
           STAGEWRIGHT_E2E: '1'
 
       - name: Preserve real-runtime execution inventory
-        if: always()
+        if: always() && (steps.real_tests.outcome == 'success' || hashFiles('output/real-electron/results.json') != '')
         uses: actions/upload-artifact@v7
         with:
           name: real-electron-tests-${{ runner.os }}-${{ github.sha }}-${{ github.run_attempt }}
@@ -211,12 +215,13 @@ jobs:
       - run: pnpm build
 
       - name: Run the gated real-Electron smokes
+        id: real_tests
         run: pnpm test:real
         env:
           STAGEWRIGHT_E2E: '1'
 
       - name: Preserve real-runtime execution inventory
-        if: always()
+        if: always() && (steps.real_tests.outcome == 'success' || hashFiles('output/real-electron/results.json') != '')
         uses: actions/upload-artifact@v7
         with:
           name: real-electron-tests-${{ runner.os }}-${{ github.sha }}-${{ github.run_attempt }}
