@@ -68,9 +68,11 @@ inputSchema (Zod object), operationType, requiresEvalFlag?, handler }`. The
 
 7. **The MCP stdio server registers tools from the dispatcher manifest.**
    `createServer()` assembles the object graph; `connectStdio()` attaches the
-   transport; `cli.ts` (the real `bin`) parses `--allow-eval`, starts the server,
-   and disposes all sessions on SIGINT/SIGTERM or when the host closes stdin so
-   launched Electron apps are not orphaned. A `listManifest()` surface renders each tool's Zod schema to JSON
+   transport and closes the server, disposing every session, when the host closes
+   stdin, so a library embedder gets the same cleanup as the CLI; `cli.ts` (the
+   real `bin`) parses `--allow-eval`, starts the server, closes it on
+   SIGINT/SIGTERM, and exits once teardown settles so launched Electron apps are
+   not orphaned. A `listManifest()` surface renders each tool's Zod schema to JSON
    Schema for offline documentation generation.
 
 ## Alternatives considered
@@ -207,3 +209,17 @@ claim. Tool names, discovery schemas, profile membership, portable byte/count/TT
 50,000-character structured-content rule are unchanged. Ordinary tests and in-memory MCP tests cover
 the completion contract; actual Electron clients and native framework qualification remain separate
 validation stages.
+
+## Status Update (2026-10-15) — stdin shutdown moved into `connectStdio`
+
+The MCP stdio transport ends when the host closes the server's stdin, but the SDK transport does not
+react to end-of-input, and a launched Electron app keeps the Node event loop alive. The CLI used to
+listen for stdin `end` / `close` itself, so an embedder calling `createServer()` + `connectStdio()`
+kept orphaned apps running after the host exited. `connectStdio()` now owns that listener and closes
+the server (disposing every session); it accepts optional `stdin` / `stdout` streams. `close()` is
+memoized, so a signal and a stdin close share one teardown, and the new `closed` promise settles with
+its outcome however it was triggered.
+
+The CLI waits on `closed` and exits `0` after a clean teardown or `1` when teardown threw (it used to
+exit `0` either way). Usage errors (`CliUsageError`) now exit `2`, matching the `production`
+subcommand; other startup failures and failed `doctor` checks still exit `1`.

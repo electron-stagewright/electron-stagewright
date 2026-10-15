@@ -155,6 +155,23 @@ consumer fix; hierarchy targeting remains a separate evidence-backed implementat
 its `supportsSurfaceTargeting`. Page targets stay `kind: "other"`; webview guests and frames are
 discovered from `/json/list` parent links and per-target frame trees.
 
+## Status Update — 2026-10-15: per-surface ref lock
+
+A walk renumbers every `data-sw-ref` tag of its surface, and only the reconcile and retag that
+follow restore the stable refs. Walks, ref diagnosis and `ref`-targeted operations therefore run
+under a ref lock keyed by `(sessionId, surfaceId)`, matching how tags and stored snapshots are
+scoped. Callers read the active surface before taking the lock, so walks on different surfaces of
+one session run concurrently. A selector that is exactly `[data-sw-ref="N"]` takes the same lock and
+freshness check as `ref: N`.
+
+The renderer counts tag rewrites in a walk generation that every walk and retag increments. A ref
+wait or expectation checks freshness and reads the generation under the lock, then runs its whole
+remaining budget in one unlocked renderer call pinned to that generation, so an event listener stays
+attached for the full wait. A poll that sees the generation move stops without resolving the ref, and the wait takes
+the lock again, rechecks freshness and resumes with its remaining budget. Actions still hold the
+lock until the transport call returns. A holder that keeps the lock past 60 seconds makes queued
+callers fail with `RENDERER_BUSY` (ADR-006) rather than releasing the holder early.
+
 ## References
 
 - [ADR-003](./003-transport-abstraction.md) — transport seam and capability matrix.

@@ -53,11 +53,14 @@ export class FakeCdpServer {
   readonly sockets: FakeSocket[] = []
   readonly #responders = new Map<string, (params: Json | undefined, url: string) => unknown>()
   readonly #never = new Set<string>()
+  /** While true, new sockets fail their handshake the way a refused connection does. */
+  refuseConnections = false
 
   readonly factory: WebSocketFactory = (url) => {
     const socket = new FakeSocket(url, this)
     this.sockets.push(socket)
-    queueMicrotask(() => socket.fire('open'))
+    const refused = this.refuseConnections
+    queueMicrotask(() => socket.fire(refused ? 'error' : 'open'))
     return socket
   }
 

@@ -5,21 +5,29 @@
  * selector → `BAD_ARGUMENT`, a missing event target → `SELECTOR_NO_MATCH`, and a
  * timeout → `WAIT_TIMEOUT` (carrying the last observed state in `details`).
  *
+ * A ref-targeted wait holds the ref lock only to check freshness and read the renderer walk
+ * generation, then polls unlocked pinned to it. If a walk rewrites the tags meanwhile, the poll
+ * stops, and the wait re-checks freshness under the lock and resumes with the remaining budget.
+ *
  * @module
  */
 
 import { makeError, makeSuccess } from '../../errors/envelope.js'
 import type { ErrorCode } from '../../errors/registry.js'
 import { withElapsedProgress } from '../../server/progress.js'
-import { assertCapability } from '../../transports/index.js'
+import { untilAborted } from '../../server/snapshot-store.js'
+import { type TransportSession, assertCapability } from '../../transports/index.js'
 import {
+  type FreshRefsOutcome,
   buildMissError,
   handleTargetFailure,
   refNameForActiveSurface,
   staleRefError,
+  targetRef,
   withFreshRefs,
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
+import { WALK_GENERATION_BODY } from './body.js'
 
 /** Default wait budget when the caller omits `timeoutMs`. */
 export const DEFAULT_WAIT_TIMEOUT_MS = 5000
@@ -45,6 +53,8 @@ export interface WaitRaw {
   readonly state?: unknown
   readonly invalid_selector?: boolean
   readonly missing_target?: boolean
+  /** A ref poll stopped because a walk or retag rewrote the ref tags. */
+  readonly generation_changed?: boolean
   readonly error?: string
   readonly [key: string]: unknown
 }
@@ -77,6 +87,50 @@ function defaultTimeoutDetails(raw: WaitRaw): Record<string, unknown> | undefine
 }
 
 /**
+ * Poll a ref target without holding the ref lock for the whole wait. Each round reads the walk
+ * generation under the lock (after the freshness check), then runs the whole remaining budget in
+ * one renderer call pinned to it, so event listeners stay attached for the full wait; a poll
+ * interrupted by a walk starts the next round.
+ */
+async function pollRef(
+  ctx: ToolContext,
+  session: TransportSession,
+  sessionId: string,
+  ref: number,
+  call: RendererCall,
+  timeoutMs: number,
+): Promise<FreshRefsOutcome<WaitRaw>> {
+  const startedAt = ctx.now()
+  const arg = call.arg as Record<string, unknown>
+  for (;;) {
+    const pinned = await withFreshRefs(
+      ctx,
+      session,
+      sessionId,
+      [{ ref }],
+      () => {
+        ctx.signal?.throwIfAborted()
+        return session.evaluate<unknown>('renderer', WALK_GENERATION_BODY, {})
+      },
+      { readOnly: true },
+    )
+    if ('staleRef' in pinned) return pinned
+    const walkGeneration = typeof pinned.value === 'number' ? pinned.value : 0
+    const remaining = Math.max(0, timeoutMs - (ctx.now() - startedAt))
+    ctx.signal?.throwIfAborted()
+    const raw = await untilAborted(
+      session.evaluate<WaitRaw>('renderer', call.body, {
+        ...arg,
+        timeoutMs: remaining,
+        walkGeneration,
+      }),
+      ctx.signal,
+    )
+    if (raw?.generation_changed !== true || remaining === 0) return { value: raw }
+  }
+}
+
+/**
  * Run a bounded renderer wait. `mapSuccess` shapes the success payload from a
  * satisfied result; a never-satisfied poll becomes `opts.timeoutCode`
  * (`WAIT_TIMEOUT` by default) carrying `opts.buildTimeoutDetails(raw)` under
@@ -87,6 +141,7 @@ export async function runWait(
   args: {
     readonly sessionId?: string | undefined
     readonly ref?: number | undefined
+    readonly selector?: string | undefined
   },
   call: RendererCall,
   mapSuccess: (raw: WaitRaw) => Record<string, unknown>,
@@ -97,29 +152,26 @@ export async function runWait(
   assertCapability(managed.transport, 'supportsRendererEval')
 
   try {
-    const run = await withFreshRefs(
-      ctx,
-      managed.session,
-      managed.id,
-      [args.ref],
-      () => {
+    const ref = targetRef(args)
+    const run = await withElapsedProgress(
+      {
+        reporter: ctx.progress,
+        totalMs: opts.timeoutMs,
+        message:
+          opts.progressMessage ??
+          (opts.timeoutCode === 'EXPECTATION_FAILED'
+            ? 'Checking expectation'
+            : 'Waiting for condition'),
+        now: ctx.now,
+      },
+      async (): Promise<FreshRefsOutcome<WaitRaw>> => {
+        if (ref !== undefined) {
+          return pollRef(ctx, managed.session, managed.id, ref, call, opts.timeoutMs)
+        }
         // A renderer poll cannot be interrupted once sent, so never start one for a cancelled request.
         ctx.signal?.throwIfAborted()
-        return withElapsedProgress(
-          {
-            reporter: ctx.progress,
-            totalMs: opts.timeoutMs,
-            message:
-              opts.progressMessage ??
-              (opts.timeoutCode === 'EXPECTATION_FAILED'
-                ? 'Checking expectation'
-                : 'Waiting for condition'),
-            now: ctx.now,
-          },
-          () => managed.session.evaluate<WaitRaw>('renderer', call.body, call.arg),
-        )
+        return { value: await managed.session.evaluate<WaitRaw>('renderer', call.body, call.arg) }
       },
-      { readOnly: true },
     )
     if ('staleRef' in run) return staleRefError(ctx, managed.session, meta, run.staleRef)
     const raw = run.value

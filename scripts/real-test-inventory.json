@@ -1,7 +1,7 @@
 [
   {
     "path": "packages/core/tests/cdp-attach-smoke.test.ts",
-    "tests": 6,
+    "tests": 7,
     "excludedPlatforms": []
   },
   {

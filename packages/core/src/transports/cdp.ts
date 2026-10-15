@@ -153,6 +153,12 @@ const LAUNCH_PROBE_TIMEOUT_MS = 750
 const LAUNCH_POLL_INTERVAL_MS = 100
 /** Best-effort SIGKILL reap budget for an owned packaged process. */
 const PROCESS_REAP_BUDGET_MS = 2_000
+/** Reconnect attempts after an attached session's browser socket drops. */
+const RECONNECT_ATTEMPTS = 3
+/** Backoff before the second reconnect attempt; doubles for each later one. */
+const RECONNECT_BACKOFF_MS = 250
+/** Upper bound for one reconnect, across every attempt. */
+const RECONNECT_BUDGET_MS = 10_000
 /** Max console entries retained per session (matches the Playwright transport). */
 const CONSOLE_CAP = 1000
 /** Max dialog events retained per session (matches the Playwright transport). */
@@ -498,6 +504,7 @@ interface CdpSessionDeps {
   readonly fetchJson: FetchJson
   readonly killProcess: KillProcess
   readonly defaultMethodTimeoutMs: number | undefined
+  readonly platform: NodeJS.Platform
 }
 
 class CdpSession implements TransportSession {
@@ -506,7 +513,7 @@ class CdpSession implements TransportSession {
   public readonly ipc: IpcChannel = { transport: TRANSPORT_ID }
   public readonly console: ConsoleStream = { transport: TRANSPORT_ID }
 
-  readonly #browser: CdpConnection
+  #browser: CdpConnection
   readonly #httpBase: string
   readonly #deps: CdpSessionDeps
   readonly #processControl: ProcessControl
@@ -523,6 +530,10 @@ class CdpSession implements TransportSession {
   #nextSurfaceId = 0
   /** Per target: frame id → its main-world execution context id. */
   readonly #frameContexts = new Map<string, Map<string, number>>()
+  /** Last discovered targets, so a reconnect can re-select the window by url/title. */
+  #knownTargets: readonly CdpTargetInfo[] = []
+  #reconnecting: Promise<void> | undefined
+  readonly #reconnectListeners = new Set<() => void>()
   /** Serializes target changes so concurrent switch calls cannot interleave. */
   #windowSwitch = Promise.resolve()
   #disposed = false
@@ -557,11 +568,24 @@ class CdpSession implements TransportSession {
     this.#httpBase = httpBase
     this.#deps = deps
     this.#processControl = processControl
-    this.#browser.onClose(() => {
-      // Browser endpoint gone → the whole session's transport is gone.
+    this.#watchBrowser(browser)
+  }
+
+  #watchBrowser(browser: CdpConnection): void {
+    browser.onClose(() => {
+      // Browser endpoint gone → every page socket opened through it is gone too.
+      if (this.#browser !== browser) return
       for (const conn of this.#pool.values()) conn.close()
       this.#pool.clear()
     })
+  }
+
+  /** Run `listener` after each successful reconnect of a dropped attach session. */
+  onReconnect(listener: () => void): () => void {
+    this.#reconnectListeners.add(listener)
+    return () => {
+      this.#reconnectListeners.delete(listener)
+    }
   }
 
   /** Open (or reuse) the pooled connection for one page target. */
@@ -991,16 +1015,139 @@ class CdpSession implements TransportSession {
   // Buffered diagnostics stay readable after a disconnect; anything touching the app does not.
   #requireRunning(): void {
     this.#requireNotDisposed()
-    if (this.#browser.closed) {
-      throw new StagewrightError('CDP_DISCONNECTED', 'CDP browser connection has closed.', {
+    if (this.#browser.closed) throw this.#disconnectedError()
+  }
+
+  #disconnectedError(): StagewrightError {
+    if (this.#processControl.ownsProcess) {
+      return new StagewrightError(
+        'SESSION_DISCONNECTED',
+        'The launched app closed its CDP connection; this session cannot be recovered.',
+        { transport: TRANSPORT_ID, sessionId: this.id },
+      )
+    }
+    return new StagewrightError('CDP_DISCONNECTED', 'CDP browser connection has closed.', {
+      transport: TRANSPORT_ID,
+      sessionId: this.id,
+    })
+  }
+
+  /**
+   * Before an app-touching call, reconnect an attach session whose browser socket dropped.
+   * Launched sessions are not reconnected: their socket only drops when the owned process dies.
+   */
+  async #ensureConnected(): Promise<void> {
+    this.#requireNotDisposed()
+    if (!this.#browser.closed) return
+    if (this.#processControl.ownsProcess) throw this.#disconnectedError()
+    this.#reconnecting ??= this.#reconnect().finally(() => {
+      this.#reconnecting = undefined
+    })
+    await this.#reconnecting
+  }
+
+  async #reconnect(): Promise<void> {
+    const deadline = Date.now() + RECONNECT_BUDGET_MS
+    let attempts = 0
+    let lastCause: unknown
+    while (attempts < RECONNECT_ATTEMPTS && Date.now() < deadline) {
+      if (attempts > 0) {
+        await delay(
+          Math.min(RECONNECT_BACKOFF_MS * 2 ** (attempts - 1), Math.max(0, deadline - Date.now())),
+        )
+      }
+      attempts += 1
+      this.#requireNotDisposed()
+      let browser: CdpConnection
+      try {
+        browser = await this.#openBrowser(Math.max(1, deadline - Date.now()))
+      } catch (cause) {
+        lastCause = cause
+        continue
+      }
+      if (this.#disposed) {
+        browser.close()
+        this.#requireNotDisposed()
+      }
+      this.#browser = browser
+      this.#watchBrowser(browser)
+      await this.#restoreTargets()
+      for (const listener of this.#reconnectListeners) {
+        try {
+          listener()
+        } catch {
+          // A reconnect observer must never fail the call that reconnected.
+        }
+      }
+      return
+    }
+    throw new StagewrightError(
+      'CDP_DISCONNECTED',
+      `Lost the CDP connection to ${this.#httpBase} and could not reconnect after ${attempts} attempt(s); the app may have exited or closed its debugging port.`,
+      {
         transport: TRANSPORT_ID,
         sessionId: this.id,
-      })
+        attempts,
+        ...(lastCause !== undefined
+          ? { cause: lastCause instanceof Error ? lastCause.message : String(lastCause) }
+          : {}),
+      },
+    )
+  }
+
+  /** Re-discover the browser endpoint; the previous URL is the fallback for cdpUrl-only hosts. */
+  async #openBrowser(timeoutMs: number): Promise<CdpConnection> {
+    let url = this.#browser.url
+    try {
+      const version = await this.#deps.fetchJson(
+        `${this.#httpBase}/json/version`,
+        Math.min(DISCOVERY_TIMEOUT_MS, timeoutMs),
+      )
+      const wsUrl = (version as { webSocketDebuggerUrl?: unknown } | null)?.webSocketDebuggerUrl
+      if (typeof wsUrl === 'string' && wsUrl !== '') url = wsUrl
+    } catch {
+      // Keep the previous browser URL.
     }
+    assertLoopbackAttachTarget(TRANSPORT_ID, { cdpUrl: url })
+    return CdpConnection.open(url, {
+      ...(this.#deps.wsFactory !== undefined ? { factory: this.#deps.wsFactory } : {}),
+      ...(this.#deps.defaultMethodTimeoutMs !== undefined
+        ? { defaultTimeoutMs: this.#deps.defaultMethodTimeoutMs }
+        : {}),
+      connectTimeoutMs: timeoutMs,
+    })
+  }
+
+  /** Re-select the previous window (by id, then url/title) and re-open capture on every target. */
+  async #restoreTargets(): Promise<void> {
+    const previous = this.#knownTargets.find((target) => target.id === this.#activeTargetId)
+    // Requests seen on the dropped sockets will never finish.
+    this.#inflight.clear()
+    let targets: readonly CdpTargetInfo[]
+    try {
+      targets = await this.#fetchTargets()
+    } catch {
+      // Discovery hiccups are tolerated here as at attach; the next listing retries.
+      return
+    }
+    const restored =
+      targets.find((target) => target.id === this.#activeTargetId) ??
+      (previous === undefined
+        ? undefined
+        : (targets.find(
+            (target) => target.url === previous.url && target.title === previous.title,
+          ) ?? targets.find((target) => target.url === previous.url)))
+    this.#activeTargetId = restored?.id
+    await Promise.allSettled(targets.map((target) => this.connectionFor(target)))
   }
 
   /** Current renderer targets (page, webview, iframe) from the discovery endpoint. */
   async #listTargets(): Promise<readonly CdpTargetInfo[]> {
+    await this.#ensureConnected()
+    return this.#fetchTargets()
+  }
+
+  async #fetchTargets(): Promise<readonly CdpTargetInfo[]> {
     this.#requireRunning()
     let listed: unknown
     try {
@@ -1013,7 +1160,9 @@ class CdpSession implements TransportSession {
       )
     }
     this.#requireRunning()
-    return asRendererTargets(listed)
+    const targets = asRendererTargets(listed)
+    this.#knownTargets = targets
+    return targets
   }
 
   /** Current window targets: pages and webview guests. */
@@ -1094,7 +1243,7 @@ class CdpSession implements TransportSession {
     body: string,
     arg?: unknown,
   ): Promise<T> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     if (target === 'main') {
       return evaluateExpression<T>(this.#browser, body, arg)
     }
@@ -1108,7 +1257,7 @@ class CdpSession implements TransportSession {
   }
 
   async screenshot(target: WindowRef, opts: ScreenshotOptions = {}): Promise<Buffer> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const info = await this.#resolveTarget(target)
     const conn = await this.connectionFor(info)
     try {
@@ -1536,7 +1685,7 @@ class CdpSession implements TransportSession {
   }
 
   async setDialogPolicy(policy: DialogPolicy): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     this.#dialogPolicy = copyDialogPolicy(policy)
   }
 
@@ -1557,7 +1706,7 @@ class CdpSession implements TransportSession {
   // --- Network seam: capture over the Network domain, stub over the Fetch domain. ---
 
   async startNetworkCapture(filter: NetworkCaptureFilter): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     this.#networkFilter = copyNetworkFilter(filter)
     this.#networkBuffer.length = 0
     this.#networkOverflow = 0
@@ -1587,7 +1736,7 @@ class CdpSession implements TransportSession {
   }
 
   async stopNetworkCapture(): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     this.#networkFilter = null
     this.#networkBuffer.length = 0
     this.#networkOverflow = 0
@@ -1602,7 +1751,7 @@ class CdpSession implements TransportSession {
   }
 
   async stubNetwork(stub: NetworkStub): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     this.#pruneExpiredStubs()
     const wasEmpty = this.#networkStubs.length === 0
     this.#networkStubs.push({ stub: copyNetworkStub(stub), remaining: stub.times ?? Infinity })
@@ -1618,7 +1767,7 @@ class CdpSession implements TransportSession {
   }
 
   async clearNetworkStubs(url?: string): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     this.#networkStubs =
       url === undefined ? [] : this.#networkStubs.filter((entry) => !entry.stub.urls.includes(url))
     if (this.#networkStubs.length === 0) {
@@ -1661,7 +1810,7 @@ class CdpSession implements TransportSession {
   // --- Storage seam: cookies over the CDP Storage/Network domains + localStorage via DOMStorage. ---
 
   async getCookies(filter?: CookieFilter): Promise<readonly StorageCookie[]> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const cookies =
       filter?.urls !== undefined
         ? await this.#cookiesForUrls(filter.urls)
@@ -1670,7 +1819,7 @@ class CdpSession implements TransportSession {
   }
 
   async setCookie(cookie: StorageCookie): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const conn = await this.#pageConnection()
     await conn.send('Network.setCookie', {
       name: cookie.name,
@@ -1686,7 +1835,7 @@ class CdpSession implements TransportSession {
   }
 
   async clearCookies(filter?: CookieFilter): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const conn = await this.#pageConnection()
     if (filter === undefined || (filter.urls === undefined && filter.name === undefined)) {
       await conn.send('Network.clearBrowserCookies')
@@ -1703,7 +1852,7 @@ class CdpSession implements TransportSession {
   }
 
   async storageSnapshot(): Promise<StorageSnapshot> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const conn = await this.#pageConnection()
     const cookies = await this.#allBrowserCookies()
     // localStorage is best-effort on CDP: read the active page's origin via DOMStorage. A failure
@@ -1835,6 +1984,7 @@ class CdpSession implements TransportSession {
       code: parsed.code,
       windowsVirtualKeyCode: parsed.windowsVirtualKeyCode,
       ...(parsed.text !== undefined ? { text: parsed.text, unmodifiedText: parsed.text } : {}),
+      ...(parsed.commands !== undefined ? { commands: parsed.commands } : {}),
     })
     await conn.send('Input.dispatchKeyEvent', {
       type: 'keyUp',
@@ -1846,7 +1996,7 @@ class CdpSession implements TransportSession {
   }
 
   async click(selector: string, opts: ClickOptions = {}): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const { conn, x, y } = await this.#interactionPoint(selector, opts)
     const button = opts.button ?? 'left'
     const clickCount = opts.clickCount ?? 1
@@ -1870,13 +2020,13 @@ class CdpSession implements TransportSession {
   }
 
   async hover(selector: string, opts: InteractionOptions = {}): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const { conn, x, y } = await this.#interactionPoint(selector, opts)
     await conn.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
   }
 
   async fill(selector: string, value: string, _opts: InteractionOptions = {}): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const renderer = await this.#activeRenderer()
     const result = await this.#evalIn<{ readonly status: string }>(renderer, FILL_BODY, {
       selector,
@@ -1886,22 +2036,22 @@ class CdpSession implements TransportSession {
   }
 
   async press(key: string, opts: PressOptions = {}): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const renderer = await this.#activeRenderer()
     if (opts.selector !== undefined) await this.#focus(renderer, opts.selector)
     else await this.#focusFrame(renderer)
-    await this.#pressParsed(renderer.input, parseKeyChord(key))
+    await this.#pressParsed(renderer.input, parseKeyChord(key, this.#deps.platform))
   }
 
   async typeText(text: string, opts: PressOptions = {}): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const renderer = await this.#activeRenderer()
     if (opts.selector !== undefined) await this.#focus(renderer, opts.selector)
     else await this.#focusFrame(renderer)
     const conn = renderer.input
     for (const ch of text) {
       if (ch === '\n' || ch === '\r') {
-        await this.#pressParsed(conn, parseKeyChord('Enter'))
+        await this.#pressParsed(conn, parseKeyChord('Enter', this.#deps.platform))
         continue
       }
       await conn.send('Input.dispatchKeyEvent', {
@@ -1919,7 +2069,7 @@ class CdpSession implements TransportSession {
     values: readonly string[],
     _opts: InteractionOptions = {},
   ): Promise<readonly string[]> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const result = await this.#evalIn<{
       readonly status: string
       readonly selected?: readonly string[]
@@ -1933,7 +2083,7 @@ class CdpSession implements TransportSession {
     checked: boolean,
     opts: InteractionOptions = {},
   ): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const state = await this.#evalIn<{
       readonly status: string
       readonly checked?: boolean
@@ -1953,7 +2103,7 @@ class CdpSession implements TransportSession {
     paths: readonly string[],
     _opts: InteractionOptions = {},
   ): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const renderer = await this.#activeRenderer()
     const conn = renderer.conn
     // DOM.querySelector cannot cross a shadow boundary or reach into an in-process frame. Resolve
@@ -2014,7 +2164,7 @@ class CdpSession implements TransportSession {
   }
 
   async dragTo(source: string, target: string, opts: InteractionOptions = {}): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const from = await this.#interactionPoint(source, opts)
     await from.conn.send('Input.dispatchMouseEvent', {
       type: 'mouseMoved',
@@ -2064,7 +2214,7 @@ class CdpSession implements TransportSession {
   }
 
   async scroll(opts: ScrollOptions = {}): Promise<void> {
-    this.#requireRunning()
+    await this.#ensureConnected()
     const renderer = await this.#activeRenderer()
     if (opts.selector !== undefined) {
       const found = await this.#evalIn<boolean>(renderer, buildScrollIntoViewBody(), {
@@ -2199,7 +2349,7 @@ export interface CDPTransportOptions {
   readonly spawnProcess?: SpawnProcess
   /** Loopback-port reservation override. Defaults to a short-lived IPv4 TCP listener. */
   readonly reserveLoopbackPort?: ReserveLoopbackPort
-  /** Platform override for credential-store defaults. Defaults to `process.platform`. */
+  /** Platform override for credential-store and editing-command defaults. Defaults to `process.platform`. */
   readonly platform?: NodeJS.Platform
   /** Packaged-launch poll interval override. */
   readonly launchPollIntervalMs?: number
@@ -2230,7 +2380,6 @@ export class CDPTransport implements ITransport {
   readonly #deps: CdpSessionDeps
   readonly #spawnProcess: SpawnProcess
   readonly #reserveLoopbackPort: ReserveLoopbackPort
-  readonly #platform: NodeJS.Platform
   readonly #launchPollIntervalMs: number
 
   constructor(opts: CDPTransportOptions = {}) {
@@ -2239,10 +2388,10 @@ export class CDPTransport implements ITransport {
       fetchJson: opts.fetchJson ?? defaultFetchJson,
       killProcess: opts.killProcess ?? defaultKillProcess,
       defaultMethodTimeoutMs: opts.defaultMethodTimeoutMs,
+      platform: opts.platform ?? process.platform,
     }
     this.#spawnProcess = opts.spawnProcess ?? defaultSpawnProcess
     this.#reserveLoopbackPort = opts.reserveLoopbackPort ?? defaultReserveLoopbackPort
-    this.#platform = opts.platform ?? process.platform
     this.#launchPollIntervalMs = opts.launchPollIntervalMs ?? LAUNCH_POLL_INTERVAL_MS
   }
 
@@ -2443,10 +2592,10 @@ export class CDPTransport implements ITransport {
     mode: NonNullable<LaunchOptions['credentialStore']>,
   ): readonly string[] {
     if (mode === 'system') return []
-    if (this.#platform === 'darwin' && !hasSwitch(callerArgs, 'use-mock-keychain')) {
+    if (this.#deps.platform === 'darwin' && !hasSwitch(callerArgs, 'use-mock-keychain')) {
       return ['--use-mock-keychain']
     }
-    if (this.#platform === 'linux' && !hasSwitch(callerArgs, 'password-store')) {
+    if (this.#deps.platform === 'linux' && !hasSwitch(callerArgs, 'password-store')) {
       return ['--password-store=basic']
     }
     return []

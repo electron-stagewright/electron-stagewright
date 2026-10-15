@@ -14,16 +14,28 @@
 
 import { z } from 'zod'
 
-import { makeSuccess } from '../../errors/envelope.js'
+import { makeError, makeSuccess } from '../../errors/envelope.js'
+import type { WalkScopeMiss } from '../../snapshot/renderer-entry.js'
 import {
+  type ScopedSnapshot,
   type Snapshot,
+  type WalkScope,
   compactDiff,
   diffSnapshots,
   markRecentlyChanged,
   renderDiffText,
   renderSnapshotText,
+  scopeDiff,
+  scopeSnapshot,
   truncateDiffToBudget,
 } from '../../snapshot/index.js'
+import {
+  buildMissError,
+  resolveTarget,
+  staleRefError,
+  targetRef,
+  withFreshRefs,
+} from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { loadInjectedWalker, runWalk } from './inject.js'
 import { reconcileRetagAndStore } from './refs.js'
@@ -46,6 +58,13 @@ const inputSchema = z.object({
     .boolean()
     .optional()
     .describe('Return only interactive elements (drops landmarks) to save tokens.'),
+  root: z
+    .object({ ref: z.number().int().positive().optional(), selector: z.string().min(1).optional() })
+    .optional()
+    .describe(
+      'Return only this element subtree (one of ref/selector; refs exist only on interactive' +
+        ' elements, so use selector for dialogs/panels). Diffs scope too; refs stay global.',
+    ),
   maxEntries: z
     .number()
     .int()
@@ -85,7 +104,8 @@ const inputSchema = z.object({
 const DESCRIPTION = [
   'Capture the selected renderer surface accessibility tree: interactive elements (and landmarks) with role, name,',
   'state, bbox, and a stable ref. Pass since:"last" for only what changed since the previous',
-  'snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap.',
+  'snapshot (added/removed/changed + ref_map), interactiveOnly to drop landmarks, maxEntries to cap,',
+  'root to return one subtree.',
   'format:"text" returns a compact one-line-per-entry rendering instead of JSON (5-10x fewer',
   'tokens): `[ref] role "name" value=… flags`, ~ marks recently-changed, [-] marks landmarks.',
   'Diffs default to a compact encoding (changed fields only; diffFormat:"full" restores complete',
@@ -98,7 +118,8 @@ const DESCRIPTION = [
   'Returns: { ok, surface_id, kind: "full" | "diff", snapshot?, diff?, snapshot_text?, diff_text?,',
   'diff_format?, renderer_reloaded, truncated }.',
   'Errors: NOT_RUNNING (no session — call electron_launch first; not retryable),',
-  'BAD_ARGUMENT (multiple sessions live — pass sessionId).',
+  'BAD_ARGUMENT (multiple sessions live — pass sessionId; bad root),',
+  'REF_NOT_FOUND / SELECTOR_NO_MATCH (root missing).',
 ].join(' ')
 
 /** Apply interactive-only filtering and the entry cap. Returns the (possibly new) snapshot. */
@@ -121,6 +142,17 @@ function applyFilters(
   }
   return { snapshot: { ...snapshot, entries }, truncated }
 }
+
+/** What the locked walk produced: a stabilised snapshot, or a root that resolved to nothing. */
+type LockedWalk =
+  | {
+      readonly prev: Snapshot | undefined
+      readonly curr: Snapshot
+      readonly comparable: boolean
+      readonly reloaded: boolean
+      readonly scope: WalkScope | undefined
+    }
+  | { readonly miss: WalkScopeMiss }
 
 /** Dependency seams for {@link makeSnapshotTool} — injected by tests. */
 export interface SnapshotToolDeps {
@@ -147,28 +179,63 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       const maxEntries = args.maxEntries ?? DEFAULT_MAX_ENTRIES
       const surface = await managed.session.activeSurface()
 
+      const rootSelector = args.root === undefined ? undefined : resolveTarget(args.root)
+      const rootRef = args.root === undefined ? undefined : targetRef(args.root)
+
       // Stabilise the walk: reconcile refs against the stored baseline, retag the
       // renderer DOM, stamp the reload flag, and store the FULL unfiltered snapshot
-      // as the diff baseline. Filters (interactiveOnly / maxEntries) apply only to
-      // what is RETURNED — never to the stored baseline — so a later since:'last'
+      // as the diff baseline. Filters (root / interactiveOnly / maxEntries) apply only
+      // to what is RETURNED — never to the stored baseline — so a later since:'last'
       // diff stays accurate even if this call (or the previous one) filtered.
-      const { prev, curr, comparable, reloaded } = await ctx.snapshots.withRefLock(
-        managed.id,
-        async () => {
-          const baseline = ctx.snapshots.get(managed.id, surface.id)
-          const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})
-          const stabilised = await reconcileRetagAndStore({
-            session: managed.session,
-            store: ctx.snapshots,
-            sessionId: managed.id,
-            surfaceId: surface.id,
-            prev: baseline,
-            walked,
+      const walkAndStore = async (): Promise<LockedWalk> => {
+        const baseline = ctx.snapshots.get(managed.id, surface.id)
+        const raw = await runWalk<ScopedSnapshot | WalkScopeMiss>(
+          managed.session,
+          loadBundle(),
+          rootSelector === undefined ? {} : { scope: rootSelector },
+        )
+        if ('scope_miss' in raw) return { miss: raw }
+        const { scope, ...walked } = raw
+        const stabilised = await reconcileRetagAndStore({
+          session: managed.session,
+          store: ctx.snapshots,
+          sessionId: managed.id,
+          surfaceId: surface.id,
+          prev: baseline,
+          walked,
+        })
+        return { prev: baseline, ...stabilised, scope }
+      }
+      // A ref root is checked against the stored snapshot inside the same lock as the walk.
+      const locked =
+        rootRef !== undefined
+          ? await withFreshRefs(ctx, managed.session, managed.id, [{ ref: rootRef }], walkAndStore)
+          : {
+              value: await ctx.snapshots.withRefLock(
+                managed.id,
+                surface.id,
+                walkAndStore,
+                ctx.signal,
+              ),
+            }
+      if ('staleRef' in locked) return staleRefError(ctx, managed.session, meta, locked.staleRef)
+      if ('miss' in locked.value) {
+        const { miss } = locked.value
+        if (miss.invalid_selector === true) {
+          return makeError('BAD_ARGUMENT', {
+            ...meta,
+            message: `Invalid root selector: ${miss.error ?? 'parse failure'}`.slice(0, 200),
           })
-          return { prev: baseline, ...stabilised }
-        },
-        ctx.signal,
-      )
+        }
+        if (rootRef !== undefined) return staleRefError(ctx, managed.session, meta, rootRef)
+        return buildMissError('SELECTOR_NO_MATCH', {
+          ctx,
+          session: managed.session,
+          meta,
+          message: 'root selector matched no element.',
+        })
+      }
+      const { prev, curr, comparable, reloaded, scope } = locked.value
 
       // since:'last' → the delta against the previous snapshot. Filters apply to
       // full snapshots, not to a diff (a diff is already only what changed). The
@@ -176,7 +243,10 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       // type narrows. Compact is the default encoding — the full prev/curr pairs
       // blow MCP-client token caps on busy dialogs; diffFormat:'full' restores them.
       if (args.since === 'last' && comparable && prev !== undefined) {
-        const fullDiff = diffSnapshots(prev, curr)
+        const fullDiff =
+          scope === undefined
+            ? diffSnapshots(prev, curr)
+            : scopeDiff(diffSnapshots(prev, curr, { skipTokenEstimate: true }), prev, curr, scope)
         // Text encoding always shapes from the compact diff (the full prev/curr pairs
         // exist to be machine-applied, which a text consumer is not doing).
         if (args.format === 'text') {
@@ -225,7 +295,7 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
           ? markRecentlyChanged(curr, diffSnapshots(prev, curr, { skipTokenEstimate: true }))
           : curr
       const { snapshot, truncated } = applyFilters(
-        marked,
+        scope === undefined ? marked : scopeSnapshot(marked, scope),
         args.interactiveOnly === true,
         maxEntries,
       )

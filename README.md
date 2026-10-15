@@ -188,6 +188,9 @@ option; diagnostics go to stderr (stdout is reserved for the JSON-RPC protocol c
 | `--plugin <name\|path>`                     | Load a plugin by package name, first-party short name, or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin trace` expands to `@electron-stagewright/plugin-trace`. After loading one, call `electron_plugins` to inspect enabled or disabled tools and their gate requirements.                                                                                                                                                                                                                                                                                               |
 | `--plugin-config <name>=<json>`             | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name; invalid input reports its Zod field path and correction input. `electron_plugins` returns only fields the plugin explicitly marks safe.                                                                                                                                                                                                                                                                                                                                                                      |
 
+The server exits `0` after a clean shutdown (SIGINT, SIGTERM, or the host closing stdin), `1` when
+startup or shutdown teardown fails, and `2` for invalid usage such as an unknown flag.
+
 Security defaults worth knowing when wiring this into another project: arbitrary JS (the
 `--allow-eval` policy) and host-path launches (`--app-root`) are opt-in; `electron_launch` refuses
 runtime-altering env vars (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `LD_*`, `DYLD_*`); and
@@ -273,7 +276,7 @@ This project is in its earliest days. Issues and discussions welcome. See [CONTR
 `pnpm test` and `pnpm test:coverage` select the ordinary `unit` project, retained across
 all six OS/Node CI cells. `pnpm test:real` selects the serialized `real-electron` project
 and checks actual JSON results against `scripts/real-test-inventory.json` (24 reviewed files,
-34 scenarios). It refuses missing binaries/required native-addon fixture inputs and rejects
+35 scenarios). It refuses missing binaries/required native-addon fixture inputs and rejects
 missing, skipped or zero execution. Prepare Linux/macOS native inputs with
 `node scripts/prepare-native-addon-fixture.mjs` and export the two variables it prints.
 Windows explicitly omits the one unsupported native-addon recovery scenario.

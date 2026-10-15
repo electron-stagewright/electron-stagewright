@@ -738,6 +738,8 @@ describe('CDP console + dialog capture', () => {
     })
 
     server.closeSockets('browser')
+    // Keep the endpoint down so the reconnect on the next app-touching call fails.
+    server.refuseConnections = true
 
     await expect(session.consoleLogs()).resolves.toMatchObject({
       entries: [{ type: 'error', text: 'crash' }],

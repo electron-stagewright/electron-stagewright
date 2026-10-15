@@ -15,8 +15,9 @@
  *    stored snapshot) so the agent recovers in one turn.
  * 3. **Ref freshness** — a `ref` only means something relative to a snapshot; if
  *    the latest stored snapshot lacks it, fail fast rather than acting on a tag
- *    that may now point at the wrong element. A ref is acted on under the
- *    session's ref lock so a concurrent walk cannot renumber its tag mid-action.
+ *    that may now point at the wrong element. A ref (or its canonical
+ *    `[data-sw-ref="N"]` selector) is acted on under its surface's ref lock so a
+ *    concurrent walk cannot renumber its tag mid-action.
  *
  * @module
  */
@@ -25,6 +26,7 @@ import { type ErrorResponse, type SimilarRef, makeError } from '../errors/envelo
 import { type ErrorCode, StagewrightError } from '../errors/registry.js'
 import { untilAborted } from '../server/snapshot-store.js'
 import type { Snapshot } from '../snapshot/index.js'
+import { refFromSelector } from '../snapshot/resolve-target.js'
 import type { TransportSession } from '../transports/index.js'
 import { loadInjectedWalker, runWalk } from './snapshot/inject.js'
 import { reconcileRetagAndStore } from './snapshot/refs.js'
@@ -221,6 +223,7 @@ async function gatherSimilarRefs(cx: {
   try {
     source = await store.withRefLock(
       cx.sessionId,
+      surface.id,
       async () => {
         const stored = store.get(cx.sessionId, surface.id)
         const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {}, cx.ctx.signal)
@@ -338,38 +341,57 @@ export async function handleTargetFailure(
 /** Outcome of {@link withFreshRefs}: the task's value, or the first ref missing from the latest snapshot. */
 export type FreshRefsOutcome<T> = { readonly value: T } | { readonly staleRef: number }
 
+/** A tool target that may address a snapshot ref, directly or through its canonical selector. */
+export interface RefTarget {
+  readonly ref?: number | undefined
+  readonly selector?: string | undefined
+}
+
+/** The ref `target` addresses: its `ref`, or N for a canonical `[data-sw-ref="N"]` selector. */
+export function targetRef(target: RefTarget): number | undefined {
+  if (target.ref !== undefined) return target.ref
+  return target.selector === undefined ? undefined : refFromSelector(target.selector)
+}
+
 /**
- * Ref-freshness guard. With any `ref` set, check each against the latest stored snapshot and run
- * `task` while holding the session's ref lock, so a walk cannot renumber the DOM tags between
- * resolving the ref and acting on it. A stale ref is returned instead of running `task`; selector
- * targets run unlocked. Miss diagnosis takes the same lock, so callers diagnose after this settles.
- * A `readOnly` task gives the lock up once the request is cancelled, since its result is discarded.
+ * Ref-freshness guard. With any target addressing a ref, check each ref against the latest stored
+ * snapshot and run `task` while holding the active surface's ref lock, so a walk cannot renumber
+ * the DOM tags between resolving the ref and acting on it. A stale ref is returned instead of
+ * running `task`; other selector targets run unlocked. Miss diagnosis takes the same lock, so
+ * callers diagnose after this settles. A `readOnly` task gives the lock up once the request is
+ * cancelled, since its result is discarded.
  */
 export async function withFreshRefs<T>(
   ctx: ToolContext,
   session: TransportSession,
   sessionId: string,
-  refs: readonly (number | undefined)[],
+  targets: readonly RefTarget[],
   task: () => Promise<T>,
   opts: { readonly readOnly?: boolean } = {},
 ): Promise<FreshRefsOutcome<T>> {
-  const used = refs.filter((ref): ref is number => ref !== undefined)
+  const used = targets.map(targetRef).filter((ref): ref is number => ref !== undefined)
   if (used.length === 0) return { value: await task() }
-  return ctx.snapshots.withRefLock(
-    sessionId,
-    async () => {
-      const surface = await session.activeSurface()
-      const stored = ctx.snapshots.get(sessionId, surface.id)
-      const staleRef =
-        stored === undefined ? undefined : used.find((ref) => !snapshotHasRef(stored, ref))
-      if (staleRef !== undefined) return { staleRef }
-      const running = task()
-      if (opts.readOnly !== true) return { value: await running }
-      running.catch(() => undefined)
-      return { value: await untilAborted(running, ctx.signal) }
-    },
-    ctx.signal,
-  )
+  for (;;) {
+    const surface = await session.activeSurface()
+    const outcome = await ctx.snapshots.withRefLock(
+      sessionId,
+      surface.id,
+      async (): Promise<FreshRefsOutcome<T> | undefined> => {
+        // A surface switch while queued means this lock no longer guards the target's tags.
+        if ((await session.activeSurface()).id !== surface.id) return undefined
+        const stored = ctx.snapshots.get(sessionId, surface.id)
+        const staleRef =
+          stored === undefined ? undefined : used.find((ref) => !snapshotHasRef(stored, ref))
+        if (staleRef !== undefined) return { staleRef }
+        const running = task()
+        if (opts.readOnly !== true) return { value: await running }
+        running.catch(() => undefined)
+        return { value: await untilAborted(running, ctx.signal) }
+      },
+      ctx.signal,
+    )
+    if (outcome !== undefined) return outcome
+  }
 }
 
 /** The `REF_NOT_FOUND` envelope (with live candidates) for a ref absent from the latest snapshot. */

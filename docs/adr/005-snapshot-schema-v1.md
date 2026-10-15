@@ -98,3 +98,24 @@ public response. Snapshot schema v1, ref reconciliation, DOM retagging, error
 mapping, and Injector's renderer-evaluation boundary are unchanged. The marker
 is memoized alongside the cached bundle on the server, while its validity is
 always checked against the actual renderer global, not session-local state.
+
+## Status Update — 2026-10-15: root-scoped snapshots
+
+`electron_snapshot` accepts `root: { ref } | { selector }` to return only one
+element's composed subtree (the element itself, its descendants, and open or
+exposed shadow content inside it).
+
+- The renderer resolves the root before the walk clears and rewrites ref tags,
+  then walks the whole document as before and reports which entry positions
+  fall inside the root. Refs, reconciliation, retagging, and the stored
+  baseline stay global; scoping is a view over the full walk, like
+  `interactiveOnly` / `maxEntries`.
+- `since:'last'` diffs are computed globally, then restricted: added and
+  changed entries by their current position, removed entries by where they sat
+  between surviving out-of-scope neighbours. A removal right at the subtree's
+  edge can therefore be reported even if it was a sibling, never the reverse.
+- A ref root is checked against the stored snapshot under the session ref
+  lock (`REF_NOT_FOUND` when stale); a root that no longer resolves returns
+  `REF_NOT_FOUND` / `SELECTOR_NO_MATCH` with `similar_refs` and leaves the DOM
+  tags untouched. Landmarks and dialogs have no ref, so they are scoped by
+  selector.

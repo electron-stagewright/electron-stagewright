@@ -113,7 +113,7 @@ export async function runTargetedRead(
       ctx,
       managed.session,
       managed.id,
-      [args.ref],
+      [args],
       () => runRendererCall(managed.session, build(selector)),
       { readOnly: true },
     )

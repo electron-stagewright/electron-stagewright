@@ -142,7 +142,24 @@ export interface WalkerOptions {
    * renderer-injected snapshot tool passes it.
    */
   readonly refAttribute?: string
+  /**
+   * Report which entries sit in this element's composed subtree (itself included)
+   * via {@link ScopedSnapshot.scope}. The walk, refs and tagging still cover the
+   * whole document; only the membership report is scoped.
+   */
+  readonly scopeRoot?: Element
 }
+
+/** Entry positions (into `entries`) inside a scoped walk's root subtree. */
+export interface WalkScope {
+  /** Number of entries emitted before the root was reached in walk order. */
+  readonly start: number
+  /** Ascending positions of the root subtree's entries. */
+  readonly indices: readonly number[]
+}
+
+/** A walk result; `scope` is present only when {@link WalkerOptions.scopeRoot} was set. */
+export type ScopedSnapshot = Snapshot & { readonly scope?: WalkScope }
 
 /** Mutable ref allocator threaded through the recursive walk. */
 interface RefCounter {
@@ -155,6 +172,13 @@ interface WalkContext {
   readonly depth: number
 }
 
+/** Mutable scope bookkeeping threaded through the recursive walk. */
+interface ScopeTracker {
+  readonly root: Element
+  start: number | undefined
+  readonly indices: number[]
+}
+
 /**
  * Walk the DOM rooted at `document` and produce the snapshot. Pure function:
  * deterministic given the same DOM state. Safe to call repeatedly — every call
@@ -163,12 +187,26 @@ interface WalkContext {
  * Walks the light DOM and open shadow roots in document order, then walks any
  * closed shadow roots exposed via the registration array / inspect callback hooks.
  */
-export function walkAccessibilityTree(document: Document, options: WalkerOptions = {}): Snapshot {
+export function walkAccessibilityTree(
+  document: Document,
+  options: WalkerOptions = {},
+): ScopedSnapshot {
   const entries: SnapshotEntry[] = []
   const refCounter: RefCounter = { next: 1 }
+  const scope: ScopeTracker | undefined =
+    options.scopeRoot !== undefined
+      ? { root: options.scopeRoot, start: undefined, indices: [] }
+      : undefined
 
   // Light DOM + open shadow roots, recursively.
-  walkRoot(document, entries, refCounter, { shadowClosed: false, depth: 0 }, options.refAttribute)
+  walkRoot(
+    document,
+    entries,
+    refCounter,
+    { shadowClosed: false, depth: 0 },
+    options.refAttribute,
+    scope,
+  )
 
   // Closed shadow roots the app author opted to expose.
   for (const shadowRoot of getInspectableClosedShadows(document)) {
@@ -178,14 +216,24 @@ export function walkAccessibilityTree(document: Document, options: WalkerOptions
       refCounter,
       { shadowClosed: true, depth: 0 },
       options.refAttribute,
+      scope,
     )
   }
 
-  return {
-    schemaVersion: 1,
-    entries,
-    meta: extractMeta(document, options),
+  const snapshot: Snapshot = { schemaVersion: 1, entries, meta: extractMeta(document, options) }
+  if (scope === undefined) return snapshot
+  const start = scope.start ?? scope.indices[0] ?? entries.length
+  return { ...snapshot, scope: { start, indices: scope.indices } }
+}
+
+/** Whether `element` is `root` or one of its descendants in the composed tree. */
+function isInComposedSubtree(element: Element, root: Element): boolean {
+  let current: Element | null = element
+  while (current !== null) {
+    if (current === root) return true
+    current = composedParentElement(current)
   }
+  return false
 }
 
 /**
@@ -200,10 +248,12 @@ function walkRoot(
   refCounter: RefCounter,
   ctx: WalkContext,
   refAttribute: string | undefined,
+  scope: ScopeTracker | undefined,
 ): void {
   if (refAttribute !== undefined) clearRefAttributes(root, refAttribute)
   const candidates = collectCandidateSet(root)
   for (const element of collectElements(root)) {
+    if (scope !== undefined && element === scope.root) scope.start = entries.length
     if (candidates.has(element)) {
       const entry = enrichEntry(element, refCounter.next, ctx.shadowClosed)
       if (entry !== null) {
@@ -222,6 +272,9 @@ function walkRoot(
             }
           }
         }
+        if (scope !== undefined && isInComposedSubtree(element, scope.root)) {
+          scope.indices.push(entries.length)
+        }
         entries.push(entry)
       }
     }
@@ -235,6 +288,7 @@ function walkRoot(
         refCounter,
         { shadowClosed: ctx.shadowClosed, depth: ctx.depth + 1 },
         refAttribute,
+        scope,
       )
     }
   }

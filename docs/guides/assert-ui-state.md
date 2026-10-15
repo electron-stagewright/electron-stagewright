@@ -82,9 +82,15 @@ The dispatch timeout triggers the same cleanup. Apps started by a cancelled laun
 existing apps being attached or injected remain running. Fixed-wait timers are released immediately,
 and role-count expectations stop scheduling accessibility re-walks. A walk that was already running
 in the renderer when the request was cancelled has renumbered the element refs, so its result is
-still reconciled and stored once it returns. Walks on one session are serialized, so a snapshot,
-find, ref diagnosis or `ref`-targeted action, read, wait or expectation started in the meantime waits
-for that reconciliation and its refs stay valid. Selector targets do not wait.
+still reconciled and stored once it returns. Walks on one renderer surface are serialized, so a
+snapshot, find, ref diagnosis or `ref`-targeted action, read, wait or expectation started in the
+meantime waits for that reconciliation and its refs stay valid. A selector that is exactly a ref's
+`[data-sw-ref="N"]` form counts as that ref; other selector targets do not wait. A ref wait or
+expectation holds that turn only while it resolves the ref, so a parallel `ref` action that
+satisfies it is not blocked. If a walk renumbers the refs during the wait, the wait rechecks the ref
+after the walk settles and continues with the remaining budget; a ref the new snapshot dropped
+reports `REF_NOT_FOUND`. A walk that keeps the renderer busy for more than 60 seconds makes queued
+calls fail with the retryable `RENDERER_BUSY` instead of waiting behind it.
 
 Cancellation cannot interrupt or undo JavaScript already sent to Electron, including a renderer
 poll. An operation on an existing session may still finish, so inspect app state before retrying a
@@ -109,6 +115,20 @@ brackets, and commas. It uses the server's character-count / 4 heuristic, not a 
 tokenizer, and excludes `ref_map`, metadata, and the response envelope. The server drops
 lowest-value entries first and reports how many under `_meta.truncated_entries`. Over a multi-turn
 session this is the difference between re-reading thousands of tokens per turn and reading tens.
+
+## Looking at one region: scoped snapshots
+
+When only a dialog, panel, or list matters, scope the snapshot to it:
+
+```json
+electron_snapshot { "root": { "selector": "[role=dialog]" } }
+```
+
+Only entries inside that element are returned; refs are the same ones a full snapshot would
+show, so they work with every other tool. Pass `root: { "ref": N }` for an interactive container
+such as a listbox (landmarks and dialogs have no ref, so use a selector). `root` combines with
+`since: "last"`, `interactiveOnly`, `maxEntries`, and `format: "text"`. On the bench app, scoping
+to the greeting form returns about 10% of the full snapshot's tokens.
 
 ## Putting it together
 
