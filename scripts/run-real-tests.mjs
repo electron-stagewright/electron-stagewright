@@ -14,11 +14,19 @@ await rm(report, { force: true })
 const requireCore = createRequire(path.join(root, 'packages/core/package.json'))
 // Read provisioned files directly: newer Electron packages may try to download a binary
 // as a side effect of require('electron'). Missing qualification inputs must fail closed.
+// Mirror electron's own resolution, including the ELECTRON_OVERRIDE_DIST_PATH the harness forwards.
 const electronDirectory = path.dirname(requireCore.resolve('electron/package.json'))
+const overrideDist = process.env.ELECTRON_OVERRIDE_DIST_PATH
 try {
-  const executable = (await readFile(path.join(electronDirectory, 'path.txt'), 'utf8')).trim()
+  const pathFile = await readFile(path.join(electronDirectory, 'path.txt'), 'utf8').catch(
+    (error) => {
+      if (overrideDist) return ''
+      throw error
+    },
+  )
+  const executable = pathFile.trim() || (overrideDist ? 'electron' : '')
   if (!executable) throw new Error('Empty Electron path.txt')
-  await access(path.join(electronDirectory, 'dist', executable))
+  await access(path.join(overrideDist || path.join(electronDirectory, 'dist'), executable))
 } catch (cause) {
   throw new Error(
     'Missing provisioned Electron binary; run the supported binary preparation before qualification',

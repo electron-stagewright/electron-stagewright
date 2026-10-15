@@ -104,6 +104,15 @@ export interface CliOptions {
   readonly productionArgs?: readonly string[]
 }
 
+const VALUE_FLAGS = new Set([
+  '--screenshot-dir',
+  '--app-root',
+  '--operation-timeout-ms',
+  '--tool-profile',
+  '--plugin',
+  '--plugin-config',
+])
+
 function requireValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index + 1]
   if (value === undefined || value.startsWith('--')) {
@@ -305,6 +314,11 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
     if (arg === '--help' || arg === '-h' || arg === '--version' || arg === '-V') {
       throw new CliUsageError(`${arg} must be used on its own`)
     }
+    const flag = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : undefined
+    if (flag !== undefined && VALUE_FLAGS.has(flag)) {
+      throw new CliUsageError(`${flag} takes its value as a separate argument: ${flag} <value>`)
+    }
+    if (arg === '--json') throw new CliUsageError('--json is only valid with doctor')
     if (arg.startsWith('-')) throw new CliUsageError(`Unknown option: ${arg}`)
     throw new CliUsageError(`Unexpected argument: ${arg}`)
   }
