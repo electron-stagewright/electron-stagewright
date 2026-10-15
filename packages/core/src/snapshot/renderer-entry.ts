@@ -24,7 +24,7 @@
  */
 
 import { computeAccessibleName } from './accname.js'
-import { queryTarget } from './resolve-target.js'
+import { WALK_GENERATION_GLOBAL, queryTarget } from './resolve-target.js'
 import { resolveRole } from './roles.js'
 import type { SnapshotBbox, SnapshotRole, SnapshotState } from './schema.js'
 import { extractState } from './state.js'
@@ -106,6 +106,7 @@ export interface StagewrightWalkGlobal {
 }
 
 const target = globalThis as typeof globalThis & StagewrightWalkGlobal
+const generations = globalThis as unknown as Record<string, number | undefined>
 
 /** Walk `document`, tagging refs; a `scope` selector is resolved first and reported on. */
 export function walkForSnapshot(
@@ -131,8 +132,10 @@ export function walkForSnapshot(
   return walkAccessibilityTree(document, { ...options, refAttribute: REF_ATTRIBUTE, scopeRoot })
 }
 
-target.__stagewrightWalk = (arg?: WalkArg): ScopedSnapshot | WalkScopeMiss =>
-  walkForSnapshot(document, arg)
+target.__stagewrightWalk = (arg?: WalkArg): ScopedSnapshot | WalkScopeMiss => {
+  generations[WALK_GENERATION_GLOBAL] = (generations[WALK_GENERATION_GLOBAL] ?? 0) + 1
+  return walkForSnapshot(document, arg)
+}
 
 /** Bounding box matching the walker's `computeBbox` (zeros in a layout-less runtime). */
 function probeBbox(element: Element): SnapshotBbox {

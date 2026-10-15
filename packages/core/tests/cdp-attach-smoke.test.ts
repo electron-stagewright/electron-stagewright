@@ -3,7 +3,8 @@
  * the transport-owned endpoint and also spawns the fixture with
  * `--remote-debugging-port=0` for attach coverage. Drives the REAL CDP transport
  * end to end through the dispatcher, including default-surface snapshot/find,
- * renderer eval, console/network capture, detach ownership, and process reaping.
+ * renderer eval, console/network capture, platform editing chords, detach
+ * ownership, and process reaping.
  *
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1` (and the `electron` devDep binary
  * is installed). Skipped by default so `pnpm test` stays fast and headless-CI-safe.
@@ -22,6 +23,7 @@ import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { attachTool } from '../src/tools/lifecycle/attach.js'
 import { CDPTransport } from '../src/transports/cdp.js'
+import { keyboardTypeTool, keyTool, typeTool } from '../src/tools/interaction/index.js'
 import { detachTool, launchTool, stopTool } from '../src/tools/lifecycle/index.js'
 import { findTool, snapshotTool } from '../src/tools/snapshot/index.js'
 
@@ -341,6 +343,61 @@ describe('CDP attach smoke (real Electron)', () => {
       expect(proc.exitCode).not.toBeNull()
     },
     120_000,
+  )
+
+  it.skipIf(!RUN_E2E)(
+    'selects all and deletes a word in an input with the platform editing chords',
+    async () => {
+      const { cdpUrl, proc } = await spawnWithCdp()
+      const sessions = new SessionManager()
+      const dispatcher = new Dispatcher({
+        sessions,
+        snapshots: new SnapshotStore(),
+        transports: new TransportRegistry(),
+      })
+      dispatcher.registerAll([attachTool, typeTool, keyTool, keyboardTypeTool, stopTool])
+      // On macOS these chords only work when the key event carries Chromium editing commands.
+      const mac = process.platform === 'darwin'
+      const selectAll = mac ? 'Meta+A' : 'Control+A'
+      const deleteWord = mac ? 'Alt+Backspace' : 'Control+Backspace'
+      try {
+        const attached = (await dispatcher.dispatch('electron_attach', {
+          cdpUrl,
+        })) as SuccessResponse & { readonly session_id: string }
+        expect(attached.ok).toBe(true)
+        const sessionId = attached.session_id
+        const session = sessions.get(sessionId)?.session
+        if (session === undefined) throw new Error('attach returned no session')
+        const field = () =>
+          session.evaluate(
+            'renderer',
+            'const el = document.querySelector("#name"); return { value: el.value, start: el.selectionStart, end: el.selectionEnd };',
+          ) as Promise<{ readonly value: string; readonly start: number; readonly end: number }>
+
+        await expect(
+          dispatcher.dispatch('electron_type', { sessionId, selector: '#name', text: 'old value' }),
+        ).resolves.toMatchObject({ ok: true })
+        await expect(
+          dispatcher.dispatch('electron_key', { sessionId, selector: '#name', key: selectAll }),
+        ).resolves.toMatchObject({ ok: true })
+        expect(await field()).toEqual({ value: 'old value', start: 0, end: 'old value'.length })
+
+        await expect(
+          dispatcher.dispatch('electron_keyboard_type', { sessionId, text: 'new text' }),
+        ).resolves.toMatchObject({ ok: true })
+        expect((await field()).value).toBe('new text')
+
+        await expect(
+          dispatcher.dispatch('electron_key', { sessionId, key: deleteWord }),
+        ).resolves.toMatchObject({ ok: true })
+        expect((await field()).value).toBe('new ')
+
+        await dispatcher.dispatch('electron_stop', { sessionId })
+      } finally {
+        if (proc.exitCode === null) proc.kill('SIGKILL')
+      }
+    },
+    60_000,
   )
 
   it.skipIf(!RUN_E2E)(

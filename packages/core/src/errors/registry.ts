@@ -82,6 +82,11 @@ export const ERROR_CODES = {
     retryable: false,
     hint: 'Call snapshot first.',
   },
+  RENDERER_BUSY: {
+    http: 503,
+    retryable: true,
+    hint: 'The renderer is busy with a previous walk that has not finished; retry shortly, and take a fresh snapshot once it settles.',
+  },
   SURFACE_NOT_FOUND: {
     http: 404,
     retryable: false,

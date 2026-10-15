@@ -271,3 +271,16 @@ callers and observers receive `OPERATION_CANCELLED` (`http: 499`, `retryable: fa
 owns response suppression for cancelled protocol requests. The hint asks callers to inspect app
 state before explicitly starting another operation, since already-dispatched JavaScript may finish.
 Client-provided cancellation reasons are not exposed. The dispatch timeout keeps `OPERATION_TIMEOUT`.
+
+## Status Update (2026-10-15) — added `RENDERER_BUSY`
+
+Accessibility walks and `ref`-targeted operations take a per-surface ref lock (see ADR-022), and a
+walk keeps that lock until its reconcile and retag finish, even after its request was cancelled. A
+renderer that never answers the walk would otherwise leave every queued caller waiting until the
+generic dispatch backstop. Added one code to the registry:
+
+- **`RENDERER_BUSY`** — `http: 503`, `retryable: true`, hint: the renderer is busy with a previous
+  walk; retry shortly and take a fresh snapshot once it settles. Once one holder keeps the lock
+  longer than the budget (60 seconds, matching the maximum wait), queued callers and new callers on
+  that surface fail with this code and `details.budget_ms`. The holder is never released early, so
+  its late reconcile still keeps the refs consistent.

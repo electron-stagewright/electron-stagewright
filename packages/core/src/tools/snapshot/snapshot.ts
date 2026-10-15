@@ -203,8 +203,15 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       // A ref root is checked against the stored snapshot inside the same lock as the walk.
       const locked =
         rootRef !== undefined
-          ? await withFreshRefs(ctx, managed.session, managed.id, [rootRef], walkAndStore)
-          : { value: await ctx.snapshots.withRefLock(managed.id, walkAndStore, ctx.signal) }
+          ? await withFreshRefs(ctx, managed.session, managed.id, [{ ref: rootRef }], walkAndStore)
+          : {
+              value: await ctx.snapshots.withRefLock(
+                managed.id,
+                surface.id,
+                walkAndStore,
+                ctx.signal,
+              ),
+            }
       if ('staleRef' in locked) return staleRefError(ctx, managed.session, meta, locked.staleRef)
       if ('miss' in locked.value) {
         const { miss } = locked.value
