@@ -55,6 +55,8 @@ export function reconcileWalkedSnapshot(
  * reload flag, and store the result as the new baseline. Returns the stored
  * snapshot plus the flags both callers need. Keeping this in one place stops the
  * two tools from drifting on how a walk becomes the canonical session view.
+ * Callers hold {@link SnapshotStore.withRefLock} from reading `prev` through
+ * this call so another walk cannot renumber the tags in between.
  */
 export async function reconcileRetagAndStore(args: {
   readonly session: TransportSession
