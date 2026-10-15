@@ -7,6 +7,8 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { type Snapshot, walkAccessibilityTree } from '../src/snapshot/index.js'
 import { makeExpectCountTool } from '../src/tools/expect/count.js'
+import { getTextTool } from '../src/tools/read/value.js'
+import { makeFindTool } from '../src/tools/snapshot/find.js'
 import { makeSnapshotTool } from '../src/tools/snapshot/snapshot.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
@@ -128,5 +130,36 @@ describe('ref walk serialization', () => {
     holder.resolve()
     await Promise.all([first, third])
     expect(ran).toEqual(['first', 'third'])
+  })
+
+  it.each([
+    ['electron_find', { role: 'button' }],
+    ['electron_get_text', { selector: '#missing' }],
+  ])('%s waits for a walk already holding the session ref lock', async (tool, args) => {
+    const sessions = new SessionManager()
+    const snapshots = new SnapshotStore()
+    let walks = 0
+    const session = new FakeSession({
+      id: 'sess',
+      evaluate: async (_target, body) => {
+        if (!body.includes('__stagewrightWalk')) return { found: false }
+        walks++
+        return snap('<button>A</button>')
+      },
+    })
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
+    dispatcher.register(makeFindTool({ loadBundle: () => '' }))
+    dispatcher.register(getTextTool)
+    const holder = deferred()
+    const held = snapshots.withRefLock('sess', () => holder.promise)
+
+    const pending = dispatcher.dispatch(tool, args)
+    for (let i = 0; i < 4; i++) await flush()
+    expect(walks).toBe(0)
+    holder.resolve()
+    await held
+    await pending
+    expect(walks).toBe(1)
   })
 })
