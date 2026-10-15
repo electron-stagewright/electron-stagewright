@@ -56,6 +56,10 @@
  * every live session disposed, so a host exit never leaves a launched Electron
  * process orphaned.
  *
+ * Exit codes: `0` on success or a clean shutdown, `1` on a startup failure, a failed
+ * `doctor` check, or a shutdown whose teardown threw, and `2` for invalid usage.
+ * `production validate` reports its own `0` / `1` / `2` contract.
+ *
  * @module
  */
 
@@ -86,6 +90,11 @@ export function formatCliFailure(error: unknown): string {
   if (error instanceof StagewrightError) return `fatal: ${error.code}: ${error.message}\n`
   const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
   return `fatal: ${detail}\n`
+}
+
+/** Usage errors exit 2, like the `production` subcommand; every other failure exits 1. */
+export function cliFailureExitCode(error: unknown): number {
+  return error instanceof CliUsageError ? 2 : 1
 }
 
 export type CliCommand = 'serve' | 'help' | 'version' | 'doctor' | 'production'
@@ -431,25 +440,24 @@ async function main(): Promise<void> {
   const { server } = configured
 
   let shuttingDown = false
-  const shutdown = async (reason: string): Promise<void> => {
+  const shutdown = (reason: string): void => {
     if (shuttingDown) return
     shuttingDown = true
     logger.info('Shutting down', { reason })
-    try {
-      await server.close()
-    } catch (err) {
+    server.close().catch((err: unknown) => {
       logger.error('Error during shutdown', {
         error: err instanceof Error ? err.message : String(err),
       })
-    } finally {
-      process.exit(0)
-    }
+    })
   }
-  process.on('SIGINT', () => void shutdown('SIGINT'))
-  process.on('SIGTERM', () => void shutdown('SIGTERM'))
-  // The SDK stdio transport ignores end-of-input; a launched app would keep the process alive.
-  process.stdin.once('end', () => void shutdown('stdin closed'))
-  process.stdin.once('close', () => void shutdown('stdin closed'))
+  process.on('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
+  // connectStdio closes the server itself when the host closes stdin; a launched app would
+  // otherwise hold the event loop open, so exit once teardown settles, whatever triggered it.
+  void server.closed.then(
+    () => process.exit(0),
+    () => process.exit(1),
+  )
 
   await server.connectStdio()
   logger.info('electron-stagewright MCP server ready (stdio)', {
@@ -484,6 +492,6 @@ export function isMainEntryPoint(moduleUrl: string, entryPath: string | undefine
 if (isMainEntryPoint(import.meta.url, process.argv[1])) {
   main().catch((err: unknown) => {
     process.stderr.write(formatCliFailure(err))
-    process.exit(1)
+    process.exit(cliFailureExitCode(err))
   })
 }
