@@ -188,6 +188,9 @@ option; diagnostics go to stderr (stdout is reserved for the JSON-RPC protocol c
 | `--plugin <name\|path>`                     | Load a plugin by package name, first-party short name, or file path. Repeatable; a single value may be comma-separated. e.g. `--plugin trace` expands to `@electron-stagewright/plugin-trace`. After loading one, call `electron_plugins` to inspect enabled or disabled tools and their gate requirements.                                                                                                                                                                                                                                                                                               |
 | `--plugin-config <name>=<json>`             | Supply a plugin's config as inline JSON, validated against its schema. Keyed by plugin name; invalid input reports its Zod field path and correction input. `electron_plugins` returns only fields the plugin explicitly marks safe.                                                                                                                                                                                                                                                                                                                                                                      |
 
+The server exits `0` after a clean shutdown (SIGINT, SIGTERM, or the host closing stdin), `1` when
+startup or shutdown teardown fails, and `2` for invalid usage such as an unknown flag.
+
 Security defaults worth knowing when wiring this into another project: arbitrary JS (the
 `--allow-eval` policy) and host-path launches (`--app-root`) are opt-in; `electron_launch` refuses
 runtime-altering env vars (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `LD_*`, `DYLD_*`); and
@@ -246,7 +249,7 @@ The agent has everything to decide its next move without asking for context.
 Three transport implementations behind a single `ITransport` interface, so the project survives if Playwright's experimental `_electron` API changes or gets deprecated:
 
 - **`PlaywrightElectronTransport`** — `_electron.launch()`, fast path (default).
-- **`CDPTransport`** — Chrome DevTools Protocol direct, no Playwright dependency; launches packaged executables through a managed loopback endpoint or attaches to an existing one, with snapshot/find on the selected root page plus eval, observe, and interaction surfaces.
+- **`CDPTransport`** — Chrome DevTools Protocol direct, no Playwright dependency; launches packaged executables through a managed loopback endpoint or attaches to an existing one, with iframe, webview and `WebContentsView` surface targeting plus snapshot/find, eval, observe, and interaction on the selected surface.
 - **`InjectorTransport`** — Node Inspector handshake into a running process; supports main-process eval, window discovery, and console capture when an app was not started with a CDP endpoint.
 
 Plugin model: a small core, with domain capabilities shipped as separate `@electron-stagewright/plugin-*` packages loaded explicitly via `--plugin` (the core never auto-scans). Shipped today: **`plugin-a11y`** (surface-scoped axe-core audits with bounded violations and incomplete checks; a fixed engine, not agent JavaScript, so no `--allow-eval` grant), **`plugin-visual`** (BrowserWindow visual baselines with explicit update confirmation, environment metadata, confined artifact roots, and actual/diff evidence), **`plugin-trace`** (session trace + deterministic replay + per-tool token budget), **`plugin-ipc`** (capture / invoke / stub Electron IPC, gated behind main eval: `--allow-eval=main`, or bare `--allow-eval`), **`plugin-production`** (validate packaged macOS, Windows, and Linux artifacts through MCP, a public library API, or a CI JSON CLI: bundle integrity, update/crash machinery, macOS signing/notarization/Gatekeeper, Windows Authenticode, and AppImage embedded signatures), **`plugin-network`** (renderer request/response capture, bodies, and stubbing via the transport seam), **`plugin-clock`** (deterministic renderer virtual time via the Playwright clock seam), **`plugin-storage`** (read, seed, and assert cookies plus storage snapshots through the no-eval transport seam, and per-key `localStorage` / `sessionStorage` plus IndexedDB records through a renderer-eval gate; cookie values are redacted by default, IndexedDB values can be redacted with config), and **`plugin-native-ui`** (read, assert, and invoke the application menu — the macOS menu bar — capture the notifications the app shows including startup ones, and read system-tray state plus fire tray events via launch-time instrumentation, all via the transport native-UI seam, no eval).
@@ -272,8 +275,8 @@ This project is in its earliest days. Issues and discussions welcome. See [CONTR
 
 `pnpm test` and `pnpm test:coverage` select the ordinary `unit` project, retained across
 all six OS/Node CI cells. `pnpm test:real` selects the serialized `real-electron` project
-and checks actual JSON results against `scripts/real-test-inventory.json` (24 reviewed files,
-34 scenarios). It refuses missing binaries/required native-addon fixture inputs and rejects
+and checks actual JSON results against `scripts/real-test-inventory.json` (25 reviewed files,
+36 scenarios). It refuses missing binaries/required native-addon fixture inputs and rejects
 missing, skipped or zero execution on every platform. Prepare the native-addon inputs with
 `node scripts/prepare-native-addon-fixture.mjs` and export the variables it prints (on Windows it
 also fetches Electron's `node.lib` and points at npm's bundled node-gyp, which needs MSVC).

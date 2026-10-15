@@ -25,6 +25,7 @@
 
 import { TARGET_RESOLVER_FN } from '../snapshot/resolve-target.js'
 import { StagewrightError } from '../errors/registry.js'
+import { macEditingCommands } from './mac-editing-commands.js'
 
 /** Modifier bit values per the CDP `Input` domain. */
 const MODIFIER_BITS: Readonly<Record<string, number>> = {
@@ -43,7 +44,8 @@ const TEXT_SUPPRESSING_MODIFIERS = 2 | 4
 
 /**
  * One parsed key chord, ready for `Input.dispatchKeyEvent`. `text` is present
- * only when the key press should insert text (printable key, no ctrl/meta).
+ * only when the key press should insert text (printable key, no ctrl/meta);
+ * `commands` only when the platform needs explicit editing commands (macOS).
  */
 export interface ParsedKey {
   readonly key: string
@@ -51,6 +53,7 @@ export interface ParsedKey {
   readonly windowsVirtualKeyCode: number
   readonly modifiers: number
   readonly text?: string
+  readonly commands?: readonly string[]
 }
 
 /** Named (non-printable or aliased) keys the chord parser understands. */
@@ -78,9 +81,20 @@ const NAMED_KEYS: Readonly<
 /**
  * Parse a Playwright-style chord (`'Enter'`, `'Control+A'`, `'Meta+Shift+Z'`)
  * into a CDP key event description. Throws `BAD_ARGUMENT` for modifiers or
- * keys outside the supported set so a typo fails loudly.
+ * keys outside the supported set so a typo fails loudly. On `darwin` the
+ * result carries the Chromium editing commands the chord maps to.
  */
-export function parseKeyChord(chord: string): ParsedKey {
+export function parseKeyChord(
+  chord: string,
+  platform: NodeJS.Platform = process.platform,
+): ParsedKey {
+  const parsed = parseChord(chord)
+  if (platform !== 'darwin') return parsed
+  const commands = macEditingCommands(parsed.code, parsed.modifiers)
+  return commands.length > 0 ? { ...parsed, commands } : parsed
+}
+
+function parseChord(chord: string): ParsedKey {
   const parts = chord.split('+')
   // A trailing literal `+` (bare `'+'`, or `'Control++'`) splits to an empty final
   // segment; the real key is that `+`. Recover it so the CDP transport accepts `+`

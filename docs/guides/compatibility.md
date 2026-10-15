@@ -54,29 +54,29 @@ against your installation and keep Electron and Playwright aligned with your tar
 
 ## Transport matrix
 
-| Transport  | Launch/attach model                                                                   | Hosted evidence                                                                              | Important limits                                                            |
-| ---------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Playwright | Launches a development `main` through Playwright `_electron`.                         | Complete real-Electron suite on Ubuntu, macOS, and Windows.                                  | Default and broadest capability surface.                                    |
-| CDP        | Launches an executable-only packaged app or attaches to an exposed loopback endpoint. | Real launch/attach, renderer, console, network, and lifecycle smokes run in the gated suite. | No Electron main-process APIs or embedded-surface hierarchy targeting.      |
-| Injector   | Attaches through the Node inspector.                                                  | Unit and integration coverage for implemented main-process capabilities.                     | Not represented as full renderer automation or as hosted end-to-end parity. |
+| Transport  | Launch/attach model                                                                   | Hosted evidence                                                                                                 | Important limits                                                                             |
+| ---------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Playwright | Launches a development `main` through Playwright `_electron`.                         | Complete real-Electron suite on Ubuntu, macOS, and Windows.                                                     | Default and broadest capability surface.                                                     |
+| CDP        | Launches an executable-only packaged app or attaches to an exposed loopback endpoint. | Real launch/attach, renderer, console, network, lifecycle, and surface-targeting smokes run in the gated suite. | No Electron main-process APIs; page roots are not classified as window or `WebContentsView`. |
+| Injector   | Attaches through the Node inspector.                                                  | Unit and integration coverage for implemented main-process capabilities.                                        | Not represented as full renderer automation or as hosted end-to-end parity.                  |
 
 Transport capability flags remain authoritative at runtime. A platform row being green does not make
 an unsupported transport method available.
 
 ## Transport × tool matrix
 
-This table names agent-facing tool families rather than protocol primitives. “Root page” means CDP
-selects one page target by default; it does not claim iframe, webview, or `WebContentsView`
-hierarchy discovery.
+This table names agent-facing tool families rather than protocol primitives. On CDP, page targets
+(`BrowserWindow` and `WebContentsView` contents) are listed as `kind: "other"` because the protocol
+exposes no ownership metadata to tell them apart; webview guests and iframes are classified.
 
 | Tool family                                                | Playwright launch       | CDP packaged/attach          | Injector                |
 | ---------------------------------------------------------- | ----------------------- | ---------------------------- | ----------------------- |
 | `electron_launch`                                          | ✓ development `main`    | ✓ executable only            | —                       |
 | `electron_attach` / `electron_inject`                      | —                       | ✓ attach                     | ✓ inject                |
-| `electron_snapshot` / `electron_find`                      | ✓ selected surface      | ✓ selected root page         | —                       |
-| Renderer reads, waits, expectations, and interactions      | ✓ selected surface      | ✓ selected root page         | —                       |
+| `electron_snapshot` / `electron_find`                      | ✓ selected surface      | ✓ selected surface           | —                       |
+| Renderer reads, waits, expectations, and interactions      | ✓ selected surface      | ✓ selected surface           | —                       |
 | Window list, switch, and screenshot                        | ✓                       | ✓                            | list only               |
-| `electron_surfaces_list` / `electron_switch_surface`       | ✓ page/frame hierarchy  | —                            | —                       |
+| `electron_surfaces_list` / `electron_switch_surface`       | ✓ page/frame hierarchy  | ✓ page/frame hierarchy       | —                       |
 | `electron_eval_renderer`                                   | ✓                       | ✓                            | —                       |
 | `electron_eval_main`                                       | ✓ Electron main process | Protocol browser target only | ✓ Electron main process |
 | Console and dialog observation                             | ✓                       | ✓                            | console only            |

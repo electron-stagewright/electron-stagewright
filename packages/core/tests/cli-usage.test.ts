@@ -69,7 +69,7 @@ describe('built CLI usage recovery', () => {
   ])('explains %j without starting MCP or printing a stack', (args, message) => {
     const result = runCli(args)
     expect(result.error).toBeUndefined()
-    expect(result.status).toBe(1)
+    expect(result.status).toBe(2)
     expect(result.stdout).toBe('')
     expect(result.stderr).toContain(message)
     expect(result.stderr).toContain('Run electron-stagewright --help')
@@ -98,5 +98,17 @@ describe('built CLI usage recovery', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toBe('')
     expect(result.stderr).toContain('Shutting down {"reason":"stdin closed"}')
+  })
+
+  it('exits 1 when teardown fails during a stdin-close shutdown', async () => {
+    // The SDK stdio transport pauses stdin while closing, so a throwing pause fails the MCP close.
+    const preload = [
+      'setInterval(() => {}, 1_000)',
+      "process.stdin.pause = () => { throw new Error('pause failed') }",
+    ].join('\n')
+    const result = await runHeldServer(preload, true)
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('Error during shutdown {"error":"pause failed"}')
   })
 })

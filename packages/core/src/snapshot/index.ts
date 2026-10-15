@@ -29,7 +29,15 @@ export type {
 
 export { SnapshotJsonSchema } from './schema.js'
 
-export { walkAccessibilityTree, isEntryReachable, type WalkerOptions } from './walker.js'
+export {
+  walkAccessibilityTree,
+  isEntryReachable,
+  type ScopedSnapshot,
+  type WalkerOptions,
+  type WalkScope,
+} from './walker.js'
+
+export { scopeDiff, scopeSnapshot } from './scope.js'
 
 export { computeAccessibleName } from './accname.js'
 

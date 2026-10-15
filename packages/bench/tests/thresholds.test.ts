@@ -42,6 +42,8 @@ function baselineResults(): ScenarioResult[] {
     res('verify-greeting-expect', 5, 3286),
     res('observe-change-rescan', 4, 6412),
     res('observe-change-diff', 4, 3843),
+    res('inspect-region-full', 1, 3171),
+    res('inspect-region-scoped', 1, 319),
     res('multi-turn-rescan-30', 62, 180_000),
     res('multi-turn-diff-30', 62, 70_000),
     res('assert-storage-snapshot', 1, 929),

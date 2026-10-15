@@ -1026,6 +1026,12 @@ export interface TransportSession {
    */
   detach(): Promise<void>
 
+  /**
+   * Optional: observe transparent reconnects of a dropped connection. The server uses it to drop
+   * state that may not survive one, such as stored snapshots. Returns the unsubscribe function.
+   */
+  onReconnect?(listener: () => void): () => void
+
   readonly ipc: IpcChannel
   readonly console: ConsoleStream
 

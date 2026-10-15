@@ -5,11 +5,15 @@
  *
  * `createServer` builds the object graph but does not connect a transport, so
  * callers (the CLI, tests) decide when and how to attach one. `connectStdio`
- * is the production path; `close` tears the server down and disposes every live
- * session so no launched Electron process is orphaned.
+ * is the production path, and closes the server when the host closes stdin; `close`
+ * tears the server down and disposes every live session so no launched Electron
+ * process is orphaned.
  *
  * @module
  */
+
+import process from 'node:process'
+import type { Readable, Writable } from 'node:stream'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -98,6 +102,12 @@ export interface CreateServerOptions {
   readonly operationTimeoutMs?: number
 }
 
+/** Options for {@link StagewrightServer.connectStdio}. Both streams default to the process's own. */
+export interface ConnectStdioOptions {
+  readonly stdin?: Readable
+  readonly stdout?: Writable
+}
+
 /** The assembled server and its collaborators. */
 export interface StagewrightServer {
   /** The underlying MCP server (for advanced operations / notifications). */
@@ -110,10 +120,21 @@ export interface StagewrightServer {
   readonly transports: TransportRegistry
   /** The per-session snapshot store. */
   readonly snapshots: SnapshotStore
-  /** Connect over stdio (reads stdin / writes protocol frames to stdout). */
-  connectStdio(): Promise<void>
-  /** Close the MCP server and dispose every live session. Idempotent-safe. */
+  /**
+   * Connect over stdio (reads stdin / writes protocol frames to stdout). When stdin ends or
+   * closes, the host has gone away, so the server closes itself and disposes every session.
+   */
+  connectStdio(options?: ConnectStdioOptions): Promise<void>
+  /**
+   * Close the MCP server and dispose every live session. Repeated calls share the first call's
+   * outcome.
+   */
   close(): Promise<void>
+  /**
+   * Settles with the outcome of the first {@link close}, however it was triggered (a direct call
+   * or stdin closing after {@link connectStdio}). It rejects when teardown failed.
+   */
+  readonly closed: Promise<void>
 }
 
 /**
@@ -136,6 +157,8 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
   const artifacts = new ArtifactStore()
   const transports = opts.transports ?? new TransportRegistry()
   const snapshots = new SnapshotStore()
+  // Refs from before a reconnect may name nodes of a reloaded renderer; force a fresh snapshot.
+  sessions.onSessionReconnect((sessionId) => snapshots.clear(sessionId))
   const dispatcher = new Dispatcher({
     sessions,
     artifacts,
@@ -254,27 +277,58 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     visibleToolCount: dispatcher.list().length,
   })
 
+  let closing: Promise<void> | undefined
+  let settleClosed!: { resolve: () => void; reject: (error: unknown) => void }
+  const closed = new Promise<void>((resolve, reject) => {
+    settleClosed = { resolve, reject }
+  })
+  // Embedders that never observe `closed` must not see an unhandled rejection.
+  closed.catch(() => {})
+
+  const teardown = async (): Promise<void> => {
+    // Dispose sessions and tear down plugins even if the MCP close rejects — a failed
+    // protocol shutdown must never leave a launched Electron process orphaned or leak
+    // a plugin's registered error codes.
+    try {
+      await mcp.close()
+    } finally {
+      artifacts.close()
+      snapshots.clearAll()
+      await sessions.disposeAll()
+      if (pluginResult) await pluginResult.teardownAll()
+    }
+  }
+  const close = (): Promise<void> => {
+    if (closing === undefined) {
+      closing = teardown()
+      closing.then(settleClosed.resolve, settleClosed.reject)
+    }
+    return closing
+  }
+
   return {
     mcp,
     dispatcher,
     sessions,
     transports,
     snapshots,
-    async connectStdio(): Promise<void> {
-      await mcp.connect(new StdioServerTransport())
-    },
-    async close(): Promise<void> {
-      // Dispose sessions and tear down plugins even if the MCP close rejects — a failed
-      // protocol shutdown must never leave a launched Electron process orphaned or leak
-      // a plugin's registered error codes.
-      try {
-        await mcp.close()
-      } finally {
-        artifacts.close()
-        snapshots.clearAll()
-        await sessions.disposeAll()
-        if (pluginResult) await pluginResult.teardownAll()
+    closed,
+    close,
+    async connectStdio(options: ConnectStdioOptions = {}): Promise<void> {
+      const stdin = options.stdin ?? process.stdin
+      // The SDK stdio transport ignores end-of-input, and a launched app keeps the event loop alive.
+      const onInputClosed = (): void => {
+        if (closing !== undefined) return
+        logger.info('Shutting down', { reason: 'stdin closed' })
+        close().catch((err: unknown) => {
+          logger.error('Error during shutdown', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
       }
+      stdin.once('end', onInputClosed)
+      stdin.once('close', onInputClosed)
+      await mcp.connect(new StdioServerTransport(stdin, options.stdout ?? process.stdout))
     },
   }
 }

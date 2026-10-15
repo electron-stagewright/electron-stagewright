@@ -244,7 +244,7 @@ export function createVisualPlugin(): StagewrightPlugin {
       return makePluginError('visual.SURFACE_UNSUPPORTED', {
         ...meta,
         message:
-          'Visual capture is currently BrowserWindow-scoped; select a window surface before capture rather than approximating a frame, webview, or WebContentsView crop.',
+          'Visual capture is currently BrowserWindow-scoped; select a window surface before capture rather than approximating a frame, webview, or WebContentsView crop. CDP sessions list page roots as "other" because they cannot prove BrowserWindow ownership.',
         details: { surface_id: surface.id, kind: surface.kind },
         next_actions: [
           'electron_surfaces_list()',

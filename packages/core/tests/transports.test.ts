@@ -477,6 +477,7 @@ function createFakeElectronApp(
   let firstWindowCalls = 0
   const killSignals: string[] = []
   const windowHandlers: ((page: ReturnType<typeof createFakePage>) => void)[] = []
+  const closeHandlers: (() => void)[] = []
   return {
     get closeCalls() {
       return closeCalls
@@ -493,8 +494,13 @@ function createFakeElectronApp(
       pages = [...pages, page]
       for (const handler of windowHandlers) handler(page)
     },
-    on(event: 'window', handler: (page: ReturnType<typeof createFakePage>) => void) {
+    /** Simulate the app process exiting on its own, as Playwright's `close` event reports. */
+    emitClose() {
+      for (const handler of closeHandlers) handler()
+    },
+    on(event: 'window' | 'close', handler: (page: ReturnType<typeof createFakePage>) => void) {
       if (event === 'window') windowHandlers.push(handler)
+      if (event === 'close') closeHandlers.push(handler as () => void)
     },
     windows: () => pages,
     firstWindow: async () => {
@@ -714,6 +720,23 @@ describe('PlaywrightElectronTransport', () => {
     await expect(session.evaluate('renderer', 'return arg.label;', { label: 'ok' })).resolves.toBe(
       'ok',
     )
+  })
+
+  it('reports a non-retryable SESSION_DISCONNECTED once the launched app exits on its own', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+    })
+
+    const session = await transport.launch({ appPath: '/abs/main.js' })
+    app.emitClose()
+
+    await expect(session.windowsList()).rejects.toMatchObject({ code: 'SESSION_DISCONNECTED' })
+    await expect(session.evaluate('renderer', 'return 1;')).rejects.toMatchObject({
+      code: 'SESSION_DISCONNECTED',
+    })
+    await expect(session.consoleLogs()).resolves.toMatchObject({ entries: [] })
+    await expect(transport.stop(session)).resolves.toEqual({ escalated: false })
   })
 
   it('forceKill() sends SIGKILL for Playwright-owned sessions and marks them stopped', async () => {

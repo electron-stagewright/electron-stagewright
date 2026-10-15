@@ -141,11 +141,17 @@ loopback `host`) or a full loopback `cdpUrl`. Two notes:
 
 - A `pid` alone is **not** attachable over CDP — but passing it alongside `port` lets a later
   `electron_stop` escalate to SIGKILL if the app ignores the graceful close.
-- The CDP transport supports snapshot/find against its selected root page, renderer evaluation,
-  reads, observation (console/dialogs), screenshots, and the core interaction surface. Explicit
-  iframe/webview/WebContentsView hierarchy discovery remains unavailable, so
-  `electron_surfaces_list` reports `TRANSPORT_UNSUPPORTED` on CDP. Pointer and keyboard input are
-  synthesised through the protocol, so there is no Playwright-style actionability auto-wait.
+- The CDP transport supports snapshot/find, renderer evaluation, reads, observation
+  (console/dialogs), screenshots, and the core interaction surface on the selected renderer
+  surface. `electron_surfaces_list` and `electron_switch_surface` reach iframes (same- and
+  cross-origin), webview guests and `WebContentsView` contents. CDP cannot tell a
+  `BrowserWindow` from a `WebContentsView`, so both are listed as `kind: "other"`. Pointer and
+  keyboard input are synthesised through the protocol, so there is no Playwright-style
+  actionability auto-wait. On macOS, key chords carry Chromium's editing commands, so `Meta+A`, `Meta+C`/`V`/`X`, `Meta+Z`,
+  `Alt+Backspace` and the other standard text-editing shortcuts behave as they do in the app. That
+  includes the native bindings for plain `Home`/`End` (scroll the document) and `Control+` letter
+  chords (`Control+A` moves to the paragraph start); use `Meta+ArrowLeft`/`Meta+ArrowRight` for the
+  line start and end.
 
 ## Inject — the app is running with no debug flag
 
@@ -164,6 +170,19 @@ that happens to own the default inspector port is refused with `INJECT_FAILED`).
 inject trigger is unreliable on some Electron versions; the same discovery path still attaches if
 the app was started with `--inspect`, and the error message says exactly that when the trigger
 fails.
+
+## When the connection drops
+
+An attached CDP session survives a dropped debugging socket. The next call that touches the app
+reconnects (up to three attempts within 10 s), re-discovers the windows, re-selects the one you had
+selected (by id, or by URL and title if the app restarted), and resumes console, dialog, and network
+capture. Stored snapshots are discarded on reconnect, so take a fresh `electron_snapshot` before
+acting on refs. If the endpoint stays down, the call fails with a retryable `CDP_DISCONNECTED` and the
+next call tries again. Buffered console, dialog, and network reads never wait on a reconnect.
+
+A launched session cannot reconnect: its connection only drops when the process exits or crashes.
+Calls that reach the app then fail with the non-retryable `SESSION_DISCONNECTED`; the buffered
+diagnostics stay readable. Release it with `electron_stop` and launch again.
 
 ## Ending a session
 

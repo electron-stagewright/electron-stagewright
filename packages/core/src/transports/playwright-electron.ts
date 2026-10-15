@@ -74,6 +74,7 @@ import {
   TYPE_EFFECT_SETTLE_MS,
   buildScrollIntoViewBody,
 } from './playwright-electron-bodies.js'
+import { originRelation } from './surface-origin.js'
 import type {
   AttachOptions,
   ClickOptions,
@@ -455,6 +456,8 @@ class PlaywrightSession implements TransportSession {
 
   private app: PWElectronApp | null
   private disposed = false
+  /** Set when the launched process exits on its own; the session cannot recover from that. */
+  private exited = false
   private readonly windowIds = new WeakMap<PWPage, string>()
   private nextWindowId = 0
   /** Opaque ids for page roots and frames; never derived from mutable renderer metadata. */
@@ -541,6 +544,9 @@ class PlaywrightSession implements TransportSession {
     try {
       for (const page of app.windows()) this.attachCaptureTo(page)
       app.on?.('window', (page) => this.attachCaptureTo(page))
+      app.on?.('close', () => {
+        this.exited = true
+      })
     } catch {
       // Event capture is best-effort; a dead app handle is not an error here.
     }
@@ -667,7 +673,7 @@ class PlaywrightSession implements TransportSession {
   }
 
   async consoleLogs(): Promise<ConsoleLogsResult> {
-    this.requireRunning()
+    this.requireNotDisposed()
     return { entries: [...this.consoleBuffer], overflowed: this.consoleOverflow }
   }
 
@@ -677,7 +683,7 @@ class PlaywrightSession implements TransportSession {
   }
 
   async dialogEvents(opts: DialogEventsOptions = {}): Promise<DialogEventsResult> {
-    this.requireRunning()
+    this.requireNotDisposed()
     // Snapshot the buffer (a copy) BEFORE an optional clear, so the returned
     // entries survive the flush.
     const result: DialogEventsResult = {
@@ -782,7 +788,7 @@ class PlaywrightSession implements TransportSession {
   }
 
   async networkEvents(opts: NetworkEventsOptions = {}): Promise<NetworkEventsResult> {
-    this.requireRunning()
+    this.requireNotDisposed()
     const result: NetworkEventsResult = {
       events: [...this.networkBuffer],
       overflowed: this.networkOverflow,
@@ -1423,6 +1429,17 @@ class PlaywrightSession implements TransportSession {
     )
   }
 
+  // Buffered diagnostics stay readable after the app exits; anything touching the app does not.
+  private requireNotDisposed(): void {
+    if (this.disposed) {
+      throw new StagewrightError(
+        'NOT_RUNNING',
+        'PlaywrightElectronTransport session has been disposed.',
+        { transport: TRANSPORT_ID, sessionId: this.id },
+      )
+    }
+  }
+
   private requireRunning(): PWElectronApp {
     if (this.disposed || this.app === null) {
       throw new StagewrightError(
@@ -1432,6 +1449,13 @@ class PlaywrightSession implements TransportSession {
           transport: TRANSPORT_ID,
           sessionId: this.id,
         },
+      )
+    }
+    if (this.exited) {
+      throw new StagewrightError(
+        'SESSION_DISCONNECTED',
+        'The launched Electron app has exited; this session cannot be recovered.',
+        { transport: TRANSPORT_ID, sessionId: this.id },
       )
     }
     return this.app
@@ -2230,22 +2254,6 @@ class PlaywrightSession implements TransportSession {
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-/** Describe a child frame's origin relative to its immediate parent without treating file/data as same-origin. */
-function originRelation(
-  parentUrl: string | undefined,
-  childUrl: string,
-): 'same-origin' | 'cross-origin' | 'opaque' {
-  if (parentUrl === undefined) return 'opaque'
-  try {
-    const parent = new URL(parentUrl)
-    const child = new URL(childUrl)
-    if (parent.origin === 'null' || child.origin === 'null') return 'opaque'
-    return parent.origin === child.origin ? 'same-origin' : 'cross-origin'
-  } catch {
-    return 'opaque'
-  }
 }
 
 export class PlaywrightElectronTransport implements ITransport {
