@@ -78,6 +78,18 @@ describe('CDP attach reconnect', () => {
     expect(reconnects).toBe(1)
   })
 
+  it('re-arms active network capture on the reconnected page sockets', async () => {
+    const { server, transport } = setup()
+    const session = await transport.attach({ port: 9222 })
+    await session.startNetworkCapture({ urls: ['/api/'] })
+    const enabledBefore = server.sentTo('page/T1', 'Network.enable').length
+
+    server.closeSockets('browser')
+    await session.evaluate('renderer', 'return 1;')
+
+    expect(server.sentTo('page/T1', 'Network.enable').length).toBeGreaterThan(enabledBefore)
+  })
+
   it('re-selects the window by url and title when the app restarted with new target ids', async () => {
     const { server, transport, setTargets } = setup()
     const session = await transport.attach({ port: 9222 })

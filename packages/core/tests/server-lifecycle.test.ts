@@ -88,4 +88,20 @@ describe('session reconnect', () => {
     expect(seen).toEqual([])
     await server.close()
   })
+
+  it('drops the reconnect subscription once the session ends', async () => {
+    let unsubscribed = 0
+    const session = Object.assign(new FakeSession({ id: 'sess-end' }), {
+      onReconnect: () => () => {
+        unsubscribed += 1
+      },
+    })
+    const { server } = await serverWithSession(session)
+    expect(unsubscribed).toBe(0)
+
+    await server.sessions.remove('sess-end')
+
+    expect(unsubscribed).toBe(1)
+    await server.close()
+  })
 })

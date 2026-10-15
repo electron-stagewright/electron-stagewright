@@ -63,6 +63,7 @@ export class SessionManager {
   readonly #sessions = new Map<SessionId, ManagedSession>()
   readonly #endListeners = new Set<SessionEndListener>()
   readonly #reconnectListeners = new Set<(sessionId: SessionId) => void>()
+  readonly #reconnectSubscriptions = new Map<SessionId, () => void>()
 
   /**
    * Record a freshly launched/attached/injected session. Returns the managed
@@ -87,10 +88,11 @@ export class SessionManager {
     }
     const managed: ManagedSession = { id: session.id, transport, session }
     this.#sessions.set(session.id, managed)
-    session.onReconnect?.(() => {
+    const unsubscribe = session.onReconnect?.(() => {
       if (this.#sessions.get(session.id)?.session !== session) return
       for (const listener of this.#reconnectListeners) listener(session.id)
     })
+    if (unsubscribe !== undefined) this.#reconnectSubscriptions.set(session.id, unsubscribe)
     return managed
   }
 
@@ -263,6 +265,8 @@ export class SessionManager {
   }
 
   async #notifySessionEnd(sessionId: SessionId, reason: SessionEndReason): Promise<void> {
+    this.#reconnectSubscriptions.get(sessionId)?.()
+    this.#reconnectSubscriptions.delete(sessionId)
     const event: SessionEndEvent = {
       sessionId,
       reason,
