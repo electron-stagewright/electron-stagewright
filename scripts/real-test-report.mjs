@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-export function assertRealExecution(report, inventory, root, platform) {
+export function assertRealExecution(report, inventory, root) {
   if (!report.success || !Array.isArray(report.testResults) || inventory.length === 0) {
     throw new Error('Real-runtime report has no successful executable inventory')
   }
@@ -18,13 +18,8 @@ export function assertRealExecution(report, inventory, root, platform) {
     ) {
       throw new Error(`Missing real-runtime scenarios: ${expected.path}`)
     }
-    const excluded = expected.excludedPlatforms.includes(platform)
     for (const assertion of row.assertionResults) {
-      if (
-        excluded
-          ? !['pending', 'skipped'].includes(assertion.status)
-          : assertion.status !== 'passed'
-      ) {
+      if (assertion.status !== 'passed') {
         throw new Error(
           `Real-runtime scenario did not execute successfully: ${expected.path} (${assertion.status})`,
         )

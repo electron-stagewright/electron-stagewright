@@ -36,9 +36,7 @@ describe('reviewed real-runtime inventory', () => {
       }
     }
     expect(discovered.sort((a, b) => a.path.localeCompare(b.path))).toEqual(
-      inventory
-        .map(({ path: file, tests }) => ({ path: file, tests }))
-        .sort((a, b) => a.path.localeCompare(b.path)),
+      [...inventory].sort((a, b) => a.path.localeCompare(b.path)),
     )
     expect(inventory).toHaveLength(24)
   })
@@ -51,10 +49,10 @@ describe('reviewed real-runtime inventory', () => {
         assertionResults: Array.from({ length: row.tests }, () => ({ status: 'passed' })),
       })),
     }
-    expect(() => assertRealExecution(passing, inventory, root, 'linux')).not.toThrow()
-    expect(() =>
-      assertRealExecution({ ...passing, testResults: [] }, inventory, root, 'linux'),
-    ).toThrow('count')
+    expect(() => assertRealExecution(passing, inventory, root)).not.toThrow()
+    expect(() => assertRealExecution({ ...passing, testResults: [] }, inventory, root)).toThrow(
+      'count',
+    )
     const skipped = {
       ...passing,
       testResults: passing.testResults.map((row) => ({
@@ -62,12 +60,24 @@ describe('reviewed real-runtime inventory', () => {
         assertionResults: row.assertionResults.map(() => ({ status: 'pending' })),
       })),
     }
-    expect(() => assertRealExecution(skipped, inventory, root, 'linux')).toThrow('did not execute')
+    expect(() => assertRealExecution(skipped, inventory, root)).toThrow('did not execute')
     const missing = {
       ...passing,
       testResults: passing.testResults.map((row) => ({ ...row, assertionResults: [] })),
     }
-    expect(() => assertRealExecution(missing, inventory, root, 'linux')).toThrow('Missing')
+    expect(() => assertRealExecution(missing, inventory, root)).toThrow('Missing')
+    // No platform may skip a scenario, including native-addon recovery on Windows.
+    const nativeAddonSkipped = {
+      ...passing,
+      testResults: passing.testResults.map((row) =>
+        row.name.endsWith('native-addon-runtime-smoke.test.ts')
+          ? { ...row, assertionResults: [{ status: 'skipped' }] }
+          : row,
+      ),
+    }
+    expect(() => assertRealExecution(nativeAddonSkipped, inventory, root)).toThrow(
+      'did not execute',
+    )
   })
 
   it('keeps six ordinary OS/Node cells and requires real commands in each runtime lane', async () => {
@@ -77,5 +87,6 @@ describe('reviewed real-runtime inventory', () => {
     const runtime = await readFile(path.join(root, '.github/workflows/e2e-electron.yml'), 'utf8')
     expect(runtime.match(/run: (?:xvfb-run --auto-servernum )?pnpm test:real/g)).toHaveLength(3)
     expect(runtime.match(/run: (?:xvfb-run --auto-servernum )?pnpm package:smoke/g)).toHaveLength(3)
+    expect(runtime.match(/node scripts\/prepare-native-addon-fixture\.mjs/g)).toHaveLength(3)
   })
 })

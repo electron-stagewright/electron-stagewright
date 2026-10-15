@@ -3,8 +3,9 @@
  *
  * The fixture compiles a classic Node addon against Electron 41 (ABI 145), where the server's
  * default Electron is ABI 146. A default launch must fail while a root-confined project runtime
- * launches and snapshots the exact same app. CI provides the archive and headers through the
- * cached fixture-preparation script; ordinary local test runs skip this network/toolchain fixture.
+ * launches and snapshots the exact same app. CI provides the archive and headers (plus node.lib
+ * and node-gyp on Windows) through the cached fixture-preparation script; ordinary local test
+ * runs skip this network/toolchain fixture.
  */
 
 import { execFile as execFileCallback } from 'node:child_process'
@@ -28,9 +29,15 @@ const execFile = promisify(execFileCallback)
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
 const ELECTRON_ARCHIVE = process.env['STAGEWRIGHT_NATIVE_ADDON_ELECTRON_ARCHIVE']
 const HEADERS_DIRECTORY = process.env['STAGEWRIGHT_NATIVE_ADDON_HEADERS_DIR']
-const SUPPORTED_PLATFORM = process.platform === 'darwin' || process.platform === 'linux'
+const NODE_GYP = process.env['STAGEWRIGHT_NATIVE_ADDON_NODE_GYP']
+const WINDOWS = process.platform === 'win32'
+const SUPPORTED_PLATFORM = ['darwin', 'linux', 'win32'].includes(process.platform)
 const SHOULD_RUN =
-  RUN_E2E && SUPPORTED_PLATFORM && ELECTRON_ARCHIVE !== undefined && HEADERS_DIRECTORY !== undefined
+  RUN_E2E &&
+  SUPPORTED_PLATFORM &&
+  ELECTRON_ARCHIVE !== undefined &&
+  HEADERS_DIRECTORY !== undefined &&
+  (!WINDOWS || NODE_GYP !== undefined)
 const TARGET_ELECTRON_VERSION = '41.7.1'
 const managers = new Set<SessionManager>()
 const temporaryRoots: string[] = []
@@ -45,7 +52,7 @@ NODE_MODULE(NODE_GYP_MODULE_NAME, Initialize)
 
 const APP_MAIN = `const { app, BrowserWindow } = require('electron')
 try {
-  require('./build/Release/runtime-aligned.node')
+  require('./build/Release/runtime_aligned.node')
 } catch (error) {
   console.error(error instanceof Error ? error.stack : String(error))
   process.exit(1)
@@ -70,9 +77,45 @@ afterEach(async () => {
 })
 
 function targetExecutableRelativePath(): string {
+  if (WINDOWS) return 'electron.exe'
   return process.platform === 'darwin'
     ? path.join('Electron.app', 'Contents', 'MacOS', 'Electron')
     : 'electron'
+}
+
+async function extractArchive(archive: string, destination: string): Promise<void> {
+  if (!WINDOWS) {
+    await execFile('unzip', ['-q', archive, '-d', destination])
+    return
+  }
+  // Windows' bsdtar reads zip archives; a GNU tar earlier on PATH would not.
+  const tar = path.join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'tar.exe')
+  await execFile(tar, ['-xf', archive, '-C', destination])
+}
+
+/**
+ * Windows addons link against Electron's node.lib and need node-gyp's delay-load hook, which
+ * rebinds their `node.exe` imports to the Electron executable.
+ */
+async function buildWithNodeGyp(root: string, headersDirectory: string): Promise<void> {
+  if (NODE_GYP === undefined) throw new Error('STAGEWRIGHT_NATIVE_ADDON_NODE_GYP is not set.')
+  await writeFile(
+    path.join(root, 'binding.gyp'),
+    JSON.stringify({
+      targets: [{ target_name: 'runtime_aligned', sources: ['runtime-aligned.cc'] }],
+    }),
+  )
+  await execFile(
+    process.execPath,
+    [
+      NODE_GYP,
+      'rebuild',
+      `--nodedir=${headersDirectory}`,
+      `--target=${TARGET_ELECTRON_VERSION}`,
+      `--arch=${process.arch}`,
+    ],
+    { cwd: root, maxBuffer: 16 * 1024 * 1024 },
+  )
 }
 
 async function prepareFixture(
@@ -85,13 +128,13 @@ async function prepareFixture(
   const distributionDirectory = path.join(electronDirectory, 'dist')
   const addonDirectory = path.join(root, 'build', 'Release')
   const source = path.join(root, 'runtime-aligned.cc')
-  const addon = path.join(addonDirectory, 'runtime-aligned.node')
+  const addon = path.join(addonDirectory, 'runtime_aligned.node')
   const main = path.join(root, 'main.cjs')
   await Promise.all([
     mkdir(distributionDirectory, { recursive: true }),
     mkdir(addonDirectory, { recursive: true }),
   ])
-  await execFile('unzip', ['-q', archive, '-d', distributionDirectory])
+  await extractArchive(archive, distributionDirectory)
   await Promise.all([
     writeFile(
       path.join(root, 'package.json'),
@@ -105,6 +148,10 @@ async function prepareFixture(
     writeFile(source, ADDON_SOURCE),
     writeFile(main, APP_MAIN),
   ])
+  if (WINDOWS) {
+    await buildWithNodeGyp(root, headersDirectory)
+    return { root, main }
+  }
   const headerPath = path.join(headersDirectory, 'include', 'node')
   const compiler = process.env['CXX'] ?? (process.platform === 'darwin' ? 'clang++' : 'g++')
   const compilerArgs =

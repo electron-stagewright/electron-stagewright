@@ -9,16 +9,37 @@ import { promisify } from 'node:util'
 
 const execFile = promisify(execFileCallback)
 const TARGET_ELECTRON_VERSION = '41.7.1'
-const SUPPORTED_PLATFORMS = new Set(['darwin', 'linux'])
+const SUPPORTED_PLATFORMS = new Set(['darwin', 'linux', 'win32'])
 const DOWNLOAD_ATTEMPTS = 3
+const HEADERS_URL = `https://electronjs.org/headers/v${TARGET_ELECTRON_VERSION}`
 
 function targetArchiveName() {
   if (!SUPPORTED_PLATFORMS.has(process.platform)) {
     throw new Error(
-      `Native addon fixture preparation supports darwin and linux, not ${process.platform}.`,
+      `Native addon fixture preparation supports darwin, linux and win32, not ${process.platform}.`,
     )
   }
   return `electron-v${TARGET_ELECTRON_VERSION}-${process.platform}-${process.arch}.zip`
+}
+
+/** Windows' bsdtar: a GNU tar from Git for Windows on PATH reads `C:\\…` as a remote host. */
+function tarExecutable() {
+  return process.platform === 'win32'
+    ? path.join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'tar.exe')
+    : 'tar'
+}
+
+/** node-gyp bundled with the running Node's npm; Windows addons need its MSVC and delay-load setup. */
+function bundledNodeGyp() {
+  return path.join(
+    path.dirname(process.execPath),
+    'node_modules',
+    'npm',
+    'node_modules',
+    'node-gyp',
+    'bin',
+    'node-gyp.js',
+  )
 }
 
 async function exists(file) {
@@ -79,29 +100,38 @@ async function main() {
     )
   }
   if (!(await exists(headersArchive))) {
-    await download(
-      `https://electronjs.org/headers/v${TARGET_ELECTRON_VERSION}/node-v${TARGET_ELECTRON_VERSION}-headers.tar.gz`,
-      headersArchive,
-    )
+    await download(`${HEADERS_URL}/node-v${TARGET_ELECTRON_VERSION}-headers.tar.gz`, headersArchive)
   }
   if (!(await exists(nodeHeader))) {
     const headersDirectory = path.dirname(headersRoot)
     await mkdir(headersDirectory, { recursive: true })
-    await execFile('tar', ['-xzf', headersArchive, '-C', headersDirectory])
+    await execFile(tarExecutable(), ['-xzf', headersArchive, '-C', headersDirectory])
   }
   if (!(await exists(nodeHeader))) {
     throw new Error(
       `Electron ${TARGET_ELECTRON_VERSION} headers did not contain include/node/node.h`,
     )
   }
+  const variables = [
+    `STAGEWRIGHT_NATIVE_ADDON_ELECTRON_ARCHIVE=${electronArchive}`,
+    `STAGEWRIGHT_NATIVE_ADDON_HEADERS_DIR=${headersRoot}`,
+  ]
+  if (process.platform === 'win32') {
+    // node-gyp --nodedir links against <nodedir>/<Configuration>/node.lib.
+    const nodeLib = path.join(headersRoot, 'Release', 'node.lib')
+    if (!(await exists(nodeLib))) {
+      await mkdir(path.dirname(nodeLib), { recursive: true })
+      await download(`${HEADERS_URL}/win-${process.arch}/node.lib`, nodeLib)
+    }
+    const nodeGyp = bundledNodeGyp()
+    if (!(await exists(nodeGyp))) {
+      throw new Error(`node-gyp is not bundled with this Node's npm at ${nodeGyp}`)
+    }
+    variables.push(`STAGEWRIGHT_NATIVE_ADDON_NODE_GYP=${nodeGyp}`)
+  }
 
   // Deliberately shell-compatible for GitHub Actions' $GITHUB_ENV and local eval.
-  process.stdout.write(
-    [
-      `STAGEWRIGHT_NATIVE_ADDON_ELECTRON_ARCHIVE=${electronArchive}`,
-      `STAGEWRIGHT_NATIVE_ADDON_HEADERS_DIR=${headersRoot}`,
-    ].join('\n') + '\n',
-  )
+  process.stdout.write(variables.join('\n') + '\n')
 }
 
 main().catch((error) => {
