@@ -204,6 +204,18 @@ describe('CLI failure classification', () => {
     expect(() => parseCliArgs(args)).toThrow(CliUsageError)
   })
 
+  it.each([
+    [['--screenshot-dir=/tmp/shots'], '--screenshot-dir takes its value as a separate argument'],
+    [['--plugin=a11y'], '--plugin takes its value as a separate argument'],
+    [['--json'], '--json is only valid with doctor'],
+  ])('explains %j instead of calling it an unknown option', (args, message) => {
+    expect(() => parseCliArgs(args)).toThrow(message)
+  })
+
+  it('keeps a near-miss flag without = as an unknown option', () => {
+    expect(() => parseCliArgs(['--app-roots'])).toThrow('Unknown option: --app-roots')
+  })
+
   it('names a misplaced --help instead of calling it an unknown option', () => {
     expect(() => parseCliArgs(['doctor', '--help'])).toThrow('--help must be used on its own')
   })
