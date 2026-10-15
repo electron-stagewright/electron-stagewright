@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -12,7 +12,7 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
 })
 
-function runCli(args: readonly string[]) {
+function runCli(args: readonly string[], input?: string) {
   const home = mkdtempSync(path.join(tmpdir(), 'stagewright-cli-usage-'))
   homes.push(home)
   return spawnSync(process.execPath, [cli, ...args], {
@@ -20,6 +20,34 @@ function runCli(args: readonly string[]) {
     env: { ...process.env, HOME: home, USERPROFILE: home },
     encoding: 'utf8',
     timeout: 10_000,
+    ...(input !== undefined ? { input } : {}),
+  })
+}
+
+function runHeldServer(
+  preload: string,
+  endStdin: boolean,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const home = mkdtempSync(path.join(tmpdir(), 'stagewright-cli-usage-'))
+  homes.push(home)
+  const preloadPath = path.join(home, 'hold.mjs')
+  writeFileSync(preloadPath, preload)
+  const child = spawn(process.execPath, ['--import', pathToFileURL(preloadPath).href, cli], {
+    cwd: home,
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()))
+  child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
+  const timer = setTimeout(() => child.kill('SIGKILL'), 4_000)
+  if (endStdin) child.stdin.end()
+  return new Promise((resolve) => {
+    child.on('close', (status) => {
+      clearTimeout(timer)
+      child.stdin.destroy()
+      resolve({ status, stdout, stderr })
+    })
   })
 }
 
@@ -46,5 +74,20 @@ describe('built CLI usage recovery', () => {
     expect(result.stderr).toContain(message)
     expect(result.stderr).toContain('Run electron-stagewright --help')
     expect(result.stderr).not.toMatch(/\n\s+at /)
+  })
+
+  // The preload's interval stands in for a launched app holding the event loop open.
+  it.each([
+    ['the host closes stdin', 'setInterval(() => {}, 1_000)', true],
+    [
+      'stdin is destroyed without EOF',
+      'setInterval(() => {}, 1_000); setTimeout(() => process.stdin.destroy(), 200)',
+      false,
+    ],
+  ])('shuts down when %s while the event loop is held', async (_case, preload, endStdin) => {
+    const result = await runHeldServer(preload, endStdin)
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('Shutting down {"reason":"stdin closed"}')
   })
 })
