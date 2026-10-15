@@ -78,20 +78,23 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
       const managed = ctx.sessions.resolve(args.sessionId)
       const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
       const surface = await managed.session.activeSurface()
-      const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})
 
       // Same stabilise-the-walk step as electron_snapshot: reconcile refs against
       // the stored baseline, retag the DOM, and store, so find and snapshot agree
       // on ref numbers and the DOM tags stay consistent.
-      const prev = ctx.snapshots.get(managed.id, surface.id)
-      const { curr: snapshot, reloaded } = await reconcileRetagAndStore({
-        session: managed.session,
-        store: ctx.snapshots,
-        sessionId: managed.id,
-        surfaceId: surface.id,
-        prev,
-        walked,
-      })
+      const { curr: snapshot, reloaded } = await ctx.snapshots.withRefLock(
+        managed.id,
+        async () =>
+          reconcileRetagAndStore({
+            session: managed.session,
+            store: ctx.snapshots,
+            sessionId: managed.id,
+            surfaceId: surface.id,
+            prev: ctx.snapshots.get(managed.id, surface.id),
+            walked: await runWalk<Snapshot>(managed.session, loadBundle(), {}),
+          }),
+        ctx.signal,
+      )
 
       const query: FindQuery = {
         ...(args.role !== undefined ? { role: args.role as SnapshotRole } : {}),

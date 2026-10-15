@@ -20,6 +20,36 @@ const DEFAULT_SURFACE_ID = '__default__'
 /** In-memory map of `sessionId → surfaceId → last snapshot`. One instance per server. */
 export class SnapshotStore {
   readonly #last = new Map<string, Map<string, Snapshot>>()
+  readonly #refLocks = new Map<string, Promise<void>>()
+
+  /**
+   * Run `task` while holding `sessionId`'s ref lock. A walk renumbers every DOM ref tag and
+   * only the following reconcile + retag + store restores them, so those steps must not
+   * interleave with another walk on the same session. A caller whose `signal` aborts while
+   * queued rejects with its reason without running `task`.
+   */
+  async withRefLock<T>(
+    sessionId: string,
+    task: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const previous = this.#refLocks.get(sessionId) ?? Promise.resolve()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const tail = previous.then(() => held)
+    this.#refLocks.set(sessionId, tail)
+    void tail.then(() => {
+      if (this.#refLocks.get(sessionId) === tail) this.#refLocks.delete(sessionId)
+    })
+    try {
+      await untilAborted(previous, signal)
+      return await task()
+    } finally {
+      release()
+    }
+  }
 
   /** The last stored snapshot for `(sessionId, surfaceId)`, or `undefined` if none. */
   get(sessionId: string, surfaceId: string = DEFAULT_SURFACE_ID): Snapshot | undefined {
@@ -45,4 +75,17 @@ export class SnapshotStore {
   clearAll(): void {
     this.#last.clear()
   }
+}
+
+function untilAborted(promise: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) return promise
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise((resolve, reject) => {
+    const cancel = (): void => reject(signal.reason)
+    signal.addEventListener('abort', cancel, { once: true })
+    void promise.then(() => {
+      signal.removeEventListener('abort', cancel)
+      resolve()
+    })
+  })
 }

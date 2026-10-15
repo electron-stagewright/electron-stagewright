@@ -213,24 +213,32 @@ async function gatherSimilarRefs(cx: {
   readonly hint?: string | undefined
 }): Promise<{ readonly similar: SimilarRef[]; readonly hadSnapshot: boolean }> {
   const surface = await cx.session.activeSurface()
-  let source = cx.ctx.snapshots.get(cx.sessionId, surface.id)
-  const hadSnapshot = source !== undefined
+  const store = cx.ctx.snapshots
+  const hadSnapshot = store.get(cx.sessionId, surface.id) !== undefined
+  let source: Snapshot | undefined
   try {
-    const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {})
-    if (walked !== undefined && Array.isArray(walked.entries)) {
-      const stabilised = await reconcileRetagAndStore({
-        session: cx.session,
-        store: cx.ctx.snapshots,
-        sessionId: cx.sessionId,
-        surfaceId: surface.id,
-        prev: source,
-        walked,
-      })
-      source = stabilised.curr
-    }
+    source = await store.withRefLock(
+      cx.sessionId,
+      async () => {
+        const stored = store.get(cx.sessionId, surface.id)
+        const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {})
+        if (walked === undefined || !Array.isArray(walked.entries)) return stored
+        const stabilised = await reconcileRetagAndStore({
+          session: cx.session,
+          store,
+          sessionId: cx.sessionId,
+          surfaceId: surface.id,
+          prev: stored,
+          walked,
+        })
+        return stabilised.curr
+      },
+      cx.ctx.signal,
+    )
   } catch {
     // Live re-walk failed (bundle missing in a pre-build test run, or a dead
     // renderer) — fall through to the stored snapshot.
+    source = store.get(cx.sessionId, surface.id)
   }
   return {
     similar: source !== undefined ? computeSimilarRefs(source, cx.hint) : [],

@@ -147,22 +147,28 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       const maxEntries = args.maxEntries ?? DEFAULT_MAX_ENTRIES
       const surface = await managed.session.activeSurface()
 
-      const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})
-
       // Stabilise the walk: reconcile refs against the stored baseline, retag the
       // renderer DOM, stamp the reload flag, and store the FULL unfiltered snapshot
       // as the diff baseline. Filters (interactiveOnly / maxEntries) apply only to
       // what is RETURNED — never to the stored baseline — so a later since:'last'
       // diff stays accurate even if this call (or the previous one) filtered.
-      const prev = ctx.snapshots.get(managed.id, surface.id)
-      const { curr, comparable, reloaded } = await reconcileRetagAndStore({
-        session: managed.session,
-        store: ctx.snapshots,
-        sessionId: managed.id,
-        surfaceId: surface.id,
-        prev,
-        walked,
-      })
+      const { prev, curr, comparable, reloaded } = await ctx.snapshots.withRefLock(
+        managed.id,
+        async () => {
+          const baseline = ctx.snapshots.get(managed.id, surface.id)
+          const walked = await runWalk<Snapshot>(managed.session, loadBundle(), {})
+          const stabilised = await reconcileRetagAndStore({
+            session: managed.session,
+            store: ctx.snapshots,
+            sessionId: managed.id,
+            surfaceId: surface.id,
+            prev: baseline,
+            walked,
+          })
+          return { prev: baseline, ...stabilised }
+        },
+        ctx.signal,
+      )
 
       // since:'last' → the delta against the previous snapshot. Filters apply to
       // full snapshots, not to a diff (a diff is already only what changed). The
