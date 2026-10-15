@@ -316,9 +316,10 @@ describe('Dispatcher operation-timeout backstop (ADR-011)', () => {
     expect((await d.dispatch('test_echo', { value: 'x' })).ok).toBe(true)
   })
 
-  it('rejects negative or fractional operation-timeout budgets at construction', () => {
+  it('rejects negative, fractional or timer-overflowing operation-timeout budgets at construction', () => {
     expect(() => newDispatcher({ operationTimeoutMs: -1 })).toThrow(/non-negative integer/)
     expect(() => newDispatcher({ operationTimeoutMs: 1.5 })).toThrow(/non-negative integer/)
+    expect(() => newDispatcher({ operationTimeoutMs: 2 ** 31 })).toThrow(/up to 2147483647/)
   })
 
   it('warns at construction when the budget could preempt a legitimate maximum-length wait', () => {

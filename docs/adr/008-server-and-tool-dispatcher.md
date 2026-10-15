@@ -69,8 +69,8 @@ inputSchema (Zod object), operationType, requiresEvalFlag?, handler }`. The
 7. **The MCP stdio server registers tools from the dispatcher manifest.**
    `createServer()` assembles the object graph; `connectStdio()` attaches the
    transport; `cli.ts` (the real `bin`) parses `--allow-eval`, starts the server,
-   and disposes all sessions on SIGINT/SIGTERM so launched Electron apps are not
-   orphaned. A `listManifest()` surface renders each tool's Zod schema to JSON
+   and disposes all sessions on SIGINT/SIGTERM or when the host closes stdin so
+   launched Electron apps are not orphaned. A `listManifest()` surface renders each tool's Zod schema to JSON
    Schema for offline documentation generation.
 
 ## Alternatives considered
