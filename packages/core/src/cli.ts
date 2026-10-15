@@ -63,12 +63,14 @@ import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 import { runDoctorChecks } from './doctor.js'
+import { StagewrightError } from './errors/registry.js'
 import type { EvalPolicy } from './server/eval-policy.js'
 import {
   CliUsageError,
   createConfiguredServer,
   inspectServerConfiguration,
 } from './server/configuration.js'
+import { MAX_OPERATION_TIMEOUT_MS } from './server/dispatcher.js'
 import { StderrLogger } from './server/logger.js'
 import { isToolProfile, type ToolProfile } from './tools/index.js'
 import { VERSION } from './version.js'
@@ -80,6 +82,8 @@ export function formatCliFailure(error: unknown): string {
   if (error instanceof CliUsageError) {
     return `fatal: ${error.message}\nRun electron-stagewright --help for usage.\n`
   }
+  // Typed errors (e.g. a misspelled --plugin) already say what failed; a stack adds noise.
+  if (error instanceof StagewrightError) return `fatal: ${error.code}: ${error.message}\n`
   const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
   return `fatal: ${detail}\n`
 }
@@ -127,10 +131,11 @@ function parsePluginConfig(pair: string): readonly [string, unknown] {
 
 function parseOperationTimeout(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 0) {
+  // Number('') is 0, which would silently disable the backstop when "$VAR" expands empty.
+  const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
+  if (Number.isNaN(value) || value > MAX_OPERATION_TIMEOUT_MS) {
     throw new CliUsageError(
-      `--operation-timeout-ms expects a non-negative integer number of milliseconds, got "${raw}"`,
+      `--operation-timeout-ms expects a non-negative integer number of milliseconds up to ${MAX_OPERATION_TIMEOUT_MS}, got "${raw}"`,
     )
   }
   return value
