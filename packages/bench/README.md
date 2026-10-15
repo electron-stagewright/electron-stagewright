@@ -72,6 +72,9 @@ Token lever (saves payload tokens):
 - **observe-change-diff** — see the same change with `snapshot({ since: 'last' })`, which
   returns only the delta (one large payload + a tiny one). On a real, larger UI this lever
   dominates — re-scanning a big tree every turn is where naive drivers burn tokens.
+- **inspect-region-full** — inspect the greeting form by reading the FULL page snapshot.
+- **inspect-region-scoped** — inspect the same form with `snapshot({ root: { selector: '#greeting' } })`,
+  which returns only that container's subtree. The saving grows with everything else on screen.
 - **assert-storage-snapshot** — assert one non-secret persisted fixture value by returning every
   localStorage entry at the loopback origin.
 - **assert-storage-local-get** — assert that identical value via the renderer-eval-gated

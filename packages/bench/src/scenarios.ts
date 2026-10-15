@@ -38,6 +38,16 @@ function expectOk(env: Envelope, step: string): Envelope {
   return env
 }
 
+/** Assert a full JSON snapshot carries an entry for each expected accessible name. */
+function expectSnapshotNames(env: Envelope, expected: readonly string[], step: string): void {
+  expectOk(env, step)
+  const snapshot = env['snapshot'] as { readonly entries?: unknown } | undefined
+  const entries = Array.isArray(snapshot?.entries) ? snapshot.entries : []
+  const names = new Set(entries.map((entry) => (entry as { readonly name?: unknown }).name))
+  const missing = expected.filter((name) => !names.has(name))
+  if (missing.length > 0) throw new Error(`${step} is missing ${missing.join(', ')}`)
+}
+
 /** Assert a text read returned the expected value. */
 function expectTextContains(env: Envelope, expected: string, step: string): void {
   expectOk(env, step)
@@ -196,6 +206,22 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
       expectOk(await call(driver, 'electron_click', { ref: refreshRef }), 'diff refresh click')
       // The agent-native way: ask for only what changed since the last snapshot.
       expectOk(await call(driver, 'electron_snapshot', { since: 'last' }), 'delta snapshot')
+    },
+  },
+  {
+    name: 'inspect-region-full',
+    description: 'Inspect the greeting form by reading the FULL snapshot.',
+    run: async (driver) => {
+      const env = await call(driver, 'electron_snapshot')
+      expectSnapshotNames(env, ['Your name', 'Greet'], 'full snapshot of the page')
+    },
+  },
+  {
+    name: 'inspect-region-scoped',
+    description: 'Inspect the same form with a snapshot scoped to its container (root).',
+    run: async (driver) => {
+      const env = await call(driver, 'electron_snapshot', { root: { selector: '#greeting' } })
+      expectSnapshotNames(env, ['Your name', 'Greet'], 'root-scoped snapshot')
     },
   },
   {
