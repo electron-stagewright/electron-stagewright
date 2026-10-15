@@ -210,8 +210,10 @@ describe('electron_wait_for_selector', () => {
     const cap = capturing({ satisfied: true, state: 'visible' })
     const { dispatcher } = setup({ evaluate: cap.evaluate })
     await dispatcher.dispatch('electron_wait_for_selector', { ref: 2, state: 'attached' })
-    expect((cap.calls[0]?.arg as { selector: string }).selector).toBe('[data-sw-ref="2"]')
-    expect((cap.calls[0]?.arg as { state: string }).state).toBe('attached')
+    // The first renderer call reads the walk generation the ref poll is pinned to.
+    const poll = cap.calls.find((call) => (call.arg as { selector?: string }).selector)
+    expect((poll?.arg as { selector: string }).selector).toBe('[data-sw-ref="2"]')
+    expect((poll?.arg as { state: string }).state).toBe('attached')
   })
 
   it('returns WAIT_TIMEOUT (retryable) when never satisfied', async () => {

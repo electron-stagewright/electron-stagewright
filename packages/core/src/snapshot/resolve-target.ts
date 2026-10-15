@@ -2,9 +2,21 @@
 
 import { MAX_SHADOW_DEPTH } from './walker.js'
 
+/**
+ * Renderer global counting ref-tag rewrites. Every walk and every retag bumps it, so a ref
+ * poll that sees it change knows the tag it resolves may have moved.
+ */
+export const WALK_GENERATION_GLOBAL = '__stagewrightWalkGeneration'
+
 /** Whether `selector` is the canonical `[data-sw-ref="N"]` selector emitted for a snapshot ref. */
 export function isRefSelector(selector: string): boolean {
   return /^\[data-sw-ref="[1-9]\d*"\]$/.test(selector)
+}
+
+/** The ref a canonical `[data-sw-ref="N"]` selector addresses, or `undefined` for any other selector. */
+export function refFromSelector(selector: string): number | undefined {
+  const match = /^\[data-sw-ref="([1-9]\d*)"\]$/.exec(selector)
+  return match === null ? undefined : Number(match[1])
 }
 
 /**

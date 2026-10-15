@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { fnv1a32 } from '../../hash.js'
-import { visitTargetElements } from '../../snapshot/resolve-target.js'
+import { WALK_GENERATION_GLOBAL, visitTargetElements } from '../../snapshot/resolve-target.js'
 import { MAX_SHADOW_DEPTH } from '../../snapshot/walker.js'
 import type { TransportSession } from '../../transports/types.js'
 
@@ -180,6 +180,7 @@ for (const assignment of assignments) {
   if (element !== undefined) pairs.push({ element, to });
 }
 let updated = 0;
+globalThis.${WALK_GENERATION_GLOBAL} = (globalThis.${WALK_GENERATION_GLOBAL} ?? 0) + 1;
 for (const pair of pairs) {
   pair.element.setAttribute('data-sw-ref', String(pair.to));
   updated += 1;
