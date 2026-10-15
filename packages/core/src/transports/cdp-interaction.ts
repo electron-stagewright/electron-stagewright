@@ -184,6 +184,23 @@ const style = window.getComputedStyle(el);
 const visible =
   rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
 const disabled = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+if (arg.probe === true) {
+  const key = Symbol.for('stagewright.pointerProbe');
+  if (window[key]) window[key].dispose();
+  const state = { moved: false, down: false };
+  const hits = (e) =>
+    typeof e.composedPath === 'function' ? e.composedPath().includes(el) : el.contains(e.target);
+  const onMove = (e) => { if (hits(e)) state.moved = true; };
+  const onDown = (e) => { if (hits(e)) state.down = true; };
+  window.addEventListener('mousemove', onMove, true);
+  window.addEventListener('mousedown', onDown, true);
+  state.dispose = () => {
+    window.removeEventListener('mousemove', onMove, true);
+    window.removeEventListener('mousedown', onDown, true);
+    if (window[key] === state) delete window[key];
+  };
+  window[key] = state;
+}
 return {
   status: 'ok',
   x: rect.x + rect.width / 2,
@@ -191,6 +208,35 @@ return {
   visible,
   disabled,
 };
+`
+
+/** What the pointer probe armed by {@link RESOLVE_POINT_BODY} has seen land on its element. */
+export interface PointerProbeState {
+  readonly moved: boolean
+  readonly down: boolean
+}
+
+/** Renderer body: read the armed pointer probe, disposing it when `arg.dispose` is set. */
+export const POINTER_PROBE_BODY = `
+const state = window[Symbol.for('stagewright.pointerProbe')];
+if (!state) return null;
+const seen = { moved: state.moved, down: state.down };
+if (arg.dispose === true) state.dispose();
+return seen;
+`
+
+/**
+ * Renderer body: resolve after the next rendered frame, bounded so a hidden window that never
+ * runs animation frames cannot stall the caller.
+ */
+export const NEXT_FRAME_BODY = `
+return new Promise((resolve) => {
+  const timer = setTimeout(() => resolve(false), 100);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    clearTimeout(timer);
+    resolve(true);
+  }));
+});
 `
 
 /** Renderer body: focus a selector (focus tolerates offscreen/hidden elements). */

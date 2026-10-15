@@ -328,7 +328,9 @@ export async function handleTargetFailure(
           'electron_type_into_editor({ selector: "<editor content area, e.g. \'.monaco-editor .view-lines\'>", text })',
           'If custom focus is needed: electron_click({ selector: "<editor content area>" }) then electron_keyboard_type({ text }) with no selector.',
         ]
-      : code === 'ELEMENT_NOT_VISIBLE' || code === 'ELEMENT_DISABLED'
+      : code === 'ELEMENT_NOT_VISIBLE' ||
+          code === 'ELEMENT_DISABLED' ||
+          code === 'POINTER_NOT_DELIVERED'
         ? ['electron_snapshot()']
         : undefined
   return makeError(code, {
