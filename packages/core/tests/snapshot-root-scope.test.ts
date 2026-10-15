@@ -208,17 +208,18 @@ describe('electron_snapshot root', () => {
     expect(later.diff.removed.map((entry) => entry.name)).toEqual(['Help'])
   })
 
-  it('returns REF_NOT_FOUND for a stale root ref without walking', async () => {
-    const { dispatcher, walkArgs } = setup()
-    await dispatcher.dispatch('electron_snapshot', {})
-    const walksBefore = walkArgs.length
+  it.each([{ ref: 999 }, { selector: '[data-sw-ref="999"]' }])(
+    'returns REF_NOT_FOUND for a stale root %o without walking',
+    async (root) => {
+      const { dispatcher, walkArgs } = setup()
+      await dispatcher.dispatch('electron_snapshot', {})
+      const walksBefore = walkArgs.length
 
-    const res = (await dispatcher.dispatch('electron_snapshot', {
-      root: { ref: 999 },
-    })) as ErrorResponse
-    expect(res).toMatchObject({ ok: false, code: 'REF_NOT_FOUND' })
-    expect(walkArgs.slice(walksBefore)).not.toContainEqual({ scope: '[data-sw-ref="999"]' })
-  })
+      const res = (await dispatcher.dispatch('electron_snapshot', { root })) as ErrorResponse
+      expect(res).toMatchObject({ ok: false, code: 'REF_NOT_FOUND' })
+      expect(walkArgs.slice(walksBefore)).not.toContainEqual({ scope: '[data-sw-ref="999"]' })
+    },
+  )
 
   it('returns REF_NOT_FOUND when a stored ref no longer resolves in the DOM', async () => {
     const { dispatcher, document } = setup()
@@ -257,13 +258,14 @@ describe('electron_snapshot root', () => {
   it.each([{ selector: '#panel' }, { ref: 1 }])(
     'waits for the session ref lock before a scoped walk (%o)',
     async (root) => {
-      const { dispatcher, snapshots, walkArgs } = setup()
+      const { dispatcher, snapshots, session, walkArgs } = setup()
       await dispatcher.dispatch('electron_snapshot', {})
       const walksBefore = walkArgs.length
 
       let release!: () => void
       const held = snapshots.withRefLock(
         'sess',
+        (await session.activeSurface()).id,
         () =>
           new Promise<void>((resolve) => {
             release = resolve

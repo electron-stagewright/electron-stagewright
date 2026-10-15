@@ -29,7 +29,13 @@ import {
   scopeSnapshot,
   truncateDiffToBudget,
 } from '../../snapshot/index.js'
-import { buildMissError, resolveTarget, staleRefError, withFreshRefs } from '../target.js'
+import {
+  buildMissError,
+  resolveTarget,
+  staleRefError,
+  targetRef,
+  withFreshRefs,
+} from '../target.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { loadInjectedWalker, runWalk } from './inject.js'
 import { reconcileRetagAndStore } from './refs.js'
@@ -174,7 +180,7 @@ export function makeSnapshotTool(deps: SnapshotToolDeps = {}): AnyToolDefinition
       const surface = await managed.session.activeSurface()
 
       const rootSelector = args.root === undefined ? undefined : resolveTarget(args.root)
-      const rootRef = args.root?.ref
+      const rootRef = args.root === undefined ? undefined : targetRef(args.root)
 
       // Stabilise the walk: reconcile refs against the stored baseline, retag the
       // renderer DOM, stamp the reload flag, and store the FULL unfiltered snapshot
