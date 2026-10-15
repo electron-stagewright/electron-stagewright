@@ -1,5 +1,5 @@
 import { JSDOM } from 'jsdom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { SuccessResponse } from '../src/errors/envelope.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
@@ -11,6 +11,7 @@ import { clickTool } from '../src/tools/interaction/pointer.js'
 import { getTextTool } from '../src/tools/read/value.js'
 import { makeFindTool } from '../src/tools/snapshot/find.js'
 import { makeSnapshotTool } from '../src/tools/snapshot/snapshot.js'
+import { waitForSelectorTool } from '../src/tools/wait/selector.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
 const RETAG_MARKER = 'const assignments = Array.isArray(arg)'
@@ -263,5 +264,54 @@ describe('ref walk serialization', () => {
     await held
     await pending
     expect(walks).toBe(1)
+  })
+
+  it('diagnoses a stale ref after releasing the ref lock instead of deadlocking', async () => {
+    const sessions = new SessionManager()
+    const snapshots = new SnapshotStore()
+    const session = new FakeSession({
+      id: 'sess',
+      evaluate: async () => snap('<button>A</button>'),
+    })
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
+    dispatcher.register(clickTool)
+    const surface = await session.activeSurface()
+    snapshots.set('sess', snap('<button>A</button>'), surface.id)
+    const click = vi.spyOn(session, 'click')
+
+    expect(await dispatcher.dispatch('electron_click', { ref: 99 })).toMatchObject({
+      ok: false,
+      code: 'REF_NOT_FOUND',
+    })
+    expect(click).not.toHaveBeenCalled()
+  })
+
+  it('holds a ref wait until a walk already holding the ref lock settles', async () => {
+    const sessions = new SessionManager()
+    const snapshots = new SnapshotStore()
+    let polls = 0
+    const session = new FakeSession({
+      id: 'sess',
+      evaluate: async () => {
+        polls++
+        return { satisfied: true }
+      },
+    })
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
+    dispatcher.register(waitForSelectorTool)
+    const surface = await session.activeSurface()
+    snapshots.set('sess', snap('<button>A</button>'), surface.id)
+    const holder = deferred()
+    const held = snapshots.withRefLock('sess', () => holder.promise)
+
+    const waiting = dispatcher.dispatch('electron_wait_for_selector', { ref: 1, state: 'attached' })
+    for (let i = 0; i < 4; i++) await flush()
+    expect(polls).toBe(0)
+    holder.resolve()
+    await held
+    expect(await waiting).toMatchObject({ ok: true })
+    expect(polls).toBe(1)
   })
 })
