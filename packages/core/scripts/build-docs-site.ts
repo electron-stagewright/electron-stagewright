@@ -451,7 +451,7 @@ function renderHomePage(bodyHtml: string): string {
   const rationaleStart = bodyHtml.indexOf('<h2 id="why-this-exists">')
   const overview = rationaleStart === -1 ? bodyHtml : bodyHtml.slice(rationaleStart)
   return `<section class="home-hero" aria-labelledby="hero-title">
-<div class="hero-kicker"><span>Agentic UX testing for Electron</span><span class="status-dot" aria-hidden="true"></span><span>v0.6.0</span></div>
+<div class="hero-kicker"><span>Agentic UX testing for Electron</span><span class="status-dot" aria-hidden="true"></span><span>v0.6.1</span></div>
 <div class="hero-grid">
 <div class="hero-copy">
 <h1 id="hero-title">Cue the app.<span>Prove the experience.</span></h1>
