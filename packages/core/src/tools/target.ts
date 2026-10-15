@@ -190,7 +190,7 @@ export async function refNameForActiveSurface(
   sessionId: string,
   ref: number | undefined,
 ): Promise<string | undefined> {
-  if (ref === undefined) return undefined
+  if (ref === undefined || ctx.signal?.aborted === true) return undefined
   try {
     const surface = await session.activeSurface()
     return refName(ctx.snapshots.get(sessionId, surface.id), ref)
@@ -216,7 +216,8 @@ async function gatherSimilarRefs(cx: {
   let source = cx.ctx.snapshots.get(cx.sessionId, surface.id)
   const hadSnapshot = source !== undefined
   try {
-    const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {})
+    const walked = await runWalk<Snapshot>(cx.session, loadInjectedWalker(), {}, cx.ctx.signal)
+    // Once the walk ran it has renumbered the DOM tags, so reconcile even if cancelled meanwhile.
     if (walked !== undefined && Array.isArray(walked.entries)) {
       const stabilised = await reconcileRetagAndStore({
         session: cx.session,
@@ -273,6 +274,8 @@ export async function buildMissError(
     readonly nameHint?: string | undefined
   },
 ): Promise<ErrorResponse> {
+  // The dispatcher already answered a cancelled request; skip the diagnosis round-trips.
+  cx.ctx.signal?.throwIfAborted()
   const { similar, hadSnapshot } = await gatherSimilarRefs({
     ctx: cx.ctx,
     session: cx.session,
