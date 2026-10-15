@@ -77,15 +77,22 @@ export class SnapshotStore {
   }
 }
 
-function untilAborted(promise: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+/** Settle with `promise`, or reject with `signal`'s reason as soon as it aborts. */
+export function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) return promise
   if (signal.aborted) return Promise.reject(signal.reason)
   return new Promise((resolve, reject) => {
     const cancel = (): void => reject(signal.reason)
     signal.addEventListener('abort', cancel, { once: true })
-    void promise.then(() => {
-      signal.removeEventListener('abort', cancel)
-      resolve()
-    })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', cancel)
+        resolve(value)
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', cancel)
+        reject(err)
+      },
+    )
   })
 }

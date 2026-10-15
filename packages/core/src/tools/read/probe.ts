@@ -23,9 +23,10 @@ import { assertCapability, type TransportSession } from '../../transports/index.
 import {
   buildMissError,
   handleTargetFailure,
-  refFreshnessError,
   refNameForActiveSurface,
   resolveTarget,
+  staleRefError,
+  withFreshRefs,
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
 
@@ -107,11 +108,17 @@ export async function runTargetedRead(
   const selector = resolveTarget(args)
   assertCapability(managed.transport, 'supportsRendererEval')
 
-  const stale = await refFreshnessError(ctx, managed.session, meta, args.ref)
-  if (stale !== undefined) return stale
-
   try {
-    const raw = await runRendererCall(managed.session, build(selector))
+    const run = await withFreshRefs(
+      ctx,
+      managed.session,
+      managed.id,
+      [args.ref],
+      () => runRendererCall(managed.session, build(selector)),
+      { readOnly: true },
+    )
+    if ('staleRef' in run) return staleRefError(ctx, managed.session, meta, run.staleRef)
+    const raw = run.value
     if (isInvalidSelector(raw)) {
       return makeError('BAD_ARGUMENT', {
         ...meta,
@@ -129,6 +136,7 @@ export async function runTargetedRead(
     }
     return makeSuccess({ session_id: managed.id, ...toPayload(raw) }, meta)
   } catch (err) {
+    if (ctx.signal?.aborted === true) throw err
     return handleTargetFailure(err, {
       ctx,
       session: managed.session,

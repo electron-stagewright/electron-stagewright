@@ -25,10 +25,11 @@ import {
   type TargetArgs,
   type ToolMeta,
   handleTargetFailure,
-  refFreshnessError,
   refNameForActiveSurface,
   resolveOptionalTarget,
   resolveTarget,
+  staleRefError,
+  withFreshRefs,
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
 
@@ -75,13 +76,13 @@ export async function runTargetedInteraction(
   const opts = resolveActionOptions(args)
   assertCapability(managed.transport, 'supportsInteraction')
 
-  const stale = await refFreshnessError(ctx, managed.session, meta, args.ref)
-  if (stale !== undefined) return stale
-
   try {
-    ctx.signal?.throwIfAborted()
-    const payload = await perform(managed.session, selector, opts)
-    return makeSuccess({ session_id: managed.id, ...payload }, meta)
+    const run = await withFreshRefs(ctx, managed.session, managed.id, [args.ref], () => {
+      ctx.signal?.throwIfAborted()
+      return perform(managed.session, selector, opts)
+    })
+    if ('staleRef' in run) return staleRefError(ctx, managed.session, meta, run.staleRef)
+    return makeSuccess({ session_id: managed.id, ...run.value }, meta)
   } catch (err) {
     // The dispatcher already answered a cancelled request; skip the diagnosis round-trips.
     if (ctx.signal?.aborted === true) throw err
@@ -117,14 +118,13 @@ export async function runDragInteraction(ctx: ToolContext, args: DragArgs): Prom
   const target = resolveTarget({ ref: args.targetRef, selector: args.targetSelector })
   assertCapability(managed.transport, 'supportsInteraction')
 
-  const staleSource = await refFreshnessError(ctx, managed.session, meta, args.ref)
-  if (staleSource !== undefined) return staleSource
-  const staleTarget = await refFreshnessError(ctx, managed.session, meta, args.targetRef)
-  if (staleTarget !== undefined) return staleTarget
-
   try {
-    ctx.signal?.throwIfAborted()
-    await managed.session.dragTo(source, target, resolveActionOptions(args))
+    const refs = [args.ref, args.targetRef]
+    const run = await withFreshRefs(ctx, managed.session, managed.id, refs, () => {
+      ctx.signal?.throwIfAborted()
+      return managed.session.dragTo(source, target, resolveActionOptions(args))
+    })
+    if ('staleRef' in run) return staleRefError(ctx, managed.session, meta, run.staleRef)
     return makeSuccess({ session_id: managed.id, source, target }, meta)
   } catch (err) {
     if (ctx.signal?.aborted === true) throw err
@@ -157,13 +157,13 @@ export async function runInteraction(
   resolveOptionalTarget(args)
   assertCapability(managed.transport, 'supportsInteraction')
 
-  const stale = await refFreshnessError(ctx, managed.session, meta, args.ref)
-  if (stale !== undefined) return stale
-
   try {
-    ctx.signal?.throwIfAborted()
-    const payload = await perform(managed.session, meta)
-    return makeSuccess({ session_id: managed.id, ...payload }, meta)
+    const run = await withFreshRefs(ctx, managed.session, managed.id, [args.ref], () => {
+      ctx.signal?.throwIfAborted()
+      return perform(managed.session, meta)
+    })
+    if ('staleRef' in run) return staleRefError(ctx, managed.session, meta, run.staleRef)
+    return makeSuccess({ session_id: managed.id, ...run.value }, meta)
   } catch (err) {
     if (ctx.signal?.aborted === true) throw err
     return handleTargetFailure(err, { ctx, session: managed.session, meta })

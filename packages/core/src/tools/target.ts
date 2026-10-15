@@ -15,13 +15,15 @@
  *    stored snapshot) so the agent recovers in one turn.
  * 3. **Ref freshness** — a `ref` only means something relative to a snapshot; if
  *    the latest stored snapshot lacks it, fail fast rather than acting on a tag
- *    that may now point at the wrong element.
+ *    that may now point at the wrong element. A ref is acted on under the
+ *    session's ref lock so a concurrent walk cannot renumber its tag mid-action.
  *
  * @module
  */
 
 import { type ErrorResponse, type SimilarRef, makeError } from '../errors/envelope.js'
 import { type ErrorCode, StagewrightError } from '../errors/registry.js'
+import { untilAborted } from '../server/snapshot-store.js'
 import type { Snapshot } from '../snapshot/index.js'
 import type { TransportSession } from '../transports/index.js'
 import { loadInjectedWalker, runWalk } from './snapshot/inject.js'
@@ -331,23 +333,50 @@ export async function handleTargetFailure(
   })
 }
 
+/** Outcome of {@link withFreshRefs}: the task's value, or the first ref missing from the latest snapshot. */
+export type FreshRefsOutcome<T> = { readonly value: T } | { readonly staleRef: number }
+
 /**
- * Ref-freshness guard. A `ref` only means anything relative to a snapshot; if the
- * latest stored snapshot does not contain it, return a `REF_NOT_FOUND` envelope
- * (with live candidates) so the caller fails fast rather than acting on a tag that
- * may now point at the wrong element. Returns `undefined` when the ref is fresh,
- * absent, or there is no baseline to check against.
+ * Ref-freshness guard. With any `ref` set, check each against the latest stored snapshot and run
+ * `task` while holding the session's ref lock, so a walk cannot renumber the DOM tags between
+ * resolving the ref and acting on it. A stale ref is returned instead of running `task`; selector
+ * targets run unlocked. Miss diagnosis takes the same lock, so callers diagnose after this settles.
+ * A `readOnly` task gives the lock up once the request is cancelled, since its result is discarded.
  */
-export async function refFreshnessError(
+export async function withFreshRefs<T>(
+  ctx: ToolContext,
+  session: TransportSession,
+  sessionId: string,
+  refs: readonly (number | undefined)[],
+  task: () => Promise<T>,
+  opts: { readonly readOnly?: boolean } = {},
+): Promise<FreshRefsOutcome<T>> {
+  const used = refs.filter((ref): ref is number => ref !== undefined)
+  if (used.length === 0) return { value: await task() }
+  return ctx.snapshots.withRefLock(
+    sessionId,
+    async () => {
+      const surface = await session.activeSurface()
+      const stored = ctx.snapshots.get(sessionId, surface.id)
+      const staleRef =
+        stored === undefined ? undefined : used.find((ref) => !snapshotHasRef(stored, ref))
+      if (staleRef !== undefined) return { staleRef }
+      const running = task()
+      if (opts.readOnly !== true) return { value: await running }
+      running.catch(() => undefined)
+      return { value: await untilAborted(running, ctx.signal) }
+    },
+    ctx.signal,
+  )
+}
+
+/** The `REF_NOT_FOUND` envelope (with live candidates) for a ref absent from the latest snapshot. */
+export function staleRefError(
   ctx: ToolContext,
   session: TransportSession,
   meta: ToolMeta,
-  ref: number | undefined,
-): Promise<ErrorResponse | undefined> {
-  if (ref === undefined) return undefined
-  const surface = await session.activeSurface()
-  const stored = ctx.snapshots.get(meta.session_id, surface.id)
-  if (stored === undefined || snapshotHasRef(stored, ref)) return undefined
+  ref: number,
+): Promise<ErrorResponse> {
   return buildMissError('REF_NOT_FOUND', {
     ctx,
     session,
