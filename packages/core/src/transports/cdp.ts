@@ -29,6 +29,8 @@
  *   renderer evals, file inputs via `DOM.setFileInputFiles` (see
  *   `cdp-interaction.ts` for the synthesis rules and known deviations from the
  *   Playwright transport).
+ * - `supportsSurfaceTargeting: true` — page, webview and iframe targets plus in-process frames are
+ *   listed and selectable (ADR-029).
  *
  * @module
  */
@@ -89,6 +91,7 @@ import {
 // The scroll-into-view body is transport-neutral renderer code; it lives next to
 // the Playwright bodies for historical reasons but has no Playwright coupling.
 import { buildScrollIntoViewBody } from './playwright-electron-bodies.js'
+import { originRelation } from './surface-origin.js'
 import type {
   AttachOptions,
   ClickOptions,
@@ -126,6 +129,7 @@ import type {
   StorageCookie,
   StorageSnapshot,
   SurfaceDescriptor,
+  SurfaceKind,
   TransportCapabilities,
   TransportId,
   TransportSession,
@@ -153,6 +157,12 @@ const PROCESS_REAP_BUDGET_MS = 2_000
 const CONSOLE_CAP = 1000
 /** Max dialog events retained per session (matches the Playwright transport). */
 const DIALOG_CAP = 200
+/** Budget for a selected frame to expose its main-world context, e.g. mid-navigation. */
+const FRAME_CONTEXT_WAIT_MS = 2_000
+/** Poll interval while waiting for a frame's main-world context. */
+const FRAME_CONTEXT_POLL_MS = 50
+/** Upper bound on frame boundaries walked to an input root; guards a malformed parent chain. */
+const MAX_FRAME_DEPTH = 64
 
 /** Fetches and JSON-parses an HTTP discovery endpoint, bounded. Injectable seam. */
 export type FetchJson = (url: string, timeoutMs: number) => Promise<unknown>
@@ -354,13 +364,93 @@ function fetchHeaderEntries(
   return entries.length > 0 ? entries : undefined
 }
 
+/** Target types that host renderer surfaces. */
+type CdpTargetType = 'page' | 'webview' | 'iframe'
+
 /** One entry from the `/json/list` discovery endpoint. */
 interface CdpTargetInfo {
   readonly id: string
-  readonly type: string
+  readonly type: CdpTargetType
   readonly title: string
   readonly url: string
   readonly webSocketDebuggerUrl: string
+  /** The containing frame (iframe) or host page (webview); absent for page targets. */
+  readonly parentId?: string
+}
+
+/** One frame of a `Page.getFrameTree` result (the slice we read). */
+interface CdpFrameTree {
+  readonly frame?: { readonly id?: string; readonly url?: string; readonly urlFragment?: string }
+  readonly childFrames?: readonly CdpFrameTree[]
+}
+
+/**
+ * A known renderer surface, keyed by its CDP frame id (a target id equals its root frame id). The
+ * mutable fields follow the frame between in-process and out-of-process hosting.
+ */
+interface CdpSurfaceRecord {
+  readonly id: string
+  readonly frameId: string
+  kind: SurfaceKind
+  /** Target whose socket evaluates in this frame. */
+  targetId: string
+  /** Page or webview target that receives input for this frame; unknown for an orphaned frame. */
+  inputTargetId: string | undefined
+  parentId: string | undefined
+  title: string | undefined
+  url: string | undefined
+  originRelation: SurfaceDescriptor['originRelation']
+  closed: boolean
+}
+
+/** One surface found during discovery, before ordering. */
+interface SurfaceNode {
+  readonly frameId: string
+  readonly targetId: string
+  readonly targetType?: CdpTargetType
+  readonly parentFrameId?: string
+  readonly title?: string
+  readonly url?: string
+}
+
+/** The selected surface resolved to the sockets that drive it. */
+interface ActiveRenderer {
+  readonly record: CdpSurfaceRecord
+  /** Socket of the target hosting the frame. */
+  readonly conn: CdpConnection
+  /** Main-world context of an in-process frame; undefined for a target's root frame. */
+  readonly contextId: number | undefined
+  /** Socket of the input root (the active window target). */
+  readonly input: CdpConnection
+  readonly isRoot: boolean
+  readonly targets: readonly CdpTargetInfo[]
+}
+
+function isWindowTarget(target: CdpTargetInfo): boolean {
+  return target.type === 'page' || target.type === 'webview'
+}
+
+function frameUrl(frame: CdpFrameTree['frame']): string | undefined {
+  const url = `${frame?.url ?? ''}${frame?.urlFragment ?? ''}`
+  return url === '' ? undefined : url
+}
+
+function findFrame(tree: CdpFrameTree | undefined, frameId: string): CdpFrameTree | undefined {
+  if (tree === undefined) return undefined
+  if (tree.frame?.id === frameId) return tree
+  for (const child of tree.childFrames ?? []) {
+    const found = findFrame(child, frameId)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+function surfaceError(
+  code: 'SURFACE_NOT_FOUND' | 'SURFACE_CLOSED' | 'SURFACE_UNSUPPORTED',
+  surfaceId: string,
+  message: string,
+): StagewrightError {
+  return new StagewrightError(code, message, { transport: TRANSPORT_ID, surfaceId })
 }
 
 /** Shape of `Runtime.consoleAPICalled` event params (the slice we read). */
@@ -376,14 +466,14 @@ interface DialogOpeningParams {
   readonly defaultPrompt?: string
 }
 
-/** Validated target list from `/json/list` — non-page targets filtered out. */
-function asPageTargets(value: unknown): readonly CdpTargetInfo[] {
+/** Validated renderer targets from `/json/list`; workers, devtools and other types are dropped. */
+function asRendererTargets(value: unknown): readonly CdpTargetInfo[] {
   if (!Array.isArray(value)) return []
   const targets: CdpTargetInfo[] = []
   for (const entry of value) {
     if (typeof entry !== 'object' || entry === null) continue
-    const t = entry as Partial<CdpTargetInfo>
-    if (t.type !== 'page') continue
+    const t = entry as { readonly [K in keyof CdpTargetInfo]?: unknown }
+    if (t.type !== 'page' && t.type !== 'webview' && t.type !== 'iframe') continue
     if (typeof t.id !== 'string' || typeof t.webSocketDebuggerUrl !== 'string') continue
     targets.push({
       id: t.id,
@@ -391,9 +481,15 @@ function asPageTargets(value: unknown): readonly CdpTargetInfo[] {
       title: typeof t.title === 'string' ? t.title : '',
       url: typeof t.url === 'string' ? t.url : '',
       webSocketDebuggerUrl: t.webSocketDebuggerUrl,
+      ...(t.type !== 'page' && typeof t.parentId === 'string' ? { parentId: t.parentId } : {}),
     })
   }
   return targets
+}
+
+/** Window roots from `/json/list`: page targets and webview guests. */
+function asWindowTargets(value: unknown): readonly CdpTargetInfo[] {
+  return asRendererTargets(value).filter(isWindowTarget)
 }
 
 /** Dependency seams threaded from the transport into each session. */
@@ -418,8 +514,15 @@ class CdpSession implements TransportSession {
   readonly #pool = new Map<string, CdpConnection>()
   /** In-flight opens so two concurrent calls never double-connect one target. */
   readonly #opening = new Map<string, Promise<CdpConnection>>()
-  /** Selected renderer target; falls back deterministically when it disappears. */
+  /** Selected window target (page or webview); falls back deterministically when it disappears. */
   #activeTargetId: string | undefined
+  /** Selected surface below the active window; undefined selects the window's root frame. */
+  #activeSurfaceId: string | undefined
+  readonly #surfacesByFrame = new Map<string, CdpSurfaceRecord>()
+  readonly #surfacesById = new Map<string, CdpSurfaceRecord>()
+  #nextSurfaceId = 0
+  /** Per target: frame id → its main-world execution context id. */
+  readonly #frameContexts = new Map<string, Map<string, number>>()
   /** Serializes target changes so concurrent switch calls cannot interleave. */
   #windowSwitch = Promise.resolve()
   #disposed = false
@@ -486,7 +589,13 @@ class CdpSession implements TransportSession {
         if (this.#pool.get(target.id) === conn) this.#pool.delete(target.id)
       })
       this.#pool.set(target.id, conn)
-      await this.#attachCapture(conn, target.id)
+      this.#trackFrameContexts(conn, target.id)
+      if (isWindowTarget(target)) {
+        await this.#attachCapture(conn, target.id)
+      } else {
+        // An out-of-process iframe socket only drives frames; it does not join capture.
+        await conn.enable('Runtime').catch(() => undefined)
+      }
       this.#requireRunning()
       return conn
     })()
@@ -496,6 +605,29 @@ class CdpSession implements TransportSession {
     } finally {
       this.#opening.delete(target.id)
     }
+  }
+
+  /** Record each frame's main-world context; `Runtime.enable` replays the existing ones. */
+  #trackFrameContexts(conn: CdpConnection, targetId: string): void {
+    const contexts = new Map<string, number>()
+    this.#frameContexts.set(targetId, contexts)
+    conn.on('Runtime.executionContextCreated', (params) => {
+      const context = (params as { context?: { id?: unknown; auxData?: unknown } } | undefined)
+        ?.context
+      const aux = context?.auxData as { isDefault?: unknown; frameId?: unknown } | undefined
+      if (aux?.isDefault !== true || typeof aux.frameId !== 'string') return
+      if (typeof context?.id === 'number') contexts.set(aux.frameId, context.id)
+    })
+    conn.on('Runtime.executionContextDestroyed', (params) => {
+      const id = (params as { executionContextId?: unknown } | undefined)?.executionContextId
+      for (const [frameId, contextId] of contexts) {
+        if (contextId === id) contexts.delete(frameId)
+      }
+    })
+    conn.on('Runtime.executionContextsCleared', () => contexts.clear())
+    conn.onClose(() => {
+      if (this.#frameContexts.get(targetId) === contexts) this.#frameContexts.delete(targetId)
+    })
   }
 
   /** Console + dialog + network capture for one target. Best-effort: enable failures are non-fatal. */
@@ -867,7 +999,7 @@ class CdpSession implements TransportSession {
     }
   }
 
-  /** Current page targets from the discovery endpoint. */
+  /** Current renderer targets (page, webview, iframe) from the discovery endpoint. */
   async #listTargets(): Promise<readonly CdpTargetInfo[]> {
     this.#requireRunning()
     let listed: unknown
@@ -881,17 +1013,23 @@ class CdpSession implements TransportSession {
       )
     }
     this.#requireRunning()
-    return asPageTargets(listed)
+    return asRendererTargets(listed)
   }
 
-  async #activeTarget(): Promise<CdpTargetInfo> {
-    // Renderer-implicit operations wait for an earlier switch to settle, so a
-    // concurrent title/index lookup cannot send a later read to the old target.
-    await this.#windowSwitch
-    const targets = await this.#listTargets()
-    const selected = targets.find((target) => target.id === this.#activeTargetId)
+  /** Current window targets: pages and webview guests. */
+  async #listWindowTargets(): Promise<readonly CdpTargetInfo[]> {
+    return (await this.#listTargets()).filter(isWindowTarget)
+  }
+
+  /**
+   * The selected window among `targets`. When it closed, the first window becomes active and the
+   * surface selection resets to its root frame.
+   */
+  #selectWindow(targets: readonly CdpTargetInfo[]): CdpTargetInfo {
+    const windows = targets.filter(isWindowTarget)
+    const selected = windows.find((target) => target.id === this.#activeTargetId)
     if (selected !== undefined) return selected
-    const fallback = targets[0]
+    const fallback = windows[0]
     if (fallback === undefined) {
       throw new StagewrightError('REF_NOT_FOUND', 'No page targets are open in the attached app.', {
         transport: TRANSPORT_ID,
@@ -899,11 +1037,19 @@ class CdpSession implements TransportSession {
       })
     }
     this.#activeTargetId = fallback.id
+    this.#activeSurfaceId = undefined
     return fallback
   }
 
+  async #activeTarget(): Promise<CdpTargetInfo> {
+    // Renderer-implicit operations wait for an earlier switch to settle, so a
+    // concurrent title/index lookup cannot send a later read to the old target.
+    await this.#windowSwitch
+    return this.#selectWindow(await this.#listTargets())
+  }
+
   async #resolveTarget(ref: WindowRef): Promise<CdpTargetInfo> {
-    const targets = await this.#listTargets()
+    const targets = await this.#listWindowTargets()
     if (targets.length === 0) {
       throw new StagewrightError('REF_NOT_FOUND', 'No page targets are open in the attached app.', {
         transport: TRANSPORT_ID,
@@ -952,11 +1098,10 @@ class CdpSession implements TransportSession {
     if (target === 'main') {
       return evaluateExpression<T>(this.#browser, body, arg)
     }
-    const conn = await this.#pageConnection()
-    return evaluateExpression<T>(conn, body, arg)
+    return this.#evalIn<T>(await this.#activeRenderer(), body, arg)
   }
 
-  /** The pooled connection for the selected active page target. */
+  /** The pooled connection for the selected window target. */
   async #pageConnection(): Promise<CdpConnection> {
     const page = await this.#activeTarget()
     return this.connectionFor(page)
@@ -986,9 +1131,8 @@ class CdpSession implements TransportSession {
   }
 
   async windowsList(): Promise<readonly WindowDescriptor[]> {
-    const targets = await this.#listTargets()
-    const active = targets.find((target) => target.id === this.#activeTargetId) ?? targets[0]
-    if (active !== undefined) this.#activeTargetId = active.id
+    const targets = await this.#listWindowTargets()
+    const active = targets.length > 0 ? this.#selectWindow(targets) : undefined
     return targets.map((t, i) => ({
       id: t.id,
       index: i,
@@ -1003,7 +1147,8 @@ class CdpSession implements TransportSession {
     const run = this.#windowSwitch.then(async () => {
       const selected = await this.#resolveTarget(target)
       this.#activeTargetId = selected.id
-      const targets = await this.#listTargets()
+      this.#activeSurfaceId = undefined
+      const targets = await this.#listWindowTargets()
       const index = targets.findIndex((candidate) => candidate.id === selected.id)
       if (index === -1) {
         throw new StagewrightError(
@@ -1031,30 +1176,358 @@ class CdpSession implements TransportSession {
     return run
   }
 
-  surfacesList(): Promise<readonly SurfaceDescriptor[]> {
-    return Promise.reject(unsupported('surfacesList', 'supportsSurfaceTargeting'))
+  // --- Surface targeting (ADR-029): /json/list targets plus per-target frame trees. ---
+
+  async surfacesList(): Promise<readonly SurfaceDescriptor[]> {
+    const targets = await this.#listTargets()
+    if (targets.some(isWindowTarget)) this.#selectWindow(targets)
+    const nodes = await this.#surfaceNodes(targets)
+    const byFrame = new Map(nodes.map((node) => [node.frameId, node]))
+    const children = new Map<string | undefined, SurfaceNode[]>()
+    for (const node of nodes) {
+      const parent =
+        node.parentFrameId !== undefined && byFrame.has(node.parentFrameId)
+          ? node.parentFrameId
+          : undefined
+      const siblings = children.get(parent) ?? []
+      siblings.push(node)
+      children.set(parent, siblings)
+    }
+
+    const live = new Set<string>()
+    const ordered: CdpSurfaceRecord[] = []
+    const visit = (node: SurfaceNode, parent: CdpSurfaceRecord | undefined): void => {
+      if (live.has(this.#surfaceRecord(node.frameId).id)) return
+      const record = this.#applyNode(node, parent)
+      live.add(record.id)
+      ordered.push(record)
+      for (const child of children.get(node.frameId) ?? []) visit(child, record)
+    }
+    for (const root of children.get(undefined) ?? []) visit(root, undefined)
+    // Nodes left unvisited form a parent cycle; list them as roots instead of inventing parentage.
+    for (const node of nodes) visit(node, undefined)
+
+    for (const record of this.#surfacesById.values()) {
+      if (!live.has(record.id)) record.closed = true
+    }
+    return ordered.map((record) => this.#descriptor(record))
   }
 
   async activeSurface(): Promise<SurfaceDescriptor> {
-    const target = await this.#activeTarget()
-    return {
-      id: target.id,
-      // CDP discovery identifies a page target but does not expose enough Electron ownership
-      // metadata to distinguish BrowserWindow, WebContentsView, or webview honestly.
+    return this.#descriptor((await this.#activeSelection()).record)
+  }
+
+  async activateSurface(surfaceId: string): Promise<SurfaceDescriptor> {
+    const run = this.#windowSwitch.then(async () => {
+      const surfaces = await this.surfacesList()
+      const selected = surfaces.find((surface) => surface.id === surfaceId)
+      const record = this.#surfacesById.get(surfaceId)
+      if (selected === undefined || record === undefined) {
+        if (record !== undefined) {
+          throw surfaceError(
+            'SURFACE_CLOSED',
+            surfaceId,
+            `Surface "${surfaceId}" is no longer live.`,
+          )
+        }
+        throw surfaceError(
+          'SURFACE_NOT_FOUND',
+          surfaceId,
+          `Surface "${surfaceId}" was not observed in this session.`,
+        )
+      }
+      if (
+        !selected.capabilities.snapshot ||
+        !selected.capabilities.interaction ||
+        !selected.capabilities.rendererEval ||
+        record.inputTargetId === undefined
+      ) {
+        throw surfaceError(
+          'SURFACE_UNSUPPORTED',
+          surfaceId,
+          `Surface "${surfaceId}" cannot be driven through the CDP transport.`,
+        )
+      }
+      this.#activeTargetId = record.inputTargetId
+      this.#activeSurfaceId = record.id
+      return this.#descriptor(record)
+    })
+    this.#windowSwitch = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  /** The record for `frameId`, minting a new opaque id the first time the frame is seen. */
+  #surfaceRecord(frameId: string): CdpSurfaceRecord {
+    const existing = this.#surfacesByFrame.get(frameId)
+    if (existing !== undefined) return existing
+    const record: CdpSurfaceRecord = {
+      id: `${this.id}-surface-${this.#nextSurfaceId}`,
+      frameId,
       kind: 'other',
+      targetId: frameId,
+      inputTargetId: undefined,
+      parentId: undefined,
+      title: undefined,
+      url: undefined,
+      originRelation: undefined,
+      closed: false,
+    }
+    this.#nextSurfaceId += 1
+    this.#surfacesByFrame.set(frameId, record)
+    this.#surfacesById.set(record.id, record)
+    return record
+  }
+
+  /** Refresh a record from one discovery node placed under `parent`. */
+  #applyNode(node: SurfaceNode, parent: CdpSurfaceRecord | undefined): CdpSurfaceRecord {
+    const record = this.#surfaceRecord(node.frameId)
+    const windowRoot = node.targetType === 'page' || node.targetType === 'webview'
+    record.kind =
+      node.targetType === 'page' ? 'other' : node.targetType === 'webview' ? 'webview' : 'frame'
+    record.targetId = node.targetId
+    record.inputTargetId = windowRoot ? node.frameId : parent?.inputTargetId
+    record.parentId = parent?.id
+    record.title = node.title
+    record.url = node.url
+    record.originRelation =
+      record.kind === 'frame' && node.url !== undefined
+        ? originRelation(parent?.url, node.url)
+        : undefined
+    record.closed = false
+    return record
+  }
+
+  /** Every target root plus each target's in-process frames, targets first on a duplicate id. */
+  async #surfaceNodes(targets: readonly CdpTargetInfo[]): Promise<readonly SurfaceNode[]> {
+    const trees = await Promise.all(targets.map((target) => this.#frameTree(target)))
+    const nodes: SurfaceNode[] = targets.map((target) => ({
+      frameId: target.id,
+      targetId: target.id,
+      targetType: target.type,
+      ...(target.parentId !== undefined ? { parentFrameId: target.parentId } : {}),
       ...(target.title !== '' ? { title: target.title } : {}),
       ...(target.url !== '' ? { url: target.url } : {}),
-      active: true,
-      capabilities: {
-        snapshot: true,
-        interaction: true,
-        rendererEval: true,
-      },
+    }))
+    const seen = new Set(nodes.map((node) => node.frameId))
+    targets.forEach((target, index) => {
+      // Children of the root frame hang off the target id, which is the root frame's id.
+      const visit = (tree: CdpFrameTree, parentFrameId: string): void => {
+        for (const child of tree.childFrames ?? []) {
+          const frameId = child.frame?.id
+          if (frameId === undefined) continue
+          if (!seen.has(frameId)) {
+            seen.add(frameId)
+            const url = frameUrl(child.frame)
+            nodes.push({
+              frameId,
+              targetId: target.id,
+              parentFrameId,
+              ...(url !== undefined ? { url } : {}),
+            })
+          }
+          visit(child, frameId)
+        }
+      }
+      const tree = trees[index]
+      if (tree !== undefined) visit(tree, target.id)
+    })
+    return nodes
+  }
+
+  /** The target's frame tree; undefined when the target refuses or closes mid-read. */
+  async #frameTree(target: CdpTargetInfo): Promise<CdpFrameTree | undefined> {
+    try {
+      const conn = await this.connectionFor(target)
+      const result = await conn.send<{ readonly frameTree?: CdpFrameTree }>('Page.getFrameTree')
+      return result.frameTree
+    } catch {
+      this.#requireRunning()
+      return undefined
     }
   }
 
-  activateSurface(_surfaceId: string): Promise<SurfaceDescriptor> {
-    return Promise.reject(unsupported('activateSurface', 'supportsSurfaceTargeting'))
+  #descriptor(record: CdpSurfaceRecord): SurfaceDescriptor {
+    const active =
+      this.#activeSurfaceId ?? this.#surfacesByFrame.get(this.#activeTargetId ?? '')?.id
+    return {
+      id: record.id,
+      kind: record.kind,
+      ...(record.parentId !== undefined ? { parentId: record.parentId } : {}),
+      ...(record.title !== undefined ? { title: record.title } : {}),
+      ...(record.url !== undefined ? { url: record.url } : {}),
+      active: record.id === active,
+      capabilities: {
+        snapshot: true,
+        interaction: record.inputTargetId !== undefined,
+        rendererEval: true,
+      },
+      ...(record.originRelation !== undefined ? { originRelation: record.originRelation } : {}),
+    }
+  }
+
+  /**
+   * The active window plus the selected surface below it. A closed window falls back as
+   * {@link #selectWindow} does; a selected frame that is gone reports `SURFACE_CLOSED`.
+   */
+  async #activeSelection(): Promise<{
+    readonly window: CdpTargetInfo
+    readonly record: CdpSurfaceRecord
+    readonly targets: readonly CdpTargetInfo[]
+  }> {
+    await this.#windowSwitch
+    const targets = await this.#listTargets()
+    const window = this.#selectWindow(targets)
+    const root = this.#surfaceRecord(window.id)
+    if (root.inputTargetId === undefined || root.closed) {
+      // First sight of this window without a listing: describe it from its target alone.
+      root.kind = window.type === 'webview' ? 'webview' : 'other'
+      root.targetId = window.id
+      root.inputTargetId = window.id
+      root.closed = false
+    }
+    root.title = window.title !== '' ? window.title : undefined
+    root.url = window.url !== '' ? window.url : undefined
+    const selectedId = this.#activeSurfaceId
+    if (selectedId === undefined || selectedId === root.id) return { window, record: root, targets }
+    const record = this.#surfacesById.get(selectedId)
+    if (record === undefined) {
+      throw surfaceError(
+        'SURFACE_NOT_FOUND',
+        selectedId,
+        `Surface "${selectedId}" was not observed in this session.`,
+      )
+    }
+    if (record.closed || !(await this.#locateFrame(record, targets))) {
+      record.closed = true
+      throw surfaceError('SURFACE_CLOSED', selectedId, `Surface "${selectedId}" is no longer live.`)
+    }
+    return { window, record, targets }
+  }
+
+  /** Find the target now hosting `record`'s frame, following an in-process/OOPIF move. */
+  async #locateFrame(
+    record: CdpSurfaceRecord,
+    targets: readonly CdpTargetInfo[],
+  ): Promise<boolean> {
+    const own = targets.find((target) => target.id === record.frameId)
+    if (own !== undefined) {
+      record.targetId = own.id
+      record.url = own.url !== '' ? own.url : undefined
+      return true
+    }
+    const candidates = [
+      ...targets.filter((target) => target.id === record.targetId),
+      ...targets.filter((target) => target.id !== record.targetId),
+    ]
+    for (const target of candidates) {
+      const frame = findFrame(await this.#frameTree(target), record.frameId)
+      if (frame !== undefined) {
+        record.targetId = target.id
+        record.url = frameUrl(frame.frame)
+        return true
+      }
+    }
+    return false
+  }
+
+  /** Resolve the selected surface to the sockets and context that drive it. */
+  async #activeRenderer(): Promise<ActiveRenderer> {
+    const { window, record, targets } = await this.#activeSelection()
+    const input = await this.connectionFor(window)
+    if (record.frameId === window.id) {
+      return { record, conn: input, contextId: undefined, input, isRoot: true, targets }
+    }
+    const host = targets.find((target) => target.id === record.targetId)
+    if (host === undefined) {
+      throw surfaceError('SURFACE_CLOSED', record.id, `Surface "${record.id}" is no longer live.`)
+    }
+    const conn = await this.connectionFor(host)
+    const contextId = record.frameId === host.id ? undefined : await this.#frameContext(record)
+    return { record, conn, contextId, input, isRoot: false, targets }
+  }
+
+  /** The main-world context of an in-process frame, waiting briefly for one mid-navigation. */
+  async #frameContext(record: CdpSurfaceRecord): Promise<number> {
+    const deadline = Date.now() + FRAME_CONTEXT_WAIT_MS
+    for (;;) {
+      const contextId = this.#frameContexts.get(record.targetId)?.get(record.frameId)
+      if (contextId !== undefined) return contextId
+      if (Date.now() >= deadline) {
+        throw surfaceError(
+          'SURFACE_UNSUPPORTED',
+          record.id,
+          `Surface "${record.id}" has no JavaScript context yet; retry once the frame has loaded.`,
+        )
+      }
+      await delay(FRAME_CONTEXT_POLL_MS)
+      this.#requireRunning()
+    }
+  }
+
+  /** Evaluate in the active renderer, retrying once if a navigation replaced the frame's context. */
+  async #evalIn<T>(renderer: ActiveRenderer, body: string, arg?: unknown): Promise<T> {
+    const { conn, contextId, record } = renderer
+    if (contextId === undefined) return evaluateExpression<T>(conn, body, arg)
+    try {
+      return await evaluateExpression<T>(conn, body, arg, { contextId })
+    } catch (err) {
+      if (!(err instanceof StagewrightError) || !/Cannot find context/i.test(err.message)) {
+        throw err
+      }
+      return evaluateExpression<T>(conn, body, arg, { contextId: await this.#frameContext(record) })
+    }
+  }
+
+  /**
+   * Offset of the active frame's viewport inside its input root: the frame owners' content boxes,
+   * summed across each target boundary up to the window target.
+   */
+  async #frameOffset(
+    renderer: ActiveRenderer,
+  ): Promise<{ readonly x: number; readonly y: number }> {
+    let x = 0
+    let y = 0
+    let current = renderer.record
+    for (let depth = 0; current.frameId !== current.inputTargetId; depth++) {
+      const parent =
+        current.parentId !== undefined ? this.#surfacesById.get(current.parentId) : undefined
+      const owner = renderer.targets.find((target) => target.id === parent?.targetId)
+      const host = owner !== undefined ? this.#surfacesByFrame.get(owner.id) : undefined
+      if (
+        parent === undefined ||
+        owner === undefined ||
+        host === undefined ||
+        depth > MAX_FRAME_DEPTH
+      ) {
+        throw surfaceError(
+          'SURFACE_UNSUPPORTED',
+          renderer.record.id,
+          `Surface "${renderer.record.id}" has no resolvable position in its window.`,
+        )
+      }
+      const conn = await this.connectionFor(owner)
+      const frameOwner = await conn.send<{ readonly backendNodeId?: number }>('DOM.getFrameOwner', {
+        frameId: current.frameId,
+      })
+      const box = await conn.send<{ readonly model?: { readonly content?: readonly number[] } }>(
+        'DOM.getBoxModel',
+        { backendNodeId: frameOwner.backendNodeId },
+      )
+      x += box.model?.content?.[0] ?? 0
+      y += box.model?.content?.[1] ?? 0
+      // getBoxModel already places the owner in its target's root viewport, so the walk continues
+      // from that target's root frame rather than from each in-process ancestor.
+      current = host
+    }
+    return { x, y }
+  }
+
+  /** Give a non-root frame keyboard focus so key events dispatched on its window reach it. */
+  async #focusFrame(renderer: ActiveRenderer): Promise<void> {
+    if (!renderer.isRoot) await this.#evalIn(renderer, 'window.focus(); return true')
   }
 
   async consoleLogs(): Promise<ConsoleLogsResult> {
@@ -1320,16 +1793,16 @@ class CdpSession implements TransportSession {
   // --- Interaction surface: Input.dispatch* synthesis (see cdp-interaction.ts). ---
 
   /**
-   * Resolve a selector to its centre point on the active page with a light
-   * actionability check. `force` bypasses the visibility/disabled refusals
-   * (the element must still exist).
+   * Resolve a selector to its centre point on the active surface, in its window's viewport, with a
+   * light actionability check. `force` bypasses the visibility/disabled refusals (the element must
+   * still exist).
    */
   async #interactionPoint(
     selector: string,
     opts: InteractionOptions = {},
   ): Promise<{ readonly conn: CdpConnection; readonly x: number; readonly y: number }> {
-    const conn = await this.#pageConnection()
-    const point = await evaluateExpression<ResolvedPoint>(conn, RESOLVE_POINT_BODY, { selector })
+    const renderer = await this.#activeRenderer()
+    const point = await this.#evalIn<ResolvedPoint>(renderer, RESOLVE_POINT_BODY, { selector })
     if (point.status !== 'ok') throw statusToError(point.status, selector)
     if (opts.force !== true) {
       if (point.visible !== true) {
@@ -1341,12 +1814,13 @@ class CdpSession implements TransportSession {
         throw new StagewrightError('ELEMENT_DISABLED', `"${selector}" is disabled.`, { selector })
       }
     }
-    return { conn, x: point.x ?? 0, y: point.y ?? 0 }
+    const offset = renderer.isRoot ? { x: 0, y: 0 } : await this.#frameOffset(renderer)
+    return { conn: renderer.input, x: (point.x ?? 0) + offset.x, y: (point.y ?? 0) + offset.y }
   }
 
-  /** Focus `selector` on `conn` (eval focus tolerates offscreen/hidden elements). */
-  async #focus(conn: CdpConnection, selector: string): Promise<void> {
-    const result = await evaluateExpression<{ readonly status: string }>(conn, FOCUS_BODY, {
+  /** Focus `selector` in the renderer (eval focus tolerates offscreen/hidden elements). */
+  async #focus(renderer: ActiveRenderer, selector: string): Promise<void> {
+    const result = await this.#evalIn<{ readonly status: string }>(renderer, FOCUS_BODY, {
       selector,
     })
     if (result.status !== 'ok') throw statusToError(result.status, selector)
@@ -1403,8 +1877,8 @@ class CdpSession implements TransportSession {
 
   async fill(selector: string, value: string, _opts: InteractionOptions = {}): Promise<void> {
     this.#requireRunning()
-    const conn = await this.#pageConnection()
-    const result = await evaluateExpression<{ readonly status: string }>(conn, FILL_BODY, {
+    const renderer = await this.#activeRenderer()
+    const result = await this.#evalIn<{ readonly status: string }>(renderer, FILL_BODY, {
       selector,
       value,
     })
@@ -1413,15 +1887,18 @@ class CdpSession implements TransportSession {
 
   async press(key: string, opts: PressOptions = {}): Promise<void> {
     this.#requireRunning()
-    const conn = await this.#pageConnection()
-    if (opts.selector !== undefined) await this.#focus(conn, opts.selector)
-    await this.#pressParsed(conn, parseKeyChord(key))
+    const renderer = await this.#activeRenderer()
+    if (opts.selector !== undefined) await this.#focus(renderer, opts.selector)
+    else await this.#focusFrame(renderer)
+    await this.#pressParsed(renderer.input, parseKeyChord(key))
   }
 
   async typeText(text: string, opts: PressOptions = {}): Promise<void> {
     this.#requireRunning()
-    const conn = await this.#pageConnection()
-    if (opts.selector !== undefined) await this.#focus(conn, opts.selector)
+    const renderer = await this.#activeRenderer()
+    if (opts.selector !== undefined) await this.#focus(renderer, opts.selector)
+    else await this.#focusFrame(renderer)
+    const conn = renderer.input
     for (const ch of text) {
       if (ch === '\n' || ch === '\r') {
         await this.#pressParsed(conn, parseKeyChord('Enter'))
@@ -1443,11 +1920,10 @@ class CdpSession implements TransportSession {
     _opts: InteractionOptions = {},
   ): Promise<readonly string[]> {
     this.#requireRunning()
-    const conn = await this.#pageConnection()
-    const result = await evaluateExpression<{
+    const result = await this.#evalIn<{
       readonly status: string
       readonly selected?: readonly string[]
-    }>(conn, SELECT_OPTION_BODY, { selector, values })
+    }>(await this.#activeRenderer(), SELECT_OPTION_BODY, { selector, values })
     if (result.status !== 'ok') throw statusToError(result.status, selector)
     return result.selected ?? []
   }
@@ -1458,12 +1934,11 @@ class CdpSession implements TransportSession {
     opts: InteractionOptions = {},
   ): Promise<void> {
     this.#requireRunning()
-    const conn = await this.#pageConnection()
-    const state = await evaluateExpression<{
+    const state = await this.#evalIn<{
       readonly status: string
       readonly checked?: boolean
       readonly disabled?: boolean
-    }>(conn, CHECKED_STATE_BODY, { selector })
+    }>(await this.#activeRenderer(), CHECKED_STATE_BODY, { selector })
     if (state.status !== 'ok') throw statusToError(state.status, selector)
     if (state.disabled === true && opts.force !== true) {
       throw new StagewrightError('ELEMENT_DISABLED', `"${selector}" is disabled.`, { selector })
@@ -1479,16 +1954,18 @@ class CdpSession implements TransportSession {
     _opts: InteractionOptions = {},
   ): Promise<void> {
     this.#requireRunning()
-    const conn = await this.#pageConnection()
-    // DOM.querySelector cannot cross a shadow boundary. Resolve snapshot refs
-    // to a remote element instead; ordinary CSS keeps its existing DOM path.
-    if (isRefSelector(selector)) {
+    const renderer = await this.#activeRenderer()
+    const conn = renderer.conn
+    // DOM.querySelector cannot cross a shadow boundary or reach into an in-process frame. Resolve
+    // refs and frame selectors to a remote element instead; other CSS keeps its existing DOM path.
+    if (isRefSelector(selector) || renderer.contextId !== undefined) {
       const result = await conn.send<{
         readonly result?: { readonly objectId?: string }
         readonly exceptionDetails?: { readonly text?: string }
       }>('Runtime.evaluate', {
         expression: `(() => { ${TARGET_RESOLVER_FN} return __swQueryTarget(${JSON.stringify(selector)}); })()`,
         returnByValue: false,
+        ...(renderer.contextId !== undefined ? { contextId: renderer.contextId } : {}),
       })
       const objectId = result.result?.objectId
       try {
@@ -1588,9 +2065,9 @@ class CdpSession implements TransportSession {
 
   async scroll(opts: ScrollOptions = {}): Promise<void> {
     this.#requireRunning()
-    const conn = await this.#pageConnection()
+    const renderer = await this.#activeRenderer()
     if (opts.selector !== undefined) {
-      const found = await evaluateExpression<boolean>(conn, buildScrollIntoViewBody(), {
+      const found = await this.#evalIn<boolean>(renderer, buildScrollIntoViewBody(), {
         selector: opts.selector,
         ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       })
@@ -1603,14 +2080,15 @@ class CdpSession implements TransportSession {
       }
       return
     }
-    const centre = await evaluateExpression<{ readonly x: number; readonly y: number }>(
-      conn,
+    const centre = await this.#evalIn<{ readonly x: number; readonly y: number }>(
+      renderer,
       VIEWPORT_CENTER_BODY,
     )
-    await conn.send('Input.dispatchMouseEvent', {
+    const offset = renderer.isRoot ? { x: 0, y: 0 } : await this.#frameOffset(renderer)
+    await renderer.input.send('Input.dispatchMouseEvent', {
       type: 'mouseWheel',
-      x: centre.x,
-      y: centre.y,
+      x: centre.x + offset.x,
+      y: centre.y + offset.y,
       deltaX: opts.dx ?? 0,
       deltaY: opts.dy ?? 0,
     })
@@ -1746,7 +2224,7 @@ export class CDPTransport implements ITransport {
     supportsMainEval: true,
     supportsRendererEval: true,
     supportsInteraction: true,
-    supportsSurfaceTargeting: false,
+    supportsSurfaceTargeting: true,
   }
 
   readonly #deps: CdpSessionDeps
@@ -1949,7 +2427,7 @@ export class CDPTransport implements ITransport {
     // dialog capture aggregates across every current window from attach onward.
     // Best-effort: a target that refuses must not fail the attach.
     try {
-      const targets = asPageTargets(
+      const targets = asWindowTargets(
         await this.#deps.fetchJson(`${httpBase}/json/list`, DISCOVERY_TIMEOUT_MS),
       )
       await Promise.allSettled(targets.map((t) => session.connectionFor(t)))
@@ -2027,7 +2505,7 @@ export class CDPTransport implements ITransport {
             lastDiscoveryError = 'launch budget elapsed before page-target discovery'
             break
           }
-          const targets = asPageTargets(
+          const targets = asWindowTargets(
             await this.#deps.fetchJson(
               `${httpBase}/json/list`,
               Math.min(LAUNCH_PROBE_TIMEOUT_MS, listRemaining),

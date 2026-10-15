@@ -149,6 +149,12 @@ iframe/webview/WebContentsView hierarchy required by this ADR, so `electron_surf
 `electron_switch_surface` continue to return `TRANSPORT_UNSUPPORTED`. A default root is the narrow
 consumer fix; hierarchy targeting remains a separate evidence-backed implementation.
 
+## Status Update — 2026-10-15: CDP hierarchy targeting
+
+[ADR-029](./029-cdp-surface-targeting.md) implements the full surface hierarchy on CDP and flips
+its `supportsSurfaceTargeting`. Page targets stay `kind: "other"`; webview guests and frames are
+discovered from `/json/list` parent links and per-target frame trees.
+
 ## References
 
 - [ADR-003](./003-transport-abstraction.md) — transport seam and capability matrix.

@@ -5,6 +5,11 @@
     "excludedPlatforms": []
   },
   {
+    "path": "packages/core/tests/cdp-surface-targeting-smoke.test.ts",
+    "tests": 1,
+    "excludedPlatforms": []
+  },
+  {
     "path": "packages/core/tests/demo-smoke.test.ts",
     "tests": 1,
     "excludedPlatforms": []

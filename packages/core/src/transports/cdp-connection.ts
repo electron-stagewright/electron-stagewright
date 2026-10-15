@@ -425,6 +425,8 @@ export interface EvaluateExpressionOptions {
   readonly includeCommandLineAPI?: boolean
   /** Per-call timeout override. */
   readonly timeoutMs?: number
+  /** Execution context to evaluate in; the target's main frame when omitted. */
+  readonly contextId?: number
 }
 
 /**
@@ -450,6 +452,7 @@ export async function evaluateExpression<T = unknown>(
       awaitPromise: true,
       returnByValue: true,
       ...(opts.includeCommandLineAPI === true ? { includeCommandLineAPI: true } : {}),
+      ...(opts.contextId !== undefined ? { contextId: opts.contextId } : {}),
     },
     opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {},
   )
