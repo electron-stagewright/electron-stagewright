@@ -109,9 +109,10 @@ export class ToolResultCodec {
    * and pattern constraints have already been checked by Zod on the same JSON snapshot: Zod's
    * JSON Schema drops regex flags, and Ajv compiles patterns in Unicode mode, so re-checking them
    * here would reject values Zod accepts or fail to compile an ordinary non-Unicode regex.
+   * `multipleOfPrecision` tolerates float error, so 0.07 stays a multiple of 0.01 as in Zod.
    */
   static #createAjv(): Ajv2020 {
-    const ajv = new Ajv2020({ strict: false, validateFormats: false })
+    const ajv = new Ajv2020({ strict: false, validateFormats: false, multipleOfPrecision: 9 })
     ajv.removeKeyword('pattern')
     return ajv
   }
