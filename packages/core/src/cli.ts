@@ -444,6 +444,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
   // The SDK stdio transport ignores end-of-input; a launched app would keep the process alive.
   process.stdin.once('end', () => void shutdown('stdin closed'))
+  process.stdin.once('close', () => void shutdown('stdin closed'))
 
   await server.connectStdio()
   logger.info('electron-stagewright MCP server ready (stdio)', {
