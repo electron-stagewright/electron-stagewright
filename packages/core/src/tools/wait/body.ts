@@ -39,17 +39,8 @@ export function pollTail(timedOutReturn: string): string {
   ${GENERATION_GUARD}`
 }
 
-/**
- * Wrap a poll body so its result also reports the walk generation it started under. Ref waits
- * run this single check under the ref lock, then pin the remaining poll to that generation.
- */
-export function withWalkGeneration(body: string): string {
-  return `const walkGeneration = globalThis.${WALK_GENERATION_GLOBAL} ?? 0;
-const result = await (async () => {
-${body}
-})();
-return result !== null && typeof result === 'object' ? { ...result, walk_generation: walkGeneration } : result;`
-}
+/** Read the renderer's walk generation; ref waits pin their poll to it under the ref lock. */
+export const WALK_GENERATION_BODY = `return globalThis.${WALK_GENERATION_GLOBAL} ?? 0;`
 
 /**
  * Body for `wait_for_selector`: poll `arg.selector` until it reaches `arg.state`

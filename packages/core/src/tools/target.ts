@@ -371,22 +371,27 @@ export async function withFreshRefs<T>(
 ): Promise<FreshRefsOutcome<T>> {
   const used = targets.map(targetRef).filter((ref): ref is number => ref !== undefined)
   if (used.length === 0) return { value: await task() }
-  const surface = await session.activeSurface()
-  return ctx.snapshots.withRefLock(
-    sessionId,
-    surface.id,
-    async () => {
-      const stored = ctx.snapshots.get(sessionId, surface.id)
-      const staleRef =
-        stored === undefined ? undefined : used.find((ref) => !snapshotHasRef(stored, ref))
-      if (staleRef !== undefined) return { staleRef }
-      const running = task()
-      if (opts.readOnly !== true) return { value: await running }
-      running.catch(() => undefined)
-      return { value: await untilAborted(running, ctx.signal) }
-    },
-    ctx.signal,
-  )
+  for (;;) {
+    const surface = await session.activeSurface()
+    const outcome = await ctx.snapshots.withRefLock(
+      sessionId,
+      surface.id,
+      async (): Promise<FreshRefsOutcome<T> | undefined> => {
+        // A surface switch while queued means this lock no longer guards the target's tags.
+        if ((await session.activeSurface()).id !== surface.id) return undefined
+        const stored = ctx.snapshots.get(sessionId, surface.id)
+        const staleRef =
+          stored === undefined ? undefined : used.find((ref) => !snapshotHasRef(stored, ref))
+        if (staleRef !== undefined) return { staleRef }
+        const running = task()
+        if (opts.readOnly !== true) return { value: await running }
+        running.catch(() => undefined)
+        return { value: await untilAborted(running, ctx.signal) }
+      },
+      ctx.signal,
+    )
+    if (outcome !== undefined) return outcome
+  }
 }
 
 /** The `REF_NOT_FOUND` envelope (with live candidates) for a ref absent from the latest snapshot. */

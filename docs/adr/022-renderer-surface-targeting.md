@@ -159,8 +159,9 @@ one session run concurrently. A selector that is exactly `[data-sw-ref="N"]` tak
 freshness check as `ref: N`.
 
 The renderer counts tag rewrites in a walk generation that every walk and retag increments. A ref
-wait or expectation checks once under the lock, then polls unlocked pinned to the generation that
-check saw. A poll that sees the generation move stops without resolving the ref, and the wait takes
+wait or expectation checks freshness and reads the generation under the lock, then runs its whole
+remaining budget in one unlocked renderer call pinned to that generation, so an event listener stays
+attached for the full wait. A poll that sees the generation move stops without resolving the ref, and the wait takes
 the lock again, rechecks freshness and resumes with its remaining budget. Actions still hold the
 lock until the transport call returns. A holder that keeps the lock past 60 seconds makes queued
 callers fail with `RENDERER_BUSY` (ADR-006) rather than releasing the holder early.

@@ -12,7 +12,8 @@ import { getTextTool } from '../src/tools/read/value.js'
 import { makeFindTool } from '../src/tools/snapshot/find.js'
 import { buildRetagBody } from '../src/tools/snapshot/inject.js'
 import { makeSnapshotTool } from '../src/tools/snapshot/snapshot.js'
-import { buildWaitForSelectorBody, withWalkGeneration } from '../src/tools/wait/body.js'
+import { WALK_GENERATION_BODY, buildWaitForSelectorBody } from '../src/tools/wait/body.js'
+import { waitForEventTool } from '../src/tools/wait/event.js'
 import { waitForSelectorTool } from '../src/tools/wait/selector.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
@@ -300,7 +301,8 @@ describe('ref walk serialization', () => {
     let polls = 0
     const session = new FakeSession({
       id: 'sess',
-      evaluate: async () => {
+      evaluate: async (_target, body) => {
+        if (body === WALK_GENERATION_BODY) return 0
         polls++
         return { satisfied: true }
       },
@@ -330,11 +332,8 @@ describe('ref walk serialization', () => {
     const polled = deferred()
     const session = new FakeSession({
       id: 'sess',
-      evaluate: async (_target, _body, arg) => {
-        const poll = arg as { timeoutMs: number; walkGeneration?: number }
-        if (poll.walkGeneration === undefined && poll.timeoutMs === 0) {
-          return { satisfied: isClicked, state: 'detached', walk_generation: 0 }
-        }
+      evaluate: async (_target, body) => {
+        if (body === WALK_GENERATION_BODY) return 0
         polled.resolve()
         await Promise.race([clicked.promise, new Promise((resolve) => setTimeout(resolve, 200))])
         return { satisfied: isClicked, state: 'detached' }
@@ -364,18 +363,21 @@ describe('ref walk serialization', () => {
   it('resumes a ref wait under the lock after a walk changes the generation', async () => {
     const sessions = new SessionManager()
     const snapshots = new SnapshotStore()
+    const reads: number[] = []
     const polls: { timeoutMs: number; walkGeneration?: number }[] = []
     const walk = deferred()
     let held: Promise<void> | undefined
     let generation = 0
     const session = new FakeSession({
       id: 'sess',
-      evaluate: async (_target, _body, arg) => {
+      evaluate: async (_target, body, arg) => {
+        if (body === WALK_GENERATION_BODY) {
+          reads.push(generation)
+          return generation
+        }
         const poll = arg as { timeoutMs: number; walkGeneration?: number }
         polls.push(poll)
-        if (poll.walkGeneration === undefined) {
-          return { satisfied: generation > 0, walk_generation: generation }
-        }
+        if (poll.walkGeneration !== 0) return { satisfied: true }
         // A walk takes the lock and bumps the generation while this poll is pending.
         held = snapshots.withRefLock('sess', surface.id, () => walk.promise)
         generation++
@@ -394,13 +396,72 @@ describe('ref walk serialization', () => {
       timeoutMs: 1000,
     })
     for (let i = 0; i < 6; i++) await flush()
-    expect(polls).toHaveLength(2)
-    expect(polls[1]).toMatchObject({ walkGeneration: 0 })
+    expect(reads).toEqual([0])
+    expect(polls).toHaveLength(1)
     walk.resolve()
     await held
     expect(await waiting).toMatchObject({ ok: true })
-    expect(polls).toHaveLength(3)
-    expect(polls[2]).toMatchObject({ timeoutMs: 0 })
+    expect(reads).toEqual([0, 1])
+    expect(polls[1]).toMatchObject({ walkGeneration: 1 })
+  })
+
+  it('keeps a ref event listener attached for the whole wait in one renderer call', async () => {
+    const sessions = new SessionManager()
+    const snapshots = new SnapshotStore()
+    const listens: { timeoutMs: number }[] = []
+    const session = new FakeSession({
+      id: 'sess',
+      evaluate: async (_target, body, arg) => {
+        if (body === WALK_GENERATION_BODY) return 0
+        const poll = arg as { timeoutMs: number }
+        listens.push(poll)
+        // The event fires after the call starts, so only a listener with budget left sees it.
+        return { satisfied: poll.timeoutMs > 0, event: 'click' }
+      },
+    })
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
+    dispatcher.register(waitForEventTool)
+    const surface = await session.activeSurface()
+    snapshots.set('sess', snap('<button>A</button>'), surface.id)
+
+    expect(
+      await dispatcher.dispatch('electron_wait_for_event', {
+        ref: 1,
+        eventName: 'click',
+        timeoutMs: 1000,
+      }),
+    ).toMatchObject({ ok: true })
+    expect(listens).toHaveLength(1)
+    expect(listens[0]?.timeoutMs).toBeGreaterThan(0)
+  })
+
+  it('re-resolves the ref lock when the active surface switches while queued', async () => {
+    const sessions = new SessionManager()
+    const snapshots = new SnapshotStore()
+    const capabilities = { snapshot: true, interaction: true, rendererEval: true }
+    const session = new FakeSession({
+      id: 'sess',
+      surfaces: [
+        { id: 'main', kind: 'window', active: true, capabilities },
+        { id: 'side', kind: 'window', active: false, capabilities },
+      ],
+      evaluate: async () => ({ found: true, text: 'B' }),
+    })
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots, operationTimeoutMs: 0 })
+    dispatcher.register(getTextTool)
+    snapshots.set('sess', snap('<button>A</button>'), 'main')
+    const holder = deferred()
+    const held = snapshots.withRefLock('sess', 'main', () => holder.promise)
+
+    const reading = dispatcher.dispatch('electron_get_text', { ref: 5 })
+    for (let i = 0; i < 4; i++) await flush()
+    await session.activateSurface('side')
+    holder.resolve()
+    await held
+    // 'side' has no stored snapshot, so ref 5 is not checked against 'main', where it is stale.
+    expect(await reading).toMatchObject({ ok: true, text: 'B' })
   })
 
   it('holds a canonical ref selector until an orphaned walk restores the stable tags', async () => {
@@ -487,8 +548,7 @@ describe('ref walk serialization', () => {
     const selector = '[data-sw-ref="1"]'
     const body = buildWaitForSelectorBody()
 
-    const check = await run(withWalkGeneration(body), { selector, state: 'detached', timeoutMs: 0 })
-    expect(check).toMatchObject({ satisfied: false, walk_generation: 0 })
+    expect(await run(WALK_GENERATION_BODY, {})).toBe(0)
     const polling = run(body, { selector, state: 'detached', timeoutMs: 1000, walkGeneration: 0 })
     await run(buildRetagBody(), [{ from: 1, to: 2 }])
     // Tag 1 is gone after the retag, which would satisfy "detached" if the poll resolved it.

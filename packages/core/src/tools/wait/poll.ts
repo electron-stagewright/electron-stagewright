@@ -5,8 +5,8 @@
  * selector → `BAD_ARGUMENT`, a missing event target → `SELECTOR_NO_MATCH`, and a
  * timeout → `WAIT_TIMEOUT` (carrying the last observed state in `details`).
  *
- * A ref-targeted wait holds the ref lock only for a single check, then polls unlocked pinned to
- * the renderer walk generation that check saw. If a walk rewrites the tags meanwhile, the poll
+ * A ref-targeted wait holds the ref lock only to check freshness and read the renderer walk
+ * generation, then polls unlocked pinned to it. If a walk rewrites the tags meanwhile, the poll
  * stops, and the wait re-checks freshness under the lock and resumes with the remaining budget.
  *
  * @module
@@ -27,7 +27,7 @@ import {
   withFreshRefs,
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
-import { withWalkGeneration } from './body.js'
+import { WALK_GENERATION_BODY } from './body.js'
 
 /** Default wait budget when the caller omits `timeoutMs`. */
 export const DEFAULT_WAIT_TIMEOUT_MS = 5000
@@ -87,9 +87,10 @@ function defaultTimeoutDetails(raw: WaitRaw): Record<string, unknown> | undefine
 }
 
 /**
- * Poll a ref target without holding the ref lock for the whole wait. Each round checks once under
- * the lock (freshness plus the walk generation), then polls the rest of the budget pinned to that
- * generation; a poll interrupted by a walk starts the next round.
+ * Poll a ref target without holding the ref lock for the whole wait. Each round reads the walk
+ * generation under the lock (after the freshness check), then runs the whole remaining budget in
+ * one renderer call pinned to it, so event listeners stay attached for the full wait; a poll
+ * interrupted by a walk starts the next round.
  */
 async function pollRef(
   ctx: ToolContext,
@@ -101,25 +102,21 @@ async function pollRef(
 ): Promise<FreshRefsOutcome<WaitRaw>> {
   const startedAt = ctx.now()
   const arg = call.arg as Record<string, unknown>
-  const checkBody = withWalkGeneration(call.body)
   for (;;) {
-    const check = await withFreshRefs(
+    const pinned = await withFreshRefs(
       ctx,
       session,
       sessionId,
       [{ ref }],
       () => {
         ctx.signal?.throwIfAborted()
-        return session.evaluate<WaitRaw>('renderer', checkBody, { ...arg, timeoutMs: 0 })
+        return session.evaluate<unknown>('renderer', WALK_GENERATION_BODY, {})
       },
       { readOnly: true },
     )
-    if ('staleRef' in check) return check
-    const { walk_generation: walkGeneration, ...first } = check.value ?? {}
+    if ('staleRef' in pinned) return pinned
+    const walkGeneration = typeof pinned.value === 'number' ? pinned.value : 0
     const remaining = Math.max(0, timeoutMs - (ctx.now() - startedAt))
-    const settled =
-      first.satisfied === true || first.invalid_selector === true || first.missing_target === true
-    if (settled || remaining === 0 || typeof walkGeneration !== 'number') return { value: first }
     ctx.signal?.throwIfAborted()
     const raw = await untilAborted(
       session.evaluate<WaitRaw>('renderer', call.body, {
@@ -129,7 +126,7 @@ async function pollRef(
       }),
       ctx.signal,
     )
-    if (raw?.generation_changed !== true) return { value: raw }
+    if (raw?.generation_changed !== true || remaining === 0) return { value: raw }
   }
 }
 
