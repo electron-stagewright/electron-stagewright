@@ -98,6 +98,9 @@ const MAX_REDISPATCH_DEPTH = 1
  */
 export const DEFAULT_OPERATION_TIMEOUT_MS = 120_000
 
+/** Node clamps a longer `setTimeout` delay to 1 ms, which would time out every dispatch. */
+export const MAX_OPERATION_TIMEOUT_MS = 2_147_483_647
+
 /**
  * Below this, an operation-timeout budget could preempt a legitimate maximum-length wait (the wait
  * family clamps to 60s). Mirrors the wait family's `MAX_WAIT_TIMEOUT_MS`; kept as a local literal
@@ -297,9 +300,13 @@ export class Dispatcher {
     this.#slowMs = opts.slowOpThresholdMs ?? SLOW_OP_THRESHOLD_MS
     this.#operationTimeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS
     this.#excludedToolProfileHints = opts.excludedToolProfileHints ?? new Map()
-    if (!Number.isInteger(this.#operationTimeoutMs) || this.#operationTimeoutMs < 0) {
+    if (
+      !Number.isInteger(this.#operationTimeoutMs) ||
+      this.#operationTimeoutMs < 0 ||
+      this.#operationTimeoutMs > MAX_OPERATION_TIMEOUT_MS
+    ) {
       throw new Error(
-        `operationTimeoutMs must be a non-negative integer number of milliseconds, got ${String(
+        `operationTimeoutMs must be a non-negative integer number of milliseconds up to ${MAX_OPERATION_TIMEOUT_MS}, got ${String(
           opts.operationTimeoutMs,
         )}`,
       )
