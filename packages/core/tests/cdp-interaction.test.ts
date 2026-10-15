@@ -302,6 +302,17 @@ describe('CDP keyboard interaction', () => {
     expect(evals.some((f) => String(f.params?.['expression']).includes('el.focus()'))).toBe(true)
   })
 
+  it('types a newline on darwin as text only, with no insertNewline command', async () => {
+    const { transport, keyEvents } = setup({}, 'darwin')
+    const session = await transport.attach({ port: 9222 })
+
+    await session.typeText('\n')
+
+    const enter = keyEvents().find((event) => event['type'] === 'keyDown')
+    expect(enter).toMatchObject({ key: 'Enter', text: '\r' })
+    expect(enter).not.toHaveProperty('commands')
+  })
+
   it('types text as per-character keyDown/keyUp pairs', async () => {
     const { transport, keyEvents } = setup()
     const session = await transport.attach({ port: 9222 })

@@ -147,7 +147,10 @@ loopback `host`) or a full loopback `cdpUrl`. Two notes:
   `electron_surfaces_list` reports `TRANSPORT_UNSUPPORTED` on CDP. Pointer and keyboard input are
   synthesised through the protocol, so there is no Playwright-style actionability auto-wait. On
   macOS, key chords carry Chromium's editing commands, so `Meta+A`, `Meta+C`/`V`/`X`, `Meta+Z`,
-  `Alt+Backspace` and the other standard text-editing shortcuts behave as they do in the app.
+  `Alt+Backspace` and the other standard text-editing shortcuts behave as they do in the app. That
+  includes the native bindings for plain `Home`/`End` (scroll the document) and `Control+` letter
+  chords (`Control+A` moves to the paragraph start); use `Meta+ArrowLeft`/`Meta+ArrowRight` for the
+  line start and end.
 
 ## Inject — the app is running with no debug flag
 

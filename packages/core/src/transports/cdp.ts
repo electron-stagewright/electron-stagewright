@@ -1754,7 +1754,6 @@ export class CDPTransport implements ITransport {
   readonly #deps: CdpSessionDeps
   readonly #spawnProcess: SpawnProcess
   readonly #reserveLoopbackPort: ReserveLoopbackPort
-  readonly #platform: NodeJS.Platform
   readonly #launchPollIntervalMs: number
 
   constructor(opts: CDPTransportOptions = {}) {
@@ -1767,7 +1766,6 @@ export class CDPTransport implements ITransport {
     }
     this.#spawnProcess = opts.spawnProcess ?? defaultSpawnProcess
     this.#reserveLoopbackPort = opts.reserveLoopbackPort ?? defaultReserveLoopbackPort
-    this.#platform = this.#deps.platform
     this.#launchPollIntervalMs = opts.launchPollIntervalMs ?? LAUNCH_POLL_INTERVAL_MS
   }
 
@@ -1968,10 +1966,10 @@ export class CDPTransport implements ITransport {
     mode: NonNullable<LaunchOptions['credentialStore']>,
   ): readonly string[] {
     if (mode === 'system') return []
-    if (this.#platform === 'darwin' && !hasSwitch(callerArgs, 'use-mock-keychain')) {
+    if (this.#deps.platform === 'darwin' && !hasSwitch(callerArgs, 'use-mock-keychain')) {
       return ['--use-mock-keychain']
     }
-    if (this.#platform === 'linux' && !hasSwitch(callerArgs, 'password-store')) {
+    if (this.#deps.platform === 'linux' && !hasSwitch(callerArgs, 'password-store')) {
       return ['--password-store=basic']
     }
     return []
