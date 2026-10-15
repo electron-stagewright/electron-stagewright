@@ -18,7 +18,7 @@ async function readText(relative: string): Promise<string> {
 
 function sourceTuple(rawLock: string): { electron: string; playwright: string } {
   const lock = toLf(rawLock)
-  const importer = lock.match(/^  packages\/core:\n([\s\S]*?)(?=^  [^ ]|$(?![\s\S]))/m)?.[1]
+  const importer = lock.match(/^  packages\/core:\n([\s\S]*?)(?=^ {0,2}\S|$(?![\s\S]))/m)?.[1]
   if (importer === undefined) throw new Error('Missing packages/core lock importer')
   const version = (name: string): string => {
     // Accept prerelease/build versions (e.g. 43.0.0-beta.2) and strip pnpm's peer suffix.
@@ -108,6 +108,25 @@ describe('source resolution is distinct from compatibility qualification', () =>
       '',
     ].join('\n')
     expect(sourceTuple(synthetic)).toEqual({ electron: '43.0.0-beta.2', playwright: '1.64.0' })
+  })
+
+  it('stops at the next top-level section when packages/core is the last importer', () => {
+    const synthetic = [
+      'importers:',
+      '',
+      '  packages/core:',
+      '    devDependencies:',
+      '      electron:',
+      '        specifier: ^42.0.0',
+      '        version: 42.11.10',
+      '',
+      'decoy:',
+      '      playwright:',
+      '        specifier: ^1.0.0',
+      '        version: 1.0.0',
+      '',
+    ].join('\n')
+    expect(() => sourceTuple(synthetic)).toThrow('Missing locked source version: playwright')
   })
 
   it('refuses an absent importer instead of looking at unrelated package snapshots', () => {

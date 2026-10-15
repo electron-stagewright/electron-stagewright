@@ -451,6 +451,26 @@ describe('dispatch completion owns its evidence and wire result', () => {
     },
   )
 
+  it.each([
+    [0.07, true],
+    [0.075, false],
+  ])('checks a decimal multipleOf result %s like Zod does', async (value, accepted) => {
+    const { dispatcher } = setup()
+    dispatcher.register(
+      defineTool({
+        name: 'test_multiple_of',
+        description: 'Return a value constrained to cents.',
+        inputSchema: z.object({}),
+        outputSchema: z.object({ value: z.number().multipleOf(0.01) }),
+        operationType: 'query',
+        handler: async () => makeSuccess({ value }),
+      }),
+    )
+    expect(await dispatcher.dispatch('test_multiple_of', {})).toMatchObject(
+      accepted ? { ok: true, value } : { ok: false, code: 'INTERNAL_ERROR' },
+    )
+  })
+
   it('returns a genuine tool error unchanged when its output contract cannot be compiled', async () => {
     const { dispatcher } = setup()
     dispatcher.register(
