@@ -286,3 +286,16 @@ retry could never succeed. Attached CDP sessions now reconnect on their next app
   `electron_launch` again. Returned by a launched session (Playwright, or packaged CDP that owns
   its process) once the app has exited or dropped its connection. The session is not reconnected,
   because the process it owned is gone. Buffered console, dialog, and network reads keep working.
+
+## Status Update (2026-10-15) — added `RENDERER_BUSY`
+
+Accessibility walks and `ref`-targeted operations take a per-surface ref lock (see ADR-022), and a
+walk keeps that lock until its reconcile and retag finish, even after its request was cancelled. A
+renderer that never answers the walk would otherwise leave every queued caller waiting until the
+generic dispatch backstop. Added one code to the registry:
+
+- **`RENDERER_BUSY`** — `http: 503`, `retryable: true`, hint: the renderer is busy with a previous
+  walk; retry shortly and take a fresh snapshot once it settles. Once one holder keeps the lock
+  longer than the budget (60 seconds, matching the maximum wait), queued callers and new callers on
+  that surface fail with this code and `details.budget_ms`. The holder is never released early, so
+  its late reconcile still keeps the refs consistent.

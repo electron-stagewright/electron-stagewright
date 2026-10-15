@@ -224,6 +224,7 @@ async function pollRoleCount(
           // stored refs pointing at different elements.
           const { curr } = await ctx.snapshots.withRefLock(
             managed.id,
+            surface.id,
             async () =>
               reconcileRetagAndStore({
                 session: managed.session,

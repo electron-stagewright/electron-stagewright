@@ -276,7 +276,7 @@ This project is in its earliest days. Issues and discussions welcome. See [CONTR
 `pnpm test` and `pnpm test:coverage` select the ordinary `unit` project, retained across
 all six OS/Node CI cells. `pnpm test:real` selects the serialized `real-electron` project
 and checks actual JSON results against `scripts/real-test-inventory.json` (24 reviewed files,
-34 scenarios). It refuses missing binaries/required native-addon fixture inputs and rejects
+35 scenarios). It refuses missing binaries/required native-addon fixture inputs and rejects
 missing, skipped or zero execution. Prepare Linux/macOS native inputs with
 `node scripts/prepare-native-addon-fixture.mjs` and export the two variables it prints.
 Windows explicitly omits the one unsupported native-addon recovery scenario.

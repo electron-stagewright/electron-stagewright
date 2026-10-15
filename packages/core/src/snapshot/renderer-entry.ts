@@ -24,11 +24,16 @@
  */
 
 import { computeAccessibleName } from './accname.js'
-import { queryTarget } from './resolve-target.js'
+import { WALK_GENERATION_GLOBAL, queryTarget } from './resolve-target.js'
 import { resolveRole } from './roles.js'
-import type { Snapshot, SnapshotBbox, SnapshotRole, SnapshotState } from './schema.js'
+import type { SnapshotBbox, SnapshotRole, SnapshotState } from './schema.js'
 import { extractState } from './state.js'
-import { MAX_SHADOW_DEPTH, type WalkerOptions, walkAccessibilityTree } from './walker.js'
+import {
+  MAX_SHADOW_DEPTH,
+  type ScopedSnapshot,
+  type WalkerOptions,
+  walkAccessibilityTree,
+} from './walker.js'
 
 /** Attribute each interactive element is tagged with, keyed to its ref number. */
 export const REF_ATTRIBUTE = 'data-sw-ref'
@@ -82,16 +87,55 @@ export interface ProbeArg {
   readonly limit?: number
 }
 
+/** Argument to `__stagewrightWalk`; `scope` is a selector resolved like a probe target. */
+export interface WalkArg extends Pick<WalkerOptions, 'diffBaseline'> {
+  readonly scope?: string
+}
+
+/** Returned instead of a walk when `scope` is malformed or matches nothing; no tags change. */
+export interface WalkScopeMiss {
+  readonly scope_miss: true
+  readonly invalid_selector?: true
+  readonly error?: string
+}
+
 /** The globals the injected bundle installs for the snapshot / read tools to call. */
 export interface StagewrightWalkGlobal {
-  __stagewrightWalk?: (options?: WalkerOptions) => Snapshot
+  __stagewrightWalk?: (options?: WalkArg) => ScopedSnapshot | WalkScopeMiss
   __stagewrightProbe?: (arg?: ProbeArg) => ProbeElementResult | ProbeListResult | ProbeMiss
 }
 
 const target = globalThis as typeof globalThis & StagewrightWalkGlobal
+const generations = globalThis as unknown as Record<string, number | undefined>
 
-target.__stagewrightWalk = (options: WalkerOptions = {}): Snapshot =>
-  walkAccessibilityTree(document, { ...options, refAttribute: REF_ATTRIBUTE })
+/** Walk `document`, tagging refs; a `scope` selector is resolved first and reported on. */
+export function walkForSnapshot(
+  document: Document,
+  arg: WalkArg = {},
+): ScopedSnapshot | WalkScopeMiss {
+  const { scope, ...options } = arg
+  if (typeof scope !== 'string') {
+    return walkAccessibilityTree(document, { ...options, refAttribute: REF_ATTRIBUTE })
+  }
+  // Resolve before walking: the walk clears and rewrites the ref tags a ref scope names.
+  let scopeRoot: Element | null
+  try {
+    scopeRoot = queryTarget(document, scope, MAX_SHADOW_DEPTH)
+  } catch (err) {
+    return {
+      scope_miss: true,
+      invalid_selector: true,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+  if (scopeRoot === null) return { scope_miss: true }
+  return walkAccessibilityTree(document, { ...options, refAttribute: REF_ATTRIBUTE, scopeRoot })
+}
+
+target.__stagewrightWalk = (arg?: WalkArg): ScopedSnapshot | WalkScopeMiss => {
+  generations[WALK_GENERATION_GLOBAL] = (generations[WALK_GENERATION_GLOBAL] ?? 0) + 1
+  return walkForSnapshot(document, arg)
+}
 
 /** Bounding box matching the walker's `computeBbox` (zeros in a layout-less runtime). */
 function probeBbox(element: Element): SnapshotBbox {

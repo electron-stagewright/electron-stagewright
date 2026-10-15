@@ -5,10 +5,13 @@
     <title>Stagewright Bench App</title>
   </head>
   <body>
-    <!-- Greeting form: drives the round-trip contrast (primitive chain vs expect_*). -->
-    <label>Your name <input id="name" type="text" aria-label="Your name" /></label>
-    <button id="greet" type="button">Greet</button>
-    <p id="status">No greeting yet</p>
+    <!-- Greeting form: drives the round-trip contrast (primitive chain vs expect_*). The
+         role-less wrapper adds no snapshot entry; it is the root for the scoped-snapshot contrast. -->
+    <div id="greeting">
+      <label>Your name <input id="name" type="text" aria-label="Your name" /></label>
+      <button id="greet" type="button">Greet</button>
+      <p id="status">No greeting yet</p>
+    </div>
 
     <!-- Deferred load: drives the error-recovery path. Clicking Load injects #late after a
          short delay, so a read before the load deterministically misses it. -->

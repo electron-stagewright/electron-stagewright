@@ -295,7 +295,7 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
           ctx,
           managed.session,
           managed.id,
-          [args.ref],
+          [args],
           () => elementClip(managed.session, selector, loadBundle()),
           { readOnly: true },
         )
