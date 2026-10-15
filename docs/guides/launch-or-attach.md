@@ -145,7 +145,9 @@ loopback `host`) or a full loopback `cdpUrl`. Two notes:
   reads, observation (console/dialogs), screenshots, and the core interaction surface. Explicit
   iframe/webview/WebContentsView hierarchy discovery remains unavailable, so
   `electron_surfaces_list` reports `TRANSPORT_UNSUPPORTED` on CDP. Pointer and keyboard input are
-  synthesised through the protocol, so there is no Playwright-style actionability auto-wait.
+  synthesised through the protocol, so there is no Playwright-style actionability auto-wait. On
+  macOS, key chords carry Chromium's editing commands, so `Meta+A`, `Meta+C`/`V`/`X`, `Meta+Z`,
+  `Alt+Backspace` and the other standard text-editing shortcuts behave as they do in the app.
 
 ## Inject — the app is running with no debug flag
 

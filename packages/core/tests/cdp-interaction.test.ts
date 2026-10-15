@@ -23,7 +23,7 @@ interface PointOverrides {
   readonly disabled?: boolean
 }
 
-function setup(point: PointOverrides = {}) {
+function setup(point: PointOverrides = {}, platform: NodeJS.Platform = 'linux') {
   const server = new FakeCdpServer()
   const fetchJson: FetchJson = async (url) => {
     if (url.endsWith('/json/version')) return { webSocketDebuggerUrl: BROWSER_WS }
@@ -78,6 +78,7 @@ function setup(point: PointOverrides = {}) {
     fetchJson,
     killProcess: () => {},
     defaultMethodTimeoutMs: 500,
+    platform,
   })
   const inputEvents = () =>
     server.sentTo('page/T1', 'Input.dispatchMouseEvent').map((f) => f.params as Json)
@@ -110,6 +111,36 @@ describe('parseKeyChord', () => {
     // real key is the trailing '+', which must not be mistaken for "no key".
     expect(parseKeyChord('+')).toMatchObject({ key: '+', text: '+', modifiers: 0 })
     expect(parseKeyChord('Control++')).toMatchObject({ key: '+', modifiers: 2 })
+  })
+
+  it('maps macOS editing chords to Chromium editing commands on darwin only', () => {
+    const cases: readonly (readonly [string, readonly string[]])[] = [
+      ['Meta+A', ['selectAll']],
+      ['Meta+c', ['copy']],
+      ['Meta+V', ['paste']],
+      ['Meta+X', ['cut']],
+      ['Meta+Z', ['undo']],
+      ['Meta+Shift+Z', ['redo']],
+      ['Alt+Backspace', ['deleteWordBackward']],
+      ['Meta+Backspace', ['deleteToBeginningOfLine']],
+      ['Meta+ArrowLeft', ['moveToLeftEndOfLine']],
+      ['Shift+Meta+ArrowRight', ['moveToRightEndOfLineAndModifySelection']],
+      ['Alt+ArrowUp', ['moveBackward', 'moveToBeginningOfParagraph']],
+      ['Control+A', ['moveToBeginningOfParagraph']],
+    ]
+    for (const [chord, commands] of cases) {
+      expect(parseKeyChord(chord, 'darwin').commands, chord).toEqual(commands)
+      expect(parseKeyChord(chord, 'linux').commands, chord).toBeUndefined()
+      expect(parseKeyChord(chord, 'win32').commands, chord).toBeUndefined()
+    }
+  })
+
+  it('omits commands for unmapped and text-inserting keys on darwin', () => {
+    expect(parseKeyChord('a', 'darwin').commands).toBeUndefined()
+    expect(parseKeyChord('Meta+Q', 'darwin').commands).toBeUndefined()
+    // insertNewline is left to the event's text so Enter never inserts twice.
+    expect(parseKeyChord('Enter', 'darwin')).toMatchObject({ text: '\r' })
+    expect(parseKeyChord('Enter', 'darwin').commands).toBeUndefined()
   })
 })
 
@@ -215,6 +246,50 @@ describe('CDP keyboard interaction', () => {
       },
       { type: 'keyUp', modifiers: 2, key: 'A', code: 'KeyA', windowsVirtualKeyCode: 65 },
     ])
+  })
+
+  it('passes macOS editing commands on darwin so Meta+A selects all', async () => {
+    const { transport, keyEvents } = setup({}, 'darwin')
+    const session = await transport.attach({ port: 9222 })
+
+    await session.press('Meta+A')
+    await session.press('Alt+Backspace')
+
+    expect(keyEvents()).toEqual([
+      {
+        type: 'rawKeyDown',
+        modifiers: 4,
+        key: 'A',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        commands: ['selectAll'],
+      },
+      { type: 'keyUp', modifiers: 4, key: 'A', code: 'KeyA', windowsVirtualKeyCode: 65 },
+      {
+        type: 'rawKeyDown',
+        modifiers: 1,
+        key: 'Backspace',
+        code: 'Backspace',
+        windowsVirtualKeyCode: 8,
+        commands: ['deleteWordBackward'],
+      },
+      {
+        type: 'keyUp',
+        modifiers: 1,
+        key: 'Backspace',
+        code: 'Backspace',
+        windowsVirtualKeyCode: 8,
+      },
+    ])
+  })
+
+  it('sends no editing commands off darwin', async () => {
+    const { transport, keyEvents } = setup({}, 'win32')
+    const session = await transport.attach({ port: 9222 })
+
+    await session.press('Meta+A')
+
+    expect(keyEvents().some((event) => 'commands' in event)).toBe(false)
   })
 
   it('focuses the selector first when one is given', async () => {
