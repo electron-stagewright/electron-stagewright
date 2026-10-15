@@ -14,6 +14,7 @@ import {
   parseCliArgs,
   runProductionCommand,
 } from '../src/cli.js'
+import { StagewrightError } from '../src/errors/registry.js'
 
 describe('parseCliArgs — value-bearing flags fail closed on a missing value', () => {
   it('throws when --app-root is followed by another flag (would silently disable confinement)', () => {
@@ -189,6 +190,11 @@ describe('CLI failure classification', () => {
     ['--plugin-config', 'plugin={'],
     ['--tool-profile', 'unknown'],
     ['--operation-timeout-ms', '-1'],
+    ['--operation-timeout-ms', ''],
+    ['--operation-timeout-ms', ' '],
+    ['--operation-timeout-ms', '0x10'],
+    ['--operation-timeout-ms', '1e3'],
+    ['--operation-timeout-ms', '2147483648'],
     ['--allow-eval=unknown'],
     ['--demo', '--demo'],
     ['unexpected'],
@@ -206,5 +212,12 @@ describe('CLI failure classification', () => {
     const internal = new Error('Unexpected startup failure')
     expect(formatCliFailure(internal)).toBe(`fatal: ${internal.stack}\n`)
     expect(formatCliFailure('startup unavailable')).toBe('fatal: startup unavailable\n')
+  })
+
+  it('prints typed startup failures without a stack', () => {
+    const failure = new StagewrightError('PLUGIN_LOAD_FAILED', 'Could not import plugin "typo".')
+    expect(formatCliFailure(failure)).toBe(
+      'fatal: PLUGIN_LOAD_FAILED: Could not import plugin "typo".\n',
+    )
   })
 })
