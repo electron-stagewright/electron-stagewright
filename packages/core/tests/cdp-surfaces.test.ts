@@ -57,6 +57,8 @@ function setup() {
   const server = new FakeCdpServer()
   let targets: readonly Json[] = DEFAULT_TARGETS
   let hostTree: Json = HOST_TREE
+  // Pointer probe reads answer in order; the last state repeats.
+  let probes: unknown[] = [{ moved: true, down: true }]
   const fetchJson: FetchJson = async (url) => {
     if (url.endsWith('/json/version')) return { webSocketDebuggerUrl: BROWSER_WS }
     if (url.endsWith('/json/list')) return targets
@@ -71,6 +73,9 @@ function setup() {
     const expr = String(params?.['expression'] ?? '')
     if (expr.includes('scrollIntoView({ block')) {
       return { result: { value: { status: 'ok', x: 10, y: 20, visible: true, disabled: false } } }
+    }
+    if (expr.includes('const seen =')) {
+      return { result: { value: probes.length > 1 ? probes.shift() : probes[0] } }
     }
     return { result: { value: 'ok' } }
   })
@@ -103,6 +108,9 @@ function setup() {
     },
     setHostTree: (next: Json) => {
       hostTree = next
+    },
+    setProbes: (next: unknown[]) => {
+      probes = next
     },
   }
 }
@@ -284,6 +292,93 @@ describe('CDP frame input', () => {
       x: 30,
       y: 220,
     })
+  })
+
+  it('checks that a click lands inside an out-of-process frame', async () => {
+    const { server, transport } = setup()
+    const session = await transport.attach({ port: 9222 })
+    await session.activateSurface(byUrl(await session.surfacesList(), 'nested-cross').id)
+
+    await session.click('#go')
+
+    const evals = server.sentTo('page/O2', 'Runtime.evaluate').map((f) => f.params?.['expression'])
+    expect(evals.find((e) => String(e).includes('scrollIntoView'))).toContain('"probe":true')
+    expect(evals.filter((e) => String(e).includes('const seen ='))).toHaveLength(2)
+    expect(
+      server.sentTo('page/H', 'Input.dispatchMouseEvent').map((f) => f.params?.['type']),
+    ).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
+  })
+
+  it('moves again after a rendered frame until the pointer reaches the frame', async () => {
+    const { server, transport, setProbes } = setup()
+    setProbes([
+      { moved: false, down: false },
+      { moved: false, down: false },
+      { moved: true, down: true },
+    ])
+    const session = await transport.attach({ port: 9222 })
+    await session.activateSurface(byUrl(await session.surfacesList(), 'nested-cross').id)
+
+    await session.click('#go')
+
+    expect(
+      server.sentTo('page/H', 'Input.dispatchMouseEvent').map((f) => f.params?.['type']),
+    ).toEqual(['mouseMoved', 'mouseMoved', 'mouseMoved', 'mousePressed', 'mouseReleased'])
+    const frameWaits = server
+      .sentTo('page/H', 'Runtime.evaluate')
+      .filter((f) => String(f.params?.['expression']).includes('requestAnimationFrame'))
+    expect(frameWaits).toHaveLength(2)
+  })
+
+  it('refuses to press when the pointer never reaches the frame', async () => {
+    const { server, transport, setProbes } = setup()
+    setProbes([{ moved: false, down: false }])
+    const session = await transport.attach({ port: 9222 })
+    const nested = byUrl(await session.surfacesList(), 'nested-cross')
+    await session.activateSurface(nested.id)
+
+    await expect(session.click('#go')).rejects.toMatchObject({
+      code: 'POINTER_NOT_DELIVERED',
+      details: { selector: '#go', surface_id: nested.id, attempts: 10 },
+    })
+    const sent = server.sentTo('page/H', 'Input.dispatchMouseEvent').map((f) => f.params?.['type'])
+    expect(sent).toHaveLength(10)
+    expect(sent).not.toContain('mousePressed')
+  })
+
+  it('reports a press that landed outside the frame', async () => {
+    const { transport, setProbes } = setup()
+    setProbes([{ moved: true, down: false }])
+    const session = await transport.attach({ port: 9222 })
+    await session.activateSurface(byUrl(await session.surfacesList(), 'nested-cross').id)
+
+    await expect(session.click('#go')).rejects.toMatchObject({ code: 'POINTER_NOT_DELIVERED' })
+  })
+
+  it('trusts a click whose frame navigated away before the probe was read', async () => {
+    const { transport, setProbes } = setup()
+    setProbes([{ moved: true, down: false }, null])
+    const session = await transport.attach({ port: 9222 })
+    await session.activateSurface(byUrl(await session.surfacesList(), 'nested-cross').id)
+
+    await expect(session.click('#go')).resolves.toBeUndefined()
+  })
+
+  it('skips the delivery probe with force and in in-process frames', async () => {
+    const { server, transport, context, setProbes } = setup()
+    setProbes([{ moved: false, down: false }])
+    const session = await transport.attach({ port: 9222 })
+    const surfaces = await session.surfacesList()
+    await session.activateSurface(byUrl(surfaces, 'nested-cross').id)
+    await session.click('#go', { force: true })
+    await session.activateSurface(byUrl(surfaces, 'nested-same').id)
+    context('H', 'S2', 7)
+    await session.click('#go')
+
+    const probeReads = server.sent
+      .filter((f) => f.method === 'Runtime.evaluate')
+      .filter((f) => String(f.params?.['expression']).includes('const seen ='))
+    expect(probeReads).toHaveLength(0)
   })
 
   it('focuses a frame before dispatching keys on its window', async () => {

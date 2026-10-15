@@ -299,3 +299,19 @@ generic dispatch backstop. Added one code to the registry:
   longer than the budget (60 seconds, matching the maximum wait), queued callers and new callers on
   that surface fail with this code and `details.budget_ms`. The holder is never released early, so
   its late reconcile still keeps the refs consistent.
+
+## Status Update (2026-10-15) — added `POINTER_NOT_DELIVERED`
+
+The CDP transport sends pointer input to the window target, and the browser routes it into an
+out-of-process frame using frame positions it updates asynchronously. Right after a layout change,
+such as the scroll `scrollIntoView` propagates to parent frames, a move or press can land in the
+parent frame while the call still reports success. Pointer actions on out-of-process frames now
+confirm delivery with an in-frame probe: the move is retried once per rendered frame until it
+reaches the element, and the press must land on it. Added one code to the registry:
+
+- **`POINTER_NOT_DELIVERED`** — `http: 409`, `retryable: true`, hint: take a fresh snapshot and
+  retry, or pass `force` to skip the delivery check. Raised by `click`, `hover`, and the source side
+  of `dragTo` when the probe saw the pointer land elsewhere (`details.selector`,
+  `details.surface_id`, `details.attempts`). A probe that disappears because the frame navigated
+  cannot be checked and never fails the action. Root surfaces and in-process frames are unaffected,
+  since their hit testing is synchronous.

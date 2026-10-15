@@ -52,12 +52,15 @@ import {
   CHECKED_STATE_BODY,
   FILL_BODY,
   FOCUS_BODY,
+  NEXT_FRAME_BODY,
+  POINTER_PROBE_BODY,
   RESOLVE_POINT_BODY,
   SELECT_OPTION_BODY,
   VIEWPORT_CENTER_BODY,
   parseKeyChord,
   statusToError,
   type ParsedKey,
+  type PointerProbeState,
   type ResolvedPoint,
 } from './cdp-interaction.js'
 import {
@@ -169,6 +172,8 @@ const FRAME_CONTEXT_WAIT_MS = 2_000
 const FRAME_CONTEXT_POLL_MS = 50
 /** Upper bound on frame boundaries walked to an input root; guards a malformed parent chain. */
 const MAX_FRAME_DEPTH = 64
+/** Frames waited for an out-of-process frame's pointer move to land before giving up. */
+const POINTER_SETTLE_ATTEMPTS = 10
 
 /** Fetches and JSON-parses an HTTP discovery endpoint, bounded. Injectable seam. */
 export type FetchJson = (url: string, timeoutMs: number) => Promise<unknown>
@@ -430,6 +435,27 @@ interface ActiveRenderer {
   readonly input: CdpConnection
   readonly isRoot: boolean
   readonly targets: readonly CdpTargetInfo[]
+}
+
+/** A pointer moved onto an element; `probed` when its delivery into the frame is checked. */
+interface PointerTarget {
+  readonly conn: CdpConnection
+  readonly x: number
+  readonly y: number
+  readonly renderer: ActiveRenderer
+  readonly probed: boolean
+}
+
+function pointerNotDelivered(
+  renderer: ActiveRenderer,
+  selector: string,
+  attempts: number,
+): StagewrightError {
+  return new StagewrightError(
+    'POINTER_NOT_DELIVERED',
+    `The pointer did not reach "${selector}" in surface "${renderer.record.id}"; it landed on another element or frame.`,
+    { selector, surface_id: renderer.record.id, attempts },
+  )
 }
 
 function isWindowTarget(target: CdpTargetInfo): boolean {
@@ -1952,8 +1978,19 @@ class CdpSession implements TransportSession {
     selector: string,
     opts: InteractionOptions = {},
   ): Promise<{ readonly conn: CdpConnection; readonly x: number; readonly y: number }> {
-    const renderer = await this.#activeRenderer()
-    const point = await this.#evalIn<ResolvedPoint>(renderer, RESOLVE_POINT_BODY, { selector })
+    return this.#pointIn(await this.#activeRenderer(), selector, opts, false)
+  }
+
+  async #pointIn(
+    renderer: ActiveRenderer,
+    selector: string,
+    opts: InteractionOptions,
+    probe: boolean,
+  ): Promise<{ readonly conn: CdpConnection; readonly x: number; readonly y: number }> {
+    const point = await this.#evalIn<ResolvedPoint>(renderer, RESOLVE_POINT_BODY, {
+      selector,
+      probe,
+    })
     if (point.status !== 'ok') throw statusToError(point.status, selector)
     if (opts.force !== true) {
       if (point.visible !== true) {
@@ -1967,6 +2004,47 @@ class CdpSession implements TransportSession {
     }
     const offset = renderer.isRoot ? { x: 0, y: 0 } : await this.#frameOffset(renderer)
     return { conn: renderer.input, x: (point.x ?? 0) + offset.x, y: (point.y ?? 0) + offset.y }
+  }
+
+  /**
+   * Move the pointer onto `selector`. The browser routes input into an out-of-process frame by
+   * frame positions it updates asynchronously, so right after a layout change a move can land in
+   * the parent; for those frames a probe confirms the move reached the element, waiting a rendered
+   * frame between tries. `force` skips the probe.
+   */
+  async #movePointer(selector: string, opts: InteractionOptions): Promise<PointerTarget> {
+    const renderer = await this.#activeRenderer()
+    const probed = opts.force !== true && renderer.conn !== renderer.input
+    for (let attempt = 1; ; attempt++) {
+      const point = await this.#pointIn(renderer, selector, opts, probed)
+      await point.conn.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: point.x,
+        y: point.y,
+        button: 'none',
+      })
+      if (!probed) return { ...point, renderer, probed }
+      // A missing probe (the frame navigated) cannot be checked, so it never fails the move.
+      const seen = await this.#readProbe(renderer, false)
+      if (seen === null || seen.moved) return { ...point, renderer, probed }
+      if (attempt >= POINTER_SETTLE_ATTEMPTS) {
+        await this.#readProbe(renderer, true)
+        throw pointerNotDelivered(renderer, selector, attempt)
+      }
+      await evaluateExpression(renderer.input, NEXT_FRAME_BODY)
+      this.#requireRunning()
+    }
+  }
+
+  async #readProbe(renderer: ActiveRenderer, dispose: boolean): Promise<PointerProbeState | null> {
+    return this.#evalIn<PointerProbeState | null>(renderer, POINTER_PROBE_BODY, { dispose })
+  }
+
+  /** Read and dispose the probe after a press; throw when it saw the press land elsewhere. */
+  async #confirmPress(target: PointerTarget, selector: string): Promise<void> {
+    if (!target.probed) return
+    const seen = await this.#readProbe(target.renderer, true)
+    if (seen !== null && !seen.down) throw pointerNotDelivered(target.renderer, selector, 1)
   }
 
   /** Focus `selector` in the renderer (eval focus tolerates offscreen/hidden elements). */
@@ -1999,32 +2077,38 @@ class CdpSession implements TransportSession {
 
   async click(selector: string, opts: ClickOptions = {}): Promise<void> {
     await this.#ensureConnected()
-    const { conn, x, y } = await this.#interactionPoint(selector, opts)
+    const target = await this.#movePointer(selector, opts)
+    const { conn, x, y } = target
     const button = opts.button ?? 'left'
     const clickCount = opts.clickCount ?? 1
-    await conn.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
-    for (let i = 1; i <= clickCount; i++) {
-      await conn.send('Input.dispatchMouseEvent', {
-        type: 'mousePressed',
-        x,
-        y,
-        button,
-        clickCount: i,
-      })
-      await conn.send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased',
-        x,
-        y,
-        button,
-        clickCount: i,
-      })
+    try {
+      for (let i = 1; i <= clickCount; i++) {
+        await conn.send('Input.dispatchMouseEvent', {
+          type: 'mousePressed',
+          x,
+          y,
+          button,
+          clickCount: i,
+        })
+        await conn.send('Input.dispatchMouseEvent', {
+          type: 'mouseReleased',
+          x,
+          y,
+          button,
+          clickCount: i,
+        })
+      }
+    } catch (err) {
+      if (target.probed) await this.#readProbe(target.renderer, true).catch(() => null)
+      throw err
     }
+    await this.#confirmPress(target, selector)
   }
 
   async hover(selector: string, opts: InteractionOptions = {}): Promise<void> {
     await this.#ensureConnected()
-    const { conn, x, y } = await this.#interactionPoint(selector, opts)
-    await conn.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
+    const target = await this.#movePointer(selector, opts)
+    if (target.probed) await this.#readProbe(target.renderer, true)
   }
 
   async fill(selector: string, value: string, _opts: InteractionOptions = {}): Promise<void> {
@@ -2167,13 +2251,7 @@ class CdpSession implements TransportSession {
 
   async dragTo(source: string, target: string, opts: InteractionOptions = {}): Promise<void> {
     await this.#ensureConnected()
-    const from = await this.#interactionPoint(source, opts)
-    await from.conn.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: from.x,
-      y: from.y,
-      button: 'none',
-    })
+    const from = await this.#movePointer(source, opts)
     await from.conn.send('Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x: from.x,
@@ -2182,6 +2260,7 @@ class CdpSession implements TransportSession {
       clickCount: 1,
     })
     try {
+      await this.#confirmPress(from, source)
       const to = await this.#interactionPoint(target, opts)
       await to.conn.send('Input.dispatchMouseEvent', {
         type: 'mouseMoved',

@@ -22,7 +22,8 @@ export const clickTool: AnyToolDefinition = defineTool({
     'Options: button (left|right|middle, default left), clickCount (2 = double-click),',
     'force (bypass actionability), timeoutMs. Returns: { ok, session_id, target }.',
     'Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (no such element — re-snapshot; not retryable, carries similar_refs),',
-    'ELEMENT_NOT_VISIBLE (retryable), ELEMENT_DISABLED (not retryable), NOT_RUNNING, BAD_ARGUMENT (ref+selector both/neither).',
+    'ELEMENT_NOT_VISIBLE (retryable), ELEMENT_DISABLED (not retryable), POINTER_NOT_DELIVERED (the click landed',
+    'on another element or frame; retryable), NOT_RUNNING, BAD_ARGUMENT (ref+selector both/neither).',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,
@@ -63,7 +64,7 @@ export const hoverTool: AnyToolDefinition = defineTool({
     'Hover the element identified by ref or selector (e.g. to reveal a tooltip or menu).',
     'Options: force, timeoutMs. Returns: { ok, session_id, target }.',
     'Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
-    'NOT_RUNNING, BAD_ARGUMENT.',
+    'POINTER_NOT_DELIVERED (retryable), NOT_RUNNING, BAD_ARGUMENT.',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,
@@ -88,7 +89,7 @@ export const dragTool: AnyToolDefinition = defineTool({
     'Drag the source element (ref or selector) onto the target element (targetRef or targetSelector),',
     'using the real mouse API. Options: force, timeoutMs. Returns: { ok, session_id, source, target }.',
     'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
-    'NOT_RUNNING, BAD_ARGUMENT (a side missing or both ref+selector given).',
+    'POINTER_NOT_DELIVERED (retryable), NOT_RUNNING, BAD_ARGUMENT (a side missing or both ref+selector given).',
   ].join(' '),
   inputSchema: z.object({
     ref: refField,

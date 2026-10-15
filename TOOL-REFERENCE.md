@@ -68,7 +68,7 @@ Clear the value of the input/textarea identified by ref or selector (sets it to 
 
 **Click an element**
 
-Click the element identified by ref (from a snapshot) or selector. Options: button (left|right|middle, default left), clickCount (2 = double-click), force (bypass actionability), timeoutMs. Returns: { ok, session_id, target }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (no such element — re-snapshot; not retryable, carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), ELEMENT_DISABLED (not retryable), NOT_RUNNING, BAD_ARGUMENT (ref+selector both/neither).
+Click the element identified by ref (from a snapshot) or selector. Options: button (left|right|middle, default left), clickCount (2 = double-click), force (bypass actionability), timeoutMs. Returns: { ok, session_id, target }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (no such element — re-snapshot; not retryable, carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), ELEMENT_DISABLED (not retryable), POINTER_NOT_DELIVERED (the click landed on another element or frame; retryable), NOT_RUNNING, BAD_ARGUMENT (ref+selector both/neither).
 
 - Operation: `command`
 
@@ -98,7 +98,7 @@ Disconnect from an attached or injected app without stopping it. A launch-owned 
 
 **Drag one element onto another**
 
-Drag the source element (ref or selector) onto the target element (targetRef or targetSelector), using the real mouse API. Options: force, timeoutMs. Returns: { ok, session_id, source, target }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), NOT_RUNNING, BAD_ARGUMENT (a side missing or both ref+selector given).
+Drag the source element (ref or selector) onto the target element (targetRef or targetSelector), using the real mouse API. Options: force, timeoutMs. Returns: { ok, session_id, source, target }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), POINTER_NOT_DELIVERED (retryable), NOT_RUNNING, BAD_ARGUMENT (a side missing or both ref+selector given).
 
 - Operation: `command`
 
@@ -145,7 +145,7 @@ Forcefully kill a session (SIGKILL) and release it — the escape hatch when sto
 
 **Hover an element**
 
-Hover the element identified by ref or selector (e.g. to reveal a tooltip or menu). Options: force, timeoutMs. Returns: { ok, session_id, target }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), NOT_RUNNING, BAD_ARGUMENT.
+Hover the element identified by ref or selector (e.g. to reveal a tooltip or menu). Options: force, timeoutMs. Returns: { ok, session_id, target }. Errors: REF_NOT_FOUND / SELECTOR_NO_MATCH (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), POINTER_NOT_DELIVERED (retryable), NOT_RUNNING, BAD_ARGUMENT.
 
 - Operation: `command`
 

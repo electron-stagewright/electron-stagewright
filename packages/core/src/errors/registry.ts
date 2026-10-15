@@ -117,6 +117,11 @@ export const ERROR_CODES = {
     retryable: false,
     hint: 'Element is disabled; address the disabled state via app-level interaction.',
   },
+  POINTER_NOT_DELIVERED: {
+    http: 409,
+    retryable: true,
+    hint: 'The pointer landed on another element or frame, so the action did not reach the target; take a fresh snapshot and retry, or pass force to skip the delivery check.',
+  },
   TYPE_NO_EFFECT: {
     http: 422,
     retryable: false,
