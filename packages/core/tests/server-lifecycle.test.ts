@@ -1,6 +1,6 @@
 /**
  * Library-level lifecycle: an embedder using createServer() + connectStdio() gets the same
- * host-exit cleanup as the CLI.
+ * host-exit cleanup as the CLI, and a transparent session reconnect drops stored snapshots.
  */
 
 import { PassThrough } from 'node:stream'
@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 
 import { NOOP_LOGGER } from '../src/server/logger.js'
 import { createServer } from '../src/server/server.js'
+import type { Snapshot } from '../src/snapshot/index.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
 async function serverWithSession(session = new FakeSession({ id: 'sess-1' })) {
@@ -48,5 +49,43 @@ describe('StagewrightServer.connectStdio', () => {
     stdin.resume()
     await server.closed
     expect(transport.stopCount).toBe(1)
+  })
+})
+
+describe('session reconnect', () => {
+  it('clears the stored snapshots of a session that reconnected', async () => {
+    let reconnected: (() => void) | undefined
+    const session = Object.assign(new FakeSession({ id: 'sess-r' }), {
+      onReconnect: (listener: () => void) => {
+        reconnected = listener
+        return () => {}
+      },
+    })
+    const { server } = await serverWithSession(session)
+    server.snapshots.set('sess-r', {} as Snapshot)
+
+    reconnected?.()
+
+    expect(server.snapshots.get('sess-r')).toBeUndefined()
+    await server.close()
+  })
+
+  it('ignores a reconnect from a session that is no longer registered', async () => {
+    let reconnected: (() => void) | undefined
+    const session = Object.assign(new FakeSession({ id: 'sess-gone' }), {
+      onReconnect: (listener: () => void) => {
+        reconnected = listener
+        return () => {}
+      },
+    })
+    const { server } = await serverWithSession(session)
+    await server.sessions.remove('sess-gone')
+    const seen: string[] = []
+    server.sessions.onSessionReconnect((id) => seen.push(id))
+
+    reconnected?.()
+
+    expect(seen).toEqual([])
+    await server.close()
   })
 })

@@ -271,3 +271,18 @@ callers and observers receive `OPERATION_CANCELLED` (`http: 499`, `retryable: fa
 owns response suppression for cancelled protocol requests. The hint asks callers to inspect app
 state before explicitly starting another operation, since already-dispatched JavaScript may finish.
 Client-provided cancellation reasons are not exposed. The dispatch timeout keeps `OPERATION_TIMEOUT`.
+
+## Status Update (2026-10-15) — `CDP_DISCONNECTED` split; added `SESSION_DISCONNECTED`
+
+`CDP_DISCONNECTED` was registered `retryable: true`, but nothing reconnected a dropped session, so a
+retry could never succeed. Attached CDP sessions now reconnect on their next app-touching call
+(ADR-003), which makes the retryable code truthful, and drops that cannot recover get their own code:
+
+- **`CDP_DISCONNECTED`** — unchanged shape (`http: 503`, `retryable: true`); the hint now says an
+  attached session reconnects on the next call. Returned when a connect-time probe or handshake
+  fails, when a call was in flight as the socket dropped, and when an attached session's bounded
+  reconnect fails (`details.attempts`). The endpoint may come back, so a later retry can succeed.
+- **`SESSION_DISCONNECTED`** — `http: 410`, `retryable: false`, hint: call `electron_stop`, then
+  `electron_launch` again. Returned by a launched session (Playwright, or packaged CDP that owns
+  its process) once the app has exited or dropped its connection. The session is not reconnected,
+  because the process it owned is gone. Buffered console, dialog, and network reads keep working.

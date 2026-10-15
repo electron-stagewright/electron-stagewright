@@ -62,6 +62,7 @@ export interface ManagedSession {
 export class SessionManager {
   readonly #sessions = new Map<SessionId, ManagedSession>()
   readonly #endListeners = new Set<SessionEndListener>()
+  readonly #reconnectListeners = new Set<(sessionId: SessionId) => void>()
 
   /**
    * Record a freshly launched/attached/injected session. Returns the managed
@@ -86,6 +87,10 @@ export class SessionManager {
     }
     const managed: ManagedSession = { id: session.id, transport, session }
     this.#sessions.set(session.id, managed)
+    session.onReconnect?.(() => {
+      if (this.#sessions.get(session.id)?.session !== session) return
+      for (const listener of this.#reconnectListeners) listener(session.id)
+    })
     return managed
   }
 
@@ -117,6 +122,14 @@ export class SessionManager {
     this.#endListeners.add(listener)
     return () => {
       this.#endListeners.delete(listener)
+    }
+  }
+
+  /** Observe a registered session transparently reconnecting after its connection dropped. */
+  onSessionReconnect(listener: (sessionId: SessionId) => void): () => void {
+    this.#reconnectListeners.add(listener)
+    return () => {
+      this.#reconnectListeners.delete(listener)
     }
   }
 

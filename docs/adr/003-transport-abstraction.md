@@ -593,3 +593,21 @@ and stops delivering events after close. Page connections completing after brows
 are closed instead of being added to the pool. A disconnected session refuses operations that reach
 the app, keeps already-buffered console, dialog, and network diagnostics readable, and preserves the
 owned-process cleanup path.
+
+## Status Update — 2026-10-15: attach reconnect and launched-session drops
+
+A CDP attach session whose browser socket drops now reconnects lazily: the next call that reaches
+the app re-discovers the browser endpoint through `/json/version` (falling back to the previous
+WebSocket URL), with at most three attempts inside a 10 s budget. Concurrent calls share one
+reconnect. It then re-selects the previously selected target by id, or by URL and title when the app
+restarted with new target ids, and re-opens the page pool so console, dialog, network capture, and
+stubs re-arm. Buffered diagnostics never trigger a reconnect.
+
+`TransportSession` gains an optional `onReconnect(listener)`. The session manager forwards it for
+registered sessions, and the server clears that session's stored snapshots so refs from before the
+reconnect are never reused.
+
+Launched sessions are not reconnected. A packaged-CDP launch whose socket drops, and a Playwright
+launch whose `ElectronApplication` emits `close`, reject app-touching calls with the non-retryable
+`SESSION_DISCONNECTED` (ADR-006) while keeping buffered diagnostics readable; `electron_stop` still
+releases them.

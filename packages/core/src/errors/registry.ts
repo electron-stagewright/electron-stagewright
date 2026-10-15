@@ -141,7 +141,12 @@ export const ERROR_CODES = {
   CDP_DISCONNECTED: {
     http: 503,
     retryable: true,
-    hint: 'The CDP connection dropped and is not restored automatically; launch or attach again.',
+    hint: 'The CDP endpoint is unreachable. An attached session reconnects on the next call, so retry once the app is reachable; otherwise attach again.',
+  },
+  SESSION_DISCONNECTED: {
+    http: 410,
+    retryable: false,
+    hint: 'The app this session launched has exited or dropped its connection and cannot be recovered; call electron_stop, then electron_launch again.',
   },
   CDP_TIMEOUT: {
     http: 408,

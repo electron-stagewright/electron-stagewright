@@ -157,6 +157,8 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
   const artifacts = new ArtifactStore()
   const transports = opts.transports ?? new TransportRegistry()
   const snapshots = new SnapshotStore()
+  // Refs from before a reconnect may name nodes of a reloaded renderer; force a fresh snapshot.
+  sessions.onSessionReconnect((sessionId) => snapshots.clear(sessionId))
   const dispatcher = new Dispatcher({
     sessions,
     artifacts,
