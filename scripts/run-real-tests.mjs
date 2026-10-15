@@ -33,14 +33,19 @@ try {
     { cause },
   )
 }
-if (process.platform !== 'win32') {
-  for (const variable of [
-    'STAGEWRIGHT_NATIVE_ADDON_ELECTRON_ARCHIVE',
-    'STAGEWRIGHT_NATIVE_ADDON_HEADERS_DIR',
-  ]) {
-    const value = process.env[variable]
-    if (!value) throw new Error(`Missing required real-runtime prerequisite: ${variable}`)
-    await access(variable.endsWith('HEADERS_DIR') ? path.join(value, 'include/node/node.h') : value)
+const nativeAddonInputs = {
+  STAGEWRIGHT_NATIVE_ADDON_ELECTRON_ARCHIVE: [],
+  STAGEWRIGHT_NATIVE_ADDON_HEADERS_DIR: [
+    'include/node/node.h',
+    ...(process.platform === 'win32' ? ['Release/node.lib'] : []),
+  ],
+  ...(process.platform === 'win32' ? { STAGEWRIGHT_NATIVE_ADDON_NODE_GYP: [] } : {}),
+}
+for (const [variable, files] of Object.entries(nativeAddonInputs)) {
+  const value = process.env[variable]
+  if (!value) throw new Error(`Missing required real-runtime prerequisite: ${variable}`)
+  for (const file of files.length > 0 ? files.map((f) => path.join(value, f)) : [value]) {
+    await access(file)
   }
 }
 const requireRoot = createRequire(path.join(root, 'package.json'))
@@ -64,7 +69,5 @@ const result = spawnSync(
 )
 if (result.error) throw result.error
 if (result.status !== 0) process.exit(result.status ?? 1)
-assertRealExecution(JSON.parse(await readFile(report, 'utf8')), inventory, root, process.platform)
-console.log(
-  `Qualified ${inventory.length} reviewed real-runtime files on ${process.platform}; native-addon omission is explicit on Windows`,
-)
+assertRealExecution(JSON.parse(await readFile(report, 'utf8')), inventory, root)
+console.log(`Qualified ${inventory.length} reviewed real-runtime files on ${process.platform}`)

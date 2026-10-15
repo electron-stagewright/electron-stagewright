@@ -6,11 +6,11 @@ verified” means a required hosted job launches Electron and drives the complet
 
 ## Runtime matrix
 
-| Operating system | Node 24            | Node 26            | Real Electron      | Notes                                                              |
-| ---------------- | ------------------ | ------------------ | ------------------ | ------------------------------------------------------------------ |
-| Ubuntu latest    | Unit + integration | Unit + integration | Node 24 under Xvfb | Also proves the Linux native-addon runtime fixture.                |
-| macOS latest     | Unit + integration | Unit + integration | Node 24 native     | Also proves the macOS native-addon runtime fixture and packed CLI. |
-| Windows latest   | Unit + integration | Unit + integration | Node 24 native     | Native-addon ABI recovery is not yet part of the Windows fixture.  |
+| Operating system | Node 24            | Node 26            | Real Electron      | Notes                                                                                  |
+| ---------------- | ------------------ | ------------------ | ------------------ | -------------------------------------------------------------------------------------- |
+| Ubuntu latest    | Unit + integration | Unit + integration | Node 24 under Xvfb | Also proves the Linux native-addon runtime fixture.                                    |
+| macOS latest     | Unit + integration | Unit + integration | Node 24 native     | Also proves the macOS native-addon runtime fixture and packed CLI.                     |
+| Windows latest   | Unit + integration | Unit + integration | Node 24 native     | Also proves the Windows native-addon runtime fixture (node-gyp + MSVC) and packed CLI. |
 
 The package requires Node 24 or newer. CI exercises Node 24 and 26; versions newer than 26 may work
 but are not yet part of the maintained matrix.
@@ -44,7 +44,8 @@ does not promote a combination to real-runtime verified compatibility.
 
 For a new tree, qualification remains pending until its own required Ubuntu/macOS/Windows
 real-Electron results, packed-CLI evidence and four-framework real-MCP result are recorded.
-Retain native-addon platform limitations. No successful unit result, fixture build or peer-range
+Every reviewed scenario, including native-addon recovery, must execute on all three platforms; the
+runner rejects a skip on any of them. No successful unit result, fixture build or peer-range
 declaration replaces those checks.
 
 Published peer ranges remain broader to allow compatible applications, but those ranges are not a
@@ -91,7 +92,8 @@ boolean cannot express.
 - `@electron-stagewright/plugin-production` validates packaged macOS `.app` bundles, Windows
   Authenticode signatures and AppImage embedded signatures. Platform tools and artifact type
   determine which checks can execute; unavailable prerequisites produce an explicit unknown result.
-- Native-addon ABI recovery is real-runtime verified on Linux and macOS, not Windows.
+- Native-addon ABI recovery is real-runtime verified on Linux, macOS and Windows. The Windows
+  fixture builds its addon with node-gyp against Electron's `node.lib`, as `@electron/rebuild` does.
 - `@electron-stagewright/plugin-native-ui` follows Electron's application menu, notification, and
   tray APIs; operating-system presentation and behavior can still differ.
 - Visual comparisons bind baselines to environment metadata. Do not share one baseline across

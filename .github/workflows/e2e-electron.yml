@@ -189,7 +189,8 @@ jobs:
         run: pnpm package:smoke
 
   # Windows unit tests already run in ci.yml. This lane proves the actual Electron binary,
-  # Playwright launch path, renderer bridge, first-party plugins, and packed CLI on Windows.
+  # Playwright launch path, renderer bridge, first-party plugins, native-addon recovery, and
+  # packed CLI on Windows. The addon builds with the runner's MSVC through npm's bundled node-gyp.
   # Keep it separate from the OS/Node unit matrix: the real suite is intentionally serialized
   # and materially more expensive than the ordinary test job.
   e2e-windows:
@@ -204,6 +205,12 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Cache native addon fixture inputs
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/electron-stagewright/native-addon-fixture
+          key: native-addon-fixture-${{ runner.os }}-41.7.1
+
       - run: pnpm install --frozen-lockfile
 
       # Fail before the suite with the package-resolution error if Electron's postinstall did
@@ -211,6 +218,10 @@ jobs:
       - name: Ensure the Electron binary is present
         run: node -e "console.log('Electron resolved to:', require('electron'))"
         working-directory: packages/core
+
+      - name: Prepare native addon fixture inputs
+        shell: bash
+        run: node scripts/prepare-native-addon-fixture.mjs >> "$GITHUB_ENV"
 
       - run: pnpm build
 

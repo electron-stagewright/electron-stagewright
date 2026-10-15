@@ -27,6 +27,12 @@ const PATTERNS: readonly {
 ]
 
 /**
+ * A native addon built for another Electron ABI. Launch logs carry the app's stderr, where Chromium
+ * on Windows routinely prints "cannot find the file" noise, so this must win over FILE_NOT_FOUND.
+ */
+const ABI_MISMATCH = /NODE_MODULE_VERSION|compiled against a different Node\.js version/i
+
+/**
  * Convert an error thrown by `ITransport.launch` into a {@link StagewrightError}
  * with a registered code. Classified `StagewrightError`s pass through; raw
  * errors and generic internal wrappers are classified by message, defaulting to
@@ -36,6 +42,9 @@ export function diagnoseLaunchError(err: unknown): StagewrightError {
   if (err instanceof StagewrightError && err.code !== 'INTERNAL_ERROR') return err
   const message = err instanceof Error ? err.message : String(err)
   const details = err instanceof StagewrightError ? err.details : undefined
+  if (ABI_MISMATCH.test(message)) {
+    return new StagewrightError('INTERNAL_ERROR', `Launch failed: ${message}`, details)
+  }
   for (const { test, code } of PATTERNS) {
     if (test.test(message)) {
       return new StagewrightError(code, `Launch failed: ${message}`, details)
