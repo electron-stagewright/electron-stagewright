@@ -170,6 +170,19 @@ inject trigger is unreliable on some Electron versions; the same discovery path 
 the app was started with `--inspect`, and the error message says exactly that when the trigger
 fails.
 
+## When the connection drops
+
+An attached CDP session survives a dropped debugging socket. The next call that touches the app
+reconnects (up to three attempts within 10 s), re-discovers the windows, re-selects the one you had
+selected (by id, or by URL and title if the app restarted), and resumes console, dialog, and network
+capture. Stored snapshots are discarded on reconnect, so take a fresh `electron_snapshot` before
+acting on refs. If the endpoint stays down, the call fails with a retryable `CDP_DISCONNECTED` and the
+next call tries again. Buffered console, dialog, and network reads never wait on a reconnect.
+
+A launched session cannot reconnect: its connection only drops when the process exits or crashes.
+Calls that reach the app then fail with the non-retryable `SESSION_DISCONNECTED`; the buffered
+diagnostics stay readable. Release it with `electron_stop` and launch again.
+
 ## Ending a session
 
 | Call                  | What happens                                                                                                                         |

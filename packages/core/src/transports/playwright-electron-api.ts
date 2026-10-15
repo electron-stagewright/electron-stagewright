@@ -231,6 +231,7 @@ export interface PWElectronApp {
   // Optional in the shim (test fakes may omit it); real Playwright always
   // provides it. Fired for every window the app opens after launch.
   on?(event: 'window', handler: (page: PWPage) => void): void
+  on?(event: 'close', handler: () => void): void
   evaluate<T = unknown>(
     fn: (electronApp: unknown, payload: EvalPayload) => unknown,
     arg?: EvalPayload,

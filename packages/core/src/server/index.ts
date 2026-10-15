@@ -55,4 +55,9 @@ export {
   type ProgressPhaseSetter,
 } from './progress.js'
 
-export { createServer, type CreateServerOptions, type StagewrightServer } from './server.js'
+export {
+  type ConnectStdioOptions,
+  createServer,
+  type CreateServerOptions,
+  type StagewrightServer,
+} from './server.js'
