@@ -219,7 +219,10 @@ describe('native addon project-runtime recovery (real Electron)', () => {
       const defaultLaunch = (await dispatcher.dispatch('electron_launch', {
         main: fixture.main,
       })) as ErrorResponse
-      expect(defaultLaunch).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+      expect(defaultLaunch, JSON.stringify(defaultLaunch)).toMatchObject({
+        ok: false,
+        code: 'INTERNAL_ERROR',
+      })
       expect(defaultLaunch.error).toMatch(/NODE_MODULE_VERSION|compiled against a different/i)
 
       const projectLaunch = (await dispatcher.dispatch('electron_launch', {
