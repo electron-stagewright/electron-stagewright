@@ -149,6 +149,22 @@ iframe/webview/WebContentsView hierarchy required by this ADR, so `electron_surf
 `electron_switch_surface` continue to return `TRANSPORT_UNSUPPORTED`. A default root is the narrow
 consumer fix; hierarchy targeting remains a separate evidence-backed implementation.
 
+## Status Update — 2026-10-15: per-surface ref lock
+
+A walk renumbers every `data-sw-ref` tag of its surface, and only the reconcile and retag that
+follow restore the stable refs. Walks, ref diagnosis and `ref`-targeted operations therefore run
+under a ref lock keyed by `(sessionId, surfaceId)`, matching how tags and stored snapshots are
+scoped. Callers read the active surface before taking the lock, so walks on different surfaces of
+one session run concurrently. A selector that is exactly `[data-sw-ref="N"]` takes the same lock and
+freshness check as `ref: N`.
+
+The renderer counts tag rewrites in a walk generation that every walk and retag increments. A ref
+wait or expectation checks once under the lock, then polls unlocked pinned to the generation that
+check saw. A poll that sees the generation move stops without resolving the ref, and the wait takes
+the lock again, rechecks freshness and resumes with its remaining budget. Actions still hold the
+lock until the transport call returns. A holder that keeps the lock past 60 seconds makes queued
+callers fail with `RENDERER_BUSY` (ADR-006) rather than releasing the holder early.
+
 ## References
 
 - [ADR-003](./003-transport-abstraction.md) — transport seam and capability matrix.
