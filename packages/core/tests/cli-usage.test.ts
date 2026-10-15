@@ -12,7 +12,7 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
 })
 
-function runCli(args: readonly string[]) {
+function runCli(args: readonly string[], input?: string) {
   const home = mkdtempSync(path.join(tmpdir(), 'stagewright-cli-usage-'))
   homes.push(home)
   return spawnSync(process.execPath, [cli, ...args], {
@@ -20,6 +20,7 @@ function runCli(args: readonly string[]) {
     env: { ...process.env, HOME: home, USERPROFILE: home },
     encoding: 'utf8',
     timeout: 10_000,
+    ...(input !== undefined ? { input } : {}),
   })
 }
 
@@ -46,5 +47,13 @@ describe('built CLI usage recovery', () => {
     expect(result.stderr).toContain(message)
     expect(result.stderr).toContain('Run electron-stagewright --help')
     expect(result.stderr).not.toMatch(/\n\s+at /)
+  })
+
+  it('disposes sessions through shutdown when the MCP host closes stdin', () => {
+    const result = runCli([], '')
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('Shutting down {"reason":"stdin closed"}')
   })
 })
