@@ -16,27 +16,32 @@ before pointing the server at your own app.
 
 ## Use the published package
 
-The default launch transport uses Playwright and an Electron runtime. Start the CLI with all three
-packages available. Before handing this command to an MCP host, run it once in a terminal with
-`doctor --json`: Electron can print binary-download progress to stdout during its first install,
-which would corrupt the host's stdio protocol. That terminal bootstrap primes the `npx` cache.
+Requires Node.js 24 or newer. The default launch transport uses Playwright and an Electron runtime,
+so start the CLI with all three packages available. Before handing the command to an MCP host,
+prepare it once in a terminal: Electron downloads its binary the first time something loads it,
+and that download prints progress to stdout, which would corrupt the host's stdio protocol. Fetch
+the binary with Electron's `install-electron` bin using the same package list, then check that
+`doctor` reports `"ok": true`:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.61.1 \
-  --package electron@42.3.0 electron-stagewright doctor --json
+npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 install-electron
+npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright doctor --json
 ```
 
 Then configure or run the normal server command:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.61.1 \
-  --package electron@42.3.0 electron-stagewright
+npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright
 ```
 
 Or install all three once and run the bin directly:
 
 ```bash
-npm install -g @electron-stagewright/core@0.6.1 playwright@1.61.1 electron@42.3.0
+npm install -g @electron-stagewright/core@0.6.1 playwright@1.63.0 electron@42.11.10
+install-electron
 electron-stagewright
 ```
 
@@ -74,9 +79,12 @@ Useful CLI flags:
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.61.1 \
-  --package electron@42.3.0 electron-stagewright
+  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright
 ```
+
+Run `claude mcp list` to confirm the server is connected; its tools appear as
+`mcp__electron-stagewright__electron_launch` and so on.
 
 For a local checkout, replace the command after `--` with
 `node /abs/path/to/electron-stagewright/packages/core/dist/cli.js`.

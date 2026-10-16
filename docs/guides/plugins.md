@@ -10,15 +10,22 @@ every plugin with `--plugin` (or pass it to `createServer`).
 ## Install and load a plugin
 
 Install the core, its launch peers, and the plugin together. For example, load trace support through
-`npx`. First prime the exact package list in a terminal, so Electron's initial binary-download output
-cannot corrupt an MCP stdio session:
+`npx`. First prepare the exact package list in a terminal: `install-electron` fetches Electron's
+binary, whose download would otherwise print to stdout during the first MCP launch, and `doctor`
+confirms the setup:
 
 ```sh
 npx -y \
   --package @electron-stagewright/core@0.6.1 \
   --package @electron-stagewright/plugin-trace@0.4.1 \
-  --package playwright@1.61.1 \
-  --package electron@42.3.0 \
+  --package playwright@1.63.0 \
+  --package electron@42.11.10 \
+  install-electron
+npx -y \
+  --package @electron-stagewright/core@0.6.1 \
+  --package @electron-stagewright/plugin-trace@0.4.1 \
+  --package playwright@1.63.0 \
+  --package electron@42.11.10 \
   electron-stagewright doctor --json --plugin trace
 ```
 
@@ -28,8 +35,8 @@ Then use the same packages with the plugin flag:
 npx -y \
   --package @electron-stagewright/core@0.6.1 \
   --package @electron-stagewright/plugin-trace@0.4.1 \
-  --package playwright@1.61.1 \
-  --package electron@42.3.0 \
+  --package playwright@1.63.0 \
+  --package electron@42.11.10 \
   electron-stagewright --plugin trace
 ```
 
@@ -43,9 +50,9 @@ For an MCP client, preserve the same package and flag order in its `args`:
   "--package",
   "@electron-stagewright/plugin-trace@0.4.1",
   "--package",
-  "playwright@1.61.1",
+  "playwright@1.63.0",
   "--package",
-  "electron@42.3.0",
+  "electron@42.11.10",
   "electron-stagewright",
   "--plugin",
   "trace"

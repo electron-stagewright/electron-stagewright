@@ -44,23 +44,33 @@ Microsoft's official Playwright MCP team [explicitly declined](https://github.co
 
 ## Quick start
 
-The default launch transport uses Playwright and an Electron runtime. For a private setup in the
-current project, keep the server local to that project and pin the release-tested package set:
+Requires **Node.js 24 or newer** (`node -v`). The default launch transport uses Playwright and an
+Electron runtime. For a private setup in the current project, keep the server local to that project
+and pin the release-tested package set.
 
-Before configuring an MCP host, run the same package set once in a terminal to prime a fresh `npx`
-cache. Electron may print binary-download progress to stdout during this first install, which would
-corrupt an MCP stdio session; the terminal bootstrap completes the install before the host starts it.
+Before configuring an MCP host, prepare the same package set once in a terminal. Electron downloads
+its binary the first time something loads it, not during install, and that download prints a
+progress line to stdout; inside an MCP session the line would land in the protocol stream. Fetch the
+binary with Electron's `install-electron` bin, then run `doctor`, which reports `"ok": true` and
+exits 0 when every required check passes:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.61.1 \
-  --package electron@42.3.0 electron-stagewright doctor --json
+npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 install-electron
+npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright doctor --json
 ```
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.61.1 \
-  --package electron@42.3.0 electron-stagewright
+  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright
 ```
+
+`claude mcp list` should then show the server as connected (or run `/mcp` inside a session), and
+its tools appear as `mcp__electron-stagewright__electron_launch` and so on. Keep the `--package`
+list identical across all three commands: `npx` caches each list separately, so adding the demo or
+a plugin package means running `install-electron` and `doctor` again with the new list.
 
 The default Claude Code scope is local: it is available only in the current project and stays out
 of unrelated workspaces. To share a reviewed configuration with a team, use `--scope project`,
@@ -93,9 +103,9 @@ Shared project `.mcp.json` shape:
         "--package",
         "@electron-stagewright/core@0.6.1",
         "--package",
-        "playwright@1.61.1",
+        "playwright@1.63.0",
         "--package",
-        "electron@42.3.0",
+        "electron@42.11.10",
         "electron-stagewright"
       ]
     }

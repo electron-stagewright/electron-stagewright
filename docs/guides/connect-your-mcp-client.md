@@ -31,9 +31,11 @@ and gives `--app-root` a stable security boundary.
 
   ```sh
   cd /absolute/path/to/your-electron-app
-  pnpm add --save-dev --save-exact @electron-stagewright/core@0.6.1 playwright@1.61.1
+  pnpm add --save-dev --save-exact @electron-stagewright/core@0.6.1 playwright@1.63.0
   # Only when the project does not already pin a compatible Electron:
-  pnpm add --save-dev --save-exact electron@42.3.0
+  pnpm add --save-dev --save-exact electron@42.11.10
+  # Electron fetches its binary on first use; download it now, outside any MCP session:
+  pnpm exec install-electron
   pnpm exec electron-stagewright doctor --json --app-root "$PWD"
   ```
 
@@ -73,9 +75,9 @@ and gives `--app-root` a stable security boundary.
       "--package",
       "@electron-stagewright/core@0.6.1",
       "--package",
-      "playwright@1.61.1",
+      "playwright@1.63.0",
       "--package",
-      "electron@42.3.0",
+      "electron@42.11.10",
       "electron-stagewright",
       "--tool-profile",
       "essential",
@@ -99,9 +101,9 @@ and gives `--app-root` a stable security boundary.
       "--package",
       "@electron-stagewright/core@0.6.1",
       "--package",
-      "playwright@1.61.1",
+      "playwright@1.63.0",
       "--package",
-      "electron@42.3.0",
+      "electron@42.11.10",
       "electron-stagewright",
       "--tool-profile",
       "essential",
@@ -111,20 +113,22 @@ and gives `--app-root` a stable security boundary.
   }
   ```
 
-  Before adding that configuration to a host, prime the exact same `--package` list once from a
+  Before adding that configuration to a host, prepare the exact same `--package` list once from a
   terminal:
 
   ```sh
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.61.1 \
-    --package electron@42.3.0 electron-stagewright doctor --json \
+  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+    --package electron@42.11.10 install-electron
+  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+    --package electron@42.11.10 electron-stagewright doctor --json \
     --app-root /absolute/path/to/your-electron-app
   ```
 
-  Electron can print a binary-download progress line to stdout during this first install. That is
-  harmless in a terminal, but stdout is MCP protocol data after the host starts the server. The
-  completed bootstrap leaves the cached command clean for the host. Repeat it after clearing the
-  `npx` cache or changing any pinned package version. When you add a demo or plugin package, include
-  that same extra `--package` in the bootstrap command before `electron-stagewright doctor --json`.
+  Electron downloads its binary the first time something loads it, not when the package installs,
+  and the download prints a progress line to stdout. That is harmless in a terminal, but stdout is
+  MCP protocol data after the host starts the server, so `install-electron` fetches the binary up
+  front. `npx` keeps a separate cache per package list: repeat both commands after clearing the
+  `npx` cache, changing any pinned version, or adding a demo or plugin `--package`.
 
 - **Global install (fast spawn, not project-pinned).** Install once, then call the bin directly.
   This is useful for a single operator, but a project-local dependency is easier for a team to
@@ -132,7 +136,8 @@ and gives `--app-root` a stable security boundary.
 
   ```sh
   pnpm add --global --save-exact @electron-stagewright/core@0.6.1 \
-    playwright@1.61.1 electron@42.3.0
+    playwright@1.63.0 electron@42.11.10
+  install-electron
   ```
 
   ```json
@@ -167,6 +172,22 @@ Each client stores MCP servers in its own config file. Claude Desktop and Cursor
 `mcpServers` JSON shape shown below — a named entry with the `command`/`args` you picked above. Other
 hosts may wrap the same command and arguments in a different schema, so confirm yours against the
 client's own MCP docs.
+
+### Claude Code
+
+Register the server with `claude mcp add`; everything after `--` is the command and arguments you
+picked above:
+
+```sh
+claude mcp add electron-stagewright -- \
+  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright --tool-profile essential
+```
+
+The default scope is the current project only; `--scope project` writes the same entry to a shared
+`.mcp.json`. `claude mcp list` should show the server as connected, and `/mcp` inside a session
+lists its tools as `mcp__electron-stagewright__electron_launch` and so on. Start a new session after
+adding it so the agent sees the tools.
 
 ### Claude Desktop
 
@@ -271,9 +292,9 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
     "--package",
     "@electron-stagewright/core@0.6.1",
     "--package",
-    "playwright@1.61.1",
+    "playwright@1.63.0",
     "--package",
-    "electron@42.3.0",
+    "electron@42.11.10",
     "electron-stagewright",
     "--tool-profile",
     "essential",
@@ -286,7 +307,31 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
 
 ## Verify it connected
 
-After saving the config and restarting the client:
+Before restarting the client, run `doctor` from a terminal with the same package list and flags. A
+working setup prints one JSON document with `"ok": true` and exits 0; each entry in `checks` reports
+`pass`, or `skip` when it does not apply (for example, the display check outside Linux):
+
+```json
+{
+  "ok": true,
+  "checks": [
+    { "id": "node", "status": "pass", "message": "Node v24.19.0 satisfies the >=24 floor." },
+    {
+      "id": "playwright",
+      "status": "pass",
+      "message": "playwright is resolvable by the server process."
+    },
+    {
+      "id": "electron",
+      "status": "pass",
+      "message": "electron is resolvable by the server process."
+    }
+  ]
+}
+```
+
+The real report lists more checks; the shape is the same. After saving the config and restarting
+the client:
 
 1. **The client lists the server's tools.** You should see the `electron_*` catalog —
    `electron_launch`, `electron_snapshot`, `electron_find`, and the rest. If `electron_eval_main` and
@@ -308,6 +353,7 @@ The failure modes are almost all about the stdio channel or the spawn command.
 | Server shows "failed" / disconnects immediately                        | Something wrote to **stdout** — for a stdio server, stdout _is_ the protocol channel, so any stray print corrupts the stream | The server sends all diagnostics to stderr by design. If you wrapped it in a shell script, make sure the wrapper prints nothing to stdout.      |
 | Client reports "server not found" / no tools                           | Wrong `command`/`args`                                                                                                       | With `npx`, confirm the exact package name. With the local-checkout form, the path must be **absolute** and you must have run `pnpm build`.     |
 | Server won't start; a version/engine error                             | Node below the version floor                                                                                                 | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                           |
+| `doctor` reports `electron` as failed right after a fresh install      | Electron has not downloaded its binary yet; it does that on first use                                                        | Run `install-electron` with the same `--package` list (or `pnpm exec install-electron` in the project), then run `doctor` again.                |
 | `electron_launch` reports that Playwright or Electron is not installed | The core package was started without an optional launch peer                                                                 | Use the pinned `npx` form shown above, install all three packages globally, or pass `executablePath` to `electron_launch`.                      |
 | `project_runtime` warns about ABI or a native addon                    | The server's default Electron differs from the app's runtime, or inventory is incomplete                                     | Start the server with `--app-root <project>`, run `electron-stagewright doctor --json`, then launch with `runtime: "project"` when appropriate. |
 | `electron_eval_main` / `electron_eval_renderer` missing                | Eval tools are gated off by default                                                                                          | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                      |
