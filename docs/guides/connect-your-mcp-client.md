@@ -13,6 +13,9 @@ that launch the server; everything else is the client's standard MCP configurati
 ## Before you start
 
 - **Node.js 24 or newer** (the server's floor — check with `node -v`).
+- **On Linux, a display for the server process.** Electron opens real windows, so the server needs
+  `DISPLAY` or `WAYLAND_DISPLAY`: run the host inside a desktop session, or start it under a virtual
+  display such as `xvfb-run -a`. `doctor` reports this as the `display` check.
 - **Playwright and Electron** for the default launch transport. The core package keeps both as
   optional peers so non-launch flows can import it without the extra install; the examples below
   install both alongside the server.
@@ -172,7 +175,9 @@ and gives `--app-root` a stable security boundary.
 Each client stores MCP servers in its own config file, and the command and arguments you picked
 above are the same everywhere; only the wrapper changes. Claude Desktop and Cursor use the common
 `mcpServers` JSON shape, Codex uses TOML, VS Code uses a `servers` key, and opencode takes the
-command as one array. Each section below shows the exact shape.
+command as one array. Each section below shows the exact shape. The Claude Desktop and Cursor
+examples use the project-local `node` form, which needs that install first; with `npx`, put the
+`npx` command and arguments in their place.
 
 ### Claude Code
 
@@ -468,25 +473,94 @@ the client:
 No host handy? The [Getting started](./getting-started.md) scripted scenario connects a real MCP
 client over stdio without any host, which is a quick way to confirm the server itself runs.
 
+## Update to a new release
+
+Every install form above pins exact versions, so nothing updates on its own. Move to a new release
+deliberately:
+
+1. **Find the release.** `npm view @electron-stagewright/core version` prints the latest core
+   version. The [release notes](https://github.com/electron-stagewright/electron-stagewright/releases)
+   say what changed and what to act on, and the README quick start always shows the tested
+   Playwright and Electron versions for the current release.
+2. **Change every pin together.** Update core, plus Playwright and Electron when the release moves
+   them. Each `@electron-stagewright/plugin-*` package depends on one exact core version, so bump
+   every plugin you load to the version released with the new core; an old plugin pin installs a
+   second copy of core. `npm view @electron-stagewright/plugin-trace dependencies` shows which core
+   a plugin version needs. The demo package does not depend on core.
+   - **Claude Code:** `claude mcp add` refuses a name that already exists, so remove the entry, then
+     add it again with the new versions:
+
+     ```sh
+     claude mcp remove electron-stagewright
+     claude mcp add electron-stagewright -- \
+       npx -y --package @electron-stagewright/core@<new> --package playwright@<new> \
+       --package electron@<new> electron-stagewright --tool-profile essential
+     ```
+
+     For a shared `--scope project` entry, edit the versions in `.mcp.json` instead.
+
+   - **Codex:** edit the versions in `args` under `[mcp_servers.electron-stagewright]` in
+     `~/.codex/config.toml`.
+   - **Claude Desktop, Cursor, VS Code, opencode:** edit the versions in that host's config file.
+   - **Project-local:** update the dependencies (add `electron@<new>` to the same command if you
+     added Electron only for Stagewright), then fetch the Electron binary:
+
+     ```sh
+     pnpm add --save-dev --save-exact @electron-stagewright/core@<new> playwright@<new>
+     pnpm exec install-electron
+     ```
+
+   - **Global:** rerun the global install with the new versions, then `install-electron`.
+
+3. **Prepare the new package list.** Run `install-electron` and `doctor --json` with the new
+   `--package` list, exactly as for a first install. `npx` treats a changed list as a separate
+   install, so its Electron binary has to be fetched even when only core changed. Electron reuses
+   its download cache, so this is quick when the Electron version did not change.
+4. **Restart the host**, or start a new session, so it spawns the updated server.
+5. **Confirm the version.** `electron-stagewright --version` (with the same `npx -y --package ...`
+   prefix) prints the core version, and `doctor --json` reports the running versions under
+   `runtime.server` (`core`, `playwright`, `electron`). With the `debug` or `full` profile, the
+   `electron_doctor` tool returns the same report from inside a session.
+
+## Remove the server
+
+1. **Remove it from the host.**
+   - Claude Code: `claude mcp remove electron-stagewright` (add `--scope project` to remove a shared
+     entry from `.mcp.json`).
+   - Codex: `codex mcp remove electron-stagewright`.
+   - Claude Desktop, Cursor, VS Code, opencode: delete the `electron-stagewright` entry from the
+     config file, then restart or reload the host.
+2. **Uninstall the packages** if you installed them. Project-local:
+   `pnpm remove @electron-stagewright/core playwright`, plus Electron if you added it only for
+   Stagewright and any plugin packages. Global: `pnpm remove --global` with the same names. The
+   `npx` form installs nothing permanently.
+3. **Optionally reclaim disk space.** `npx` keeps each package list under `_npx` in npm's cache
+   (`npm config get cache` prints its location, usually `~/.npm`). Deleting `_npx` is safe; the next
+   `npx` run of any tool downloads again. Electron keeps downloaded archives in its own cache:
+   `~/Library/Caches/electron` on macOS, `~/.cache/electron` on Linux, and
+   `%LOCALAPPDATA%\electron\Cache` on Windows. Screenshots go to the OS temporary directory
+   unless you set `--screenshot-dir`.
+
 ## Troubleshooting
 
 The failure modes are almost all about the stdio channel or the spawn command.
 
-| Symptom                                                                | Likely cause                                                                                                                 | Fix                                                                                                                                             |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Server shows "failed" / disconnects immediately                        | Something wrote to **stdout** — for a stdio server, stdout _is_ the protocol channel, so any stray print corrupts the stream | The server sends all diagnostics to stderr by design. If you wrapped it in a shell script, make sure the wrapper prints nothing to stdout.      |
-| Client reports "server not found" / no tools                           | Wrong `command`/`args`                                                                                                       | With `npx`, confirm the exact package name. With the local-checkout form, the path must be **absolute** and you must have run `pnpm build`.     |
-| Codex reports the server timed out during startup                      | Codex allows 10 seconds by default, and an `npx` resolution can take longer                                                  | Set `startup_timeout_sec = 30` on the server in `~/.codex/config.toml`, and run the terminal bootstrap first.                                   |
-| A desktop host logs `npx` or `node` not found                          | The host started from the Dock or Finder without your shell `PATH`                                                           | Use the absolute `npx` path and an `env.PATH` that contains Node.js; see the desktop-apps section above.                                        |
-| Server won't start; a version/engine error                             | Node below the version floor                                                                                                 | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                           |
-| `doctor` reports `electron` as failed right after a fresh install      | Electron has not downloaded its binary yet; it does that on first use                                                        | Run `install-electron` with the same `--package` list (or `pnpm exec install-electron` in the project), then run `doctor` again.                |
-| `electron_launch` reports that Playwright or Electron is not installed | The core package was started without an optional launch peer                                                                 | Use the pinned `npx` form shown above, install all three packages globally, or pass `executablePath` to `electron_launch`.                      |
-| `project_runtime` warns about ABI or a native addon                    | The server's default Electron differs from the app's runtime, or inventory is incomplete                                     | Start the server with `--app-root <project>`, run `electron-stagewright doctor --json`, then launch with `runtime: "project"` when appropriate. |
-| `electron_eval_main` / `electron_eval_renderer` missing                | Eval tools are gated off by default                                                                                          | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                      |
-| A known core tool is missing                                           | The selected core profile does not include it                                                                                | Restart with the profile named in the tool's recovery hint, or use `--tool-profile full`.                                                       |
-| `electron_launch` returns `FUSES_BLOCK_LAUNCH`                         | A `main`-based Playwright launch selected a runtime that disables the Node CLI inspect fuse                                  | For a packaged app, launch with `executablePath` and no `main`; otherwise use a compatible development runtime.                                 |
-| `electron_launch` returns `ELECTRON_RUNTIME_MISSING`                   | Electron downloads its binary on first use, and the server refuses to do that mid-session                                    | Run `install-electron` with the server's `--package` list (or `pnpm exec install-electron` in the project), or pass `executablePath`.           |
-| The app won't launch from `electron_launch`                            | `main` is not an absolute path, or the app needs attach/inject                                                               | Pass an absolute `main`; see [Launch, attach, or inject](./launch-or-attach.md) for apps that are already running.                              |
+| Symptom                                                                | Likely cause                                                                                                                                               | Fix                                                                                                                                                       |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server shows "failed" / disconnects immediately                        | Something wrote to **stdout** — for a stdio server, stdout _is_ the protocol channel, so any stray print corrupts the stream                               | The server sends all diagnostics to stderr by design. If you wrapped it in a shell script, make sure the wrapper prints nothing to stdout.                |
+| Client reports "server not found" / no tools                           | Wrong `command`/`args`                                                                                                                                     | With `npx`, confirm the exact package name. With the local-checkout form, the path must be **absolute** and you must have run `pnpm build`.               |
+| Codex reports the server timed out during startup                      | Codex allows 10 seconds by default, and an `npx` resolution can take longer                                                                                | Set `startup_timeout_sec = 30` on the server in `~/.codex/config.toml`, and run the terminal bootstrap first.                                             |
+| A desktop host logs `npx` or `node` not found                          | The host started from the Dock or Finder without your shell `PATH`                                                                                         | Use the absolute `npx` path and an `env.PATH` that contains Node.js; see the desktop-apps section above.                                                  |
+| `doctor` fails the `display` check, or no app window opens on Linux    | The server process has neither `DISPLAY` nor `WAYLAND_DISPLAY` (a headless machine, an SSH session, or a host that filters the environment, such as Codex) | Run the host in a desktop session, start it under `xvfb-run -a`, or forward `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` (in Codex, through `env_vars`). |
+| Server won't start; a version/engine error                             | Node below the version floor                                                                                                                               | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                                     |
+| `doctor` reports `electron` as failed right after a fresh install      | Electron has not downloaded its binary yet; it does that on first use                                                                                      | Run `install-electron` with the same `--package` list (or `pnpm exec install-electron` in the project), then run `doctor` again.                          |
+| `electron_launch` reports that Playwright or Electron is not installed | The core package was started without an optional launch peer                                                                                               | Use the pinned `npx` form shown above, install all three packages globally, or pass `executablePath` to `electron_launch`.                                |
+| `project_runtime` warns about ABI or a native addon                    | The server's default Electron differs from the app's runtime, or inventory is incomplete                                                                   | Start the server with `--app-root <project>`, run `electron-stagewright doctor --json`, then launch with `runtime: "project"` when appropriate.           |
+| `electron_eval_main` / `electron_eval_renderer` missing                | Eval tools are gated off by default                                                                                                                        | Add `--allow-eval` (or `--allow-eval=renderer` / `=main`) to `args`. Read the [security model](./security-model.md) first.                                |
+| A known core tool is missing                                           | The selected core profile does not include it                                                                                                              | Restart with the profile named in the tool's recovery hint, or use `--tool-profile full`.                                                                 |
+| `electron_launch` returns `FUSES_BLOCK_LAUNCH`                         | A `main`-based Playwright launch selected a runtime that disables the Node CLI inspect fuse                                                                | For a packaged app, launch with `executablePath` and no `main`; otherwise use a compatible development runtime.                                           |
+| `electron_launch` returns `ELECTRON_RUNTIME_MISSING`                   | Electron downloads its binary on first use, and the server refuses to do that mid-session                                                                  | Run `install-electron` with the server's `--package` list (or `pnpm exec install-electron` in the project), or pass `executablePath`.                     |
+| The app won't launch from `electron_launch`                            | `main` is not an absolute path, or the app needs attach/inject                                                                                             | Pass an absolute `main`; see [Launch, attach, or inject](./launch-or-attach.md) for apps that are already running.                                        |
 
 ## Where next
 

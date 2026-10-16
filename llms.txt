@@ -18,7 +18,7 @@ npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright doctor --json
 claude mcp add electron-stagewright -- \
   npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright
+  --package electron@42.11.10 electron-stagewright --tool-profile essential
 ```
 
 Then `claude mcp list` should show the server as connected. First call: `electron_launch` with the
@@ -28,14 +28,17 @@ below. Codex: `codex mcp add electron-stagewright -- <the npx command above>`, t
 `startup_timeout_sec = 30` and, on Linux, `env_vars = ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"]`
 on that server in `~/.codex/config.toml`. VS Code: `.vscode/mcp.json` uses a top-level `servers`
 key with `"type": "stdio"`. Desktop hosts opened from the Dock may need the absolute `npx` path and
-an `env.PATH` that contains Node.js.
+an `env.PATH` that contains Node.js. To update later, change every pinned version together (plugins
+need the matching core), rerun `install-electron` and `doctor` with the new list, restart the host,
+and check `runtime.server.core` in the `doctor --json` report; see "Update to a new release" in
+Connect your MCP client.
 
 ## Docs
 
 - [Tool reference](https://github.com/electron-stagewright/electron-stagewright/blob/main/TOOL-REFERENCE.md): every tool with parameters, return shapes, and error codes — generated from the live manifest
-- [Getting started](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/getting-started.md): install, connect an MCP host, drive the bundled example end to end
-- [Try the packaged demo](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/demo.md): exact npx, global, and local MCP configurations for a local-only modal/list/multi-window Electron verification flow
-- [Connect your MCP client](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/connect-your-mcp-client.md): wire the published package into Claude Code, Codex, Claude Desktop, Cursor, VS Code, opencode, or any MCP host (npx/global/local command forms), verify it connected, troubleshoot stdio/config failures
+- [Getting started](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/getting-started.md): contributor tutorial that clones and builds the repository to drive the bundled example (to install the published package, use Connect your MCP client)
+- [Try the packaged demo](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/demo.md): pinned npx bootstrap and host entries for a local-only modal/list/multi-window Electron app that proves a host can drive Electron
+- [Connect your MCP client](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/connect-your-mcp-client.md): wire the published package into Claude Code, Codex, Claude Desktop, Cursor, VS Code, opencode, or any MCP host (npx/global/local command forms), verify it connected, update or remove it, troubleshoot stdio/config failures
 - [Launch, attach, or inject](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/launch-or-attach.md): the three ways to get a session against an app
 - [Assert UI state](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/assert-ui-state.md): refs, the expect family, waits, snapshot diffs
 - [Type into code editors](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/type-into-code-editors.md): the reliable Monaco/EditContext/CodeMirror typing path (electron_type_into_editor), replace and clear, the auto-pairing caveat, attached-not-visible waits, and verifying the text landed

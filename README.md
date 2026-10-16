@@ -44,7 +44,8 @@ Microsoft's official Playwright MCP team [explicitly declined](https://github.co
 
 ## Quick start
 
-Requires **Node.js 24 or newer** (`node -v`). The default launch transport uses Playwright and an
+Requires **Node.js 24 or newer** (`node -v`); on Linux the server also needs a display (`DISPLAY`,
+`WAYLAND_DISPLAY`, or `xvfb-run -a`). The default launch transport uses Playwright and an
 Electron runtime. For a private setup in the current project, keep the server local to that project
 and pin the release-tested package set.
 
@@ -64,13 +65,15 @@ npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
 ```bash
 claude mcp add electron-stagewright -- \
   npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright
+  --package electron@42.11.10 electron-stagewright --tool-profile essential
 ```
 
 `claude mcp list` should then show the server as connected (or run `/mcp` inside a session), and
 its tools appear as `mcp__electron-stagewright__electron_launch` and so on. Keep the `--package`
 list identical across all three commands: `npx` caches each list separately, so adding the demo or
-a plugin package means running `install-electron` and `doctor` again with the new list.
+a plugin package means running `install-electron` and `doctor` again with the new list. To move to
+a newer release later, follow
+[Update to a new release](docs/guides/connect-your-mcp-client.md#update-to-a-new-release).
 
 The default Claude Code scope is local: it is available only in the current project and stays out
 of unrelated workspaces. To share a reviewed configuration with a team, use `--scope project`,
@@ -106,14 +109,17 @@ Shared project `.mcp.json` shape:
         "playwright@1.63.0",
         "--package",
         "electron@42.11.10",
-        "electron-stagewright"
+        "electron-stagewright",
+        "--tool-profile",
+        "essential"
       ]
     }
   }
 }
 ```
 
-Then from any MCP-compatible agent:
+Then from any MCP-compatible agent (tool names as Claude Code shows them; other hosts prefix them
+differently):
 
 ```jsonc
 // Launch
@@ -155,7 +161,7 @@ The full tool list — every tool, its parameters, and operation type — is in
 - [Try the packaged demo](docs/guides/demo.md) — verify a published MCP host setup against a local,
   multi-window Electron task board without supplying your own app path.
 - [Connect your MCP client](docs/guides/connect-your-mcp-client.md) — wire the published package
-  into Claude Desktop, Cursor, or any MCP host, and confirm it connected.
+  into Claude Code, Codex, Claude Desktop, Cursor, VS Code, opencode, or any MCP host, confirm it connected, update it, or remove it.
 - [Launch, attach, or inject](docs/guides/launch-or-attach.md) — getting a session against YOUR
   app, including apps that are already running.
 - [Assert UI state](docs/guides/assert-ui-state.md) — refs vs selectors, the `expect_*` family,

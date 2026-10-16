@@ -16,7 +16,8 @@ before pointing the server at your own app.
 
 ## Use the published package
 
-Requires Node.js 24 or newer. The default launch transport uses Playwright and an Electron runtime,
+Requires Node.js 24 or newer, and on Linux a display for the server (`DISPLAY`, `WAYLAND_DISPLAY`,
+or `xvfb-run -a`). The default launch transport uses Playwright and an Electron runtime,
 so start the CLI with all three packages available. Before handing the command to an MCP host,
 prepare it once in a terminal: Electron downloads its binary the first time something loads it,
 and that download prints progress to stdout, which would corrupt the host's stdio protocol. Fetch
@@ -80,7 +81,7 @@ Useful CLI flags:
 ```bash
 claude mcp add electron-stagewright -- \
   npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright
+  --package electron@42.11.10 electron-stagewright --tool-profile essential
 ```
 
 Run `claude mcp list` to confirm the server is connected; its tools appear as
