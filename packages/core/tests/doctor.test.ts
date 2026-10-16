@@ -118,9 +118,10 @@ describe('runDoctorChecks', () => {
     expect(
       report.checks.filter((check) => check.status === 'fail').map((check) => check.id),
     ).toEqual(['node', 'electron', 'display', 'app_root', 'screenshot_dir'])
-    expect(report.checks.find((check) => check.id === 'electron')?.hint).toContain(
-      '--package electron',
-    )
+    const electronHint = report.checks.find((check) => check.id === 'electron')?.hint
+    expect(electronHint).toContain('--package electron')
+    expect(electronHint).toContain('install-electron')
+    expect(electronHint).toContain('pnpm exec install-electron')
   })
 
   it('checks optional peers through package metadata without importing their entry points', async () => {

@@ -11,17 +11,11 @@ const COMMAND_TIMEOUT_MS = 5 * 60_000
 const EVIDENCE_LIMIT = 2000
 
 /**
- * Checks this smoke owns. They prove the published CLI resolved its own dependencies and produced a
- * report.
- *
- * `electron` is excluded deliberately. This smoke bootstraps into an isolated, cold Electron cache to
- * prove a clean install, and that sandbox does not provision Electron's binary on every platform —
- * on the Linux runner it does not, so nothing lands under `dist/`. Requiring the check would assert a
- * property of the sandbox rather than of the published package. Real-Electron coverage belongs to the
- * e2e job, which provisions the binary deterministically before driving an app. The check's status is
- * still reported below so a maintainer sees it.
+ * Checks this smoke owns. They prove the published CLI resolved its own dependencies, that the
+ * documented `install-electron` step provisioned the binary the server launches with, and that
+ * doctor produced a report.
  */
-const REQUIRED_PASSING_CHECKS = ['node', 'playwright', 'eval_policy']
+const REQUIRED_PASSING_CHECKS = ['node', 'playwright', 'electron', 'eval_policy']
 
 function exactVersion(value, packageName) {
   if (typeof value !== 'string' || !/^\^?\d+\.\d+\.\d+$/.test(value)) {
@@ -30,15 +24,13 @@ function exactVersion(value, packageName) {
   return value.replace(/^\^/, '')
 }
 
-function npxArguments(packages) {
-  return [
-    '-y',
-    ...packages.flatMap((packageName) => ['--package', packageName]),
-    'electron-stagewright',
-    'doctor',
-    '--json',
-  ]
+/** The documented `npx` invocation for one package list; only the trailing command differs. */
+export function npxArguments(packages, command) {
+  return ['-y', ...packages.flatMap((packageName) => ['--package', packageName]), ...command]
 }
+
+const INSTALL_ELECTRON = ['install-electron']
+const DOCTOR_JSON = ['electron-stagewright', 'doctor', '--json']
 
 function evidence(label, value) {
   const text = (value ?? '').toString().trim()
@@ -54,7 +46,11 @@ function evidence(label, value) {
  */
 async function runPublishedDoctor(packages, options) {
   try {
-    const { stdout, stderr } = await execPackageCommand('npx', npxArguments(packages), options)
+    const { stdout, stderr } = await execPackageCommand(
+      'npx',
+      npxArguments(packages, DOCTOR_JSON),
+      options,
+    )
     return { stdout, stderr, code: 0 }
   } catch (error) {
     return { stdout: error?.stdout ?? '', stderr: error?.stderr ?? '', code: error?.code ?? 1 }
@@ -73,14 +69,14 @@ export function assertDoctorReport(outcome) {
     report = JSON.parse(stdout)
   } catch (error) {
     throw new Error(
-      `The warmed npx command did not emit a single doctor JSON document (exit ${code}): ${
+      `The npx doctor command did not emit a single doctor JSON document (exit ${code}): ${
         error instanceof Error ? error.message : String(error)
       }\n${evidence('stdout', stdout)}\n${evidence('stderr', stderr)}`,
     )
   }
   if (report === null || typeof report !== 'object' || !Array.isArray(report.checks)) {
     throw new Error(
-      `The warmed npx doctor output is not a report with checks (exit ${code}).\n${evidence(
+      `The npx doctor output is not a report with checks (exit ${code}).\n${evidence(
         'stdout',
         stdout,
       )}`,
@@ -90,7 +86,7 @@ export function assertDoctorReport(outcome) {
     const check = report.checks.find((candidate) => candidate?.id === id)
     if (check?.status !== 'pass') {
       throw new Error(
-        `The warmed npx doctor output did not pass the ${id} check: ${JSON.stringify(
+        `The npx doctor output did not pass the ${id} check: ${JSON.stringify(
           check ?? null,
         )}\n${evidence('stdout', stdout)}`,
       )
@@ -104,13 +100,7 @@ function summarize(report, packages) {
   return [
     `published npx smoke passed after a clean-cache bootstrap: ${packages.join(', ')}`,
     `  doctor.ok=${report.ok} node=${status('node')} playwright=${status('playwright')} electron=${status('electron')}`,
-    status('electron') === 'pass'
-      ? ''
-      : "  note: this sandbox's cold Electron cache provisioned no binary, so the electron check is\n" +
-        '  expected to fail here. Driving a real Electron app is the e2e job, not this smoke.',
-  ]
-    .filter((line) => line !== '')
-    .join('\n')
+  ].join('\n')
 }
 
 async function main() {
@@ -138,10 +128,9 @@ async function main() {
     maxBuffer: 4 * 1024 * 1024,
   }
   try {
-    // Electron's install can write binary-download progress to stdout on the first run. This command
-    // exists only to absorb that outside an MCP transport and to warm the npx cache the measured run
-    // reuses, so its output AND its exit code are both discarded.
-    await runPublishedDoctor(packages, options)
+    // The documented first step: Electron downloads its binary lazily, so fetch it outside any MCP
+    // transport. Its progress output is expected and not part of the contract.
+    await execPackageCommand('npx', npxArguments(packages, INSTALL_ELECTRON), options)
     const report = assertDoctorReport(await runPublishedDoctor(packages, options))
     process.stderr.write(`${summarize(report, packages)}\n`)
   } finally {

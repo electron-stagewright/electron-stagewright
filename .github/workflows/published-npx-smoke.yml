@@ -20,7 +20,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      # This intentionally installs no workspace dependencies. The helper runs a discardable first
-      # npx command to absorb Electron's postinstall stdout, then proves a second host command emits
-      # a single valid doctor JSON document from an otherwise empty npm/Electron cache.
+      # This intentionally installs no workspace dependencies. From an empty npm/Electron cache the
+      # helper follows the documented install: install-electron, then doctor, which must emit a single
+      # valid JSON document with the electron check passing.
       - run: node scripts/published-npx-smoke.mjs

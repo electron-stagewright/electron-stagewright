@@ -2,8 +2,8 @@
  * Unit-test the published npx smoke's assertion contract.
  *
  * The smoke previously had no executable coverage and only ran on a published release, so its first
- * real run was against a live release. These tests pin what it owns: exactly one valid doctor JSON
- * document on stdout, the checks that do not depend on a downloaded Electron binary, and a
+ * real run was against a live release. These tests pin what it owns: the documented install-electron
+ * then doctor sequence, exactly one valid doctor JSON document on stdout, the required checks, and a
  * diagnosable failure message.
  */
 
@@ -16,11 +16,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..')
 const SMOKE = pathToFileURL(path.join(REPO_ROOT, 'scripts', 'published-npx-smoke.mjs')).href
 
-const { assertDoctorReport } = (await import(SMOKE)) as {
+const { assertDoctorReport, npxArguments } = (await import(SMOKE)) as {
   assertDoctorReport: (outcome: { stdout: string; stderr: string; code: number }) => {
     readonly ok: boolean
     readonly checks: readonly { readonly id: string; readonly status: string }[]
   }
+  npxArguments: (packages: readonly string[], command: readonly string[]) => string[]
 }
 
 function report(overrides: readonly { id: string; status: string }[] = []): string {
@@ -46,14 +47,19 @@ describe('published npx smoke assertions', () => {
     expect(assertDoctorReport(outcome(report())).ok).toBe(true)
   })
 
-  it('accepts a sandbox whose cold cache never provisioned an Electron binary', () => {
-    // The smoke bootstraps into an isolated, cold Electron cache, which does not provision the binary
-    // on every platform. doctor then exits 1: a failing check is a report about that sandbox, not a
-    // crash and not a defect in the published package, so the smoke must read the report and pass.
-    const parsed = assertDoctorReport(outcome(report([{ id: 'electron', status: 'fail' }]), 1))
+  it('rejects a report whose electron check failed, since install-electron ran first', () => {
+    const stdout = report([{ id: 'electron', status: 'fail' }])
 
-    expect(parsed.ok).toBe(false)
-    expect(parsed.checks.find((check) => check.id === 'electron')?.status).toBe('fail')
+    expect(() => assertDoctorReport(outcome(stdout, 1))).toThrow(/did not pass the electron check/)
+  })
+
+  it('runs install-electron and doctor with the same package list', () => {
+    const packages = ['@electron-stagewright/core@1.0.0', 'playwright@1.0.0', 'electron@1.0.0']
+    const install = npxArguments(packages, ['install-electron'])
+    const doctor = npxArguments(packages, ['electron-stagewright', 'doctor', '--json'])
+
+    expect(install.at(-1)).toBe('install-electron')
+    expect(install.slice(0, -1)).toEqual(doctor.slice(0, -3))
   })
 
   it('rejects stdout polluted by an installer, which would break an MCP host', () => {
