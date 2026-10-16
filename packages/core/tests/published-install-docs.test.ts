@@ -90,12 +90,16 @@ describe('published-install documentation', () => {
       readRepoFile('docs', 'guides', 'plugins.md'),
     ])
 
+    // Electron fetches its binary on first use and prints to stdout, so each bootstrap must
+    // download it with install-electron before doctor and before any MCP host starts the server.
     for (const doc of [readme, coreReadme, connectionGuide, demoGuide, pluginsGuide]) {
       expect(doc).toContain('electron-stagewright doctor --json')
+      expect(doc).toContain('install-electron')
+      expect(doc.indexOf('install-electron')).toBeLessThan(
+        doc.indexOf('electron-stagewright doctor --json'),
+      )
+      expect(doc).toMatch(/stdout/)
     }
-    expect([readme, coreReadme, connectionGuide, demoGuide, pluginsGuide].join('\n')).toMatch(
-      /binary-download.*stdout|stdout.*binary-download/is,
-    )
     expect(demoGuide).toContain(`${DEMO_PACKAGE.name}@${DEMO_PACKAGE.version}`)
     expect(pluginsGuide).toContain(`${TRACE_PACKAGE.name}@${TRACE_PACKAGE.version}`)
   })

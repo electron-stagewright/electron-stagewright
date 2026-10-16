@@ -10,22 +10,28 @@ normal core installation neither loads nor depends on this package.
 
 ## Start it from the published packages
 
-Prime a fresh `npx` cache in a terminal before adding this command to an MCP host. Electron's first
-binary download can print progress to stdout, so the bootstrap must finish outside the stdio protocol.
+Prepare a fresh `npx` cache in a terminal before adding this command to an MCP host. Electron
+downloads its binary the first time something loads it and prints progress to stdout, so fetch it
+with `install-electron` first, outside the stdio protocol, then confirm with `doctor`:
 
 ```sh
 npx -y \
   --package @electron-stagewright/core@0.6.1 \
   --package @electron-stagewright/demo@0.1.0 \
-  --package playwright@1.61.1 \
-  --package electron@42.3.0 \
+  --package playwright@1.63.0 \
+  --package electron@42.11.10 \
+  install-electron
+npx -y \
+  --package @electron-stagewright/core@0.6.1 \
+  --package @electron-stagewright/demo@0.1.0 \
+  --package playwright@1.63.0 \
+  --package electron@42.11.10 \
   electron-stagewright doctor --json
 ```
 
-The first terminal run can print a download line before the doctor JSON; repeat the same package
-list with `electron-stagewright --demo` from the host configuration after it completes. The package
-set is deliberately pinned: update all four versions together after validating a new release. To run
-from a built checkout instead, use:
+`doctor` should report `"ok": true`. Then use the same package list with `electron-stagewright --demo`
+in the host configuration. The package set is deliberately pinned: update all four versions together
+after validating a new release. To run from a built checkout instead, use:
 
 ```sh
 node /absolute/path/to/electron-stagewright/packages/core/dist/cli.js --demo
@@ -34,6 +40,14 @@ node /absolute/path/to/electron-stagewright/packages/core/dist/cli.js --demo
 ## Configure a host
 
 Use `npx` as the command and include the demo package before the CLI and `--demo` flag.
+
+### Claude Code
+
+```sh
+claude mcp add electron-stagewright-demo -- \
+  npx -y --package @electron-stagewright/core@0.6.1 --package @electron-stagewright/demo@0.1.0 \
+  --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright --demo
+```
 
 ### Claude Desktop
 
@@ -51,9 +65,9 @@ Add this entry to `claude_desktop_config.json`, then fully restart Claude Deskto
         "--package",
         "@electron-stagewright/demo@0.1.0",
         "--package",
-        "playwright@1.61.1",
+        "playwright@1.63.0",
         "--package",
-        "electron@42.3.0",
+        "electron@42.11.10",
         "electron-stagewright",
         "--demo"
       ]

@@ -23,6 +23,9 @@ These exact development versions come from the `packages/core` importer in the f
 A unit consistency test checks only this source-resolution field. Installation or source checking
 does not promote a combination to real-runtime verified compatibility.
 
+The install commands in the README and guides pin this same pair (`electron@42.11.10`,
+`playwright@1.63.0`), so a documented install uses the versions the real-Electron CI jobs run.
+
 ### Qualified compatibility evidence
 
 - Previous guide assertion at source `6598c945a126eaf7cff40c9e816897ba044eaaac`:

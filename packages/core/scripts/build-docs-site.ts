@@ -460,7 +460,7 @@ function renderHomePage(bodyHtml: string): string {
 <a class="button-primary" href="guides/demo.html">Run the packaged demo</a>
 <a class="button-secondary" href="guides/getting-started.html">Read the getting-started guide</a>
 </div>
-<div class="install-line" aria-label="Install the core package"><span class="prompt" aria-hidden="true">$</span><code>pnpm add -D @electron-stagewright/core</code></div>
+<div class="install-line" aria-label="Install the pinned package set"><span class="prompt" aria-hidden="true">$</span><code>pnpm add -D -E @electron-stagewright/core@0.6.1 playwright@1.63.0 electron@42.11.10</code></div>
 </div>
 <div class="session-card" aria-label="Example Electron Stagewright session">
 <div class="session-head"><span>Session / desktop-app</span><span>connected</span></div>

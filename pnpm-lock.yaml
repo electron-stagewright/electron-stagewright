@@ -232,7 +232,7 @@ importers:
         specifier: workspace:*
         version: link:../demo
       electron:
-        specifier: ^42.3.0
+        specifier: ^42.11.10
         version: 42.11.10
       esbuild:
         specifier: ^0.28.1
@@ -250,7 +250,7 @@ importers:
         specifier: ^2.2.4
         version: 2.2.4(marked@18.0.14)
       playwright:
-        specifier: ^1.61.1
+        specifier: ^1.63.0
         version: 1.63.0
 
   packages/demo:

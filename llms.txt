@@ -4,26 +4,52 @@
 > design: numbered snapshot refs instead of CSS guessing, a family of single-call expect
 > assertions, structured error envelopes with stable codes and recovery hints.
 
+## Install (Claude Code)
+
+Requires Node.js 24 or newer. Run these from a terminal before the MCP host starts the server; keep
+the `--package` list identical in all three commands. `install-electron` downloads Electron's
+binary up front, because its first-use download prints to stdout and would corrupt the MCP stdio
+stream. `doctor --json` must report `"ok": true`.
+
+```bash
+npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 install-electron
+npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright doctor --json
+claude mcp add electron-stagewright -- \
+  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright
+```
+
+Then `claude mcp list` should show the server as connected. First call: `electron_launch` with the
+absolute path to the app's built main entry, then `electron_snapshot`, and end with `electron_stop`.
+Other hosts use the same command and arguments in their own config shape; see Connect your MCP client
+below. Codex: `codex mcp add electron-stagewright -- <the npx command above>`, then set
+`startup_timeout_sec = 30` and, on Linux, `env_vars = ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"]`
+on that server in `~/.codex/config.toml`. VS Code: `.vscode/mcp.json` uses a top-level `servers`
+key with `"type": "stdio"`. Desktop hosts opened from the Dock may need the absolute `npx` path and
+an `env.PATH` that contains Node.js.
+
 ## Docs
 
-- [Tool reference](TOOL-REFERENCE.md): every tool with parameters, return shapes, and error codes — generated from the live manifest
-- [Getting started](docs/guides/getting-started.md): install, connect an MCP host, drive the bundled example end to end
-- [Try the packaged demo](docs/guides/demo.md): exact npx, global, and local MCP configurations for a local-only modal/list/multi-window Electron verification flow
-- [Connect your MCP client](docs/guides/connect-your-mcp-client.md): wire the published package into Claude Desktop, Cursor, or any MCP host (npx/global/local command forms), verify it connected, troubleshoot stdio/config failures
-- [Launch, attach, or inject](docs/guides/launch-or-attach.md): the three ways to get a session against an app
-- [Assert UI state](docs/guides/assert-ui-state.md): refs, the expect family, waits, snapshot diffs
-- [Type into code editors](docs/guides/type-into-code-editors.md): the reliable Monaco/EditContext/CodeMirror typing path (electron_type_into_editor), replace and clear, the auto-pairing caveat, attached-not-visible waits, and verifying the text landed
-- [Capture diagnostics](docs/guides/capture-diagnostics.md): screenshots, console logs, dialogs, session traces
-- [Load, configure, and diagnose plugins](docs/guides/plugins.md): explicit plugin loading, narrow gates, and effective configuration
-- [Migrate from electron-driver](docs/guides/migrate-from-electron-driver.md): tool-by-tool mapping
-- [Choose an Electron MCP server](docs/guides/choosing-an-electron-mcp-server.md): capability-first workflow comparison and a reproducible evaluation checklist
-- [Compatibility](docs/guides/compatibility.md): verified runtime, platform, and transport combinations plus explicit limits
-- [Concepts](docs/guides/concepts.md): the agent-native model and why -- envelope, refs, snapshots, retrying assertions, sessions/transports, eval and plugins -- each linked to its ADR
-- [Security model](docs/guides/security-model.md): trust boundaries, the controls behind --allow-eval, residual risks, and a deployment checklist
-- [Architecture decisions](docs/adr/README.md): the design record (ADR-001 through ADR-028)
+- [Tool reference](https://github.com/electron-stagewright/electron-stagewright/blob/main/TOOL-REFERENCE.md): every tool with parameters, return shapes, and error codes — generated from the live manifest
+- [Getting started](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/getting-started.md): install, connect an MCP host, drive the bundled example end to end
+- [Try the packaged demo](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/demo.md): exact npx, global, and local MCP configurations for a local-only modal/list/multi-window Electron verification flow
+- [Connect your MCP client](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/connect-your-mcp-client.md): wire the published package into Claude Code, Codex, Claude Desktop, Cursor, VS Code, opencode, or any MCP host (npx/global/local command forms), verify it connected, troubleshoot stdio/config failures
+- [Launch, attach, or inject](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/launch-or-attach.md): the three ways to get a session against an app
+- [Assert UI state](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/assert-ui-state.md): refs, the expect family, waits, snapshot diffs
+- [Type into code editors](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/type-into-code-editors.md): the reliable Monaco/EditContext/CodeMirror typing path (electron_type_into_editor), replace and clear, the auto-pairing caveat, attached-not-visible waits, and verifying the text landed
+- [Capture diagnostics](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/capture-diagnostics.md): screenshots, console logs, dialogs, session traces
+- [Load, configure, and diagnose plugins](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/plugins.md): explicit plugin loading, narrow gates, and effective configuration
+- [Migrate from electron-driver](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/migrate-from-electron-driver.md): tool-by-tool mapping
+- [Choose an Electron MCP server](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/choosing-an-electron-mcp-server.md): capability-first workflow comparison and a reproducible evaluation checklist
+- [Compatibility](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/compatibility.md): verified runtime, platform, and transport combinations plus explicit limits
+- [Concepts](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/concepts.md): the agent-native model and why -- envelope, refs, snapshots, retrying assertions, sessions/transports, eval and plugins -- each linked to its ADR
+- [Security model](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/guides/security-model.md): trust boundaries, the controls behind --allow-eval, residual risks, and a deployment checklist
+- [Architecture decisions](https://github.com/electron-stagewright/electron-stagewright/blob/main/docs/adr/README.md): the numbered design record
 
 ## Optional
 
-- [Example app and scripted session](examples/minimal-app/README.md): the runnable hello world
-- [Contributing](.github/CONTRIBUTING.md): conventions and the public-repo content policy
-- [Governance](.github/GOVERNANCE.md): roles, decision-making, and the co-maintainer path
+- [Example app and scripted session](https://github.com/electron-stagewright/electron-stagewright/blob/main/examples/minimal-app/README.md): the runnable hello world
+- [Contributing](https://github.com/electron-stagewright/electron-stagewright/blob/main/.github/CONTRIBUTING.md): conventions and the public-repo content policy
+- [Governance](https://github.com/electron-stagewright/electron-stagewright/blob/main/.github/GOVERNANCE.md): roles, decision-making, and the co-maintainer path
