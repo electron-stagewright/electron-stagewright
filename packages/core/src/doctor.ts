@@ -7,6 +7,7 @@
 import { access, readFile, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 
 import { INSTALL_ELECTRON_REMEDY, inspectDefaultElectron } from './runtime/default-electron.js'
 import {
@@ -94,6 +95,8 @@ export interface DoctorDeps {
   readonly platform?: NodeJS.Platform
   readonly env?: NodeJS.ProcessEnv
   readonly resolvePackage?: (name: 'playwright' | 'electron') => Promise<void>
+  /** Directory of a copy the current project has but the server cannot resolve. */
+  readonly findProjectCopy?: (name: 'playwright' | 'electron') => string | undefined
   readonly inspectDirectory?: (
     path: string,
     requireWritable: boolean,
@@ -119,6 +122,28 @@ async function resolvePackage(name: 'playwright' | 'electron'): Promise<void> {
     return
   }
   createRequire(import.meta.url).resolve(`${name}/package.json`)
+}
+
+// `npx --package` installs only what the project at the working directory lacks, so a peer the
+// project already has at that version never lands beside core.
+function findProjectCopy(name: 'playwright' | 'electron'): string | undefined {
+  const manifest = `${name}/package.json`
+  try {
+    createRequire(import.meta.url).resolve(manifest)
+    return undefined
+  } catch {
+    // Not resolvable by the server; see whether the project has it.
+  }
+  try {
+    return dirname(createRequire(join(process.cwd(), 'noop.js')).resolve(manifest))
+  } catch {
+    return undefined
+  }
+}
+
+/** Hint for a peer `npx` left out of its install because the current project already had it. */
+export function npxSkippedPeerHint(name: string, projectCopy: string): string {
+  return `npx reused ${name} from the current project (${projectCopy}) instead of installing it beside the server. Add --prefix ~/ after -y in every npx command for this server so npx installs the whole --package list.`
 }
 
 async function packageVersion(name: 'playwright' | 'electron'): Promise<string | undefined> {
@@ -205,6 +230,7 @@ function nodeCheck(nodeVersion: string): DoctorCheck {
 async function packageCheck(
   name: 'playwright' | 'electron',
   resolve: (name: 'playwright' | 'electron') => Promise<void>,
+  projectCopyOf: (name: 'playwright' | 'electron') => string | undefined,
 ): Promise<DoctorCheck> {
   try {
     await resolve(name)
@@ -214,17 +240,20 @@ async function packageCheck(
       message: `${name} is resolvable by the server process.`,
     }
   } catch (cause) {
-    const hint =
+    const remedy =
       name === 'playwright'
-        ? 'Install it beside the server: npm install playwright.'
+        ? 'Add --package playwright@<version> to the npx command that starts the server, or install it beside core.'
         : `${INSTALL_ELECTRON_REMEDY} If the package itself is missing, add --package electron@<version> to that list first. Alternatively pass executablePath to electron_launch.`
+    const projectCopy = projectCopyOf(name)
     return {
       id: name,
       status: 'fail',
       message: `${name} is not usable by the server process: ${
         cause instanceof Error ? cause.message : String(cause)
       }`,
-      hint,
+      hint:
+        projectCopy !== undefined ? `${npxSkippedPeerHint(name, projectCopy)} ${remedy}` : remedy,
+      ...(projectCopy !== undefined ? { details: { project_copy: projectCopy } } : {}),
     }
   }
 }
@@ -486,6 +515,7 @@ export async function runDoctorChecks(
   deps: DoctorDeps = {},
 ): Promise<DoctorReport> {
   const resolve = deps.resolvePackage ?? resolvePackage
+  const projectCopyOf = deps.findProjectCopy ?? findProjectCopy
   const inspect = deps.inspectDirectory ?? inspectDirectory
   const platform = deps.platform ?? process.platform
   const env = deps.env ?? process.env
@@ -493,8 +523,8 @@ export async function runDoctorChecks(
   const projectRuntime = await inspectProjectRuntime(opts.appRoot, serverRuntime, deps)
   const checks = [
     nodeCheck(deps.nodeVersion ?? process.version),
-    await packageCheck('playwright', resolve),
-    await packageCheck('electron', resolve),
+    await packageCheck('playwright', resolve, projectCopyOf),
+    await packageCheck('electron', resolve, projectCopyOf),
     displayCheck(platform, env),
     await directoryCheck('app_root', opts.appRoot, inspect),
     await directoryCheck('screenshot_dir', opts.screenshotDir, inspect),

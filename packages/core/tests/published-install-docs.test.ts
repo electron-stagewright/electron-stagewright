@@ -104,6 +104,31 @@ describe('published-install documentation', () => {
     expect(pluginsGuide).toContain(`${TRACE_PACKAGE.name}@${TRACE_PACKAGE.version}`)
   })
 
+  it('keeps npx from reusing a project copy of a pinned package', async () => {
+    const sources = [
+      'README.md',
+      'llms.txt',
+      'packages/core/README.md',
+      'docs/guides/connect-your-mcp-client.md',
+      'docs/guides/demo.md',
+      'docs/guides/plugins.md',
+    ]
+    const missing: string[] = []
+    for (const source of sources) {
+      const text = await readRepoFile(...source.split('/'))
+      // Without --prefix, npx leaves out any listed package the project at the cwd already has.
+      const commands = [...text.matchAll(/npx(?:\.cmd)? -y\b|"-y",/g)]
+      expect(commands.length, source).toBeGreaterThan(0)
+      for (const command of commands) {
+        const rest = text.slice((command.index ?? 0) + command[0].length)
+        if (!/^(?: --prefix ~\/ |\s*"--prefix",\s*"~\/")/.test(rest)) {
+          missing.push(`${source}: ${text.slice(command.index, (command.index ?? 0) + 60)}`)
+        }
+      }
+    }
+    expect(missing, 'add --prefix ~/ right after -y').toEqual([])
+  })
+
   it('pins every documented package to the version this tree publishes', async () => {
     const packageVersions = new Map<string, string>()
     const packageDirs = await readdir(path.join(REPO_ROOT, 'packages'))

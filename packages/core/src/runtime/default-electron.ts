@@ -17,6 +17,10 @@ import { dirname, join } from 'node:path'
 export const INSTALL_ELECTRON_REMEDY =
   'Run Electron\'s install-electron bin with the same npx --package list as the server (replace the trailing electron-stagewright with install-electron), or "pnpm exec install-electron" in a project.'
 
+/** `npx --package` skips a package the project at the working directory already has. */
+export const NPX_PREFIX_REMEDY =
+  'If the server runs through npx inside a project that already has this package, add --prefix ~/ after -y so npx installs it beside the server.'
+
 export type DefaultElectronStatus =
   | { readonly ok: true; readonly version?: string }
   | {

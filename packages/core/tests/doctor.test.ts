@@ -124,6 +124,45 @@ describe('runDoctorChecks', () => {
     expect(electronHint).toContain('pnpm exec install-electron')
   })
 
+  it('names the project copy npx reused instead of installing a peer beside the server', async () => {
+    const report = await runDoctorChecks(
+      { allowEvalMain: false, allowEvalRenderer: false },
+      {
+        ...READY_DEPS,
+        resolvePackage: async (name) => {
+          if (name === 'playwright') throw new Error("Cannot find module 'playwright/package.json'")
+        },
+        findProjectCopy: (name) =>
+          name === 'playwright' ? '/work/app/node_modules/playwright' : undefined,
+      },
+    )
+
+    const playwright = report.checks.find((check) => check.id === 'playwright')
+    expect(playwright?.status).toBe('fail')
+    expect(playwright?.hint).toContain('/work/app/node_modules/playwright')
+    expect(playwright?.hint).toContain('--prefix ~/')
+    expect(playwright?.details).toEqual({ project_copy: '/work/app/node_modules/playwright' })
+    expect(report.checks.find((check) => check.id === 'electron')?.status).toBe('pass')
+  })
+
+  it('keeps the generic peer hint when the project has no copy either', async () => {
+    const report = await runDoctorChecks(
+      { allowEvalMain: false, allowEvalRenderer: false },
+      {
+        ...READY_DEPS,
+        resolvePackage: async () => {
+          throw new Error('Cannot find module')
+        },
+        findProjectCopy: () => undefined,
+      },
+    )
+
+    const playwright = report.checks.find((check) => check.id === 'playwright')
+    expect(playwright?.hint).toContain('--package playwright@<version>')
+    expect(playwright?.hint).not.toContain('reused')
+    expect(playwright?.details).toBeUndefined()
+  })
+
   it('checks optional peers through package metadata without importing their entry points', async () => {
     const report = await runDoctorChecks(
       { allowEvalMain: false, allowEvalRenderer: false },

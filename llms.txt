@@ -9,16 +9,18 @@
 Requires Node.js 24 or newer. Run these from a terminal before the MCP host starts the server; keep
 the `--package` list identical in all three commands. `install-electron` downloads Electron's
 binary up front, because its first-use download prints to stdout and would corrupt the MCP stdio
-stream. `doctor --json` must report `"ok": true`.
+stream. `doctor --json` must report `"ok": true`. Keep `--prefix ~/`: without it, `npx` skips any
+listed package the current project already has, and the server cannot load it.
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 install-electron
-npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright doctor --json
+npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 install-electron
+npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright doctor --json
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright --tool-profile essential
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 \
+  electron-stagewright --tool-profile essential
 ```
 
 Then `claude mcp list` should show the server as connected. First call: `electron_launch` with the
