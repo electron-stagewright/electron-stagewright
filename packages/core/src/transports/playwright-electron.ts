@@ -39,6 +39,11 @@ import { join } from 'node:path'
 
 import { StagewrightError } from '../errors/registry.js'
 import {
+  INSTALL_ELECTRON_REMEDY,
+  inspectDefaultElectron,
+  type DefaultElectronStatus,
+} from '../runtime/default-electron.js'
+import {
   NOTIFICATION_REGISTRY_GLOBAL,
   TRAY_REGISTRY_GLOBAL,
   buildInstrumentationShim,
@@ -388,10 +393,38 @@ export interface PlaywrightLaunchOptions {
   readonly timeout?: number
 }
 
-async function loadPlaywrightElectron(): Promise<PWElectron> {
+export interface LoadPlaywrightElectronDeps {
+  readonly importPlaywright?: () => Promise<PWModule>
+  readonly inspectElectron?: () => Promise<DefaultElectronStatus>
+}
+
+function electronRuntimeMissing(
+  reason: 'package_missing' | 'binary_missing',
+  message: string,
+  details: Record<string, unknown> = {},
+): StagewrightError {
+  const remedy =
+    reason === 'binary_missing'
+      ? INSTALL_ELECTRON_REMEDY
+      : 'Add --package electron@<version> to the npx command that starts the server, then run install-electron with that list.'
+  return new StagewrightError(
+    'ELECTRON_RUNTIME_MISSING',
+    `${message} ${remedy} Alternatively pass executablePath, or runtime:"project" with --app-root.`,
+    { transport: TRANSPORT_ID, reason, ...details },
+  )
+}
+
+/**
+ * Load Playwright's `_electron`. A launch without `executablePath` makes Playwright load the
+ * `electron` package, which can download a missing binary and write to stdout, so it is refused
+ * first when that would happen.
+ */
+export async function loadPlaywrightElectron(
+  deps: LoadPlaywrightElectronDeps = {},
+): Promise<PWElectron> {
   let mod: PWModule
   try {
-    mod = (await import('playwright')) as PWModule
+    mod = await (deps.importPlaywright ?? (async () => (await import('playwright')) as PWModule))()
   } catch (cause) {
     throw new StagewrightError(
       'TRANSPORT_UNSUPPORTED',
@@ -410,7 +443,22 @@ async function loadPlaywrightElectron(): Promise<PWElectron> {
       { transport: TRANSPORT_ID },
     )
   }
-  return electron
+  const inspect = deps.inspectElectron ?? (() => inspectDefaultElectron())
+  return {
+    async launch(opts) {
+      if (opts.executablePath === undefined) {
+        const runtime = await inspect()
+        if (!runtime.ok) {
+          throw electronRuntimeMissing(
+            runtime.reason,
+            runtime.message,
+            runtime.version !== undefined ? { electron_version: runtime.version } : {},
+          )
+        }
+      }
+      return electron.launch(opts)
+    },
+  }
 }
 
 function mergeEnv(
@@ -2324,12 +2372,13 @@ export class PlaywrightElectronTransport implements ITransport {
       app = await electron.launch(launchOpts)
     } catch (cause) {
       await removeShimDir(shimDir)
+      if (cause instanceof StagewrightError) throw cause
       const message = cause instanceof Error ? cause.message : String(cause)
       if (opts.executablePath === undefined && isMissingElectronRuntime(message)) {
-        throw new StagewrightError(
-          'TRANSPORT_UNSUPPORTED',
-          'Electron runtime is not installed for the server process. Install electron beside the server, run npx with --package electron, or pass executablePath to electron_launch.',
-          { transport: TRANSPORT_ID, appPath: opts.appPath ?? '' },
+        throw electronRuntimeMissing(
+          'package_missing',
+          'The electron package is not resolvable by the server process.',
+          { appPath: opts.appPath ?? '' },
         )
       }
       const isTimeout = /timeout/i.test(message)

@@ -8,6 +8,7 @@ import { access, readFile, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { createRequire } from 'node:module'
 
+import { INSTALL_ELECTRON_REMEDY, inspectDefaultElectron } from './runtime/default-electron.js'
 import {
   inventoryNativeAddons,
   probeElectronRuntime,
@@ -110,13 +111,14 @@ async function resolvePackage(name: 'playwright' | 'electron'): Promise<void> {
   // Doctor only needs to establish that the optional peer can be resolved. Importing Electron's
   // package entry may download a missing binary and print progress to stdout, which would corrupt
   // the documented machine-readable `doctor --json` channel.
-  const requireFromHere = createRequire(import.meta.url)
-  const packageJsonPath = requireFromHere.resolve(`${name}/package.json`)
   if (name === 'electron') {
-    // A resolvable package without its dist binary cannot launch an app. Validate that binary by
-    // reading Electron's metadata instead of importing the package entry and triggering a download.
-    await resolveElectronExecutableFromPackageManifest(packageJsonPath, {})
+    // Same metadata check electron_launch runs, so doctor passes only when a launch would not
+    // trigger that download.
+    const runtime = await inspectDefaultElectron()
+    if (!runtime.ok) throw new Error(runtime.message)
+    return
   }
+  createRequire(import.meta.url).resolve(`${name}/package.json`)
 }
 
 async function packageVersion(name: 'playwright' | 'electron'): Promise<string | undefined> {
@@ -215,11 +217,11 @@ async function packageCheck(
     const hint =
       name === 'playwright'
         ? 'Install it beside the server: npm install playwright.'
-        : 'Install it beside the server, pass executablePath to electron_launch, or run npx with --package electron.'
+        : `${INSTALL_ELECTRON_REMEDY} If the package itself is missing, add --package electron@<version> to that list first. Alternatively pass executablePath to electron_launch.`
     return {
       id: name,
       status: 'fail',
-      message: `${name} is not resolvable by the server process: ${
+      message: `${name} is not usable by the server process: ${
         cause instanceof Error ? cause.message : String(cause)
       }`,
       hint,

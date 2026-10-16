@@ -53,7 +53,10 @@ retryable), and `LAUNCH_FAILED` (the packaged app could not start or exited befo
 renderer appeared).
 `FUSES_BLOCK_LAUNCH` applies only to a `main`-based Playwright launch whose selected runtime disables
 Electron's Node CLI inspect fuse. For a shipped build, omit `main` and launch the executable over
-CDP instead. Unknown or unreadable fuse state does not block a Playwright launch. When the server was started with
+CDP instead. Unknown or unreadable fuse state does not block a Playwright launch.
+`ELECTRON_RUNTIME_MISSING` means a `main`-based launch without `executablePath` found no downloaded
+Electron binary for the server. Electron fetches it on first use, which would write to the MCP
+stream, so run `install-electron` with the server's `--package` list first. When the server was started with
 `--app-root <dir>`, launch paths outside that root are refused — useful when the operator wants to
 confine what an agent can start.
 

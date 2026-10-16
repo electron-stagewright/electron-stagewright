@@ -315,3 +315,19 @@ reaches the element, and the press must land on it. Added one code to the regist
   `details.surface_id`, `details.attempts`). A probe that disappears because the frame navigated
   cannot be checked and never fails the action. Root surfaces and in-process frames are unaffected,
   since their hit testing is synchronous.
+
+## Status Update (2026-10-15) — added `ELECTRON_RUNTIME_MISSING`
+
+A `main`-based launch without `executablePath` lets Playwright load the `electron` package. From
+Electron 42 that package has no install script: its entry downloads the binary on first load and
+prints progress to stdout, which on the stdio transport corrupts the MCP stream and stalls the call
+for a ~100 MB download. The Playwright loader now checks Electron's metadata first, using the
+package's own "already installed" test without evaluating it, and refuses the launch instead of
+downloading mid-session. Added one code to the registry:
+
+- **`ELECTRON_RUNTIME_MISSING`** — `http: 424`, `retryable: false`, hint: run `install-electron`
+  with the same `npx --package` list as the server, or pass `executablePath`. `details.reason` is
+  `binary_missing` or `package_missing`, with `details.electron_version` when the package resolved.
+  The `Cannot find module 'electron'` case, previously `TRANSPORT_UNSUPPORTED`, now uses this code
+  too, since the remedy is the same. `doctor`'s `electron` check runs the same test, so it passes
+  only when a launch would not download.

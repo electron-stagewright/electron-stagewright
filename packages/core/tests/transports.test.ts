@@ -38,7 +38,10 @@ import type {
   PWRequest,
   PWRoute,
 } from '../src/transports/playwright-electron-api.js'
-import { buildPlaywrightLaunchOptions } from '../src/transports/playwright-electron.js'
+import {
+  buildPlaywrightLaunchOptions,
+  loadPlaywrightElectron,
+} from '../src/transports/playwright-electron.js'
 import { NOTIFICATION_HOOK_BODY } from '../src/transports/native-instrumentation.js'
 import {
   bodyContentTypeAllowed,
@@ -605,9 +608,54 @@ describe('PlaywrightElectronTransport', () => {
     })
 
     await expect(missingRuntime.launch({ appPath: '/abs/main.js' })).rejects.toMatchObject({
-      code: 'TRANSPORT_UNSUPPORTED',
+      code: 'ELECTRON_RUNTIME_MISSING',
       message: expect.stringContaining('--package electron'),
+      details: { reason: 'package_missing' },
     })
+  })
+
+  it('refuses a default-runtime launch before Playwright can download a missing binary', async () => {
+    const launched: unknown[] = []
+    const electron = await loadPlaywrightElectron({
+      importPlaywright: async () => ({
+        _electron: {
+          launch: (opts) => {
+            launched.push(opts)
+            return Promise.reject(new Error('launched'))
+          },
+        },
+      }),
+      inspectElectron: async () => ({
+        ok: false,
+        reason: 'binary_missing',
+        message: 'electron@42.11.10 has no binary.',
+        version: '42.11.10',
+      }),
+    })
+    const transport = new PlaywrightElectronTransport({ loadElectron: async () => electron })
+
+    await expect(transport.launch({ appPath: '/abs/main.js' })).rejects.toMatchObject({
+      code: 'ELECTRON_RUNTIME_MISSING',
+      message: expect.stringContaining('install-electron'),
+      details: { reason: 'binary_missing', electron_version: '42.11.10' },
+    })
+    expect(launched).toEqual([])
+  })
+
+  it('skips the default-runtime check when the caller names an executable', async () => {
+    let inspected = false
+    const electron = await loadPlaywrightElectron({
+      importPlaywright: async () => ({
+        _electron: { launch: () => Promise.reject(new Error('launched')) },
+      }),
+      inspectElectron: async () => {
+        inspected = true
+        return { ok: true }
+      },
+    })
+
+    await expect(electron.launch({ executablePath: '/abs/Electron' })).rejects.toThrow('launched')
+    expect(inspected).toBe(false)
   })
 
   it('maps a main-process appPath to Playwright args instead of executablePath', () => {

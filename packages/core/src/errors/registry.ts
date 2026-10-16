@@ -48,6 +48,11 @@ export const ERROR_CODES = {
     retryable: false,
     hint: 'The packaged app could not be started or exited before a driveable Electron window became available; inspect its path, startup configuration, and logs.',
   },
+  ELECTRON_RUNTIME_MISSING: {
+    http: 424,
+    retryable: false,
+    hint: 'The Electron runtime the server launches with is not installed. Run install-electron with the same npx --package list as the server, or pass executablePath.',
+  },
   FUSES_BLOCK_LAUNCH: {
     http: 409,
     retryable: false,
