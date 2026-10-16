@@ -12,12 +12,12 @@ binary up front, because its first-use download prints to stdout and would corru
 stream. `doctor --json` must report `"ok": true`.
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 install-electron
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright doctor --json
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright --tool-profile essential
 ```
 

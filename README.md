@@ -56,15 +56,15 @@ binary with Electron's `install-electron` bin, then run `doctor`, which reports 
 exits 0 when every required check passes:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 install-electron
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright doctor --json
 ```
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright --tool-profile essential
 ```
 
@@ -104,7 +104,7 @@ Shared project `.mcp.json` shape:
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.6.1",
+        "@electron-stagewright/core@0.6.2",
         "--package",
         "playwright@1.63.0",
         "--package",
