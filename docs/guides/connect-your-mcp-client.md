@@ -35,7 +35,7 @@ and gives `--app-root` a stable security boundary.
 
   ```sh
   cd /absolute/path/to/your-electron-app
-  pnpm add --save-dev --save-exact @electron-stagewright/core@0.6.1 playwright@1.63.0
+  pnpm add --save-dev --save-exact @electron-stagewright/core@0.6.2 playwright@1.63.0
   # Only when the project does not already pin a compatible Electron:
   pnpm add --save-dev --save-exact electron@42.11.10
   # Electron fetches its binary on first use; download it now, outside any MCP session:
@@ -77,7 +77,7 @@ and gives `--app-root` a stable security boundary.
     "args": [
       "-y",
       "--package",
-      "@electron-stagewright/core@0.6.1",
+      "@electron-stagewright/core@0.6.2",
       "--package",
       "playwright@1.63.0",
       "--package",
@@ -103,7 +103,7 @@ and gives `--app-root` a stable security boundary.
       "npx.cmd",
       "-y",
       "--package",
-      "@electron-stagewright/core@0.6.1",
+      "@electron-stagewright/core@0.6.2",
       "--package",
       "playwright@1.63.0",
       "--package",
@@ -121,9 +121,9 @@ and gives `--app-root` a stable security boundary.
   terminal:
 
   ```sh
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
     --package electron@42.11.10 install-electron
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
     --package electron@42.11.10 electron-stagewright doctor --json \
     --app-root /absolute/path/to/your-electron-app
   ```
@@ -139,7 +139,7 @@ and gives `--app-root` a stable security boundary.
   reproduce and upgrade together.
 
   ```sh
-  pnpm add --global --save-exact @electron-stagewright/core@0.6.1 \
+  pnpm add --global --save-exact @electron-stagewright/core@0.6.2 \
     playwright@1.63.0 electron@42.11.10
   install-electron
   ```
@@ -186,7 +186,7 @@ picked above:
 
 ```sh
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright --tool-profile essential
 ```
 
@@ -201,7 +201,7 @@ Run the terminal bootstrap above first, then register the server with `codex mcp
 
 ```sh
 codex mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright --tool-profile essential
 ```
 
@@ -213,7 +213,7 @@ server:
 command = "npx"
 args = [
   "-y",
-  "--package", "@electron-stagewright/core@0.6.1",
+  "--package", "@electron-stagewright/core@0.6.2",
   "--package", "playwright@1.63.0",
   "--package", "electron@42.11.10",
   "electron-stagewright",
@@ -290,7 +290,7 @@ VS Code reads `.vscode/mcp.json` in the workspace. Its top-level key is `servers
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.6.1",
+        "@electron-stagewright/core@0.6.2",
         "--package",
         "playwright@1.63.0",
         "--package",
@@ -323,7 +323,7 @@ one array:
         "npx",
         "-y",
         "--package",
-        "@electron-stagewright/core@0.6.1",
+        "@electron-stagewright/core@0.6.2",
         "--package",
         "playwright@1.63.0",
         "--package",
@@ -352,7 +352,7 @@ Node.js:
 ```json
 {
   "command": "/Users/you/.local/share/fnm/aliases/default/bin/npx",
-  "args": ["-y", "--package", "@electron-stagewright/core@0.6.1", "..."],
+  "args": ["-y", "--package", "@electron-stagewright/core@0.6.2", "..."],
   "env": { "PATH": "/Users/you/.local/share/fnm/aliases/default/bin:/usr/bin:/bin" }
 }
 ```
@@ -419,7 +419,7 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
   "args": [
     "-y",
     "--package",
-    "@electron-stagewright/core@0.6.1",
+    "@electron-stagewright/core@0.6.2",
     "--package",
     "playwright@1.63.0",
     "--package",

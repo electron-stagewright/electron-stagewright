@@ -25,23 +25,23 @@ the binary with Electron's `install-electron` bin using the same package list, t
 `doctor` reports `"ok": true`:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 install-electron
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright doctor --json
 ```
 
 Then configure or run the normal server command:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright
 ```
 
 Or install all three once and run the bin directly:
 
 ```bash
-npm install -g @electron-stagewright/core@0.6.1 playwright@1.63.0 electron@42.11.10
+npm install -g @electron-stagewright/core@0.6.2 playwright@1.63.0 electron@42.11.10
 install-electron
 electron-stagewright
 ```
@@ -80,7 +80,7 @@ Useful CLI flags:
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright --tool-profile essential
 ```
 

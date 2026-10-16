@@ -16,13 +16,13 @@ with `install-electron` first, outside the stdio protocol, then confirm with `do
 
 ```sh
 npx -y \
-  --package @electron-stagewright/core@0.6.1 \
+  --package @electron-stagewright/core@0.6.2 \
   --package @electron-stagewright/demo@0.1.0 \
   --package playwright@1.63.0 \
   --package electron@42.11.10 \
   install-electron
 npx -y \
-  --package @electron-stagewright/core@0.6.1 \
+  --package @electron-stagewright/core@0.6.2 \
   --package @electron-stagewright/demo@0.1.0 \
   --package playwright@1.63.0 \
   --package electron@42.11.10 \
@@ -45,7 +45,7 @@ Use `npx` as the command and include the demo package before the CLI and `--demo
 
 ```sh
 claude mcp add electron-stagewright-demo -- \
-  npx -y --package @electron-stagewright/core@0.6.1 --package @electron-stagewright/demo@0.1.0 \
+  npx -y --package @electron-stagewright/core@0.6.2 --package @electron-stagewright/demo@0.1.0 \
   --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright --demo
 ```
 
@@ -61,7 +61,7 @@ Add this entry to `claude_desktop_config.json`, then fully restart Claude Deskto
       "args": [
         "-y",
         "--package",
-        "@electron-stagewright/core@0.6.1",
+        "@electron-stagewright/core@0.6.2",
         "--package",
         "@electron-stagewright/demo@0.1.0",
         "--package",

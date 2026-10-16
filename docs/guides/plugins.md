@@ -16,14 +16,14 @@ confirms the setup:
 
 ```sh
 npx -y \
-  --package @electron-stagewright/core@0.6.1 \
-  --package @electron-stagewright/plugin-trace@0.4.1 \
+  --package @electron-stagewright/core@0.6.2 \
+  --package @electron-stagewright/plugin-trace@0.4.2 \
   --package playwright@1.63.0 \
   --package electron@42.11.10 \
   install-electron
 npx -y \
-  --package @electron-stagewright/core@0.6.1 \
-  --package @electron-stagewright/plugin-trace@0.4.1 \
+  --package @electron-stagewright/core@0.6.2 \
+  --package @electron-stagewright/plugin-trace@0.4.2 \
   --package playwright@1.63.0 \
   --package electron@42.11.10 \
   electron-stagewright doctor --json --plugin trace
@@ -33,8 +33,8 @@ Then use the same packages with the plugin flag:
 
 ```sh
 npx -y \
-  --package @electron-stagewright/core@0.6.1 \
-  --package @electron-stagewright/plugin-trace@0.4.1 \
+  --package @electron-stagewright/core@0.6.2 \
+  --package @electron-stagewright/plugin-trace@0.4.2 \
   --package playwright@1.63.0 \
   --package electron@42.11.10 \
   electron-stagewright --plugin trace
@@ -46,9 +46,9 @@ For an MCP client, preserve the same package and flag order in its `args`:
 [
   "-y",
   "--package",
-  "@electron-stagewright/core@0.6.1",
+  "@electron-stagewright/core@0.6.2",
   "--package",
-  "@electron-stagewright/plugin-trace@0.4.1",
+  "@electron-stagewright/plugin-trace@0.4.2",
   "--package",
   "playwright@1.63.0",
   "--package",
