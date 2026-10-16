@@ -20,7 +20,8 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      # This intentionally installs no workspace dependencies. From an empty npm/Electron cache the
-      # helper follows the documented install: install-electron, then doctor, which must emit a single
-      # valid JSON document with the electron check passing.
+      # This intentionally installs no workspace dependencies. From an empty npm/Electron cache, and
+      # from inside a project that already has the pinned Playwright and Electron, the helper follows
+      # the documented install: install-electron, then doctor, which must emit a single valid JSON
+      # document with the playwright and electron checks passing.
       - run: node scripts/published-npx-smoke.mjs

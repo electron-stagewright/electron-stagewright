@@ -56,22 +56,26 @@ binary with Electron's `install-electron` bin, then run `doctor`, which reports 
 exits 0 when every required check passes:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 install-electron
-npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright doctor --json
+npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 install-electron
+npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright doctor --json
 ```
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright --tool-profile essential
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 \
+  electron-stagewright --tool-profile essential
 ```
 
 `claude mcp list` should then show the server as connected (or run `/mcp` inside a session), and
 its tools appear as `mcp__electron-stagewright__electron_launch` and so on. Keep the `--package`
 list identical across all three commands: `npx` caches each list separately, so adding the demo or
-a plugin package means running `install-electron` and `doctor` again with the new list. To move to
+a plugin package means running `install-electron` and `doctor` again with the new list. Keep
+`--prefix ~/` too: without it, `npx` skips any listed package the current project already has at
+that version (an Electron app often has both Playwright and Electron), and the server, which runs
+from npx's cache, cannot load it. The server still runs in the current directory. To move to
 a newer release later, follow
 [Update to a new release](docs/guides/connect-your-mcp-client.md#update-to-a-new-release).
 
@@ -103,6 +107,8 @@ Shared project `.mcp.json` shape:
       "command": "npx",
       "args": [
         "-y",
+        "--prefix",
+        "~/",
         "--package",
         "@electron-stagewright/core@0.6.2",
         "--package",

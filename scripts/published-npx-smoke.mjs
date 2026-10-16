@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,7 +26,46 @@ function exactVersion(value, packageName) {
 
 /** The documented `npx` invocation for one package list; only the trailing command differs. */
 export function npxArguments(packages, command) {
-  return ['-y', ...packages.flatMap((packageName) => ['--package', packageName]), ...command]
+  return [
+    '-y',
+    '--prefix',
+    '~/',
+    ...packages.flatMap((packageName) => ['--package', packageName]),
+    ...command,
+  ]
+}
+
+/**
+ * Stand in for an Electron app project that already depends on the pinned launch peers. Without
+ * `--prefix`, `npx` run from here leaves those peers out of its cache, where core cannot load them.
+ */
+export async function writeProjectFixture(directory, packages) {
+  const peers = packages
+    .map((specifier) => /^(playwright|electron)@(.+)$/.exec(specifier))
+    .filter((match) => match !== null)
+    .map(([, name, version]) => ({ name, version }))
+  await mkdir(directory, { recursive: true })
+  await writeFile(
+    path.join(directory, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: 'published-npx-smoke-project',
+        private: true,
+        devDependencies: Object.fromEntries(peers.map(({ name, version }) => [name, version])),
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  for (const { name, version } of peers) {
+    const packageDirectory = path.join(directory, 'node_modules', name)
+    await mkdir(packageDirectory, { recursive: true })
+    await writeFile(
+      path.join(packageDirectory, 'package.json'),
+      `${JSON.stringify({ name, version })}\n`,
+    )
+  }
+  return peers.map(({ name }) => name)
 }
 
 const INSTALL_ELECTRON = ['install-electron']
@@ -95,10 +134,11 @@ export function assertDoctorReport(outcome) {
   return report
 }
 
-function summarize(report, packages) {
+function summarize(report, packages, projectPeers) {
   const status = (id) => report.checks.find((check) => check?.id === id)?.status ?? 'absent'
   return [
     `published npx smoke passed after a clean-cache bootstrap: ${packages.join(', ')}`,
+    `  cwd: a project that already has ${projectPeers.join(', ')}`,
     `  doctor.ok=${report.ok} node=${status('node')} playwright=${status('playwright')} electron=${status('electron')}`,
   ].join('\n')
 }
@@ -112,8 +152,9 @@ async function main() {
   ]
   const scratch = await mkdtemp(path.join(tmpdir(), 'stagewright-published-npx-'))
   const home = path.join(scratch, 'home')
+  const project = path.join(scratch, 'project')
   const options = {
-    cwd: scratch,
+    cwd: project,
     env: {
       ...process.env,
       HOME: home,
@@ -128,11 +169,14 @@ async function main() {
     maxBuffer: 4 * 1024 * 1024,
   }
   try {
+    // `--prefix` must name an existing directory, which a real home always is.
+    await mkdir(home, { recursive: true })
+    const projectPeers = await writeProjectFixture(project, packages)
     // The documented first step: Electron downloads its binary lazily, so fetch it outside any MCP
     // transport. Its progress output is expected and not part of the contract.
     await execPackageCommand('npx', npxArguments(packages, INSTALL_ELECTRON), options)
     const report = assertDoctorReport(await runPublishedDoctor(packages, options))
-    process.stderr.write(`${summarize(report, packages)}\n`)
+    process.stderr.write(`${summarize(report, packages, projectPeers)}\n`)
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }

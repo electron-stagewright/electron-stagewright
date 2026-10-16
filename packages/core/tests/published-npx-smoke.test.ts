@@ -7,6 +7,8 @@
  * diagnosable failure message.
  */
 
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -16,12 +18,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..')
 const SMOKE = pathToFileURL(path.join(REPO_ROOT, 'scripts', 'published-npx-smoke.mjs')).href
 
-const { assertDoctorReport, npxArguments } = (await import(SMOKE)) as {
+const { assertDoctorReport, npxArguments, writeProjectFixture } = (await import(SMOKE)) as {
   assertDoctorReport: (outcome: { stdout: string; stderr: string; code: number }) => {
     readonly ok: boolean
     readonly checks: readonly { readonly id: string; readonly status: string }[]
   }
   npxArguments: (packages: readonly string[], command: readonly string[]) => string[]
+  writeProjectFixture: (directory: string, packages: readonly string[]) => Promise<string[]>
 }
 
 function report(overrides: readonly { id: string; status: string }[] = []): string {
@@ -60,6 +63,37 @@ describe('published npx smoke assertions', () => {
 
     expect(install.at(-1)).toBe('install-electron')
     expect(install.slice(0, -1)).toEqual(doctor.slice(0, -3))
+  })
+
+  it('points npx at the home directory so a project copy of a peer is not reused', () => {
+    expect(npxArguments(['playwright@1.0.0'], ['install-electron']).slice(0, 3)).toEqual([
+      '-y',
+      '--prefix',
+      '~/',
+    ])
+  })
+
+  it('runs from a project that already has the pinned launch peers', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'stagewright-npx-fixture-'))
+    try {
+      const peers = await writeProjectFixture(directory, [
+        '@electron-stagewright/core@1.0.0',
+        'playwright@1.2.3',
+        'electron@4.5.6',
+      ])
+      const manifest = JSON.parse(
+        await readFile(path.join(directory, 'node_modules', 'playwright', 'package.json'), 'utf8'),
+      ) as unknown
+
+      expect(peers).toEqual(['playwright', 'electron'])
+      expect(manifest).toEqual({ name: 'playwright', version: '1.2.3' })
+      expect((await readdir(path.join(directory, 'node_modules'))).sort()).toEqual([
+        'electron',
+        'playwright',
+      ])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('rejects stdout polluted by an installer, which would break an MCP host', () => {

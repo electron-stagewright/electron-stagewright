@@ -40,6 +40,7 @@ import { join } from 'node:path'
 import { StagewrightError } from '../errors/registry.js'
 import {
   INSTALL_ELECTRON_REMEDY,
+  NPX_PREFIX_REMEDY,
   inspectDefaultElectron,
   type DefaultElectronStatus,
 } from '../runtime/default-electron.js'
@@ -406,7 +407,7 @@ function electronRuntimeMissing(
   const remedy =
     reason === 'binary_missing'
       ? INSTALL_ELECTRON_REMEDY
-      : 'Add --package electron@<version> to the npx command that starts the server, then run install-electron with that list.'
+      : `Add --package electron@<version> to the npx command that starts the server, then run install-electron with that list. ${NPX_PREFIX_REMEDY}`
   return new StagewrightError(
     'ELECTRON_RUNTIME_MISSING',
     `${message} ${remedy} Alternatively pass executablePath, or runtime:"project" with --app-root.`,
@@ -428,7 +429,7 @@ export async function loadPlaywrightElectron(
   } catch (cause) {
     throw new StagewrightError(
       'TRANSPORT_UNSUPPORTED',
-      'Playwright peer dependency is not installed. Install with: pnpm add -D playwright',
+      `Playwright peer dependency is not installed. Add --package playwright@<version> to the npx command that starts the server, or install it beside core. ${NPX_PREFIX_REMEDY}`,
       {
         transport: TRANSPORT_ID,
         cause: cause instanceof Error ? cause.message : String(cause),

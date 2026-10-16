@@ -22,20 +22,21 @@ so start the CLI with all three packages available. Before handing the command t
 prepare it once in a terminal: Electron downloads its binary the first time something loads it,
 and that download prints progress to stdout, which would corrupt the host's stdio protocol. Fetch
 the binary with Electron's `install-electron` bin using the same package list, then check that
-`doctor` reports `"ok": true`:
+`doctor` reports `"ok": true`. `--prefix ~/` keeps `npx` from skipping a listed package because the
+current project already has that version, which would leave the server unable to load it:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 install-electron
-npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright doctor --json
+npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 install-electron
+npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright doctor --json
 ```
 
 Then configure or run the normal server command:
 
 ```bash
-npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright
+npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright
 ```
 
 Or install all three once and run the bin directly:
@@ -80,8 +81,9 @@ Useful CLI flags:
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --package @electron-stagewright/core@0.6.2 --package playwright@1.63.0 \
-  --package electron@42.11.10 electron-stagewright --tool-profile essential
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package playwright@1.63.0 --package electron@42.11.10 \
+  electron-stagewright --tool-profile essential
 ```
 
 Run `claude mcp list` to confirm the server is connected; its tools appear as

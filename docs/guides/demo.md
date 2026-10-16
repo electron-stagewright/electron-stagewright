@@ -12,16 +12,18 @@ normal core installation neither loads nor depends on this package.
 
 Prepare a fresh `npx` cache in a terminal before adding this command to an MCP host. Electron
 downloads its binary the first time something loads it and prints progress to stdout, so fetch it
-with `install-electron` first, outside the stdio protocol, then confirm with `doctor`:
+with `install-electron` first, outside the stdio protocol, then confirm with `doctor`. Keep
+`--prefix ~/` in every command so `npx` installs the whole list even inside a project that already
+has Playwright or Electron:
 
 ```sh
-npx -y \
+npx -y --prefix ~/ \
   --package @electron-stagewright/core@0.6.2 \
   --package @electron-stagewright/demo@0.1.0 \
   --package playwright@1.63.0 \
   --package electron@42.11.10 \
   install-electron
-npx -y \
+npx -y --prefix ~/ \
   --package @electron-stagewright/core@0.6.2 \
   --package @electron-stagewright/demo@0.1.0 \
   --package playwright@1.63.0 \
@@ -45,8 +47,9 @@ Use `npx` as the command and include the demo package before the CLI and `--demo
 
 ```sh
 claude mcp add electron-stagewright-demo -- \
-  npx -y --package @electron-stagewright/core@0.6.2 --package @electron-stagewright/demo@0.1.0 \
-  --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright --demo
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.6.2 \
+  --package @electron-stagewright/demo@0.1.0 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright --demo
 ```
 
 ### Claude Desktop
@@ -60,6 +63,8 @@ Add this entry to `claude_desktop_config.json`, then fully restart Claude Deskto
       "command": "npx",
       "args": [
         "-y",
+        "--prefix",
+        "~/",
         "--package",
         "@electron-stagewright/core@0.6.2",
         "--package",
