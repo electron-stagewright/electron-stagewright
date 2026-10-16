@@ -30,10 +30,12 @@ below. Codex: `codex mcp add electron-stagewright -- <the npx command above>`, t
 `startup_timeout_sec = 30` and, on Linux, `env_vars = ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"]`
 on that server in `~/.codex/config.toml`. VS Code: `.vscode/mcp.json` uses a top-level `servers`
 key with `"type": "stdio"`. Desktop hosts opened from the Dock may need the absolute `npx` path and
-an `env.PATH` that contains Node.js. To update later, change every pinned version together (plugins
-need the matching core), rerun `install-electron` and `doctor` with the new list, restart the host,
-and check `runtime.server.core` in the `doctor --json` report; see "Update to a new release" in
-Connect your MCP client.
+an `env.PATH` that contains Node.js. To update later, run `install-electron` and `doctor` with the new
+package list first, then change every pinned version in the host config together (plugins need the
+matching core) while keeping the existing flags (in Claude Code, read them with
+`claude mcp get electron-stagewright`, then remove and add the entry in the same scope), restart the
+host, and check `runtime.server.core` in the `doctor --json` report; see "Update to a new release"
+in Connect your MCP client.
 
 ## Docs
 

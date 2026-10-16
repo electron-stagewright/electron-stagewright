@@ -498,29 +498,39 @@ client over stdio without any host, which is a quick way to confirm the server i
 ## Update to a new release
 
 Every install form above pins exact versions, so nothing updates on its own. Move to a new release
-deliberately:
+deliberately, in this order:
 
-1. **Find the release.** `npm view @electron-stagewright/core version` prints the latest core
-   version. The [release notes](https://github.com/electron-stagewright/electron-stagewright/releases)
-   say what changed and what to act on, and the README quick start always shows the tested
-   Playwright and Electron versions for the current release.
-2. **Change every pin together.** Update core, plus Playwright and Electron when the release moves
-   them. Each `@electron-stagewright/plugin-*` package depends on one exact core version, so bump
-   every plugin you load to the version released with the new core; an old plugin pin installs a
-   second copy of core. `npm view @electron-stagewright/plugin-trace dependencies` shows which core
-   a plugin version needs. The demo package does not depend on core.
-   - **Claude Code:** `claude mcp add` refuses a name that already exists, so remove the entry, then
-     add it again with the new versions:
+1. **Find the release and its package set.** `npm view @electron-stagewright/core version` prints
+   the latest core version. Each
+   [release's notes](https://github.com/electron-stagewright/electron-stagewright/releases) list
+   what changed, what to act on, and the plugin versions that go with that core; the README quick
+   start shows the tested Playwright and Electron versions. Every `@electron-stagewright/plugin-*`
+   package depends on one exact core version, so plan to move each plugin you load together with
+   core; an old plugin pin installs a second copy of core.
+   `npm view @electron-stagewright/plugin-trace dependencies` shows which core a plugin version
+   needs. The demo package does not depend on core.
+2. **Prepare the new package list** before any host uses it. With `npx`, run `install-electron`
+   and `doctor --json` with the new `--package` list and your server flags, exactly as for a first
+   install; the project-local and global forms install and fetch Electron in step 3. `npx` treats a changed list as a separate install, so its Electron binary has to be
+   fetched even when only core changed; Electron reuses its download cache, so this is quick when
+   the Electron version did not change.
+3. **Point the host at the new versions.** Keep every flag you already pass (`--allow-eval`,
+   `--app-root`, `--plugin`, `--tool-profile`, and so on); only the versions change.
+   - **Claude Code:** `claude mcp add` refuses a name that already exists, and `claude mcp remove`
+     forgets your flags. Print the current entry first, then remove it and add it back in the same
+     scope with the same flags and the new versions:
 
      ```sh
-     claude mcp remove electron-stagewright
-     claude mcp add electron-stagewright -- \
+     claude mcp get electron-stagewright   # note the Scope and the Args
+     claude mcp remove electron-stagewright -s local
+     claude mcp add electron-stagewright -s local -- \
        npx -y --prefix ~/ --package @electron-stagewright/core@<new> \
        --package playwright@<new> --package electron@<new> \
-       electron-stagewright --tool-profile essential
+       electron-stagewright <the same flags as before>
      ```
 
-     For a shared `--scope project` entry, edit the versions in `.mcp.json` instead.
+     Use `-s user` or `-s project` instead of `-s local` when `claude mcp get` shows that scope; a
+     project-scope entry lives in `.mcp.json`, so you can also edit the versions there.
 
    - **Codex:** edit the versions in `args` under `[mcp_servers.electron-stagewright]` in
      `~/.codex/config.toml`.
@@ -535,15 +545,11 @@ deliberately:
 
    - **Global:** rerun the global install with the new versions, then `install-electron`.
 
-3. **Prepare the new package list.** Run `install-electron` and `doctor --json` with the new
-   `--package` list, exactly as for a first install. `npx` treats a changed list as a separate
-   install, so its Electron binary has to be fetched even when only core changed. Electron reuses
-   its download cache, so this is quick when the Electron version did not change.
 4. **Restart the host**, or start a new session, so it spawns the updated server.
 5. **Confirm the version.** `electron-stagewright --version`, run through the same
-   `npx -y --prefix ~/ --package ...` command, prints the core version, and `doctor --json` reports the running versions under
-   `runtime.server` (`core`, `playwright`, `electron`). With the `debug` or `full` profile, the
-   `electron_doctor` tool returns the same report from inside a session.
+   `npx -y --prefix ~/ --package ...` command, prints the core version, and `doctor --json` reports
+   the running versions under `runtime.server` (`core`, `playwright`, `electron`). With the `debug`
+   or `full` profile, the `electron_doctor` tool returns the same report from inside a session.
 
 ## Remove the server
 
