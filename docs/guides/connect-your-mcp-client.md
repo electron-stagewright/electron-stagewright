@@ -1,9 +1,10 @@
 # Connect your MCP client
 
-Wire the published server into your MCP client — Claude Desktop, Cursor, or any MCP-capable host —
-and confirm it connected, so an agent can drive your own Electron app. This is the task-oriented
-counterpart to [Getting started](./getting-started.md): that tutorial clones the repository to drive
-the bundled example; here you install the **published** package and point your client at it.
+Wire the published server into your MCP client — Claude Code, Codex, Claude Desktop, Cursor, VS Code,
+opencode, or any MCP-capable host — and confirm it connected, so an agent can drive your own
+Electron app. This is the task-oriented counterpart to [Getting started](./getting-started.md): that
+tutorial clones the repository to drive the bundled example; here you install the **published**
+package and point your client at it.
 
 The server speaks the Model Context Protocol over **stdio** — your client spawns it as a child
 process and exchanges JSON-RPC frames over stdin/stdout. You give the client a `command` and `args`
@@ -168,10 +169,10 @@ and gives `--app-root` a stable security boundary.
 
 ## Configure your client
 
-Each client stores MCP servers in its own config file. Claude Desktop and Cursor use the common
-`mcpServers` JSON shape shown below — a named entry with the `command`/`args` you picked above. Other
-hosts may wrap the same command and arguments in a different schema, so confirm yours against the
-client's own MCP docs.
+Each client stores MCP servers in its own config file, and the command and arguments you picked
+above are the same everywhere; only the wrapper changes. Claude Desktop and Cursor use the common
+`mcpServers` JSON shape, Codex uses TOML, VS Code uses a `servers` key, and opencode takes the
+command as one array. Each section below shows the exact shape.
 
 ### Claude Code
 
@@ -188,6 +189,43 @@ The default scope is the current project only; `--scope project` writes the same
 `.mcp.json`. `claude mcp list` should show the server as connected, and `/mcp` inside a session
 lists its tools as `mcp__electron-stagewright__electron_launch` and so on. Start a new session after
 adding it so the agent sees the tools.
+
+### Codex
+
+Run the terminal bootstrap above first, then register the server with `codex mcp add`:
+
+```sh
+codex mcp add electron-stagewright -- \
+  npx -y --package @electron-stagewright/core@0.6.1 --package playwright@1.63.0 \
+  --package electron@42.11.10 electron-stagewright --tool-profile essential
+```
+
+That writes an entry to `~/.codex/config.toml`. Edit it to add two settings Codex needs for this
+server:
+
+```toml
+[mcp_servers.electron-stagewright]
+command = "npx"
+args = [
+  "-y",
+  "--package", "@electron-stagewright/core@0.6.1",
+  "--package", "playwright@1.63.0",
+  "--package", "electron@42.11.10",
+  "electron-stagewright",
+  "--tool-profile", "essential",
+]
+startup_timeout_sec = 30
+env_vars = ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"]
+```
+
+- `startup_timeout_sec`: Codex gives a server 10 seconds to start by default, which an `npx`
+  resolution can exceed.
+- `env_vars`: Codex starts servers with a minimal environment (`HOME`, `PATH`, `SHELL`, `USER`
+  and a few others), so on Linux the display variables must be forwarded or Electron cannot open a
+  window. They are harmless on macOS and Windows.
+
+`codex mcp list` shows only the configuration. Run `/mcp` in the Codex TUI to see whether the server
+connected; its tools appear under the `electron-stagewright` name.
 
 ### Claude Desktop
 
@@ -232,6 +270,92 @@ reload:
   }
 }
 ```
+
+### VS Code
+
+VS Code reads `.vscode/mcp.json` in the workspace. Its top-level key is `servers`, not
+`mcpServers`, so a config copied from another client will not load:
+
+```json
+{
+  "servers": {
+    "electron-stagewright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "--package",
+        "@electron-stagewright/core@0.6.1",
+        "--package",
+        "playwright@1.63.0",
+        "--package",
+        "electron@42.11.10",
+        "electron-stagewright",
+        "--tool-profile",
+        "essential"
+      ]
+    }
+  }
+}
+```
+
+To add it to your user profile instead, pass the same command to
+`code --add-mcp '{"name":"electron-stagewright","command":"npx","args":[...]}'`. Run **MCP: List
+Servers** from the Command Palette to check that it started.
+
+### opencode
+
+Add the server to `opencode.json` in the project. opencode takes the command and its arguments as
+one array:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "electron-stagewright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "--package",
+        "@electron-stagewright/core@0.6.1",
+        "--package",
+        "playwright@1.63.0",
+        "--package",
+        "electron@42.11.10",
+        "electron-stagewright",
+        "--tool-profile",
+        "essential"
+      ],
+      "enabled": true
+    }
+  }
+}
+```
+
+`opencode mcp list` should report `electron-stagewright` as connected.
+
+### Desktop apps that do not see your shell `PATH`
+
+Some desktop hosts, Claude Desktop among them, do not load your shell profile when you open them
+from the Dock or Finder. A Node.js installed through nvm, fnm, volta, or asdf is then missing from
+their `PATH`, and the server fails to start with `npx` or `node` not found in the host's log. An
+absolute path to `npx` is not enough on its own: `npx` is a Node.js script, so it fails with
+`env: node: No such file or directory`. Give the host the absolute `npx` and a `PATH` that contains
+Node.js:
+
+```json
+{
+  "command": "/Users/you/.local/share/fnm/aliases/default/bin/npx",
+  "args": ["-y", "--package", "@electron-stagewright/core@0.6.1", "..."],
+  "env": { "PATH": "/Users/you/.local/share/fnm/aliases/default/bin:/usr/bin:/bin" }
+}
+```
+
+Use a directory that stays stable across shells. `command -v node` prints a per-session path under
+fnm, so point at the default alias instead (`~/.local/share/fnm/aliases/default/bin`); with nvm,
+use `~/.nvm/versions/node/<version>/bin`. The project-local form avoids `npx` but still needs the
+absolute path to `node` as its `command`.
 
 ### Any other MCP host
 
@@ -352,6 +476,8 @@ The failure modes are almost all about the stdio channel or the spawn command.
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Server shows "failed" / disconnects immediately                        | Something wrote to **stdout** — for a stdio server, stdout _is_ the protocol channel, so any stray print corrupts the stream | The server sends all diagnostics to stderr by design. If you wrapped it in a shell script, make sure the wrapper prints nothing to stdout.      |
 | Client reports "server not found" / no tools                           | Wrong `command`/`args`                                                                                                       | With `npx`, confirm the exact package name. With the local-checkout form, the path must be **absolute** and you must have run `pnpm build`.     |
+| Codex reports the server timed out during startup                      | Codex allows 10 seconds by default, and an `npx` resolution can take longer                                                  | Set `startup_timeout_sec = 30` on the server in `~/.codex/config.toml`, and run the terminal bootstrap first.                                   |
+| A desktop host logs `npx` or `node` not found                          | The host started from the Dock or Finder without your shell `PATH`                                                           | Use the absolute `npx` path and an `env.PATH` that contains Node.js; see the desktop-apps section above.                                        |
 | Server won't start; a version/engine error                             | Node below the version floor                                                                                                 | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                           |
 | `doctor` reports `electron` as failed right after a fresh install      | Electron has not downloaded its binary yet; it does that on first use                                                        | Run `install-electron` with the same `--package` list (or `pnpm exec install-electron` in the project), then run `doctor` again.                |
 | `electron_launch` reports that Playwright or Electron is not installed | The core package was started without an optional launch peer                                                                 | Use the pinned `npx` form shown above, install all three packages globally, or pass `executablePath` to `electron_launch`.                      |
