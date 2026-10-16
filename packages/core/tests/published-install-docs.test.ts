@@ -1,6 +1,6 @@
 /** Guard the copy-paste onboarding path against unpublished packages and moving npx defaults. */
 
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -102,5 +102,46 @@ describe('published-install documentation', () => {
     }
     expect(demoGuide).toContain(`${DEMO_PACKAGE.name}@${DEMO_PACKAGE.version}`)
     expect(pluginsGuide).toContain(`${TRACE_PACKAGE.name}@${TRACE_PACKAGE.version}`)
+  })
+
+  it('pins every documented package to the version this tree publishes', async () => {
+    const packageVersions = new Map<string, string>()
+    const packageDirs = await readdir(path.join(REPO_ROOT, 'packages'))
+    for (const dir of packageDirs) {
+      const manifest = JSON.parse(
+        await readRepoFile('packages', dir, 'package.json').catch(() => '{}'),
+      ) as { readonly name?: string; readonly version?: string }
+      if (manifest.name !== undefined && manifest.version !== undefined) {
+        packageVersions.set(manifest.name, manifest.version)
+      }
+    }
+    const guides = (await readdir(path.join(REPO_ROOT, 'docs', 'guides'))).filter((name) =>
+      name.endsWith('.md'),
+    )
+    const sources = [
+      'README.md',
+      'llms.txt',
+      'packages/core/scripts/build-docs-site.ts',
+      ...packageDirs.map((dir) => `packages/${dir}/README.md`),
+      ...guides.map((name) => `docs/guides/${name}`),
+    ]
+    const expected = new Map<string, string>([
+      ...packageVersions,
+      ['playwright', exactDevVersion('playwright')],
+      ['electron', exactDevVersion('electron')],
+    ])
+
+    const stale: string[] = []
+    for (const source of sources) {
+      const text = await readRepoFile(...source.split('/')).catch(() => '')
+      for (const match of text.matchAll(
+        /(@electron-stagewright\/[a-z0-9-]+|(?<![\w@/-])(?:playwright|electron))@(\d+\.\d+\.\d+)/g,
+      )) {
+        const [, name, version] = match
+        const want = expected.get(name ?? '')
+        if (want !== undefined && version !== want) stale.push(`${source}: ${name}@${version}`)
+      }
+    }
+    expect(stale, 'update these pins with the release').toEqual([])
   })
 })

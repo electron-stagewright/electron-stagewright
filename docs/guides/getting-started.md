@@ -4,7 +4,9 @@ From a clean checkout to a complete agent-driven session against a real Electron
 read the UI, interact, assert, capture, stop. The walkthrough drives the bundled
 [`examples/minimal-app`](../../examples/minimal-app/README.md), a ~30-line form app; every call
 shown below is the same flow its scripted scenario automates, and a gated repository test
-executes this exact sequence against real Electron so the tutorial stays runnable.
+executes this exact sequence against real Electron so the tutorial stays runnable. To install the
+published package into your own MCP host instead of working from a checkout, use
+[Connect your MCP client](./connect-your-mcp-client.md).
 
 <!-- stagewright-resource:begin -->
 
@@ -181,8 +183,8 @@ the graceful close, the stop escalates to SIGKILL after a bounded budget and rep
 
 ## Where next
 
-- [Connect your MCP client](./connect-your-mcp-client.md) — wire the published package into Claude
-  Desktop, Cursor, or any MCP host, and confirm it connected.
+- [Connect your MCP client](./connect-your-mcp-client.md) — wire the published package into
+  Claude Code, Codex, Claude Desktop, Cursor, VS Code, opencode, or any MCP host, confirm it connected, update it, or remove it.
 - [Launch, attach, or inject](./launch-or-attach.md) — driving YOUR app, including apps that are
   already running.
 - [Assert UI state](./assert-ui-state.md) — the assertion and wait toolbox.
