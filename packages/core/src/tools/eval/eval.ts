@@ -76,6 +76,8 @@ interface EvalToolSpec {
   readonly target: 'main' | 'renderer'
   readonly capability: keyof TransportCapabilities
   readonly context: string
+  /** Extra arguments the code receives beyond `arg`, documented per target. */
+  readonly scope?: string
 }
 
 /** Build an eval tool. The two instances differ only by target context + capability. */
@@ -86,6 +88,7 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
     description: [
       `Evaluate JavaScript in the ${spec.context} and return the returned/awaited value;`,
       'the code receives a JSON `arg`.',
+      ...(spec.scope !== undefined ? [spec.scope] : []),
       `Only available when the eval policy permits the ${spec.target} target (start the server with`,
       `--allow-eval, or --allow-eval=${spec.target}); otherwise this tool is not`,
       'registered. The code passes a keyword blocklist and a structural (AST) check before running,',
@@ -142,6 +145,10 @@ export const evalMainTool: AnyToolDefinition = makeEvalTool({
   target: 'main',
   capability: 'supportsMainEval',
   context: 'main process',
+  scope:
+    'On launch and inject sessions it also receives the electron module as `electronApp`' +
+    ' (`arguments[0]`), e.g. `const { dialog } = electronApp`; `require` is blocked, and attach' +
+    ' (CDP) sessions have no main eval.',
 })
 
 /** `electron_eval_renderer` — evaluate in the focused renderer (`page.evaluate`). */

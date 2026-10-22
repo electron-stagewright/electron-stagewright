@@ -202,6 +202,41 @@ describe('eval-tool safety + error classification', () => {
     expect(res.details?.['code_hash']).toBe(fnv1a32(code))
   })
 
+  it('points a blocked require in main eval at the electron module', async () => {
+    const { dispatcher } = setup()
+    const keyword = (await dispatcher.dispatch('electron_eval_main', {
+      code: "const { dialog } = require('electron')",
+    })) as ErrorResponse
+    expect(keyword.code).toBe('EVAL_BLOCKED_KEYWORD')
+    expect(keyword.hint).toContain('electronApp')
+    expect(keyword.hint).toContain('arguments[0]')
+
+    // `require ('x')` slips past the substring list; the AST pass carries the same hint.
+    const construct = (await dispatcher.dispatch('electron_eval_main', {
+      code: "return require ('electron')",
+    })) as ErrorResponse
+    expect(construct.code).toBe('EVAL_BLOCKED_CONSTRUCT')
+    expect(construct.hint).toBe(keyword.hint)
+  })
+
+  it('keeps the registry hint for a blocked require in renderer eval', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_eval_renderer', {
+      code: "return require('electron')",
+    })) as ErrorResponse
+    expect(res.code).toBe('EVAL_BLOCKED_KEYWORD')
+    expect(res.hint).not.toContain('electron')
+  })
+
+  it('keeps the registry hint for other blocked keywords in main eval', async () => {
+    const { dispatcher } = setup()
+    const res = (await dispatcher.dispatch('electron_eval_main', {
+      code: 'process.exit(0)',
+    })) as ErrorResponse
+    expect(res.code).toBe('EVAL_BLOCKED_KEYWORD')
+    expect(res.hint).not.toContain('electronApp')
+  })
+
   it('rejects an over-long code payload before the AST preflight (BAD_ARGUMENT)', async () => {
     const { dispatcher } = setup()
     // Over the 100k cap: bounded at the schema so a multi-MB payload can never reach the

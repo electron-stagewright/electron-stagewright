@@ -58,6 +58,13 @@ describe('eval smoke (real Electron)', () => {
       expect(typeof main.result).toBe('string')
       expect((main.result as string).length).toBeGreaterThan(0)
 
+      // The documented contract behind the blocked-require hint: arguments[0] is the electron module.
+      const electronModule = (await dispatcher.dispatch('electron_eval_main', {
+        sessionId,
+        code: 'return [typeof arguments[0].dialog.showOpenDialog, arguments[0] === electronApp]',
+      })) as SuccessResponse & { result: unknown }
+      expect(electronModule.result).toEqual(['function', true])
+
       const renderer = (await dispatcher.dispatch('electron_eval_renderer', {
         sessionId,
         code: 'return document.title',

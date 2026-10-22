@@ -402,6 +402,21 @@ describe('routeByOperationType', () => {
     }
   })
 
+  it('adds the electron-module hint only for a blocked require in main', () => {
+    const hintFor = (source: string, target?: 'main' | 'renderer'): string | undefined => {
+      try {
+        routeByOperationType('eval', source, target !== undefined ? { target } : {})
+      } catch (err) {
+        if (err instanceof StagewrightError) return err.hint
+      }
+      throw new Error('expected a StagewrightError')
+    }
+    expect(hintFor("require('electron')", 'main')).toContain('electronApp')
+    expect(hintFor("require('electron')", 'renderer')).toBeUndefined()
+    expect(hintFor("require('electron')")).toBeUndefined()
+    expect(hintFor('process.exit(0)', 'main')).toBeUndefined()
+  })
+
   it('passes eval validation options through the router', () => {
     expect(() =>
       routeByOperationType('eval', 'process.exit(0)', { allowDangerous: true }),
