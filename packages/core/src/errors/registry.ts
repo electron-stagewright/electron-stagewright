@@ -376,12 +376,17 @@ export class StagewrightError extends Error {
   public override readonly name = 'StagewrightError'
   public readonly code: ErrorCode
   public readonly details?: Record<string, unknown>
+  /** Overrides the registry hint for this concrete failure. */
+  public readonly hint?: string
 
-  constructor(code: ErrorCode, message?: string, details?: Record<string, unknown>) {
+  constructor(code: ErrorCode, message?: string, details?: Record<string, unknown>, hint?: string) {
     super(message ?? ERROR_CODES[code].hint)
     this.code = code
     if (details !== undefined) {
       this.details = details
+    }
+    if (hint !== undefined) {
+      this.hint = hint
     }
   }
 }

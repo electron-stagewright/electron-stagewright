@@ -623,7 +623,11 @@ export class Dispatcher {
       // Eval payloads run through the keyword blocklist here; non-eval ops are a
       // no-op. The blocklist always applies — the eval flag gates tool visibility,
       // not per-payload safety.
-      routeByOperationType(def.operationType, args)
+      routeByOperationType(
+        def.operationType,
+        args,
+        def.evalTarget !== undefined ? { target: def.evalTarget } : {},
+      )
     } catch (err) {
       return this.#complete(name, args, this.#mapThrown(err, startedAt), startedAt)
     }
@@ -810,16 +814,18 @@ export class Dispatcher {
     const code = err instanceof StagewrightError ? err.code : 'INTERNAL_ERROR'
     const message = err instanceof Error ? err.message : String(err)
     const details = err instanceof StagewrightError ? err.details : undefined
+    const hint = err instanceof StagewrightError ? err.hint : undefined
+    const base = { message, startedAt, now: this.#now, ...(hint !== undefined ? { hint } : {}) }
     if (details !== undefined) {
       try {
         // makeError throws if details are not JSON-serialisable; fall back to a
         // detail-less envelope rather than letting that escape the dispatcher.
-        return makeError(code, { message, details, startedAt, now: this.#now })
+        return makeError(code, { ...base, details })
       } catch {
         this.#logger.warn('Dropped non-serialisable error details', { code })
       }
     }
-    return makeError(code, { message, startedAt, now: this.#now })
+    return makeError(code, base)
   }
 
   /** Emit a slow-op warning when a dispatch exceeds the configured threshold. */

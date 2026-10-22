@@ -131,6 +131,21 @@ export function validateCommandContent(_input: unknown): void {
 export interface ValidateEvalOptions {
   /** Bypass the keyword blocklist for trusted direct callers; the dispatcher keeps this false. */
   readonly allowDangerous?: boolean
+  /** The eval tool's target; blocked `require`/`import()` in main gets an electron-module hint. */
+  readonly target?: 'main' | 'renderer'
+}
+
+/** Where main eval exposes the electron module, since `require` and `import()` stay blocked. */
+const MAIN_EVAL_ELECTRON_HINT =
+  'require and import() are blocked. On sessions launched with a `main` entry and on inject ' +
+  'sessions the electron module is already in scope as `electronApp` (also `arguments[0]`), e.g. ' +
+  '`const { dialog, BrowserWindow, app } = electronApp`. CDP sessions (attach, or a packaged ' +
+  'launch) have no main-process eval.'
+
+function blockedHint(blocked: string, opts: ValidateEvalOptions): string | undefined {
+  return opts.target === 'main' && (blocked.startsWith('require') || blocked === 'import()')
+    ? MAIN_EVAL_ELECTRON_HINT
+    : undefined
 }
 
 /**
@@ -155,6 +170,7 @@ export function validateEvalContent(input: unknown, opts: ValidateEvalOptions = 
           'EVAL_BLOCKED_KEYWORD',
           `Eval payload contains blocked keyword: ${keyword}`,
           { keyword, code_hash: fnv1a32(source) },
+          blockedHint(keyword, opts),
         )
       }
     }
@@ -167,6 +183,7 @@ export function validateEvalContent(input: unknown, opts: ValidateEvalOptions = 
         'EVAL_BLOCKED_CONSTRUCT',
         `Eval payload contains a blocked construct: ${construct.label}`,
         { construct: construct.label, code_hash: fnv1a32(source) },
+        blockedHint(construct.label, opts),
       )
     }
   }

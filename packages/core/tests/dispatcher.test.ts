@@ -220,6 +220,32 @@ describe('Dispatcher dispatch', () => {
     expect((res as ErrorResponse).code).toBe('INTERNAL_ERROR')
     expect((res as ErrorResponse).details).toBeUndefined()
   })
+
+  it('keeps a thrown per-call hint, including when its details are dropped', async () => {
+    const d = newDispatcher()
+    const circular: Record<string, unknown> = {}
+    circular['self'] = circular
+    d.register(
+      defineTool({
+        name: 'test_hint',
+        description: 'x',
+        inputSchema: z.object({ bad: z.boolean() }),
+        operationType: 'query',
+        handler: async (args) => {
+          throw new StagewrightError(
+            'INTERNAL_ERROR',
+            'with a hint',
+            args.bad ? circular : { ok: 1 },
+            'call-specific hint',
+          )
+        },
+      }),
+    )
+    for (const bad of [false, true]) {
+      const res = (await d.dispatch('test_hint', { bad })) as ErrorResponse
+      expect(res.hint).toBe('call-specific hint')
+    }
+  })
 })
 
 describe('Dispatcher manifest', () => {
