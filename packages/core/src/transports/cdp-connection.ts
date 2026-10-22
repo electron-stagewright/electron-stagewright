@@ -396,7 +396,7 @@ export interface RuntimeEvaluateResult {
 export function buildEvalExpression(body: string, arg: unknown): string {
   const serialised = JSON.stringify(arg === undefined ? null : arg) ?? 'null'
   const safe = serialised.replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
-  return `(async (arg) => { ${body} })(${safe})`
+  return `(async (arg) => {\n${body}\n})(${safe})`
 }
 
 /** Render one console-argument RemoteObject to text. */

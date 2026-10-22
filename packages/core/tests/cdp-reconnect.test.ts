@@ -111,7 +111,7 @@ describe('CDP attach reconnect', () => {
     await Promise.all([
       session.evaluate('renderer', 'return 1;'),
       session.windowsList(),
-      session.evaluate('main', 'return 1;'),
+      session.surfacesList(),
     ])
     expect(browserSockets()).toBe(2)
   })

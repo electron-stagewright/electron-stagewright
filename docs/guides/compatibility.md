@@ -72,19 +72,19 @@ This table names agent-facing tool families rather than protocol primitives. On 
 (`BrowserWindow` and `WebContentsView` contents) are listed as `kind: "other"` because the protocol
 exposes no ownership metadata to tell them apart; webview guests and iframes are classified.
 
-| Tool family                                                | Playwright launch       | CDP packaged/attach          | Injector                |
-| ---------------------------------------------------------- | ----------------------- | ---------------------------- | ----------------------- |
-| `electron_launch`                                          | ✓ development `main`    | ✓ executable only            | —                       |
-| `electron_attach` / `electron_inject`                      | —                       | ✓ attach                     | ✓ inject                |
-| `electron_snapshot` / `electron_find`                      | ✓ selected surface      | ✓ selected surface           | —                       |
-| Renderer reads, waits, expectations, and interactions      | ✓ selected surface      | ✓ selected surface           | —                       |
-| Window list, switch, and screenshot                        | ✓                       | ✓                            | list only               |
-| `electron_surfaces_list` / `electron_switch_surface`       | ✓ page/frame hierarchy  | ✓ page/frame hierarchy       | —                       |
-| `electron_eval_renderer`                                   | ✓                       | ✓                            | —                       |
-| `electron_eval_main`                                       | ✓ Electron main process | Protocol browser target only | ✓ Electron main process |
-| Console and dialog observation                             | ✓                       | ✓                            | console only            |
-| Network capture/stubbing and storage plugin transport seam | ✓                       | ✓                            | —                       |
-| Clock and native-UI plugin transport seam                  | ✓                       | —                            | —                       |
+| Tool family                                                | Playwright launch       | CDP packaged/attach    | Injector                |
+| ---------------------------------------------------------- | ----------------------- | ---------------------- | ----------------------- |
+| `electron_launch`                                          | ✓ development `main`    | ✓ executable only      | —                       |
+| `electron_attach` / `electron_inject`                      | —                       | ✓ attach               | ✓ inject                |
+| `electron_snapshot` / `electron_find`                      | ✓ selected surface      | ✓ selected surface     | —                       |
+| Renderer reads, waits, expectations, and interactions      | ✓ selected surface      | ✓ selected surface     | —                       |
+| Window list, switch, and screenshot                        | ✓                       | ✓                      | list only               |
+| `electron_surfaces_list` / `electron_switch_surface`       | ✓ page/frame hierarchy  | ✓ page/frame hierarchy | —                       |
+| `electron_eval_renderer`                                   | ✓                       | ✓                      | —                       |
+| `electron_eval_main`                                       | ✓ Electron main process | —                      | ✓ Electron main process |
+| Console and dialog observation                             | ✓                       | ✓                      | console only            |
+| Network capture/stubbing and storage plugin transport seam | ✓                       | ✓                      | —                       |
+| Clock and native-UI plugin transport seam                  | ✓                       | —                      | —                       |
 
 Every successful launch, attach, or inject response includes the transport's raw `capabilities`
 record. Use it for machine decisions; use the table for the narrower behavioral limits that one

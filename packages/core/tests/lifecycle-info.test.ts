@@ -13,6 +13,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { makeInfoTool } from '../src/tools/lifecycle/info.js'
 import type { SignatureInfo } from '../src/tools/lifecycle/signature.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
+import { fullCapabilities } from '../../testkit/src/capabilities.js'
 
 const RAW_INFO = {
   electron: '32.1.0',
@@ -60,6 +61,37 @@ describe('electron_info', () => {
       canLaunch: true,
     })
     expect((res as SuccessResponse)._meta.session_id).toBe('sess-info')
+  })
+
+  it('reports null versions and app fields when the transport has no main eval', async () => {
+    const sessions = new SessionManager()
+    let evaluated = false
+    const transport = new FakeTransport({
+      id: 'cdp',
+      capabilities: { ...fullCapabilities(), supportsMainEval: false },
+      session: new FakeSession({
+        id: 'sess-cdp',
+        transport: 'cdp',
+        evaluate: async () => {
+          evaluated = true
+          return RAW_INFO
+        },
+      }),
+    })
+    sessions.register(transport, transport.session)
+    const dispatcher = new Dispatcher({ sessions })
+    dispatcher.register(makeInfoTool({ inspectSignature: async () => ({ status: 'signed' }) }))
+
+    const res = await dispatcher.dispatch('electron_info', {})
+    expect(evaluated).toBe(false)
+    expect(res).toMatchObject({
+      ok: true,
+      transport: 'cdp',
+      versions: { electron: null, node: null, chrome: null, v8: null },
+      app: { name: null, packaged: null },
+      signature: { status: 'unknown' },
+      capabilities: { supportsMainEval: false },
+    })
   })
 
   it('returns NOT_RUNNING when no session is live', async () => {

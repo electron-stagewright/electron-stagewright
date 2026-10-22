@@ -24,7 +24,8 @@ import { TransportRegistry } from '../src/server/transport-registry.js'
 import { attachTool } from '../src/tools/lifecycle/attach.js'
 import { CDPTransport } from '../src/transports/cdp.js'
 import { keyboardTypeTool, keyTool, typeTool } from '../src/tools/interaction/index.js'
-import { detachTool, launchTool, stopTool } from '../src/tools/lifecycle/index.js'
+import { EVAL_TOOLS } from '../src/tools/eval/index.js'
+import { detachTool, infoTool, launchTool, stopTool } from '../src/tools/lifecycle/index.js'
 import { findTool, snapshotTool } from '../src/tools/snapshot/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
@@ -465,5 +466,44 @@ describe('CDP attach smoke (real Electron)', () => {
       })
     },
     120_000,
+  )
+
+  it.skipIf(!RUN_E2E)(
+    'reports no main eval over CDP: eval_main is unsupported and electron_info degrades',
+    async () => {
+      const { cdpUrl, proc } = await spawnWithCdp()
+      const sessions = new SessionManager()
+      const dispatcher = new Dispatcher({
+        sessions,
+        transports: new TransportRegistry({ transports: [new CDPTransport()] }),
+        allowEval: true,
+      })
+      dispatcher.registerAll([attachTool, detachTool, infoTool, ...EVAL_TOOLS])
+      try {
+        const attached = (await dispatcher.dispatch('electron_attach', {
+          cdpUrl,
+        })) as SuccessResponse & { session_id: string }
+        expect(attached.ok).toBe(true)
+        const sessionId = attached.session_id
+
+        await expect(
+          dispatcher.dispatch('electron_eval_main', { sessionId, code: 'return 1' }),
+        ).resolves.toMatchObject({ ok: false, code: 'TRANSPORT_UNSUPPORTED' })
+        await expect(dispatcher.dispatch('electron_info', { sessionId })).resolves.toMatchObject({
+          ok: true,
+          transport: 'cdp',
+          versions: { electron: null },
+          capabilities: { supportsMainEval: false },
+        })
+        await expect(
+          dispatcher.dispatch('electron_eval_renderer', { sessionId, code: 'return 1 + 1' }),
+        ).resolves.toMatchObject({ ok: true, result: 2 })
+
+        await dispatcher.dispatch('electron_detach', { sessionId })
+      } finally {
+        if (proc.exitCode === null) proc.kill('SIGKILL')
+      }
+    },
+    30_000,
   )
 })

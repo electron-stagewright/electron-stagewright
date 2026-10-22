@@ -643,13 +643,16 @@ describe('CDP evaluation (pending map + awaitPromise + domain cache)', () => {
     expect(server.sentTo('browser/b1', 'Runtime.evaluate')).toHaveLength(0)
   })
 
-  it('evaluates main against the browser endpoint', async () => {
+  it('refuses main eval without sending it to the browser endpoint', async () => {
     const { server, transport } = setup()
-    server.respond('Runtime.evaluate', () => ({ result: { value: 'main-ok' } }))
     const session = await transport.attach({ port: 9222 })
 
-    await expect(session.evaluate('main', 'return "main-ok";')).resolves.toBe('main-ok')
-    expect(server.sentTo('browser/b1', 'Runtime.evaluate')).toHaveLength(1)
+    expect(transport.capabilities.supportsMainEval).toBe(false)
+    await expect(session.evaluate('main', 'return 1;')).rejects.toMatchObject({
+      code: 'TRANSPORT_UNSUPPORTED',
+      details: { capability: 'supportsMainEval' },
+    })
+    expect(server.sentTo('browser/b1', 'Runtime.evaluate')).toHaveLength(0)
   })
 
   it('sends each domain enable exactly once per connection (enabled-domain cache)', async () => {

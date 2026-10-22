@@ -140,10 +140,13 @@ electron_attach { "port": 9222 }
 `electron_discover_running` scans the conventional loopback ports (9222–9225 by default) and
 returns `{ targets: [{ targetId, port, appName, pid }], scanned }` — an empty result is
 unambiguous because `scanned` reports exactly what was probed. Attach accepts `port` (+ optional
-loopback `host`) or a full loopback `cdpUrl`. Two notes:
+loopback `host`) or a full loopback `cdpUrl`. Three notes:
 
 - A `pid` alone is **not** attachable over CDP — but passing it alongside `port` lets a later
   `electron_stop` escalate to SIGKILL if the app ignores the graceful close.
+- The CDP endpoint exposes renderer targets only, so an attach session has no main-process
+  evaluation: `electron_eval_main` returns `TRANSPORT_UNSUPPORTED` and `electron_info` reports
+  null versions. Use launch or inject when you need the main process.
 - The CDP transport supports snapshot/find, renderer evaluation, reads, observation
   (console/dialogs), screenshots, and the core interaction surface on the selected renderer
   surface. `electron_surfaces_list` and `electron_switch_surface` reach iframes (same- and
@@ -169,7 +172,8 @@ console capture. Renderer reads and interaction need a CDP endpoint — when you
 starts, prefer `--remote-debugging-port` + `electron_attach`.
 
 The injected target is verified to belong to the pid you named (attaching to a different process
-that happens to own the default inspector port is refused with `INJECT_FAILED`). On Windows the
+that happens to own the default inspector port is refused with `INJECT_FAILED`). Main evaluation
+receives the electron module as `electronApp`, as on a launch session. On Windows the
 inject trigger is unreliable on some Electron versions; the same discovery path still attaches if
 the app was started with `--inspect`, and the error message says exactly that when the trigger
 fails.
