@@ -4,8 +4,9 @@
  * receives the electron module as `electronApp` / `arguments[0]` (the launch
  * contract), and `electron_info` reads the app through it.
  *
- * Opt-in: runs only when `STAGEWRIGHT_E2E=1`. Skipped on Windows, where the
- * inspector trigger is unreliable.
+ * Opt-in: runs only when `STAGEWRIGHT_E2E=1`. On Windows, where the inspector
+ * trigger is unreliable, the app starts with `--inspect` so inject takes its
+ * documented discovery fallback.
  *
  * @module
  */
@@ -43,7 +44,9 @@ afterAll(() => {
 async function spawnReady(): Promise<ChildProcess> {
   const electronPath = (await import('electron')).default as unknown as string
   // The remote-debugging port is only a readiness signal here; inject never uses it.
-  const proc = spawn(electronPath, [FIXTURE_MAIN, '--remote-debugging-port=0'], {
+  const args = [FIXTURE_MAIN, '--remote-debugging-port=0']
+  if (process.platform === 'win32') args.push('--inspect=9229')
+  const proc = spawn(electronPath, args, {
     stdio: ['ignore', 'ignore', 'pipe'],
   })
   child = proc
@@ -66,7 +69,7 @@ async function spawnReady(): Promise<ChildProcess> {
 }
 
 describe('inject smoke (real Electron)', () => {
-  it.skipIf(!RUN_E2E || process.platform === 'win32')(
+  it.skipIf(!RUN_E2E)(
     'injects into a running app and evaluates in main with the electron module',
     async () => {
       const proc = await spawnReady()

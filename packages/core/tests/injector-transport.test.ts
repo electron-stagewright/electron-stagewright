@@ -105,6 +105,18 @@ describe('InjectorTransport.inject', () => {
     expect(server.sockets.map((s) => s.url)).toEqual([NODE_WS])
   })
 
+  it('keeps polling when an unlabelled inspector is listed before its socket accepts', async () => {
+    const { server, transport } = setup({
+      targets: [{ title: 'electron/js2c/browser_init', webSocketDebuggerUrl: NODE_WS }],
+    })
+    server.refuseConnections = true
+    setTimeout(() => {
+      server.refuseConnections = false
+    }, 20)
+    const session = await transport.inject({ pid: 4242, timeoutMs: 1_000 })
+    expect(session.transport).toBe('injector')
+  })
+
   it('refuses an unlabelled inspector that reports another pid, contacting it once', async () => {
     const { server, transport } = setup({
       targets: [{ title: 'electron/js2c/browser_init', webSocketDebuggerUrl: NODE_WS }],
@@ -144,6 +156,19 @@ describe('InjectorTransport.attach', () => {
       targets: [
         { title: 'electron[9999]', webSocketDebuggerUrl: FOREIGN_NODE_WS },
         { title: 'electron[4242]', webSocketDebuggerUrl: NODE_WS },
+      ],
+    })
+    const session = await transport.attach({ port: 9229, pid: 4242 })
+
+    expect(session.transport).toBe('injector')
+    expect(server.sockets.map((s) => s.url)).toEqual([NODE_WS])
+  })
+
+  it("attaches by port to Electron's unlabelled main inspector once it reports the pid", async () => {
+    const { server, transport } = setup({
+      targets: [
+        { title: 'node[9999]', webSocketDebuggerUrl: FOREIGN_NODE_WS },
+        { title: 'electron/js2c/browser_init', webSocketDebuggerUrl: NODE_WS },
       ],
     })
     const session = await transport.attach({ port: 9229, pid: 4242 })
@@ -209,6 +234,14 @@ describe('InjectorSession surface', () => {
     )
     const result: unknown = await runInNewContext(expression, { require: () => electron })
     expect(result).toEqual([true, 'function', 7])
+  })
+
+  it('keeps the wrappers intact when the code ends in a line comment', async () => {
+    const plain = buildEvalExpression('return arg.n // done', { n: 2 })
+    await expect(runInNewContext(plain)).resolves.toBe(2)
+    const expression = buildEvalExpression(withElectronModule('return arg.n // done'), { n: 3 })
+    const result: unknown = await runInNewContext(expression, { require: () => ({}) })
+    expect(result).toBe(3)
   })
 
   it('refuses renderer evaluation with TRANSPORT_UNSUPPORTED', async () => {

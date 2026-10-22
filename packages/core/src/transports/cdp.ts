@@ -1941,8 +1941,8 @@ class CdpSession implements TransportSession {
   }
 
   // --- Native UI seam: not reachable over CDP (canAccessNativeUI: false). ---
-  // The application menu lives in the Electron main-process Node context; CDP's evaluate runs against the
-  // browser target, which has no Electron `Menu` module, so the seam stays honestly unimplemented.
+  // The application menu lives in the Electron main-process Node context, which the remote-debugging
+  // endpoint does not expose, so the seam stays honestly unimplemented.
 
   getApplicationMenu(): Promise<NativeMenu | null> {
     return Promise.reject(notImplemented('getApplicationMenu'))

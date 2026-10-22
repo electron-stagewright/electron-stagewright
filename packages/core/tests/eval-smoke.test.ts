@@ -60,7 +60,8 @@ describe('eval smoke (real Electron)', () => {
 
       const renderer = (await dispatcher.dispatch('electron_eval_renderer', {
         sessionId,
-        code: 'return document.title',
+        // A trailing line comment must not swallow the transport's wrapper.
+        code: 'return document.title // trailing comment',
       })) as SuccessResponse & { result: unknown }
       expect(typeof renderer.result).toBe('string')
 

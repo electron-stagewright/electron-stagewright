@@ -1534,7 +1534,7 @@ class PlaywrightSession implements TransportSession {
           Function(
             'electronApp',
             'arg',
-            `"use strict"; return (async () => { ${input.body} })()`,
+            `"use strict"; return (async () => {\n${input.body}\n})()`,
           )(electronApp, input.arg),
         payload,
       )
@@ -1542,7 +1542,7 @@ class PlaywrightSession implements TransportSession {
     const { target: renderer } = await this.activeRenderer()
     return renderer.evaluate<T>(
       (input) =>
-        Function('arg', `"use strict"; return (async () => { ${input.body} })()`)(input.arg),
+        Function('arg', `"use strict"; return (async () => {\n${input.body}\n})()`)(input.arg),
       payload,
     )
   }

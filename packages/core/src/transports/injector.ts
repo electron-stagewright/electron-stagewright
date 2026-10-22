@@ -238,7 +238,7 @@ try {
  * the JSON `arg`, the same contract as the Playwright launch transport.
  */
 export function withElectronModule(body: string): string {
-  return `return (async function (electronApp, arg) { return (async () => { ${body} })() })(require('electron'), arg)`
+  return `return (async function (electronApp, arg) { return (async () => {\n${body}\n})() })(require('electron'), arg)`
 }
 
 /** Main-process body: ask the app to quit gracefully. */
@@ -733,7 +733,8 @@ export class InjectorTransport implements ITransport {
 
   /**
    * Connect to the first candidate whose inspector reports `pid`. An unlabelled candidate that
-   * reports another pid is skipped and recorded in `foreign`; every other failure is final.
+   * reports another pid is recorded in `foreign`, one whose socket will not open is skipped, and
+   * every other failure is final.
    */
   async #connectOwned(
     candidates: readonly NodeInspectorTarget[],
@@ -742,13 +743,24 @@ export class InjectorTransport implements ITransport {
     foreign?: Set<string>,
   ): Promise<CdpConnection | undefined> {
     for (const target of candidates) {
-      const conn = await this.#open(target.webSocketDebuggerUrl, timeoutMs)
+      const labelled = target.title.includes(`[${pid}]`)
+      let conn: CdpConnection
+      try {
+        conn = await this.#open(target.webSocketDebuggerUrl, timeoutMs)
+      } catch (err) {
+        // A loopback refusal stays final; a socket that will not open is retried on the next poll.
+        const unreachable =
+          err instanceof StagewrightError &&
+          (err.code === 'CDP_DISCONNECTED' || err.code === 'CDP_TIMEOUT')
+        if (labelled || !unreachable) throw err
+        continue
+      }
       try {
         await this.#verifyConnectedPid(conn, pid)
         return conn
       } catch (err) {
         const otherPid = err instanceof StagewrightError && err.details?.['actual'] !== undefined
-        if (!otherPid || target.title.includes(`[${pid}]`)) throw err
+        if (!otherPid || labelled) throw err
         foreign?.add(target.webSocketDebuggerUrl)
       }
     }
