@@ -1118,7 +1118,7 @@ describe('CDPTransport', () => {
       canControlClock: false,
       canAccessStorage: true,
       canAccessNativeUI: false,
-      supportsMainEval: true,
+      supportsMainEval: false,
       supportsRendererEval: true,
       supportsInteraction: true,
     })

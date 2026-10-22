@@ -775,7 +775,7 @@ Return the .value of the input/textarea/select identified by ref or selector (nu
 
 **Electron app info**
 
-Report the running Electron app environment: runtime versions (electron/node/chrome/v8), app name/version/paths, packaged flag, code-signature status (verified for packaged macOS apps; "unknown" for unpackaged/dev apps, "unsupported" off macOS), the active transport, and its capability matrix. Pass sessionId to target a specific session when several are running. Returns: { ok, session_id, transport, versions, app, signature, capabilities }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId; not retryable).
+Report the running Electron app environment: runtime versions (electron/node/chrome/v8), app name/version/paths, packaged flag, code-signature status (verified for packaged macOS apps; "unknown" for unpackaged/dev apps, "unsupported" off macOS), the active transport, and its capability matrix. Pass sessionId to target a specific session when several are running. Versions and app fields are null when the transport cannot evaluate in the main process (CDP attach). Returns: { ok, session_id, transport, versions, app, signature, capabilities }. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId; not retryable).
 
 - Operation: `query`
 

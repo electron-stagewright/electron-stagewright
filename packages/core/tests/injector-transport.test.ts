@@ -8,9 +8,12 @@
  * API, console capture, detach-on-dispose, and quit-with-escalation stop.
  */
 
+import { runInNewContext } from 'node:vm'
+
 import { describe, expect, it } from 'vitest'
 
-import { InjectorTransport } from '../src/transports/injector.js'
+import { buildEvalExpression } from '../src/transports/cdp-connection.js'
+import { InjectorTransport, withElectronModule } from '../src/transports/injector.js'
 import type { FetchJson } from '../src/transports/cdp.js'
 import { FakeCdpServer } from './helpers/fake-cdp.js'
 
@@ -86,6 +89,32 @@ describe('InjectorTransport.inject', () => {
     const failure = await transport.inject({ pid: 4242, timeoutMs: 50 }).catch((e: unknown) => e)
     expect(failure).toMatchObject({ code: 'INJECT_FAILED' })
     expect(String((failure as Error).message)).toContain('another process')
+  })
+
+  it("attaches to Electron's unlabelled main inspector once it reports the pid", async () => {
+    const { server, transport } = setup({
+      targets: [
+        { title: 'node[9999]', webSocketDebuggerUrl: FOREIGN_NODE_WS },
+        { title: 'electron/js2c/browser_init', webSocketDebuggerUrl: NODE_WS },
+      ],
+    })
+    const session = await transport.inject({ pid: 4242 })
+
+    expect(session.transport).toBe('injector')
+    // The target labelled with another pid is never contacted.
+    expect(server.sockets.map((s) => s.url)).toEqual([NODE_WS])
+  })
+
+  it('refuses an unlabelled inspector that reports another pid, contacting it once', async () => {
+    const { server, transport } = setup({
+      targets: [{ title: 'electron/js2c/browser_init', webSocketDebuggerUrl: NODE_WS }],
+    })
+    server.respond('Runtime.evaluate', () => ({ result: { value: 9999 } }))
+    const failure = await transport.inject({ pid: 4242, timeoutMs: 50 }).catch((e: unknown) => e)
+
+    expect(failure).toMatchObject({ code: 'INJECT_FAILED' })
+    expect(String((failure as Error).message)).toContain('another process')
+    expect(server.sockets).toHaveLength(1)
   })
 
   it('fails with INJECT_FAILED when no inspector appears within the budget', async () => {
@@ -168,6 +197,18 @@ describe('InjectorSession surface', () => {
     const session = await transport.inject({ pid: 4242 })
 
     await expect(session.evaluate('main', 'return 40 + 2;')).resolves.toBe(42)
+  })
+
+  it('passes the electron module as electronApp and arguments[0], like the launch transport', async () => {
+    const electron = { dialog: { showOpenDialog: () => undefined } }
+    const expression = buildEvalExpression(
+      withElectronModule(
+        'return [arguments[0] === electronApp, typeof electronApp.dialog.showOpenDialog, arg.n]',
+      ),
+      { n: 7 },
+    )
+    const result: unknown = await runInNewContext(expression, { require: () => electron })
+    expect(result).toEqual([true, 'function', 7])
   })
 
   it('refuses renderer evaluation with TRANSPORT_UNSUPPORTED', async () => {

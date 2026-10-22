@@ -146,7 +146,7 @@ plugin. A tray with no listener for the event is refused, not faked.
   read, so on a very noisy app a matching startup notification could be evicted past the 1000 cap before the read.
 - **Playwright launch transport only.** The application menu lives in the Electron main-process Node
   context; only the Playwright transport reaches it (`electronApp.evaluate`). A CDP attach session
-  evaluates against the browser target, which has no Electron `Menu` module, so it returns
+  exposes renderer targets only, with no main-process context, so it returns
   `native.UNSUPPORTED`; the injector stub does too. Requires a transport whose `canAccessNativeUI`
   capability is set.
 - **Cross-platform, macOS-leaning.** `Menu.getApplicationMenu()` works on every platform, but the menu

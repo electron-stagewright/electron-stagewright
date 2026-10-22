@@ -1,7 +1,7 @@
 [
   {
     "path": "packages/core/tests/cdp-attach-smoke.test.ts",
-    "tests": 7
+    "tests": 8
   },
   {
     "path": "packages/core/tests/cdp-surface-targeting-smoke.test.ts",
@@ -21,6 +21,10 @@
   },
   {
     "path": "packages/core/tests/expect-smoke.test.ts",
+    "tests": 1
+  },
+  {
+    "path": "packages/core/tests/inject-smoke.test.ts",
     "tests": 1
   },
   {

@@ -22,7 +22,8 @@
  *   here: CDP's `Emulation.setVirtualTimePolicy` cannot honestly support the full seam (notably
  *   resume-to-real), so the capability stays honest-false until a CDP clock increment lands (the seam
  *   methods reject `NOT_IMPLEMENTED` for a direct caller that bypasses the gate).
- * - `supportsMainEval: true` — `Runtime.evaluate` against the browser target.
+ * - `supportsMainEval: false` — the remote-debugging endpoint lists renderer targets only, with no
+ *   main-process Node context to evaluate in.
  * - `supportsRendererEval: true` — `Runtime.evaluate` against a page target.
  * - `supportsInteraction: true` — pointer/keyboard input synthesised through
  *   `Input.dispatch*` at eval-resolved element centres, value-setting via
@@ -1271,10 +1272,8 @@ class CdpSession implements TransportSession {
     body: string,
     arg?: unknown,
   ): Promise<T> {
+    if (target === 'main') throw unsupported('evaluate(main)', 'supportsMainEval')
     await this.#ensureConnected()
-    if (target === 'main') {
-      return evaluateExpression<T>(this.#browser, body, arg)
-    }
     return this.#evalIn<T>(await this.#activeRenderer(), body, arg)
   }
 
@@ -2449,10 +2448,10 @@ export class CDPTransport implements ITransport {
     canIntercept: true,
     canControlClock: false,
     canAccessStorage: true,
-    // The application menu lives in the Electron main-process Node context, unreachable over the CDP
-    // browser-target evaluate; the native-UI seam stays honestly unimplemented.
+    // The remote-debugging endpoint exposes renderer targets only; the main-process Node context
+    // (application menu, main eval) is unreachable from it.
     canAccessNativeUI: false,
-    supportsMainEval: true,
+    supportsMainEval: false,
     supportsRendererEval: true,
     supportsInteraction: true,
     supportsSurfaceTargeting: true,

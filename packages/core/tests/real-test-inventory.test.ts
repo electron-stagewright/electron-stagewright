@@ -38,7 +38,7 @@ describe('reviewed real-runtime inventory', () => {
     expect(discovered.sort((a, b) => a.path.localeCompare(b.path))).toEqual(
       [...inventory].sort((a, b) => a.path.localeCompare(b.path)),
     )
-    expect(inventory).toHaveLength(25)
+    expect(inventory).toHaveLength(26)
   })
 
   it('fails if discovery or opt-in silently leaves every test pending', () => {

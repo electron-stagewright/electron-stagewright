@@ -13,14 +13,16 @@
  *    this doubles as the Windows fallback: an inspector that is ALREADY
  *    listening (an app started with `--inspect`, or a previously injected one)
  *    is discovered even when step 1 failed or did nothing.
- * 3. The discovered target must belong to `pid`: the Node inspector embeds the
- *    pid in its target title (`electron[12345]`). Attaching to a DIFFERENT
- *    process's inspector on a shared default port would be a silent
- *    catastrophe, so a pid mismatch is an explicit `INJECT_FAILED`. The label
- *    selects a candidate; the connected inspector must also report that pid.
+ * 3. The discovered target must belong to `pid`. Node embeds the pid in its
+ *    target title (`node[12345]`); Electron's main inspector does not
+ *    (`electron/js2c/browser_init`). Labelled targets are tried first, then
+ *    unlabelled ones, and the connected inspector must report that pid.
+ *    Attaching to a DIFFERENT process's inspector on a shared default port
+ *    would be a silent catastrophe, so no verified match is `INJECT_FAILED`.
  * 4. A {@link CdpConnection} opens to the target's `webSocketDebuggerUrl`. The
  *    session speaks the Node inspector protocol: MAIN-process
- *    `Runtime.evaluate` (with the command-line API so `require` resolves),
+ *    `Runtime.evaluate` (with the command-line API so `require` resolves, and
+ *    the electron module passed in as `electronApp`, like the launch transport),
  *    console capture, and a window list read through the Electron API.
  *
  * Capability matrix:
@@ -167,6 +169,20 @@ interface NodeInspectorTarget {
   readonly webSocketDebuggerUrl: string
 }
 
+/**
+ * Targets that may belong to `pid`, in trial order: those labelled with it (`node[123]`), then
+ * unlabelled ones — Electron's main inspector is titled `electron/js2c/browser_init`. A target
+ * labelled with another pid is never contacted.
+ */
+function pidCandidates(
+  targets: readonly NodeInspectorTarget[],
+  pid: number,
+): readonly NodeInspectorTarget[] {
+  const labelled = targets.filter((t) => t.title.includes(`[${pid}]`))
+  const unlabelled = targets.filter((t) => !/\[\d+\]/.test(t.title))
+  return [...labelled, ...unlabelled]
+}
+
 /** Validated target list from a Node inspector `/json/list` response. */
 function asNodeTargets(value: unknown): readonly NodeInspectorTarget[] {
   if (!Array.isArray(value)) return []
@@ -216,6 +232,14 @@ try {
   return [];
 }
 `
+
+/**
+ * Wrap a main eval body so it receives the electron module as `electronApp` (`arguments[0]`) and
+ * the JSON `arg`, the same contract as the Playwright launch transport.
+ */
+export function withElectronModule(body: string): string {
+  return `return (async function (electronApp, arg) { return (async () => { ${body} })() })(require('electron'), arg)`
+}
 
 /** Main-process body: ask the app to quit gracefully. */
 const QUIT_BODY = `
@@ -302,7 +326,9 @@ class InjectorSession implements TransportSession {
     }
     // The Node inspector context has no global `require`; the command-line API
     // exposes it, which is what makes Electron main-process drives possible.
-    return evaluateExpression<T>(this.#conn, body, arg, { includeCommandLineAPI: true })
+    return evaluateExpression<T>(this.#conn, withElectronModule(body), arg, {
+      includeCommandLineAPI: true,
+    })
   }
 
   async windowsList(): Promise<readonly WindowDescriptor[]> {
@@ -622,8 +648,15 @@ export class InjectorTransport implements ITransport {
     }
     const host = opts.host ?? '127.0.0.1'
     const targets = await this.#listTargets(host, opts.port)
-    const first =
-      opts.pid === undefined ? targets[0] : targets.find((t) => t.title.includes(`[${opts.pid}]`))
+    if (opts.pid !== undefined) {
+      const owned = await this.#connectOwned(
+        pidCandidates(targets, opts.pid),
+        opts.pid,
+        opts.timeoutMs,
+      )
+      if (owned !== undefined) return new InjectorSession(owned, this.#sessionDeps, opts.pid)
+    }
+    const first = opts.pid === undefined ? targets[0] : undefined
     if (first === undefined) {
       const sawForeignTarget = opts.pid !== undefined && targets.length > 0
       throw new StagewrightError(
@@ -639,7 +672,6 @@ export class InjectorTransport implements ITransport {
       )
     }
     const conn = await this.#open(first.webSocketDebuggerUrl, opts.timeoutMs)
-    await this.#verifyConnectedPid(conn, opts.pid)
     return new InjectorSession(conn, this.#sessionDeps, opts.pid)
   }
 
@@ -665,6 +697,7 @@ export class InjectorTransport implements ITransport {
     }
 
     const deadline = Date.now() + (opts.timeoutMs ?? INJECT_DISCOVERY_BUDGET_MS)
+    const foreignUrls = new Set<string>()
     let lastSeenTitles: readonly string[] = []
     for (;;) {
       let targets: readonly NodeInspectorTarget[] = []
@@ -673,12 +706,11 @@ export class InjectorTransport implements ITransport {
       } catch {
         // Inspector not up yet — keep polling until the deadline.
       }
-      const owned = targets.find((t) => t.title.includes(`[${opts.pid}]`))
-      if (owned !== undefined) {
-        const conn = await this.#open(owned.webSocketDebuggerUrl, undefined)
-        await this.#verifyConnectedPid(conn, opts.pid)
-        return new InjectorSession(conn, this.#sessionDeps, opts.pid)
-      }
+      const candidates = pidCandidates(targets, opts.pid).filter(
+        (t) => !foreignUrls.has(t.webSocketDebuggerUrl),
+      )
+      const owned = await this.#connectOwned(candidates, opts.pid, undefined, foreignUrls)
+      if (owned !== undefined) return new InjectorSession(owned, this.#sessionDeps, opts.pid)
       lastSeenTitles = targets.map((t) => t.title)
       if (Date.now() >= deadline) break
       await delay(this.#pollIntervalMs)
@@ -697,6 +729,30 @@ export class InjectorTransport implements ITransport {
         : missingMessage,
       { transport: TRANSPORT_ID, pid: opts.pid, port: this.#inspectorPort },
     )
+  }
+
+  /**
+   * Connect to the first candidate whose inspector reports `pid`. An unlabelled candidate that
+   * reports another pid is skipped and recorded in `foreign`; every other failure is final.
+   */
+  async #connectOwned(
+    candidates: readonly NodeInspectorTarget[],
+    pid: number,
+    timeoutMs: number | undefined,
+    foreign?: Set<string>,
+  ): Promise<CdpConnection | undefined> {
+    for (const target of candidates) {
+      const conn = await this.#open(target.webSocketDebuggerUrl, timeoutMs)
+      try {
+        await this.#verifyConnectedPid(conn, pid)
+        return conn
+      } catch (err) {
+        const otherPid = err instanceof StagewrightError && err.details?.['actual'] !== undefined
+        if (!otherPid || target.title.includes(`[${pid}]`)) throw err
+        foreign?.add(target.webSocketDebuggerUrl)
+      }
+    }
+    return undefined
   }
 
   async #listTargets(host: string, port: number): Promise<readonly NodeInspectorTarget[]> {

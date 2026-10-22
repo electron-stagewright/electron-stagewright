@@ -77,7 +77,7 @@ A helper `assertCapability(transport, capability)` is exported alongside the int
 | Transport                     | canLaunch | canAttach | canInject | canIntercept | canControlClock | supportsMainEval | supportsRendererEval |
 | ----------------------------- | --------- | --------- | --------- | ------------ | --------------- | ---------------- | -------------------- |
 | `PlaywrightElectronTransport` | ✓         | ✗         | ✗         | ✗            | ✗               | ✓                | ✓                    |
-| `CDPTransport`                | ✗         | ✓         | ✗         | ✓            | ✓               | ✓                | ✓                    |
+| `CDPTransport`                | ✗         | ✓         | ✗         | ✓            | ✓               | ✗ (2026-10-22)   | ✓                    |
 | `InjectorTransport`           | ✗         | ✓         | ✓         | ✗            | ✗               | ✓                | ✗                    |
 
 **PlaywrightElectronTransport** ships as the only fully-implemented transport in this slice. It uses Playwright's experimental `_electron.launch()` API loaded via **dynamic import** so the `playwright` peer dependency stays optional: consumers can install `@electron-stagewright/core` without `playwright` and still import the package; only invoking `launch()` surfaces a `TRANSPORT_UNSUPPORTED` error with a clear remediation hint.
@@ -445,8 +445,8 @@ driven by the native-UI plugin (see ADR-019). Like the clock seam, it is Playwri
 - The **Playwright transport** implements it via `electronApp.evaluate` running a fixed serializer over
   `Menu.getApplicationMenu()` in the Electron main-process Node context, and declares
   `canAccessNativeUI: true`.
-- The **CDP transport** declares `canAccessNativeUI: false`: its `supportsMainEval` is `Runtime.evaluate`
-  against the **browser target**, which has no Electron `Menu` module, so it cannot reach the main-process
+- The **CDP transport** declares `canAccessNativeUI: false`: its endpoint exposes renderer targets
+  only (see the 2026-10-22 status update), with no Electron `Menu` module, so it cannot reach the main-process
   menu. The seam method rejects `NOT_IMPLEMENTED`.
 - The **injector** transport keeps `canAccessNativeUI: false` (capability-honest stub).
 
@@ -611,3 +611,24 @@ Launched sessions are not reconnected. A packaged-CDP launch whose socket drops,
 launch whose `ElectronApplication` emits `close`, reject app-touching calls with the non-retryable
 `SESSION_DISCONNECTED` (ADR-006) while keeping buffered diagnostics readable; `electron_stop` still
 releases them.
+
+## Status Update — 2026-10-22: no main eval over CDP; inject finds Electron's inspector
+
+Live checks on Electron 42 showed that the CDP `supportsMainEval: true` above was never real. The
+`--remote-debugging-port` endpoint lists renderer targets only, and `Runtime.evaluate` on the browser
+endpoint fails with "'Runtime.evaluate' wasn't found". The fake CDP server in the unit tests answered
+it anyway, so the gap went unnoticed. `CDPTransport` now declares `supportsMainEval: false`: main
+evaluation rejects with `TRANSPORT_UNSUPPORTED`, the IPC plugin refuses through its capability gate,
+and `electron_info` reports null versions and app fields instead of failing. Reaching the main
+process from an attach session would need the Node inspector next to the CDP endpoint, which fused
+packaged apps usually disable; that is a separate decision.
+
+Two injector fixes came out of the same checks:
+
+- Electron's main inspector is titled `electron/js2c/browser_init`, without the `[pid]` label plain
+  Node uses, so pid matching by title rejected every Electron app. The injector now tries targets
+  labelled with the pid first, then unlabelled ones, and keeps the first whose inspector reports
+  that pid. A target labelled with another pid is never contacted.
+- Main evaluation now receives the electron module as `electronApp` (also `arguments[0]`) and the
+  JSON `arg`, the same contract as the Playwright launch transport, so `electron_info` and the IPC
+  plugin's main-process bodies run on inject sessions too.

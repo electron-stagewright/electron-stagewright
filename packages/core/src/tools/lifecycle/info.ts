@@ -53,6 +53,19 @@ return {
 };
 `
 
+const NO_MAIN_EVAL_INFO: RawInfo = {
+  electron: null,
+  node: null,
+  chrome: null,
+  v8: null,
+  app_name: null,
+  app_version: null,
+  app_path: null,
+  exe_path: null,
+  user_data_path: null,
+  packaged: null,
+}
+
 const inputSchema = z.object({
   sessionId: z
     .string()
@@ -65,6 +78,7 @@ const DESCRIPTION = [
   'app name/version/paths, packaged flag, code-signature status (verified for packaged macOS',
   'apps; "unknown" for unpackaged/dev apps, "unsupported" off macOS), the active transport,',
   'and its capability matrix. Pass sessionId to target a specific session when several are running.',
+  'Versions and app fields are null when the transport cannot evaluate in the main process (CDP attach).',
   'Returns: { ok, session_id, transport, versions, app, signature, capabilities }.',
   'Errors: NOT_RUNNING (no session — call electron_launch first; not retryable),',
   'BAD_ARGUMENT (multiple sessions live — pass sessionId; not retryable).',
@@ -90,14 +104,18 @@ export function makeInfoTool(deps: InfoToolDeps = {}): AnyToolDefinition {
     operationType: 'query',
     handler: async (args, ctx) => {
       const managed = ctx.sessions.resolve(args.sessionId)
-      const raw = await managed.session.evaluate<RawInfo>('main', PROBE_BODY)
+      const mainEval = managed.transport.capabilities.supportsMainEval
+      const raw = mainEval
+        ? await managed.session.evaluate<RawInfo>('main', PROBE_BODY)
+        : NO_MAIN_EVAL_INFO
       const signature: SignatureInfo =
         raw.packaged === true && raw.exe_path !== null && raw.exe_path !== ''
           ? await inspect(raw.exe_path)
           : {
               status: 'unknown',
-              detail:
-                raw.packaged === false
+              detail: !mainEval
+                ? 'This transport cannot evaluate in the main process, so the executable path is unknown.'
+                : raw.packaged === false
                   ? 'App is not packaged; signature verification applies to packaged executables.'
                   : 'Packaged status or executable path was not returned by the probe.',
             }
