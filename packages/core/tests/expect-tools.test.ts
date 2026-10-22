@@ -526,6 +526,21 @@ describe('electron_expect_count (role mode)', () => {
 })
 
 describe('electron_expect_url', () => {
+  it('keeps checking on the new page when a redirect lands mid-check', async () => {
+    let calls = 0
+    const evaluate: FakeEvaluate = async () => {
+      calls += 1
+      if (calls === 1) {
+        throw new Error('CDP Runtime.evaluate failed: Inspected target navigated or closed')
+      }
+      return { satisfied: true, actual: 'app://x/home' }
+    }
+    const { dispatcher } = setup({ evaluate })
+    const res = await dispatcher.dispatch('electron_expect_url', { contains: '/home' })
+    expect(res).toMatchObject({ ok: true })
+    expect(calls).toBe(2)
+  })
+
   it('matches when the URL contains the substring', async () => {
     const { dispatcher } = setup({
       evaluate: canned({ satisfied: true, actual: 'app://x/settings' }),

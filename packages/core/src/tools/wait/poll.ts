@@ -29,6 +29,7 @@ import {
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
 import { WALK_GENERATION_BODY } from './body.js'
+import { sleep } from './sleep.js'
 
 /** Default wait budget when the caller omits `timeoutMs`. */
 export const DEFAULT_WAIT_TIMEOUT_MS = 5000
@@ -136,7 +137,7 @@ const NAVIGATION_RETRY_MS = 50
 
 /**
  * Run a selector poll, starting it again on the new page when the renderer navigates under it,
- * within the same overall budget.
+ * within the same overall budget. A budget spent mid-navigation reads as not satisfied.
  */
 async function pollAcrossNavigation(
   ctx: ToolContext,
@@ -154,9 +155,10 @@ async function pollAcrossNavigation(
     try {
       return await session.evaluate<WaitRaw>('renderer', call.body, bounded)
     } catch (err) {
-      if (!isRendererNavigation(err) || remaining === 0) throw err
+      if (!isRendererNavigation(err)) throw err
     }
-    await new Promise((resolve) => setTimeout(resolve, NAVIGATION_RETRY_MS))
+    if (ctx.now() - startedAt >= timeoutMs) return { satisfied: false }
+    await sleep(NAVIGATION_RETRY_MS, ctx.signal)
   }
 }
 
@@ -229,7 +231,7 @@ export async function runWait(
   } catch (err) {
     if (ctx.signal?.aborted === true) throw err
     if (isRendererNavigation(err)) {
-      // A ref wait, or a selector wait whose budget ran out mid-navigation.
+      // Only a ref wait gets here: the navigation dropped the page its ref pointed into.
       return makeError('RENDERER_NAVIGATED', {
         ...meta,
         message: 'The renderer navigated during the wait; refs from before it are gone.',

@@ -96,7 +96,10 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
       'truncated?, result_serialized?, result_chars? }.',
       'Errors: EVAL_BLOCKED_KEYWORD / EVAL_BLOCKED_CONSTRUCT (blocked keyword or construct; not',
       'retryable), EVAL_SYNTAX_ERROR,',
-      'EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable), RENDERER_NAVIGATED (page reloaded mid-call; retryable),',
+      'EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable),',
+      ...(spec.target === 'renderer'
+        ? ['RENDERER_NAVIGATED (page reloaded mid-call; retryable),']
+        : []),
       'TRANSPORT_UNSUPPORTED (transport cannot eval',
       'here), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).',
     ].join(' '),

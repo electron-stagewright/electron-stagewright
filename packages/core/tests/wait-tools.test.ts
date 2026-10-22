@@ -93,7 +93,11 @@ function recordingProgress(): {
 }
 
 function setup(
-  opts: { readonly evaluate?: FakeEvaluate; readonly capabilities?: TransportCapabilities } = {},
+  opts: {
+    readonly evaluate?: FakeEvaluate
+    readonly capabilities?: TransportCapabilities
+    readonly now?: () => number
+  } = {},
 ) {
   const sessions = new SessionManager()
   const snapshots = new SnapshotStore()
@@ -106,7 +110,11 @@ function setup(
       ? new FakeTransport({ capabilities: opts.capabilities })
       : new FakeTransport()
   sessions.register(transport, session)
-  const dispatcher = new Dispatcher({ sessions, snapshots })
+  const dispatcher = new Dispatcher({
+    sessions,
+    snapshots,
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+  })
   dispatcher.registerAll(WAIT_TOOLS)
   return { dispatcher, session, snapshots }
 }
@@ -266,26 +274,66 @@ describe('electron_wait_for_selector', () => {
     expect(cap.calls).toEqual([])
   })
 
-  it('starts the poll again on the new page when the renderer navigates under it', async () => {
-    const calls: unknown[] = []
+  it('starts the poll again on the new page with only the remaining budget', async () => {
+    let clock = 0
+    const budgets: unknown[] = []
     const evaluate: FakeEvaluate = async (_target, _body, arg) => {
-      calls.push(arg)
-      if (calls.length === 1) {
+      budgets.push((arg as { timeoutMs: number }).timeoutMs)
+      if (budgets.length === 1) {
+        clock += 500
         throw new Error(
           'page.evaluate: Execution context was destroyed, most likely because of a navigation.',
         )
       }
       return { satisfied: true, state: 'visible' }
     }
-    const { dispatcher } = setup({ evaluate })
+    const { dispatcher } = setup({ evaluate, now: () => clock })
     const res = await dispatcher.dispatch('electron_wait_for_selector', {
       selector: 'body',
       timeoutMs: 2000,
     })
     expect(res).toMatchObject({ ok: true, matched: true })
-    expect(calls).toHaveLength(2)
-    // The second poll gets only what is left of the budget.
-    expect((calls[1] as { timeoutMs: number }).timeoutMs).toBeLessThanOrEqual(2000)
+    expect(budgets).toEqual([2000, 1500])
+  })
+
+  it('times out, not RENDERER_NAVIGATED, when the budget runs out mid-navigation', async () => {
+    let clock = 0
+    const evaluate: FakeEvaluate = async () => {
+      clock += 1000
+      throw new Error(
+        'page.evaluate: Execution context was destroyed, most likely because of a navigation.',
+      )
+    }
+    const { dispatcher } = setup({ evaluate, now: () => clock })
+    const res = await dispatcher.dispatch('electron_wait_for_selector', {
+      selector: 'body',
+      timeoutMs: 2000,
+    })
+    expect(res).toMatchObject({ ok: false, code: 'WAIT_TIMEOUT' })
+  })
+
+  it('stops pausing between navigation retries once the request is cancelled', async () => {
+    vi.useFakeTimers()
+    try {
+      const controller = new AbortController()
+      const evaluate: FakeEvaluate = async () => {
+        throw new Error(
+          'page.evaluate: Execution context was destroyed, most likely because of a navigation.',
+        )
+      }
+      const { dispatcher } = setup({ evaluate })
+      const pending = dispatcher.dispatch(
+        'electron_wait_for_selector',
+        { selector: 'body', timeoutMs: 60_000 },
+        { signal: controller.signal },
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      controller.abort()
+      await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reports RENDERER_NAVIGATED when a navigation drops the page a ref wait polls', async () => {
