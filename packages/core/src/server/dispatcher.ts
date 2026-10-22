@@ -61,6 +61,7 @@ import type {
   ToolContext,
   ToolResult,
 } from '../tools/types.js'
+import { isRendererNavigation } from '../transports/navigation.js'
 import { anyEvalAllowed, type EvalPolicy, normalizeEvalPolicy } from './eval-policy.js'
 import { type Logger, NOOP_LOGGER, SLOW_OP_THRESHOLD_MS } from './logger.js'
 import {
@@ -811,8 +812,17 @@ export class Dispatcher {
 
   /** Map a thrown value to an error envelope. */
   #mapThrown(err: unknown, startedAt: number): ErrorResponse {
-    const code = err instanceof StagewrightError ? err.code : 'INTERNAL_ERROR'
     const message = err instanceof Error ? err.message : String(err)
+    const internal = !(err instanceof StagewrightError) || err.code === 'INTERNAL_ERROR'
+    if (internal && isRendererNavigation(err)) {
+      return makeError('RENDERER_NAVIGATED', {
+        message: `The renderer navigated during the call: ${message.split('\n', 1)[0]}`,
+        next_actions: ['electron_snapshot()'],
+        startedAt,
+        now: this.#now,
+      })
+    }
+    const code = err instanceof StagewrightError ? err.code : 'INTERNAL_ERROR'
     const details = err instanceof StagewrightError ? err.details : undefined
     const hint = err instanceof StagewrightError ? err.hint : undefined
     const base = { message, startedAt, now: this.#now, ...(hint !== undefined ? { hint } : {}) }

@@ -24,7 +24,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { ERROR_CODES, type ErrorCode } from '../src/errors/registry.js'
+import { ERROR_CODES, type ErrorCode, StagewrightError } from '../src/errors/registry.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
@@ -45,6 +45,7 @@ interface ErrorEnvelope {
   readonly code?: string
   readonly retryable?: boolean
   readonly message?: string
+  readonly next_actions?: readonly string[]
 }
 
 /**
@@ -151,6 +152,105 @@ describe('resilience: bad selectors and unactionable elements', () => {
       'electron_click',
       { selector: '#x' },
       { code: 'ELEMENT_NOT_VISIBLE', retryable: true },
+    )
+  })
+})
+
+describe('resilience: the renderer navigates during the call', () => {
+  const PLAYWRIGHT_NAV =
+    'page.evaluate: Execution context was destroyed, most likely because of a navigation.'
+
+  it('maps a thrown navigation in a tool the dispatcher catches to RENDERER_NAVIGATED', async () => {
+    const { dispatcher } = chaosSetup({
+      session: new FakeSession({
+        id: 'sess',
+        evaluate: async () => {
+          throw new Error(PLAYWRIGHT_NAV)
+        },
+      }),
+    })
+    const res = await expectCleanError(
+      dispatcher,
+      'electron_find',
+      { role: 'button' },
+      { code: 'RENDERER_NAVIGATED', retryable: true },
+    )
+    expect(res).toMatchObject({ next_actions: ['electron_snapshot()'] })
+  })
+
+  it('maps a CDP navigation wrapped as INTERNAL_ERROR the same way', async () => {
+    const { dispatcher } = chaosSetup({
+      session: new FakeSession({
+        id: 'sess',
+        evaluate: async () => {
+          throw new StagewrightError(
+            'INTERNAL_ERROR',
+            'CDP Runtime.evaluate failed: Inspected target navigated or closed',
+          )
+        },
+      }),
+    })
+    await expectCleanError(
+      dispatcher,
+      'electron_find',
+      { role: 'button' },
+      { code: 'RENDERER_NAVIGATED', retryable: true },
+    )
+  })
+
+  it('maps a navigation in an interaction tool that handles its own failure', async () => {
+    const { dispatcher } = chaosSetup({
+      session: new FakeSession({
+        id: 'sess',
+        interactionError: new Error(
+          'locator.click: Execution context was destroyed, most likely because of a navigation',
+        ),
+      }),
+    })
+    const res = await expectCleanError(
+      dispatcher,
+      'electron_click',
+      { selector: '#x' },
+      { code: 'RENDERER_NAVIGATED', retryable: true },
+    )
+    expect(res).toMatchObject({ next_actions: ['electron_snapshot()'] })
+  })
+
+  it('keeps an already classified code and a thrown look-alike as they are', async () => {
+    const closed = chaosSetup({
+      session: new FakeSession({
+        id: 'sess',
+        evaluate: async () => {
+          throw new StagewrightError(
+            'SURFACE_CLOSED',
+            'CDP Runtime.evaluate failed: Inspected target navigated or closed',
+          )
+        },
+      }),
+    })
+    await expectCleanError(
+      closed.dispatcher,
+      'electron_find',
+      { role: 'button' },
+      {
+        code: 'SURFACE_CLOSED',
+      },
+    )
+    const thrown = chaosSetup({
+      session: new FakeSession({
+        id: 'sess',
+        evaluate: async () => {
+          throw new Error('page.evaluate: Error: Execution context was destroyed')
+        },
+      }),
+    })
+    await expectCleanError(
+      thrown.dispatcher,
+      'electron_find',
+      { role: 'button' },
+      {
+        code: 'INTERNAL_ERROR',
+      },
     )
   })
 })

@@ -5,13 +5,14 @@
  */
 
 /**
- * Transport messages for a renderer that navigated mid-call. Anchored on the transport prefix so an
+ * Transport messages for a renderer that navigated mid-call. Anchored on the transport's own prefix
+ * (a Playwright API such as `page.evaluate:` or `locator.click:`, or a failed CDP method) so an
  * error the evaluated code throws with the same words (`page.evaluate: Error: …`,
  * `CDP evaluation threw: …`) is not mistaken for one.
  */
 const NAVIGATED = [
-  /^\w+\.evaluate: execution context was destroyed/,
-  /^cdp runtime\.evaluate failed: inspected target navigated or closed/,
+  /^[\w.]+: execution context was destroyed/,
+  /^cdp [\w.]+ failed: (inspected target navigated or closed|not attached to an active page)/,
 ]
 
 /** Whether `err` is a transport report that the renderer navigated during the call. */
