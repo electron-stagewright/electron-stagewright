@@ -24,6 +24,7 @@ import {
   findEntries,
 } from '../../snapshot/index.js'
 import { assertCapability } from '../../transports/index.js'
+import { isRendererNavigation } from '../../transports/navigation.js'
 import { sessionIdField } from '../schema.js'
 import { loadInjectedWalker, runWalk } from '../snapshot/inject.js'
 import { reconcileRetagAndStore } from '../snapshot/refs.js'
@@ -212,7 +213,8 @@ async function pollRoleCount(
       const startedAt = ctx.now()
       for (;;) {
         ctx.signal?.throwIfAborted()
-        let actual: number
+        // Undefined when a navigation dropped the page mid-walk: count again on the new page.
+        let actual: number | undefined
         try {
           // The walker CLEARS and renumbers every data-sw-ref in document order. Without
           // reconciling and re-tagging (as snapshot/find do), the DOM tags would silently
@@ -239,18 +241,23 @@ async function pollRoleCount(
           actual = findEntries(curr, query).length
         } catch (err) {
           ctx.signal?.throwIfAborted()
-          return handleTargetFailure(err, { ctx, session: managed.session, meta })
+          if (!isRendererNavigation(err)) {
+            return handleTargetFailure(err, { ctx, session: managed.session, meta })
+          }
         }
-        if (countSatisfied(actual, match)) {
+        if (actual !== undefined && countSatisfied(actual, match)) {
           return makeSuccess({ session_id: managed.id, matched: true, actual }, meta)
         }
         const remaining = timeoutMs - (ctx.now() - startedAt)
         if (remaining <= 0) {
           return makeError('EXPECTATION_FAILED', {
             ...meta,
-            message: `The match count did not satisfy the predicate within ${timeoutMs}ms.`,
+            message:
+              actual === undefined
+                ? `The page was still navigating when the ${timeoutMs}ms budget ended, so nothing was counted.`
+                : `The match count did not satisfy the predicate within ${timeoutMs}ms.`,
             next_actions: ['electron_snapshot()'],
-            details: { expected: describeCount(match), actual },
+            details: { expected: describeCount(match), actual: actual ?? null },
           })
         }
         await sleep(Math.min(ROLE_POLL_INTERVAL_MS, remaining), ctx.signal)
