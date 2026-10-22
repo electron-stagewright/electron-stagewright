@@ -548,6 +548,21 @@ describe('electron_screenshot freshness', () => {
     ).resolves.toMatchObject({ same_as_previous: false })
   })
 
+  it('treats the same window addressed by id, index or title as one target', async () => {
+    const { dispatcher } = freshSetup({ evaluate: async () => true })
+    const dir = await tempDir()
+    await dispatcher.dispatch('electron_screenshot', { dir })
+    for (const ref of [
+      { windowIndex: 0 },
+      { windowTitle: ACTIVE_WINDOW.title },
+      { windowId: ACTIVE_WINDOW.id },
+    ]) {
+      await expect(
+        dispatcher.dispatch('electron_screenshot', { dir, ...ref }),
+      ).resolves.toMatchObject({ same_as_previous: true })
+    }
+  })
+
   it('reports overwrote when an explicit path already existed', async () => {
     const { dispatcher } = freshSetup({ evaluate: async () => true })
     const file = path.join(await tempDir(), 'same.png')

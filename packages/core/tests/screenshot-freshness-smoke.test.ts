@@ -80,12 +80,11 @@ async function checkFreshness(dispatcher: Dispatcher, sessionId: string): Promis
       dir,
       ...extra,
     })) as Capture
-    expect(res.ok).toBe(true)
+    expect(res).toMatchObject({ ok: true, frame_waited: true })
     return res
   }
 
   const first = await capture()
-  expect(first.frame_waited).toBe(true)
   const unchanged = await capture()
   expect(unchanged).toMatchObject({
     same_as_previous: true,

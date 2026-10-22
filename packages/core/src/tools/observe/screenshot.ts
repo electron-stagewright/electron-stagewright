@@ -436,9 +436,11 @@ export function makeScreenshotTool(deps: ScreenshotToolDeps = {}): AnyToolDefini
       ctx.signal?.throwIfAborted()
 
       const contentSha256 = createHash('sha256').update(buffer).digest('hex')
+      // Key on the resolved window, so the same window addressed another way is the same target.
+      const targetWindow = windows.find((window) => refNamesWindow(target, window))
       const captureKey = JSON.stringify([
         managed.id,
-        target,
+        targetWindow?.id ?? target,
         elementSelector ?? null,
         args.clip ?? null,
         args.fullPage ?? false,
