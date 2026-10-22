@@ -217,6 +217,12 @@ describe('eval-tool safety + error classification', () => {
     })) as ErrorResponse
     expect(construct.code).toBe('EVAL_BLOCKED_CONSTRUCT')
     expect(construct.hint).toBe(keyword.hint)
+
+    const dynamicImport = (await dispatcher.dispatch('electron_eval_main', {
+      code: "const { dialog } = await import('electron')",
+    })) as ErrorResponse
+    expect(dynamicImport.code).toBe('EVAL_BLOCKED_CONSTRUCT')
+    expect(dynamicImport.hint).toBe(keyword.hint)
   })
 
   it('keeps the registry hint for a blocked require in renderer eval', async () => {

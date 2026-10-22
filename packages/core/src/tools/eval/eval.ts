@@ -146,9 +146,10 @@ export const evalMainTool: AnyToolDefinition = makeEvalTool({
   capability: 'supportsMainEval',
   context: 'main process',
   scope:
-    'On launch and inject sessions it also receives the electron module as `electronApp`' +
-    ' (`arguments[0]`), e.g. `const { dialog } = electronApp`; `require` is blocked, and attach' +
-    ' (CDP) sessions have no main eval.',
+    'On sessions launched with a `main` entry and on inject sessions it also receives the' +
+    ' electron module as `electronApp` (`arguments[0]`), e.g. `const { dialog } = electronApp`;' +
+    ' `require` and `import()` are blocked, and CDP sessions (attach or packaged launch) have no' +
+    ' main eval.',
 })
 
 /** `electron_eval_renderer` — evaluate in the focused renderer (`page.evaluate`). */
