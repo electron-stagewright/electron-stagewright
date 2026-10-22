@@ -331,3 +331,24 @@ downloading mid-session. Added one code to the registry:
   The `Cannot find module 'electron'` case, previously `TRANSPORT_UNSUPPORTED`, now uses this code
   too, since the remedy is the same. `doctor`'s `electron` check runs the same test, so it passes
   only when a launch would not download.
+
+## Status Update (2026-10-22) — added `RENDERER_NAVIGATED`
+
+An eval that reloads or navigates the renderer (`location.reload()`, a locale or theme switch that
+reloads) loses its execution context before the result comes back. Playwright reports "Execution
+context was destroyed" and CDP "Inspected target navigated or closed", and both surfaced as
+`EVAL_RUNTIME_ERROR`, although the navigation happened and was usually the intent. Added one code to
+the registry:
+
+- **`RENDERER_NAVIGATED`** — `http: 409`, `retryable: true`, hint: the renderer navigated or
+  reloaded during the call and its result was lost; wait for the new page before the next call.
+  `classifyEvalError` matches the transport's own message prefix (`page.evaluate: Execution
+context was destroyed`, `CDP Runtime.evaluate failed: Inspected target navigated or closed`), so
+  an error the evaluated code throws with the same words stays `EVAL_RUNTIME_ERROR`. The eval tools
+  attach `next_actions` pointing at `electron_wait_for_selector`.
+
+That suggestion first failed on a real app: called while the reload was still loading, the wait's
+own renderer poll lost its context and returned `INTERNAL_ERROR`. The wait and expect tools now
+start a selector poll again on the new page, within the same budget, when the renderer navigates
+under it. A ref-targeted wait cannot follow its ref across a navigation and returns
+`RENDERER_NAVIGATED` with `next_actions` pointing at `electron_snapshot`.

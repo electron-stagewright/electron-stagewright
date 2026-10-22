@@ -266,6 +266,45 @@ describe('electron_wait_for_selector', () => {
     expect(cap.calls).toEqual([])
   })
 
+  it('starts the poll again on the new page when the renderer navigates under it', async () => {
+    const calls: unknown[] = []
+    const evaluate: FakeEvaluate = async (_target, _body, arg) => {
+      calls.push(arg)
+      if (calls.length === 1) {
+        throw new Error(
+          'page.evaluate: Execution context was destroyed, most likely because of a navigation.',
+        )
+      }
+      return { satisfied: true, state: 'visible' }
+    }
+    const { dispatcher } = setup({ evaluate })
+    const res = await dispatcher.dispatch('electron_wait_for_selector', {
+      selector: 'body',
+      timeoutMs: 2000,
+    })
+    expect(res).toMatchObject({ ok: true, matched: true })
+    expect(calls).toHaveLength(2)
+    // The second poll gets only what is left of the budget.
+    expect((calls[1] as { timeoutMs: number }).timeoutMs).toBeLessThanOrEqual(2000)
+  })
+
+  it('reports RENDERER_NAVIGATED when a navigation drops the page a ref wait polls', async () => {
+    const snapshot = snap('<button>Save</button>')
+    const ref = snapshot.entries.find((entry) => entry.role === 'button')?.ref
+    const evaluate: FakeEvaluate = async (_target, body) => {
+      if (body === 'WALK') return 0
+      throw new Error('CDP Runtime.evaluate failed: Inspected target navigated or closed')
+    }
+    const { dispatcher, snapshots } = setup({ evaluate })
+    snapshots.set('sess', snapshot)
+    const res = await dispatcher.dispatch('electron_wait_for_selector', { ref })
+    expect(res).toMatchObject({
+      ok: false,
+      code: 'RENDERER_NAVIGATED',
+      next_actions: ['electron_snapshot()'],
+    })
+  })
+
   it('guards stale refs before absence can satisfy hidden/detached waits', async () => {
     const cap = capturing({ satisfied: true, state: 'hidden' })
     const { dispatcher, snapshots } = setup({ evaluate: cap.evaluate })

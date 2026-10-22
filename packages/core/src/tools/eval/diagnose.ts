@@ -8,15 +8,18 @@
  */
 
 import { type ErrorCode, StagewrightError } from '../../errors/registry.js'
+import { isRendererNavigation } from '../../transports/navigation.js'
 
 /**
  * Map an error thrown while evaluating an eval payload to a registered code:
- * a SyntaxError → `EVAL_SYNTAX_ERROR`, a timeout → `EVAL_TIMEOUT`, an already
- * classified non-internal `StagewrightError` (e.g. `NOT_RUNNING`) passes through,
- * and everything else → `EVAL_RUNTIME_ERROR` (a value the body threw at runtime).
+ * a SyntaxError → `EVAL_SYNTAX_ERROR`, a timeout → `EVAL_TIMEOUT`, a navigation
+ * during the call → `RENDERER_NAVIGATED`, an already classified non-internal
+ * `StagewrightError` (e.g. `NOT_RUNNING`) passes through, and everything else →
+ * `EVAL_RUNTIME_ERROR` (a value the body threw at runtime).
  */
 export function classifyEvalError(err: unknown): ErrorCode {
   if (err instanceof StagewrightError && err.code !== 'INTERNAL_ERROR') return err.code
+  if (isRendererNavigation(err)) return 'RENDERER_NAVIGATED'
   if (err instanceof Error && err.name === 'SyntaxError') return 'EVAL_SYNTAX_ERROR'
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
   if (
