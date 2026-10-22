@@ -230,14 +230,6 @@ export async function runWait(
     })
   } catch (err) {
     if (ctx.signal?.aborted === true) throw err
-    if (isRendererNavigation(err)) {
-      // Only a ref wait gets here: the navigation dropped the page its ref pointed into.
-      return makeError('RENDERER_NAVIGATED', {
-        ...meta,
-        message: 'The renderer navigated during the wait; refs from before it are gone.',
-        next_actions: ['electron_snapshot()'],
-      })
-    }
     return handleTargetFailure(err, {
       ctx,
       session: managed.session,

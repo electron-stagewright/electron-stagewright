@@ -352,3 +352,18 @@ own renderer poll lost its context and returned `INTERNAL_ERROR`. The wait and e
 start a selector poll again on the new page, within the same budget, when the renderer navigates
 under it. A ref-targeted wait cannot follow its ref across a navigation and returns
 `RENDERER_NAVIGATED` with `next_actions` pointing at `electron_snapshot`.
+
+## Status Update (2026-10-22) — `RENDERER_NAVIGATED` for every renderer tool
+
+The first slice covered eval and the wait and expect tools. Every other renderer tool still turned
+the same transport message into `INTERNAL_ERROR`: on a real app, `electron_snapshot`,
+`electron_find`, `electron_get_text` and `electron_exists` called during a reload returned
+`page.evaluate: Execution context was destroyed`, and `electron_screenshot` on CDP returned
+`Page.captureScreenshot failed: Not attached to an active page`. The mapping now lives in the two
+places errors become envelopes: `Dispatcher#mapThrown` for tools that throw, and
+`classifyTargetError` for tools that handle their own failure. Both add `next_actions` pointing at
+`electron_snapshot`, since refs from before the navigation are gone. Only an error that would
+otherwise be `INTERNAL_ERROR` is remapped, so an already classified code (for example
+`SURFACE_CLOSED`) keeps its meaning. The detector accepts any Playwright API prefix
+(`locator.click:`, `frame.evaluate:`) and any failed CDP method, with the same guard against a
+thrown look-alike.

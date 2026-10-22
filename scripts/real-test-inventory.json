@@ -44,6 +44,10 @@
     "tests": 1
   },
   {
+    "path": "packages/core/tests/navigation-smoke.test.ts",
+    "tests": 2
+  },
+  {
     "path": "packages/core/tests/observe-smoke.test.ts",
     "tests": 2
   },

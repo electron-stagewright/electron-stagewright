@@ -28,6 +28,7 @@ import { untilAborted } from '../server/snapshot-store.js'
 import type { Snapshot } from '../snapshot/index.js'
 import { refFromSelector } from '../snapshot/resolve-target.js'
 import type { TransportSession } from '../transports/index.js'
+import { isRendererNavigation } from '../transports/navigation.js'
 import { loadInjectedWalker, runWalk } from './snapshot/inject.js'
 import { reconcileRetagAndStore } from './snapshot/refs.js'
 import type { ToolContext } from './types.js'
@@ -113,6 +114,7 @@ export function resolveOptionalTarget(args: {
  */
 export function classifyTargetError(err: unknown): ErrorCode {
   if (err instanceof StagewrightError && err.code !== 'INTERNAL_ERROR') return err.code
+  if (isRendererNavigation(err)) return 'RENDERER_NAVIGATED'
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
   if (/not enabled|is disabled|element is disabled/.test(msg)) return 'ELEMENT_DISABLED'
   if (/not visible|is hidden|outside of the viewport|not stable|intercepts pointer/.test(msg)) {
@@ -330,7 +332,8 @@ export async function handleTargetFailure(
         ]
       : code === 'ELEMENT_NOT_VISIBLE' ||
           code === 'ELEMENT_DISABLED' ||
-          code === 'POINTER_NOT_DELIVERED'
+          code === 'POINTER_NOT_DELIVERED' ||
+          code === 'RENDERER_NAVIGATED'
         ? ['electron_snapshot()']
         : undefined
   return makeError(code, {

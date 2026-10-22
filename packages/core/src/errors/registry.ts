@@ -210,7 +210,7 @@ export const ERROR_CODES = {
   RENDERER_NAVIGATED: {
     http: 409,
     retryable: true,
-    hint: 'The renderer navigated or reloaded during the call, so its result was lost; the navigation itself happened. Wait for the new page (electron_wait_for_selector) before the next call.',
+    hint: 'The renderer navigated or reloaded during the call, so its result was lost; the navigation itself happened. Let the new page load (electron_wait_for_selector), then take a fresh snapshot before using refs.',
   },
   EVAL_TIMEOUT: {
     http: 408,
