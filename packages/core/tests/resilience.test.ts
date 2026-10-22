@@ -30,6 +30,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { EVAL_TOOLS } from '../src/tools/eval/index.js'
 import { INTERACTION_TOOLS } from '../src/tools/interaction/index.js'
+import { READ_TOOLS } from '../src/tools/read/index.js'
 import { makeFindTool } from '../src/tools/snapshot/find.js'
 import type { AnyToolDefinition } from '../src/tools/types.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
@@ -46,6 +47,7 @@ interface ErrorEnvelope {
   readonly retryable?: boolean
   readonly message?: string
   readonly next_actions?: readonly string[]
+  readonly details?: Record<string, unknown>
 }
 
 /**
@@ -186,16 +188,38 @@ describe('resilience: the renderer navigates during the call', () => {
           throw new StagewrightError(
             'INTERNAL_ERROR',
             'CDP Runtime.evaluate failed: Inspected target navigated or closed',
+            { method: 'Runtime.evaluate' },
           )
         },
       }),
     })
-    await expectCleanError(
+    const res = await expectCleanError(
       dispatcher,
       'electron_find',
       { role: 'button' },
       { code: 'RENDERER_NAVIGATED', retryable: true },
     )
+    // The transport's details survive the remap, so the failing method stays visible.
+    expect(res).toMatchObject({ details: { method: 'Runtime.evaluate' } })
+  })
+
+  it('maps a navigation in a read tool, which reports its own failure', async () => {
+    const { dispatcher } = chaosSetup({
+      tools: READ_TOOLS,
+      session: new FakeSession({
+        id: 'sess',
+        evaluate: async () => {
+          throw new Error(PLAYWRIGHT_NAV)
+        },
+      }),
+    })
+    const res = await expectCleanError(
+      dispatcher,
+      'electron_get_text',
+      { selector: 'body' },
+      { code: 'RENDERER_NAVIGATED', retryable: true },
+    )
+    expect(res).toMatchObject({ next_actions: ['electron_snapshot()'] })
   })
 
   it('maps a navigation in an interaction tool that handles its own failure', async () => {

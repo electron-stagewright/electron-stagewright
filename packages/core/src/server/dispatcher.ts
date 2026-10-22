@@ -814,18 +814,21 @@ export class Dispatcher {
   #mapThrown(err: unknown, startedAt: number): ErrorResponse {
     const message = err instanceof Error ? err.message : String(err)
     const internal = !(err instanceof StagewrightError) || err.code === 'INTERNAL_ERROR'
-    if (internal && isRendererNavigation(err)) {
-      return makeError('RENDERER_NAVIGATED', {
-        message: `The renderer navigated during the call: ${message.split('\n', 1)[0]}`,
-        next_actions: ['electron_snapshot()'],
-        startedAt,
-        now: this.#now,
-      })
-    }
-    const code = err instanceof StagewrightError ? err.code : 'INTERNAL_ERROR'
+    const navigated = internal && isRendererNavigation(err)
+    const code = navigated
+      ? 'RENDERER_NAVIGATED'
+      : err instanceof StagewrightError
+        ? err.code
+        : 'INTERNAL_ERROR'
     const details = err instanceof StagewrightError ? err.details : undefined
     const hint = err instanceof StagewrightError ? err.hint : undefined
-    const base = { message, startedAt, now: this.#now, ...(hint !== undefined ? { hint } : {}) }
+    const base = {
+      message,
+      startedAt,
+      now: this.#now,
+      ...(hint !== undefined ? { hint } : {}),
+      ...(navigated ? { next_actions: ['electron_snapshot()'] } : {}),
+    }
     if (details !== undefined) {
       try {
         // makeError throws if details are not JSON-serialisable; fall back to a
