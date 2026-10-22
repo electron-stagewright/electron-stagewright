@@ -140,3 +140,24 @@ The reviewed baseline records this intentional discovery cost without changing t
 The essential profile is unchanged. The reason recorded by `manifest:update` identifies the
 schemas and portable evidence explicitly. This does not authorize adding schemas speculatively to
 the entire catalog; subsequent adoption remains subject to measurement and the existing gate.
+
+## Status update (2026-10-22): focus-aware keyboard input
+
+The keyboard tools gain `waitForFocusMs` and `requireEditable` and return `focused`. A first draft
+also gave the three tools output schemas; measured, each cost about 1,270 characters because the
+schema wraps the full response envelope, roughly three quarters of the growth. These are not
+evidence tools, so in line with the 2026-10-03 update the schemas were dropped and `focused` is
+documented in each description's `Returns` instead.
+
+Together with the error-code and navigation changes since the last baseline, the essential
+profiles cross the 3% gate, so the baseline is moved with an explicit reason (the gate is
+unchanged). From this point each change that grows the manifest records its own reason.
+
+| Variant               | Previous BPE | New BPE | Growth |
+| --------------------- | -----------: | ------: | -----: |
+| Core safe             |       19,108 |  19,624 |  2.70% |
+| Essential safe        |        9,852 |  10,160 |  3.13% |
+| Essential with eval   |       10,484 |  10,861 |  3.60% |
+| Testing safe          |       17,221 |  17,737 |  3.00% |
+| All plugins safe      |       31,849 |  32,365 |  1.62% |
+| All plugins with eval |       36,200 |  36,722 |  1.44% |

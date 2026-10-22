@@ -87,6 +87,28 @@ describe('__stagewrightProbe element mode', () => {
   })
 })
 
+describe('__stagewrightProbe editable flag', () => {
+  it.each([
+    ['<input id="t" type="text">', true],
+    ['<input id="t">', true],
+    ['<input id="t" type="search">', true],
+    ['<textarea id="t"></textarea>', true],
+    ['<div id="t" contenteditable="true">x</div>', true],
+    ['<div contenteditable><p id="t">x</p></div>', true],
+    ['<input id="t" type="text" readonly>', false],
+    ['<input id="t" type="text" disabled>', false],
+    ['<textarea id="t" readonly></textarea>', false],
+    ['<input id="t" type="checkbox">', false],
+    ['<button id="t">Go</button>', false],
+    ['<div contenteditable="false"><p id="t">x</p></div>', false],
+  ])('%s → editable %s', (html, editable) => {
+    withDom(html, () => {
+      const result = g.__stagewrightProbe({ selector: '#t' }) as ProbeElementResult
+      expect(result.editable).toBe(editable)
+    })
+  })
+})
+
 describe('__stagewrightProbe focused mode', () => {
   it('reports the focused element', () => {
     withDom('<input id="n" />', (doc) => {

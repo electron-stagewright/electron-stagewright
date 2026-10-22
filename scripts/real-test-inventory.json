@@ -32,6 +32,10 @@
     "tests": 2
   },
   {
+    "path": "packages/core/tests/keyboard-focus-smoke.test.ts",
+    "tests": 2
+  },
+  {
     "path": "packages/core/tests/lifecycle-multi-window-smoke.test.ts",
     "tests": 1
   },

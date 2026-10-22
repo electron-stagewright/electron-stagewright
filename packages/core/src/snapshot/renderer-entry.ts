@@ -51,6 +51,8 @@ export interface ProbeElementResult {
   readonly value: string | null
   readonly bbox: SnapshotBbox
   readonly state: SnapshotState
+  /** Whether typed text would land here: a text input, textarea or contenteditable that accepts it. */
+  readonly editable: boolean
 }
 
 /** One entry in `__stagewrightProbe` `list` mode. */
@@ -158,6 +160,33 @@ function probeValue(element: Element): string | null {
   return null
 }
 
+/** Input types that do not take typed text. */
+const NON_TEXT_INPUT_TYPES = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'hidden',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+])
+
+/** Whether typed text would land in `element`. */
+function probeEditable(element: Element): boolean {
+  const control = element as Element & { disabled?: unknown; readOnly?: unknown }
+  const tag = element.tagName.toLowerCase()
+  if (tag === 'textarea' || tag === 'input') {
+    if (control.disabled === true || control.readOnly === true) return false
+    if (tag === 'textarea') return true
+    return !NON_TEXT_INPUT_TYPES.has((element.getAttribute('type') ?? 'text').toLowerCase())
+  }
+  const host = element.closest('[contenteditable]')
+  return host !== null && host.getAttribute('contenteditable') !== 'false'
+}
+
 /** Parse the `data-sw-ref` tag into a number, or `null` when untagged / malformed. */
 function probeRef(element: Element): number | null {
   const attr = element.getAttribute(REF_ATTRIBUTE)
@@ -177,6 +206,7 @@ function probeElement(element: Element): ProbeElementResult {
     value: probeValue(element),
     bbox: probeBbox(element),
     state: extractState(element, role),
+    editable: probeEditable(element),
   }
 }
 

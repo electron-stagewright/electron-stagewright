@@ -325,22 +325,29 @@ export async function handleTargetFailure(
     return buildMissError(code, { ...cx, message })
   }
   const next_actions =
-    code === 'TYPE_NO_EFFECT'
-      ? [
-          'electron_type_into_editor({ selector: "<editor content area, e.g. \'.monaco-editor .view-lines\'>", text })',
-          'If custom focus is needed: electron_click({ selector: "<editor content area>" }) then electron_keyboard_type({ text }) with no selector.',
-        ]
-      : code === 'ELEMENT_NOT_VISIBLE' ||
-          code === 'ELEMENT_DISABLED' ||
-          code === 'POINTER_NOT_DELIVERED' ||
-          code === 'RENDERER_NAVIGATED'
-        ? ['electron_snapshot()']
-        : undefined
-  return makeError(code, {
-    ...cx.meta,
-    message,
-    ...(next_actions !== undefined ? { next_actions } : {}),
-  })
+    code === 'NO_FOCUSED_EDITABLE'
+      ? ['electron_focused_element()', 'electron_keyboard_type({ selector: "<the input>", text })']
+      : code === 'TYPE_NO_EFFECT'
+        ? [
+            'electron_type_into_editor({ selector: "<editor content area, e.g. \'.monaco-editor .view-lines\'>", text })',
+            'If custom focus is needed: electron_click({ selector: "<editor content area>" }) then electron_keyboard_type({ text }) with no selector.',
+          ]
+        : code === 'ELEMENT_NOT_VISIBLE' ||
+            code === 'ELEMENT_DISABLED' ||
+            code === 'POINTER_NOT_DELIVERED' ||
+            code === 'RENDERER_NAVIGATED'
+          ? ['electron_snapshot()']
+          : undefined
+  const base = { ...cx.meta, message, ...(next_actions !== undefined ? { next_actions } : {}) }
+  const details = err instanceof StagewrightError ? err.details : undefined
+  if (details !== undefined) {
+    try {
+      return makeError(code, { ...base, details })
+    } catch {
+      // Non-serialisable details are dropped rather than failing the call.
+    }
+  }
+  return makeError(code, base)
 }
 
 /** Outcome of {@link withFreshRefs}: the task's value, or the first ref missing from the latest snapshot. */
