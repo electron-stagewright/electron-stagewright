@@ -252,7 +252,10 @@ async function pollRoleCount(
         if (remaining <= 0) {
           return makeError('EXPECTATION_FAILED', {
             ...meta,
-            message: `The match count did not satisfy the predicate within ${timeoutMs}ms.`,
+            message:
+              actual === undefined
+                ? `The page was still navigating when the ${timeoutMs}ms budget ended, so nothing was counted.`
+                : `The match count did not satisfy the predicate within ${timeoutMs}ms.`,
             next_actions: ['electron_snapshot()'],
             details: { expected: describeCount(match), actual: actual ?? null },
           })

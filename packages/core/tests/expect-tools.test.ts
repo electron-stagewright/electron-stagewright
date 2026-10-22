@@ -502,6 +502,7 @@ describe('electron_expect_count (role mode)', () => {
     })) as ErrorResponse & { details?: { actual?: unknown } }
     expect(res.code).toBe('EXPECTATION_FAILED')
     expect(res.details?.actual).toBeNull()
+    expect(res.error).toContain('still navigating')
   })
 
   it('fails when the role count does not satisfy the predicate', async () => {
