@@ -19,7 +19,9 @@ import { z } from 'zod'
 import { TARGET_RESOLVER_FN } from '../../snapshot/resolve-target.js'
 import { StagewrightError } from '../../errors/registry.js'
 import type { PressOptions, TransportSession } from '../../transports/index.js'
-import { type AnyToolDefinition, defineTool } from '../types.js'
+import { loadInjectedWalker, runProbe } from '../snapshot/inject.js'
+import { type AnyToolDefinition, type ToolContext, defineTool } from '../types.js'
+import { sleep } from '../wait/sleep.js'
 import { refField, selectorField, sessionIdField, forceField, timeoutField } from './schema.js'
 import {
   resolveActionOptions,
@@ -42,6 +44,108 @@ function pressOptionsFor(args: {
     ...(force !== undefined ? { force } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   }
+}
+
+/** Dependency seams for the keyboard tools, injected by tests. */
+export interface KeyboardToolDeps {
+  /** Loader for the bundled walker/probe IIFE. Defaults to reading the built artifact. */
+  readonly loadBundle?: () => string
+}
+
+/** Where the keys go: the target when one is given, otherwise the focused element. */
+export interface KeyFocus {
+  readonly role: string
+  readonly name: string
+  readonly editable: boolean
+}
+
+/** Longest accessible name quoted in a NO_FOCUSED_EDITABLE message. */
+const MAX_FOCUS_NAME_CHARS = 60
+
+/** Upper bound on `waitForFocusMs`. */
+const MAX_WAIT_FOR_FOCUS_MS = 10_000
+/** Interval between focus checks while waiting. */
+const FOCUS_POLL_MS = 25
+
+const focusOptionFields = {
+  waitForFocusMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_WAIT_FOR_FOCUS_MS)
+    .optional()
+    .describe('No target: wait up to this many ms for an editable element to take focus.'),
+  requireEditable: z
+    .boolean()
+    .optional()
+    .describe('Fail with NO_FOCUSED_EDITABLE unless keys go to an editable element.'),
+}
+
+interface FocusArgs {
+  readonly waitForFocusMs?: number | undefined
+  readonly requireEditable?: boolean | undefined
+}
+
+async function readKeyFocus(
+  session: TransportSession,
+  bundle: string,
+  selector: string | undefined,
+): Promise<KeyFocus | null> {
+  const raw = await runProbe<{
+    found?: unknown
+    role?: unknown
+    name?: unknown
+    editable?: unknown
+  }>(session, bundle, selector !== undefined ? { selector } : { mode: 'focused' })
+  if (raw?.found !== true) return null
+  return {
+    role: typeof raw.role === 'string' ? raw.role : '',
+    name: typeof raw.name === 'string' ? raw.name : '',
+    editable: raw.editable === true,
+  }
+}
+
+/**
+ * Report where the keys will go, waiting for an editable focus when asked. Without
+ * `waitForFocusMs`/`requireEditable` a failed read yields `null` so typing proceeds as before.
+ */
+async function resolveKeyFocus(
+  ctx: ToolContext,
+  session: TransportSession,
+  bundle: string,
+  selector: string | undefined,
+  args: FocusArgs,
+): Promise<KeyFocus | null> {
+  const waitMs = selector === undefined ? (args.waitForFocusMs ?? 0) : 0
+  const strict = args.requireEditable === true || waitMs > 0
+  let focused: KeyFocus | null
+  try {
+    focused = await readKeyFocus(session, bundle, selector)
+    const deadline = ctx.now() + waitMs
+    while (focused?.editable !== true && ctx.now() < deadline) {
+      await sleep(FOCUS_POLL_MS, ctx.signal)
+      focused = await readKeyFocus(session, bundle, selector)
+    }
+  } catch (err) {
+    if (strict) throw err
+    return null
+  }
+  // A missing target is left to the transport, which reports it with similar_refs.
+  const missing = focused === null && selector !== undefined
+  if (args.requireEditable === true && !missing && focused?.editable !== true) {
+    const name =
+      focused !== null && focused.name.length > MAX_FOCUS_NAME_CHARS
+        ? `${focused.name.slice(0, MAX_FOCUS_NAME_CHARS)}…`
+        : focused?.name
+    throw new StagewrightError(
+      'NO_FOCUSED_EDITABLE',
+      focused === null
+        ? 'Nothing had focus, so the keys would go nowhere.'
+        : `The keys would go to a non-editable ${focused.role || 'element'}${name ? ` "${name}"` : ''}.`,
+      { focused },
+    )
+  }
+  return focused
 }
 
 /** Short settle delay before checking whether editor text visibly changed. */
@@ -156,39 +260,51 @@ export const typeTool: AnyToolDefinition = defineTool({
     }),
 })
 
-/** `electron_keyboard_type` — type text as real per-character keystrokes. */
-export const keyboardTypeTool: AnyToolDefinition = defineTool({
-  name: 'electron_keyboard_type',
-  title: 'Type text as real keystrokes',
-  description: [
-    'Type text as real per-character keystrokes (fires keydown/keypress/input/keyup per char), unlike',
-    'electron_type which sets the value directly. Focuses ref/selector first when given; otherwise types',
-    'into the active element. For a code editor (Monaco / EditContext), the reliable path is',
-    "electron_type_into_editor (it clicks the editor content area, e.g. '.monaco-editor .view-lines',",
-    'then types into the focused editor) — do NOT target the hidden textarea, which modern editors',
-    'ignore. force:true focuses an offscreen/aria-hidden input but a swallowed keystroke returns',
-    'TYPE_NO_EFFECT. Options: force, timeoutMs. Returns: { ok, session_id, typed }.',
-    'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
-    'TYPE_NO_EFFECT (typing changed nothing — use electron_type_into_editor), NOT_RUNNING, BAD_ARGUMENT.',
-  ].join(' '),
-  inputSchema: z.object({
-    ref: refField,
-    selector: selectorField,
-    text: z
-      .string()
-      .max(MAX_KEYSTROKE_TEXT_LENGTH)
-      .describe('The text to type, character by character.'),
-    force: forceField,
-    timeoutMs: timeoutField,
-    sessionId: sessionIdField,
-  }),
-  operationType: 'command',
-  handler: (args, ctx) =>
-    runInteraction(ctx, args, async (session) => {
-      await session.typeText(args.text, pressOptionsFor(args))
-      return { typed: args.text.length }
+/** Build `electron_keyboard_type` — type text as real per-character keystrokes. */
+export function makeKeyboardTypeTool(deps: KeyboardToolDeps = {}): AnyToolDefinition {
+  const loadBundle = deps.loadBundle ?? loadInjectedWalker
+  return defineTool({
+    name: 'electron_keyboard_type',
+    title: 'Type text as real keystrokes',
+    description: [
+      'Type text as real per-character keystrokes (fires keydown/keypress/input/keyup per char), unlike',
+      'electron_type which sets the value directly. Focuses ref/selector first when given; otherwise types',
+      'into the active element. For a code editor (Monaco / EditContext), the reliable path is',
+      "electron_type_into_editor (it clicks the editor content area, e.g. '.monaco-editor .view-lines',",
+      'then types into the focused editor) — do NOT target the hidden textarea, which modern editors',
+      'ignore. force:true focuses an offscreen/aria-hidden input but a swallowed keystroke returns',
+      'TYPE_NO_EFFECT. Options: force, timeoutMs, waitForFocusMs, requireEditable.',
+      'Returns: { ok, session_id, typed, focused: { role, name, editable } | null } (where the keys went).',
+      'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
+      'TYPE_NO_EFFECT (typing changed nothing — use electron_type_into_editor), NO_FOCUSED_EDITABLE,',
+      'NOT_RUNNING, BAD_ARGUMENT.',
+    ].join(' '),
+    inputSchema: z.object({
+      ref: refField,
+      selector: selectorField,
+      text: z
+        .string()
+        .max(MAX_KEYSTROKE_TEXT_LENGTH)
+        .describe('The text to type, character by character.'),
+      force: forceField,
+      timeoutMs: timeoutField,
+      ...focusOptionFields,
+      sessionId: sessionIdField,
     }),
-})
+    operationType: 'command',
+    handler: (args, ctx) =>
+      runInteraction(ctx, args, async (session) => {
+        const opts = pressOptionsFor(args)
+        const focused = await resolveKeyFocus(ctx, session, loadBundle(), opts.selector, args)
+        ctx.signal?.throwIfAborted()
+        await session.typeText(args.text, opts)
+        return { typed: args.text.length, focused }
+      }),
+  })
+}
+
+/** `electron_keyboard_type` with the default bundle loader. */
+export const keyboardTypeTool: AnyToolDefinition = makeKeyboardTypeTool()
 
 /**
  * The platform's select-all chord. The MCP server always runs on the same host
@@ -260,77 +376,96 @@ export const typeIntoEditorTool: AnyToolDefinition = defineTool({
     }),
 })
 
-/** `electron_key` — press a single key or chord, optionally focusing a target first. */
-export const keyTool: AnyToolDefinition = defineTool({
-  name: 'electron_key',
-  title: 'Press a key or chord',
-  description: [
-    "Press a key or chord (e.g. 'Enter', 'Control+A', 'ArrowDown'). Focuses ref/selector first when given;",
-    'otherwise presses against the active element. For editors, click the visible content area first;',
-    'reserve force:true for offscreen inputs that truly accept focus. Options: force, timeoutMs.',
-    'Returns: { ok, session_id, key }.',
-    'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
-    'NOT_RUNNING, BAD_ARGUMENT (ref+selector both).',
-  ].join(' '),
-  inputSchema: z.object({
-    ref: refField,
-    selector: selectorField,
-    key: z.string().describe("Key or chord, e.g. 'Enter' or 'Control+A'."),
-    force: forceField,
-    timeoutMs: timeoutField,
-    sessionId: sessionIdField,
-  }),
-  operationType: 'command',
-  handler: (args, ctx) =>
-    runInteraction(ctx, args, async (session) => {
-      await session.press(args.key, pressOptionsFor(args))
-      return { key: args.key }
+/** Build `electron_key` — press a single key or chord, optionally focusing a target first. */
+export function makeKeyTool(deps: KeyboardToolDeps = {}): AnyToolDefinition {
+  const loadBundle = deps.loadBundle ?? loadInjectedWalker
+  return defineTool({
+    name: 'electron_key',
+    title: 'Press a key or chord',
+    description: [
+      "Press a key or chord (e.g. 'Enter', 'Control+A', 'ArrowDown'). Focuses ref/selector first when given;",
+      'otherwise presses against the active element. For editors, click the visible content area first;',
+      'reserve force:true for offscreen inputs that truly accept focus. Options: force, timeoutMs,',
+      'waitForFocusMs, requireEditable. Returns: { ok, session_id, key, focused }.',
+      'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
+      'NO_FOCUSED_EDITABLE, NOT_RUNNING, BAD_ARGUMENT (ref+selector both).',
+    ].join(' '),
+    inputSchema: z.object({
+      ref: refField,
+      selector: selectorField,
+      key: z.string().describe("Key or chord, e.g. 'Enter' or 'Control+A'."),
+      force: forceField,
+      timeoutMs: timeoutField,
+      ...focusOptionFields,
+      sessionId: sessionIdField,
     }),
-})
-
-/** `electron_press_sequence` — press an ordered list of keys, in order. */
-export const pressSequenceTool: AnyToolDefinition = defineTool({
-  name: 'electron_press_sequence',
-  title: 'Press a sequence of keys',
-  description: [
-    "Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focuses ref/selector",
-    'first when given. For editors, click the visible content area first; reserve force:true for',
-    'offscreen inputs that truly accept focus.',
-    'Options: force, timeoutMs. Returns: { ok, session_id, keys }.',
-    'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
-    'NOT_RUNNING, BAD_ARGUMENT (empty keys or ref+selector both).',
-  ].join(' '),
-  inputSchema: z.object({
-    ref: refField,
-    selector: selectorField,
-    keys: z
-      .array(z.string())
-      .min(1)
-      .max(MAX_KEY_SEQUENCE)
-      .describe('Ordered keys/chords to press.'),
-    force: forceField,
-    timeoutMs: timeoutField,
-    sessionId: sessionIdField,
-  }),
-  operationType: 'command',
-  handler: (args, ctx) =>
-    runInteraction(ctx, args, async (session) => {
-      const opts = pressOptionsFor(args)
-      // When forcing focus on an offscreen selector, focus ONCE via the first
-      // key, then press the rest against the active element. Re-focusing the selector
-      // between keys would fight editors that move focus to a transient popup mid-sequence
-      // (e.g. an autocomplete list opened by the first key). Non-force sequences keep their
-      // per-key page.press(selector) behaviour unchanged.
-      const focusOncePerSequence = opts.selector !== undefined && opts.force === true
-      let pressed = 0
-      for (const key of args.keys) {
+    operationType: 'command',
+    handler: (args, ctx) =>
+      runInteraction(ctx, args, async (session) => {
+        const opts = pressOptionsFor(args)
+        const focused = await resolveKeyFocus(ctx, session, loadBundle(), opts.selector, args)
         ctx.signal?.throwIfAborted()
-        await session.press(key, focusOncePerSequence && pressed > 0 ? {} : opts)
-        pressed += 1
-      }
-      return { keys: args.keys }
+        await session.press(args.key, opts)
+        return { key: args.key, focused }
+      }),
+  })
+}
+
+/** `electron_key` with the default bundle loader. */
+export const keyTool: AnyToolDefinition = makeKeyTool()
+
+/** Build `electron_press_sequence` — press an ordered list of keys, in order. */
+export function makePressSequenceTool(deps: KeyboardToolDeps = {}): AnyToolDefinition {
+  const loadBundle = deps.loadBundle ?? loadInjectedWalker
+  return defineTool({
+    name: 'electron_press_sequence',
+    title: 'Press a sequence of keys',
+    description: [
+      "Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focuses ref/selector",
+      'first when given. For editors, click the visible content area first; reserve force:true for',
+      'offscreen inputs that truly accept focus.',
+      'Options: force, timeoutMs, waitForFocusMs, requireEditable (checked before the first key).',
+      'Returns: { ok, session_id, keys, focused }.',
+      'Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable),',
+      'NO_FOCUSED_EDITABLE, NOT_RUNNING, BAD_ARGUMENT (empty keys or ref+selector both).',
+    ].join(' '),
+    inputSchema: z.object({
+      ref: refField,
+      selector: selectorField,
+      keys: z
+        .array(z.string())
+        .min(1)
+        .max(MAX_KEY_SEQUENCE)
+        .describe('Ordered keys/chords to press.'),
+      force: forceField,
+      timeoutMs: timeoutField,
+      ...focusOptionFields,
+      sessionId: sessionIdField,
     }),
-})
+    operationType: 'command',
+    handler: (args, ctx) =>
+      runInteraction(ctx, args, async (session) => {
+        const opts = pressOptionsFor(args)
+        const focused = await resolveKeyFocus(ctx, session, loadBundle(), opts.selector, args)
+        // When forcing focus on an offscreen selector, focus ONCE via the first
+        // key, then press the rest against the active element. Re-focusing the selector
+        // between keys would fight editors that move focus to a transient popup mid-sequence
+        // (e.g. an autocomplete list opened by the first key). Non-force sequences keep their
+        // per-key page.press(selector) behaviour unchanged.
+        const focusOncePerSequence = opts.selector !== undefined && opts.force === true
+        let pressed = 0
+        for (const key of args.keys) {
+          ctx.signal?.throwIfAborted()
+          await session.press(key, focusOncePerSequence && pressed > 0 ? {} : opts)
+          pressed += 1
+        }
+        return { keys: args.keys, focused }
+      }),
+  })
+}
+
+/** `electron_press_sequence` with the default bundle loader. */
+export const pressSequenceTool: AnyToolDefinition = makePressSequenceTool()
 
 /** `electron_clear_input` — clear the value of an input/textarea. */
 export const clearInputTool: AnyToolDefinition = defineTool({

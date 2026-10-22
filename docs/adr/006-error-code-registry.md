@@ -367,3 +367,21 @@ otherwise be `INTERNAL_ERROR` is remapped, so an already classified code (for ex
 `SURFACE_CLOSED`) keeps its meaning. The detector accepts any Playwright API prefix
 (`locator.click:`, `frame.evaluate:`) and any failed CDP method, with the same guard against a
 thrown look-alike.
+
+## Status Update (2026-10-22) — added `NO_FOCUSED_EDITABLE`
+
+`electron_keyboard_type` once reported 19 characters typed while none reached a command palette
+input that took focus a moment after its button was clicked; the keys went to the button. The
+keyboard tools (`electron_keyboard_type`, `electron_key`, `electron_press_sequence`) now return
+`focused: { role, name, editable } | null`, describing the target when one is given and the
+focused element otherwise, can wait for an editable element to take focus (`waitForFocusMs`), and
+can refuse to send keys that would be lost. Added one code to the registry:
+
+- **`NO_FOCUSED_EDITABLE`** — `http: 409`, `retryable: true`, hint: pass the input as ref or
+  selector, click it first, or raise `waitForFocusMs` when focus arrives late. Returned only when
+  the caller set `requireEditable` and the keys would go to a non-editable element or to nothing;
+  `details.focused` says which. No keys are sent. Retryable because focus can still arrive. A
+  missing target is left to the transport, which reports `SELECTOR_NO_MATCH` with `similar_refs`.
+
+`handleTargetFailure` now also carries the thrown error's `details` into the envelope (dropped if
+they cannot be serialised), so codes raised with diagnostics keep them.

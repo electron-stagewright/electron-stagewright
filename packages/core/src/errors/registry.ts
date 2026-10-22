@@ -127,6 +127,11 @@ export const ERROR_CODES = {
     retryable: true,
     hint: 'The pointer landed on another element or frame, so the action did not reach the target; take a fresh snapshot and retry, or pass force to skip the delivery check.',
   },
+  NO_FOCUSED_EDITABLE: {
+    http: 409,
+    retryable: true,
+    hint: 'No editable element had focus, so typed keys would be lost. Pass the input as ref/selector, click it first, or raise waitForFocusMs if focus arrives late.',
+  },
   TYPE_NO_EFFECT: {
     http: 422,
     retryable: false,

@@ -174,7 +174,7 @@ Attach to a running Electron process that was NOT started with a debug flag, by 
 
 **Press a key or chord**
 
-Press a key or chord (e.g. 'Enter', 'Control+A', 'ArrowDown'). Focuses ref/selector first when given; otherwise presses against the active element. For editors, click the visible content area first; reserve force:true for offscreen inputs that truly accept focus. Options: force, timeoutMs. Returns: { ok, session_id, key }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), NOT_RUNNING, BAD_ARGUMENT (ref+selector both).
+Press a key or chord (e.g. 'Enter', 'Control+A', 'ArrowDown'). Focuses ref/selector first when given; otherwise presses against the active element. For editors, click the visible content area first; reserve force:true for offscreen inputs that truly accept focus. Options: force, timeoutMs, waitForFocusMs, requireEditable. Returns: { ok, session_id, key, focused }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), NO_FOCUSED_EDITABLE, NOT_RUNNING, BAD_ARGUMENT (ref+selector both).
 
 - Operation: `command`
 
@@ -185,13 +185,15 @@ Press a key or chord (e.g. 'Enter', 'Control+A', 'ArrowDown'). Focuses ref/selec
 | `key` | string | yes | Key or chord, e.g. 'Enter' or 'Control+A'. |
 | `force` | boolean | no | Bypass actionability checks (visibility/enabled/stable). Default false. |
 | `timeoutMs` | integer | no | Actionability budget in ms (default 5000, clamped to 30000). |
+| `waitForFocusMs` | integer | no | No target: wait up to this many ms for an editable element to take focus. |
+| `requireEditable` | boolean | no | Fail with NO_FOCUSED_EDITABLE unless keys go to an editable element. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ### `electron_keyboard_type`
 
 **Type text as real keystrokes**
 
-Type text as real per-character keystrokes (fires keydown/keypress/input/keyup per char), unlike electron_type which sets the value directly. Focuses ref/selector first when given; otherwise types into the active element. For a code editor (Monaco / EditContext), the reliable path is electron_type_into_editor (it clicks the editor content area, e.g. '.monaco-editor .view-lines', then types into the focused editor) — do NOT target the hidden textarea, which modern editors ignore. force:true focuses an offscreen/aria-hidden input but a swallowed keystroke returns TYPE_NO_EFFECT. Options: force, timeoutMs. Returns: { ok, session_id, typed }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), TYPE_NO_EFFECT (typing changed nothing — use electron_type_into_editor), NOT_RUNNING, BAD_ARGUMENT.
+Type text as real per-character keystrokes (fires keydown/keypress/input/keyup per char), unlike electron_type which sets the value directly. Focuses ref/selector first when given; otherwise types into the active element. For a code editor (Monaco / EditContext), the reliable path is electron_type_into_editor (it clicks the editor content area, e.g. '.monaco-editor .view-lines', then types into the focused editor) — do NOT target the hidden textarea, which modern editors ignore. force:true focuses an offscreen/aria-hidden input but a swallowed keystroke returns TYPE_NO_EFFECT. Options: force, timeoutMs, waitForFocusMs, requireEditable. Returns: { ok, session_id, typed, focused: { role, name, editable } | null } (where the keys went). Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), TYPE_NO_EFFECT (typing changed nothing — use electron_type_into_editor), NO_FOCUSED_EDITABLE, NOT_RUNNING, BAD_ARGUMENT.
 
 - Operation: `command`
 
@@ -202,6 +204,8 @@ Type text as real per-character keystrokes (fires keydown/keypress/input/keyup p
 | `text` | string | yes | The text to type, character by character. |
 | `force` | boolean | no | Bypass actionability checks (visibility/enabled/stable). Default false. |
 | `timeoutMs` | integer | no | Actionability budget in ms (default 5000, clamped to 30000). |
+| `waitForFocusMs` | integer | no | No target: wait up to this many ms for an editable element to take focus. |
+| `requireEditable` | boolean | no | Fail with NO_FOCUSED_EDITABLE unless keys go to an editable element. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ### `electron_launch`
@@ -230,7 +234,7 @@ Launch an Electron app and start a driving session. Provide main (absolute path 
 
 **Press a sequence of keys**
 
-Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focuses ref/selector first when given. For editors, click the visible content area first; reserve force:true for offscreen inputs that truly accept focus. Options: force, timeoutMs. Returns: { ok, session_id, keys }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), NOT_RUNNING, BAD_ARGUMENT (empty keys or ref+selector both).
+Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focuses ref/selector first when given. For editors, click the visible content area first; reserve force:true for offscreen inputs that truly accept focus. Options: force, timeoutMs, waitForFocusMs, requireEditable (checked before the first key). Returns: { ok, session_id, keys, focused }. Errors: SELECTOR_NO_MATCH / REF_NOT_FOUND (carries similar_refs), ELEMENT_NOT_VISIBLE (retryable), NO_FOCUSED_EDITABLE, NOT_RUNNING, BAD_ARGUMENT (empty keys or ref+selector both).
 
 - Operation: `command`
 
@@ -241,6 +245,8 @@ Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focu
 | `keys` | string[] | yes | Ordered keys/chords to press. |
 | `force` | boolean | no | Bypass actionability checks (visibility/enabled/stable). Default false. |
 | `timeoutMs` | integer | no | Actionability budget in ms (default 5000, clamped to 30000). |
+| `waitForFocusMs` | integer | no | No target: wait up to this many ms for an editable element to take focus. |
+| `requireEditable` | boolean | no | Fail with NO_FOCUSED_EDITABLE unless keys go to an editable element. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ### `electron_scroll`
