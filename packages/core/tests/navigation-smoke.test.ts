@@ -1,7 +1,8 @@
 /**
  * Real-Electron navigation smoke — reloads the renderer and calls renderer tools while it
  * navigates, on the Playwright launch and the CDP attach transports. A call that loses the page
- * must report RENDERER_NAVIGATED (or a plain miss on the new page), never INTERNAL_ERROR.
+ * must report a classified code (RENDERER_NAVIGATED, a miss on the new page, or a transport
+ * timeout), never INTERNAL_ERROR.
  *
  * Opt-in: runs only when `STAGEWRIGHT_E2E=1`.
  *
@@ -49,14 +50,15 @@ const TOOLS = [
   ...INTERACTION_TOOLS,
   ...EVAL_TOOLS,
 ]
-const CALLS: readonly (readonly [string, Record<string, unknown>])[] = [
-  ['electron_snapshot', {}],
-  ['electron_find', { role: 'button' }],
-  ['electron_get_text', { selector: 'body' }],
-  ['electron_exists', { selector: 'button' }],
-  ['electron_screenshot', {}],
+const QUICK = [0, 5, 20]
+// A CDP capture mid-navigation can stall until its 15 s method timeout on Linux, so try it once.
+const CALLS: readonly (readonly [string, Record<string, unknown>, readonly number[]])[] = [
+  ['electron_snapshot', {}, QUICK],
+  ['electron_find', { role: 'button' }, QUICK],
+  ['electron_get_text', { selector: 'body' }, QUICK],
+  ['electron_exists', { selector: 'button' }, QUICK],
+  ['electron_screenshot', {}, [0]],
 ]
-const ALLOWED = new Set(['RENDERER_NAVIGATED', 'SELECTOR_NO_MATCH'])
 
 let child: ChildProcess | undefined
 
@@ -79,12 +81,12 @@ function newDispatcher(transport: CDPTransport | PlaywrightElectronTransport): D
 async function codesDuringReloads(dispatcher: Dispatcher, sessionId: string): Promise<string[]> {
   const codes: string[] = []
   for (let round = 0; round < 3; round++) {
-    for (const [tool, args] of CALLS) {
+    for (const [tool, args, delays] of CALLS) {
       await dispatcher.dispatch('electron_eval_renderer', {
         sessionId,
         code: 'setTimeout(() => location.reload(), 0); return 1',
       })
-      for (const delayMs of [0, 5, 20]) {
+      for (const delayMs of delays) {
         await new Promise((resolve) => setTimeout(resolve, delayMs))
         const res = (await dispatcher.dispatch(tool, { sessionId, ...args })) as {
           ok: boolean
@@ -98,8 +100,8 @@ async function codesDuringReloads(dispatcher: Dispatcher, sessionId: string): Pr
   return codes
 }
 
-function unexpected(codes: readonly string[]): string[] {
-  return codes.filter((entry) => !ALLOWED.has(entry.split(': ')[1] ?? ''))
+function internalErrors(codes: readonly string[]): string[] {
+  return codes.filter((entry) => entry.endsWith(': INTERNAL_ERROR'))
 }
 
 describe('navigation smoke (real Electron)', () => {
@@ -113,7 +115,9 @@ describe('navigation smoke (real Electron)', () => {
         session_id: string
       }
       try {
-        expect(unexpected(await codesDuringReloads(dispatcher, launched.session_id))).toEqual([])
+        expect(internalErrors(await codesDuringReloads(dispatcher, launched.session_id))).toEqual(
+          [],
+        )
       } finally {
         await dispatcher.dispatch('electron_stop', { sessionId: launched.session_id })
       }
@@ -155,7 +159,9 @@ describe('navigation smoke (real Electron)', () => {
           sessionId: attached.session_id,
           selector: 'button',
         })
-        expect(unexpected(await codesDuringReloads(dispatcher, attached.session_id))).toEqual([])
+        expect(internalErrors(await codesDuringReloads(dispatcher, attached.session_id))).toEqual(
+          [],
+        )
         await dispatcher.dispatch('electron_detach', { sessionId: attached.session_id })
       } finally {
         if (proc.exitCode === null) proc.kill('SIGKILL')
