@@ -161,3 +161,10 @@ unchanged). From this point each change that grows the manifest records its own 
 | Testing safe          |       17,221 |  17,737 |  3.00% |
 | All plugins safe      |       31,849 |  32,365 |  1.62% |
 | All plugins with eval |       36,200 |  36,722 |  1.44% |
+
+## Status update (2026-10-22): screenshot freshness fields
+
+`electron_screenshot`, an evidence tool with an output schema since 2026-10-03, gains
+`waitForFrame` (default true, about 17 ms per capture on the launch and CDP transports) and
+`settleMs`, and returns `content_sha256`, `same_as_previous`, `overwrote` and `frame_waited`. The
+growth stays within the 3% gate of the baseline set for the keyboard tools, so it does not move.

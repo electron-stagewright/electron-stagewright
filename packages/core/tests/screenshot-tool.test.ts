@@ -5,6 +5,7 @@
  * format. Captures are written to (and cleaned up from) the OS temp dir.
  */
 
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -19,7 +20,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { type Snapshot, walkAccessibilityTree } from '../src/snapshot/index.js'
 import type { SurfaceDescriptor, WindowDescriptor } from '../src/transports/index.js'
-import { OBSERVE_TOOLS } from '../src/tools/observe/index.js'
+import { OBSERVE_TOOLS, makeScreenshotTool } from '../src/tools/observe/index.js'
 import { FakeSession, FakeTransport, type FakeEvaluate } from './helpers/fake-transport.js'
 
 vi.mock('../src/tools/snapshot/inject.js', () => ({
@@ -436,5 +437,152 @@ describe('electron_screenshot', () => {
     dispatcher.registerAll(OBSERVE_TOOLS)
     const res = (await dispatcher.dispatch('electron_screenshot', {})) as ErrorResponse
     expect(res.code).toBe('NOT_RUNNING')
+  })
+})
+
+describe('electron_screenshot freshness', () => {
+  const PNG = pngBuffer(4, 3)
+  const OTHER_WINDOW: WindowDescriptor = { ...ACTIVE_WINDOW, id: 'w2', index: 1, focused: false }
+
+  /** A dispatcher with its own screenshot tool, so remembered captures do not leak across tests. */
+  function freshSetup(
+    opts: { evaluate?: FakeEvaluate; windows?: readonly WindowDescriptor[] } = {},
+  ) {
+    const sessions = new SessionManager()
+    const session = new FakeSession({
+      id: 'sess',
+      screenshotResult: PNG,
+      windows: opts.windows ?? [ACTIVE_WINDOW],
+      ...(opts.evaluate !== undefined ? { evaluate: opts.evaluate } : {}),
+    })
+    sessions.register(new FakeTransport(), session)
+    const dispatcher = new Dispatcher({ sessions, snapshots: new SnapshotStore() })
+    dispatcher.register(makeScreenshotTool({ loadBundle: () => 'BUNDLE' }))
+    return { dispatcher, session }
+  }
+
+  async function tempDir(): Promise<string> {
+    const dir = await mkdtemp(path.join(tmpdir(), 'sw-fresh-'))
+    created.push(dir)
+    return dir
+  }
+
+  it('waits for the active window to paint a frame before capturing', async () => {
+    const order: string[] = []
+    const { dispatcher, session } = freshSetup({
+      evaluate: async (_target, body) => {
+        order.push(`evaluate:${body.includes('requestAnimationFrame') ? 'frame' : body}`)
+        return true
+      },
+    })
+    const capture = session.screenshot.bind(session)
+    session.screenshot = async (target, opts) => {
+      order.push('capture')
+      return capture(target, opts)
+    }
+    const res = await dispatcher.dispatch('electron_screenshot', { dir: await tempDir() })
+    expect(res).toMatchObject({ ok: true, frame_waited: true })
+    expect(order).toEqual(['evaluate:frame', 'capture'])
+  })
+
+  it('skips the frame wait when asked, or when the capture targets another window', async () => {
+    const bodies: string[] = []
+    const { dispatcher } = freshSetup({
+      windows: [ACTIVE_WINDOW, OTHER_WINDOW],
+      evaluate: async (_target, body) => {
+        bodies.push(body)
+        return true
+      },
+    })
+    const dir = await tempDir()
+    await expect(
+      dispatcher.dispatch('electron_screenshot', { dir, waitForFrame: false }),
+    ).resolves.toMatchObject({ ok: true, frame_waited: false })
+    await expect(
+      dispatcher.dispatch('electron_screenshot', { dir, windowIndex: 1 }),
+    ).resolves.toMatchObject({ ok: true, frame_waited: false })
+    expect(bodies).toEqual([])
+  })
+
+  it('still captures when no frame arrives in time', async () => {
+    const { dispatcher, session } = freshSetup({ evaluate: async () => false })
+    const res = await dispatcher.dispatch('electron_screenshot', { dir: await tempDir() })
+    expect(res).toMatchObject({ ok: true, frame_waited: false })
+    expect(session.screenshotCalls).toHaveLength(1)
+  })
+
+  it('waits settleMs before capturing', async () => {
+    vi.useFakeTimers()
+    try {
+      const { dispatcher, session } = freshSetup({ evaluate: async () => true })
+      const pending = dispatcher.dispatch('electron_screenshot', {
+        dir: tmpdir(),
+        settleMs: 1000,
+      })
+      await vi.advanceTimersByTimeAsync(999)
+      expect(session.screenshotCalls).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(1)
+      const res = (await pending) as SuccessResponse & { path: string }
+      created.push(res.path)
+      expect(session.screenshotCalls).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports the content hash and whether it matches the last capture of the same target', async () => {
+    const { dispatcher } = freshSetup({ evaluate: async () => true })
+    const dir = await tempDir()
+    const sha = createHash('sha256').update(PNG).digest('hex')
+    await expect(dispatcher.dispatch('electron_screenshot', { dir })).resolves.toMatchObject({
+      content_sha256: sha,
+      same_as_previous: false,
+    })
+    await expect(dispatcher.dispatch('electron_screenshot', { dir })).resolves.toMatchObject({
+      content_sha256: sha,
+      same_as_previous: true,
+    })
+    // A different target is compared only with its own previous capture.
+    await expect(
+      dispatcher.dispatch('electron_screenshot', { dir, fullPage: true }),
+    ).resolves.toMatchObject({ same_as_previous: false })
+  })
+
+  it('treats the same window addressed by id, index or title as one target', async () => {
+    const { dispatcher } = freshSetup({ evaluate: async () => true })
+    const dir = await tempDir()
+    await dispatcher.dispatch('electron_screenshot', { dir })
+    for (const ref of [
+      { windowIndex: 0 },
+      { windowTitle: ACTIVE_WINDOW.title },
+      { windowId: ACTIVE_WINDOW.id },
+    ]) {
+      await expect(
+        dispatcher.dispatch('electron_screenshot', { dir, ...ref }),
+      ).resolves.toMatchObject({ same_as_previous: true })
+    }
+  })
+
+  it('reports overwrote when an explicit path already existed', async () => {
+    const { dispatcher } = freshSetup({ evaluate: async () => true })
+    const file = path.join(await tempDir(), 'same.png')
+    await expect(dispatcher.dispatch('electron_screenshot', { path: file })).resolves.toMatchObject(
+      { overwrote: false },
+    )
+    await expect(dispatcher.dispatch('electron_screenshot', { path: file })).resolves.toMatchObject(
+      { overwrote: true },
+    )
+  })
+
+  it('reports RENDERER_NAVIGATED and captures nothing when the page navigates during the wait', async () => {
+    const { dispatcher, session } = freshSetup({
+      evaluate: async () => {
+        throw new Error('CDP Runtime.evaluate failed: Inspected target navigated or closed')
+      },
+    })
+    await expect(
+      dispatcher.dispatch('electron_screenshot', { dir: await tempDir() }),
+    ).resolves.toMatchObject({ ok: false, code: 'RENDERER_NAVIGATED' })
+    expect(session.screenshotCalls).toHaveLength(0)
   })
 })
