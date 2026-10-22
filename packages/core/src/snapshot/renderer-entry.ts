@@ -179,7 +179,10 @@ function probeEditable(element: Element): boolean {
   const control = element as Element & { disabled?: unknown; readOnly?: unknown }
   const tag = element.tagName.toLowerCase()
   if (tag === 'textarea' || tag === 'input') {
-    if (control.disabled === true || control.readOnly === true) return false
+    // `:disabled` also covers a control inside a disabled <fieldset>.
+    if (control.disabled === true || control.readOnly === true || element.matches(':disabled')) {
+      return false
+    }
     if (tag === 'textarea') return true
     return !NON_TEXT_INPUT_TYPES.has((element.getAttribute('type') ?? 'text').toLowerCase())
   }
@@ -225,8 +228,15 @@ target.__stagewrightProbe = (
   const mode = arg.mode ?? 'element'
 
   if (mode === 'focused') {
-    const active = document.activeElement
-    if (active === null || active === document.body) return { found: false }
+    const outer = document.activeElement
+    if (outer === null || outer === document.body) return { found: false }
+    // Focus inside an open shadow root leaves the document pointing at the host.
+    let active: Element = outer
+    for (let depth = 0; depth < MAX_SHADOW_DEPTH; depth++) {
+      const inner: Element | null = active.shadowRoot?.activeElement ?? null
+      if (inner === null) break
+      active = inner
+    }
     return probeElement(active)
   }
 

@@ -59,6 +59,9 @@ export interface KeyFocus {
   readonly editable: boolean
 }
 
+/** Longest accessible name quoted in a NO_FOCUSED_EDITABLE message. */
+const MAX_FOCUS_NAME_CHARS = 60
+
 /** Upper bound on `waitForFocusMs`. */
 const MAX_WAIT_FOR_FOCUS_MS = 10_000
 /** Interval between focus checks while waiting. */
@@ -130,11 +133,15 @@ async function resolveKeyFocus(
   // A missing target is left to the transport, which reports it with similar_refs.
   const missing = focused === null && selector !== undefined
   if (args.requireEditable === true && !missing && focused?.editable !== true) {
+    const name =
+      focused !== null && focused.name.length > MAX_FOCUS_NAME_CHARS
+        ? `${focused.name.slice(0, MAX_FOCUS_NAME_CHARS)}…`
+        : focused?.name
     throw new StagewrightError(
       'NO_FOCUSED_EDITABLE',
       focused === null
         ? 'Nothing had focus, so the keys would go nowhere.'
-        : `The keys would go to a non-editable ${focused.role || 'element'}${focused.name ? ` "${focused.name}"` : ''}.`,
+        : `The keys would go to a non-editable ${focused.role || 'element'}${name ? ` "${name}"` : ''}.`,
       { focused },
     )
   }

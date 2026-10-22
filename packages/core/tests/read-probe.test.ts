@@ -101,10 +101,26 @@ describe('__stagewrightProbe editable flag', () => {
     ['<input id="t" type="checkbox">', false],
     ['<button id="t">Go</button>', false],
     ['<div contenteditable="false"><p id="t">x</p></div>', false],
+    ['<fieldset disabled><input id="t" type="text"></fieldset>', false],
   ])('%s → editable %s', (html, editable) => {
     withDom(html, () => {
       const result = g.__stagewrightProbe({ selector: '#t' }) as ProbeElementResult
       expect(result.editable).toBe(editable)
+    })
+  })
+})
+
+describe('__stagewrightProbe focused mode in a shadow root', () => {
+  it('reports the focused element inside an open shadow root, not its host', () => {
+    withDom('<div id="host"></div>', (doc) => {
+      const host = doc.getElementById('host') as HTMLElement
+      const root = host.attachShadow({ mode: 'open' })
+      root.innerHTML = '<input aria-label="Search commands">'
+      ;(root.querySelector('input') as HTMLInputElement).focus()
+      const result = g.__stagewrightProbe({ mode: 'focused' }) as ProbeElementResult
+      expect(result.found).toBe(true)
+      expect(result.name).toBe('Search commands')
+      expect(result.editable).toBe(true)
     })
   })
 })

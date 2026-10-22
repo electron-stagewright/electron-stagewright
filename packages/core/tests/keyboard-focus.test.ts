@@ -131,6 +131,26 @@ describe('waitForFocusMs', () => {
     }
   })
 
+  it('stops waiting and sends no keys once the request is cancelled', async () => {
+    vi.useFakeTimers()
+    try {
+      const controller = new AbortController()
+      const { dispatcher, session } = setup(focusSequence([BUTTON]).evaluate)
+      const pending = dispatcher.dispatch(
+        'electron_keyboard_type',
+        { text: 'x', waitForFocusMs: 5000 },
+        { signal: controller.signal },
+      )
+      await vi.advanceTimersByTimeAsync(50)
+      controller.abort()
+      await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(session.interactions).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not wait when a target is given', async () => {
     const probe = focusSequence([BUTTON])
     const { dispatcher } = setup(probe.evaluate)
@@ -187,6 +207,17 @@ describe('requireEditable', () => {
     })
     expect(res).toMatchObject({ ok: false })
     expect(session.interactions).toEqual([])
+  })
+
+  it('names a long focused element briefly in the error message', async () => {
+    const long = { ...BUTTON, name: 'x'.repeat(500) }
+    const { dispatcher } = setup(focusSequence([long]).evaluate)
+    const res = (await dispatcher.dispatch('electron_keyboard_type', {
+      text: 'x',
+      requireEditable: true,
+    })) as ErrorResponse
+    expect(res.code).toBe('NO_FOCUSED_EDITABLE')
+    expect(res.error.length).toBeLessThan(150)
   })
 
   it('passes when the keys go to an editable element', async () => {

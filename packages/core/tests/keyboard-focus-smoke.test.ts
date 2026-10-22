@@ -121,6 +121,23 @@ async function checkFocusAwareTyping(dispatcher: Dispatcher, sessionId: string):
   await expect(
     dispatcher.dispatch('electron_keyboard_type', { sessionId, text: 'x', requireEditable: true }),
   ).resolves.toMatchObject({ ok: false, code: 'NO_FOCUSED_EDITABLE' })
+
+  // An input focused inside a shadow root counts as an editable focus, not as its host.
+  await dispatcher.dispatch('electron_eval_renderer', {
+    sessionId,
+    code: `
+      document.getElementById('shadow-host')?.remove();
+      const host = document.createElement('div');
+      host.id = 'shadow-host';
+      document.body.append(host);
+      const root = host.attachShadow({ mode: 'open' });
+      root.innerHTML = '<input aria-label="Shadow search">';
+      root.querySelector('input').focus();
+      return true`,
+  })
+  await expect(
+    dispatcher.dispatch('electron_keyboard_type', { sessionId, text: 'x', requireEditable: true }),
+  ).resolves.toMatchObject({ ok: true, focused: { name: 'Shadow search', editable: true } })
 }
 
 describe('focus-aware typing smoke (real Electron)', () => {
