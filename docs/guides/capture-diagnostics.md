@@ -17,6 +17,21 @@ targeted window (default; `windowId` / `windowTitle` / `windowIndex` select amon
 stable artifact location, pass `dir` per call or start the server with `--screenshot-dir <dir>` —
 otherwise files land in the OS temp directory.
 
+Each capture first waits for the active window to paint a new frame (`waitForFrame`, default
+`true`, about two frames), so a capture taken right after a change shows it; `settleMs` adds a wait
+for animations. The result says whether the capture can be trusted as new:
+
+- `content_sha256` — hash of the image bytes.
+- `same_as_previous` — `true` when the bytes match the last capture of the same target in this
+  server; a change you expected has not reached the screen yet.
+- `overwrote` — the explicit `path` already existed. An image viewer may still show the old file
+  from its cache; prefer a new name per capture.
+- `frame_waited` — `false` when no frame was awaited: another window was targeted, the window is
+  hidden, or `waitForFrame` was off.
+
+A capture while the page is navigating returns `RENDERER_NAVIGATED`; wait for the new page, then
+capture again.
+
 ## Portable evidence over MCP
 
 `electron_screenshot`, `trace_stop`, `trace_view`, and `trace_promote` preserve their existing paths
