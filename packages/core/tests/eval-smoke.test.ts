@@ -23,6 +23,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { EVAL_TOOLS } from '../src/tools/eval/index.js'
 import { launchTool, stopTool } from '../src/tools/lifecycle/index.js'
+import { waitForSelectorTool } from '../src/tools/wait/index.js'
 import { PlaywrightElectronTransport } from '../src/transports/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
@@ -46,7 +47,7 @@ describe('eval smoke (real Electron)', () => {
       const transports = new TransportRegistry({ transports: [new PlaywrightElectronTransport()] })
       // allowEval: true models a server started with --allow-eval.
       const dispatcher = new Dispatcher({ sessions, transports, allowEval: true })
-      dispatcher.registerAll([launchTool, stopTool, ...EVAL_TOOLS])
+      dispatcher.registerAll([launchTool, stopTool, waitForSelectorTool, ...EVAL_TOOLS])
 
       const launched = await dispatcher.dispatch('electron_launch', { main: FIXTURE_MAIN })
       const sessionId = (launched as SuccessResponse & { session_id: string }).session_id
@@ -71,6 +72,20 @@ describe('eval smoke (real Electron)', () => {
         code: 'return document.title // trailing comment',
       })) as SuccessResponse & { result: unknown }
       expect(typeof renderer.result).toBe('string')
+
+      // A reload during the call is a navigation, not a runtime error; a real throw stays one.
+      const navigated = await dispatcher.dispatch('electron_eval_renderer', {
+        sessionId,
+        code: 'location.reload(); await new Promise((resolve) => setTimeout(resolve, 5000)); return 1',
+      })
+      expect(navigated).toMatchObject({ ok: false, code: 'RENDERER_NAVIGATED', retryable: true })
+      // The suggested next action settles the reloaded page.
+      await expect(
+        dispatcher.dispatch('electron_wait_for_selector', { sessionId, selector: 'body' }),
+      ).resolves.toMatchObject({ ok: true })
+      await expect(
+        dispatcher.dispatch('electron_eval_renderer', { sessionId, code: "throw new Error('x')" }),
+      ).resolves.toMatchObject({ ok: false, code: 'EVAL_RUNTIME_ERROR' })
 
       const stopped = await dispatcher.dispatch('electron_stop', { sessionId })
       expect(stopped.ok).toBe(true)

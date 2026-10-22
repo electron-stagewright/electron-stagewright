@@ -17,6 +17,7 @@ import type { ErrorCode } from '../../errors/registry.js'
 import { withElapsedProgress } from '../../server/progress.js'
 import { untilAborted } from '../../server/snapshot-store.js'
 import { type TransportSession, assertCapability } from '../../transports/index.js'
+import { isRendererNavigation } from '../../transports/navigation.js'
 import {
   type FreshRefsOutcome,
   buildMissError,
@@ -28,6 +29,7 @@ import {
 } from '../target.js'
 import type { ToolContext, ToolResult } from '../types.js'
 import { WALK_GENERATION_BODY } from './body.js'
+import { sleep } from './sleep.js'
 
 /** Default wait budget when the caller omits `timeoutMs`. */
 export const DEFAULT_WAIT_TIMEOUT_MS = 5000
@@ -130,6 +132,36 @@ async function pollRef(
   }
 }
 
+/** Pause between attempts while a navigation settles, so a closing target is not hammered. */
+const NAVIGATION_RETRY_MS = 50
+
+/**
+ * Run a selector poll, starting it again on the new page when the renderer navigates under it,
+ * within the same overall budget. A budget spent mid-navigation reads as not satisfied.
+ */
+async function pollAcrossNavigation(
+  ctx: ToolContext,
+  session: TransportSession,
+  call: RendererCall,
+  timeoutMs: number,
+): Promise<WaitRaw> {
+  const startedAt = ctx.now()
+  const arg = call.arg as Record<string, unknown>
+  for (;;) {
+    // A renderer poll cannot be interrupted once sent, so never start one for a cancelled request.
+    ctx.signal?.throwIfAborted()
+    const remaining = Math.max(0, timeoutMs - (ctx.now() - startedAt))
+    const bounded = typeof arg['timeoutMs'] === 'number' ? { ...arg, timeoutMs: remaining } : arg
+    try {
+      return await session.evaluate<WaitRaw>('renderer', call.body, bounded)
+    } catch (err) {
+      if (!isRendererNavigation(err)) throw err
+    }
+    if (ctx.now() - startedAt >= timeoutMs) return { satisfied: false }
+    await sleep(NAVIGATION_RETRY_MS, ctx.signal)
+  }
+}
+
 /**
  * Run a bounded renderer wait. `mapSuccess` shapes the success payload from a
  * satisfied result; a never-satisfied poll becomes `opts.timeoutCode`
@@ -168,9 +200,7 @@ export async function runWait(
         if (ref !== undefined) {
           return pollRef(ctx, managed.session, managed.id, ref, call, opts.timeoutMs)
         }
-        // A renderer poll cannot be interrupted once sent, so never start one for a cancelled request.
-        ctx.signal?.throwIfAborted()
-        return { value: await managed.session.evaluate<WaitRaw>('renderer', call.body, call.arg) }
+        return { value: await pollAcrossNavigation(ctx, managed.session, call, opts.timeoutMs) }
       },
     )
     if ('staleRef' in run) return staleRefError(ctx, managed.session, meta, run.staleRef)
@@ -200,6 +230,14 @@ export async function runWait(
     })
   } catch (err) {
     if (ctx.signal?.aborted === true) throw err
+    if (isRendererNavigation(err)) {
+      // Only a ref wait gets here: the navigation dropped the page its ref pointed into.
+      return makeError('RENDERER_NAVIGATED', {
+        ...meta,
+        message: 'The renderer navigated during the wait; refs from before it are gone.',
+        next_actions: ['electron_snapshot()'],
+      })
+    }
     return handleTargetFailure(err, {
       ctx,
       session: managed.session,

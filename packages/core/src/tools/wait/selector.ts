@@ -31,7 +31,8 @@ export const waitForSelectorTool: AnyToolDefinition = defineTool({
     "(e.g. a code editor's hidden textarea like Monaco), wait for state:'attached' — state:'visible'",
     'will time out because the element is never laid out. Returns: { ok, session_id, matched, state }.',
     'Errors: WAIT_TIMEOUT (condition not met within timeoutMs; retryable — for offscreen editor inputs',
-    "use state:'attached'), REF_NOT_FOUND (stale ref; carries similar_refs), TRANSPORT_UNSUPPORTED,",
+    "use state:'attached'), REF_NOT_FOUND (stale ref; carries similar_refs), RENDERER_NAVIGATED,",
+    'TRANSPORT_UNSUPPORTED,',
     'NOT_RUNNING, BAD_ARGUMENT (invalid selector, or ref+selector both/neither).',
   ].join(' '),
   inputSchema: z.object({

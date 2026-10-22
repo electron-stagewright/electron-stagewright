@@ -96,7 +96,11 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
       'truncated?, result_serialized?, result_chars? }.',
       'Errors: EVAL_BLOCKED_KEYWORD / EVAL_BLOCKED_CONSTRUCT (blocked keyword or construct; not',
       'retryable), EVAL_SYNTAX_ERROR,',
-      'EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable), TRANSPORT_UNSUPPORTED (transport cannot eval',
+      'EVAL_RUNTIME_ERROR, EVAL_TIMEOUT (retryable),',
+      ...(spec.target === 'renderer'
+        ? ['RENDERER_NAVIGATED (page reloaded mid-call; retryable),']
+        : []),
+      'TRANSPORT_UNSUPPORTED (transport cannot eval',
       'here), NOT_RUNNING, BAD_ARGUMENT (multiple sessions).',
     ].join(' '),
     inputSchema: z.object({
@@ -132,6 +136,13 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
       } catch (err) {
         const code = classifyEvalError(err)
         const firstLine = (err instanceof Error ? err.message : String(err)).split('\n', 1)[0] ?? ''
+        if (code === 'RENDERER_NAVIGATED') {
+          return makeError(code, {
+            ...meta,
+            message: `The renderer navigated during ${spec.name}; the call's result was lost.`,
+            next_actions: ['electron_wait_for_selector({ selector: "body" })'],
+          })
+        }
         return makeError(code, { ...meta, message: firstLine.slice(0, 200) || 'Eval failed.' })
       }
     },
@@ -146,10 +157,9 @@ export const evalMainTool: AnyToolDefinition = makeEvalTool({
   capability: 'supportsMainEval',
   context: 'main process',
   scope:
-    'On sessions launched with a `main` entry and on inject sessions it also receives the' +
-    ' electron module as `electronApp` (`arguments[0]`), e.g. `const { dialog } = electronApp`;' +
-    ' `require` and `import()` are blocked, and CDP sessions (attach or packaged launch) have no' +
-    ' main eval.',
+    'After a `main`-entry launch or an inject it also gets the electron module as `electronApp`' +
+    ' (`arguments[0]`); `require`/`import()` are blocked; CDP sessions (attach, packaged launch)' +
+    ' have no main eval.',
 })
 
 /** `electron_eval_renderer` — evaluate in the focused renderer (`page.evaluate`). */

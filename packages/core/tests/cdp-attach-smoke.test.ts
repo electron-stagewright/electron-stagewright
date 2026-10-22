@@ -27,6 +27,7 @@ import { keyboardTypeTool, keyTool, typeTool } from '../src/tools/interaction/in
 import { EVAL_TOOLS } from '../src/tools/eval/index.js'
 import { detachTool, infoTool, launchTool, stopTool } from '../src/tools/lifecycle/index.js'
 import { findTool, snapshotTool } from '../src/tools/snapshot/index.js'
+import { waitForSelectorTool } from '../src/tools/wait/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
 const FIXTURE_MAIN = path.join(
@@ -478,7 +479,7 @@ describe('CDP attach smoke (real Electron)', () => {
         transports: new TransportRegistry({ transports: [new CDPTransport()] }),
         allowEval: true,
       })
-      dispatcher.registerAll([attachTool, detachTool, infoTool, ...EVAL_TOOLS])
+      dispatcher.registerAll([attachTool, detachTool, infoTool, waitForSelectorTool, ...EVAL_TOOLS])
       try {
         const attached = (await dispatcher.dispatch('electron_attach', {
           cdpUrl,
@@ -498,6 +499,23 @@ describe('CDP attach smoke (real Electron)', () => {
         await expect(
           dispatcher.dispatch('electron_eval_renderer', { sessionId, code: 'return 1 + 1' }),
         ).resolves.toMatchObject({ ok: true, result: 2 })
+
+        // A reload during the call is a navigation, not a runtime error; a real throw stays one.
+        const navigated = await dispatcher.dispatch('electron_eval_renderer', {
+          sessionId,
+          code: 'location.reload(); await new Promise((resolve) => setTimeout(resolve, 5000)); return 1',
+        })
+        expect(navigated).toMatchObject({ ok: false, code: 'RENDERER_NAVIGATED', retryable: true })
+        // The suggested next action settles the reloaded page.
+        await expect(
+          dispatcher.dispatch('electron_wait_for_selector', { sessionId, selector: 'body' }),
+        ).resolves.toMatchObject({ ok: true })
+        await expect(
+          dispatcher.dispatch('electron_eval_renderer', {
+            sessionId,
+            code: "throw new Error('x')",
+          }),
+        ).resolves.toMatchObject({ ok: false, code: 'EVAL_RUNTIME_ERROR' })
 
         await dispatcher.dispatch('electron_detach', { sessionId })
       } finally {

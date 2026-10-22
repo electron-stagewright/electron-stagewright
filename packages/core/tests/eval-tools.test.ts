@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { type ErrorResponse, type SuccessResponse } from '../src/errors/envelope.js'
+import { StagewrightError } from '../src/errors/registry.js'
 import { fnv1a32 } from '../src/hash.js'
 import { Dispatcher } from '../src/server/dispatcher.js'
 import type { LogFields, Logger } from '../src/server/logger.js'
@@ -296,6 +297,49 @@ describe('eval-tool safety + error classification', () => {
     })
     const res = (await dispatcher.dispatch('electron_eval_main', {
       code: 'return boom()',
+    })) as ErrorResponse
+    expect(res.code).toBe('EVAL_RUNTIME_ERROR')
+  })
+
+  it.each([
+    [
+      'Playwright',
+      new Error(
+        'page.evaluate: Execution context was destroyed, most likely because of a navigation.',
+      ),
+    ],
+    [
+      'CDP',
+      new StagewrightError(
+        'INTERNAL_ERROR',
+        'CDP Runtime.evaluate failed: Inspected target navigated or closed',
+      ),
+    ],
+  ])('maps a %s navigation during the call to RENDERER_NAVIGATED', async (_transport, thrown) => {
+    const { dispatcher } = setup({
+      evaluate: async () => {
+        throw thrown
+      },
+    })
+    const res = (await dispatcher.dispatch('electron_eval_renderer', {
+      code: 'location.reload(); await new Promise(() => {})',
+    })) as ErrorResponse
+    expect(res).toMatchObject({
+      code: 'RENDERER_NAVIGATED',
+      retryable: true,
+      next_actions: ['electron_wait_for_selector({ selector: "body" })'],
+    })
+    expect(res.error).toContain('electron_eval_renderer')
+  })
+
+  it('keeps a thrown error that mentions a navigation as EVAL_RUNTIME_ERROR', async () => {
+    const { dispatcher } = setup({
+      evaluate: async () => {
+        throw new Error('page.evaluate: Error: Execution context was destroyed')
+      },
+    })
+    const res = (await dispatcher.dispatch('electron_eval_renderer', {
+      code: "throw new Error('Execution context was destroyed')",
     })) as ErrorResponse
     expect(res.code).toBe('EVAL_RUNTIME_ERROR')
   })
