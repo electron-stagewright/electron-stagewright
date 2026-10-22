@@ -469,6 +469,41 @@ describe('electron_expect_count (role mode)', () => {
     expect(stored?.entries.filter((e) => e.role === 'button')).toHaveLength(2)
   })
 
+  it('keeps counting on the new page when the renderer navigates during a walk', async () => {
+    let calls = 0
+    const walked = snap(TWO_BUTTONS)
+    const evaluate: FakeEvaluate = async () => {
+      calls += 1
+      if (calls === 1) {
+        throw new Error(
+          'page.evaluate: Execution context was destroyed, most likely because of a navigation.',
+        )
+      }
+      return walked
+    }
+    const { dispatcher } = setup({ evaluate })
+    const res = await dispatcher.dispatch('electron_expect_count', {
+      role: 'button',
+      equals: 2,
+      timeoutMs: 2000,
+    })
+    expect(res).toMatchObject({ ok: true, matched: true, actual: 2 })
+  })
+
+  it('fails the expectation, not RENDERER_NAVIGATED, when the budget ends mid-navigation', async () => {
+    const evaluate: FakeEvaluate = async () => {
+      throw new Error('CDP Runtime.evaluate failed: Inspected target navigated or closed')
+    }
+    const { dispatcher } = setup({ evaluate })
+    const res = (await dispatcher.dispatch('electron_expect_count', {
+      role: 'button',
+      equals: 2,
+      timeoutMs: 0,
+    })) as ErrorResponse & { details?: { actual?: unknown } }
+    expect(res.code).toBe('EXPECTATION_FAILED')
+    expect(res.details?.actual).toBeNull()
+  })
+
   it('fails when the role count does not satisfy the predicate', async () => {
     const { dispatcher } = setup({ evaluate: canned(snap(TWO_BUTTONS)) })
     const res = (await dispatcher.dispatch('electron_expect_count', {

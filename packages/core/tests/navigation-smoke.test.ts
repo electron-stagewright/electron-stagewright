@@ -21,6 +21,7 @@ import { SessionManager } from '../src/server/session-manager.js'
 import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { EVAL_TOOLS } from '../src/tools/eval/index.js'
+import { EXPECT_TOOLS } from '../src/tools/expect/index.js'
 import { INTERACTION_TOOLS } from '../src/tools/interaction/index.js'
 import { attachTool } from '../src/tools/lifecycle/attach.js'
 import { detachTool, launchTool, stopTool } from '../src/tools/lifecycle/index.js'
@@ -49,6 +50,7 @@ const TOOLS = [
   ...READ_TOOLS,
   ...INTERACTION_TOOLS,
   ...EVAL_TOOLS,
+  ...EXPECT_TOOLS,
 ]
 const QUICK = [0, 5, 20]
 // A CDP capture mid-navigation can stall until its 15 s method timeout on Linux, so try it once.
@@ -100,6 +102,20 @@ async function codesDuringReloads(dispatcher: Dispatcher, sessionId: string): Pr
   return codes
 }
 
+/** A role-mode expect_count started as the page reloads must ride through to the new page. */
+async function countAcrossReload(dispatcher: Dispatcher, sessionId: string): Promise<unknown> {
+  await dispatcher.dispatch('electron_eval_renderer', {
+    sessionId,
+    code: 'setTimeout(() => location.reload(), 0); return 1',
+  })
+  return dispatcher.dispatch('electron_expect_count', {
+    sessionId,
+    role: 'button',
+    min: 1,
+    timeoutMs: 10_000,
+  })
+}
+
 function internalErrors(codes: readonly string[]): string[] {
   return codes.filter((entry) => entry.endsWith(': INTERNAL_ERROR'))
 }
@@ -118,6 +134,9 @@ describe('navigation smoke (real Electron)', () => {
         expect(internalErrors(await codesDuringReloads(dispatcher, launched.session_id))).toEqual(
           [],
         )
+        await expect(countAcrossReload(dispatcher, launched.session_id)).resolves.toMatchObject({
+          ok: true,
+        })
       } finally {
         await dispatcher.dispatch('electron_stop', { sessionId: launched.session_id })
       }
@@ -162,6 +181,9 @@ describe('navigation smoke (real Electron)', () => {
         expect(internalErrors(await codesDuringReloads(dispatcher, attached.session_id))).toEqual(
           [],
         )
+        await expect(countAcrossReload(dispatcher, attached.session_id)).resolves.toMatchObject({
+          ok: true,
+        })
         await dispatcher.dispatch('electron_detach', { sessionId: attached.session_id })
       } finally {
         if (proc.exitCode === null) proc.kill('SIGKILL')
