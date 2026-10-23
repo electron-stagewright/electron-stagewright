@@ -2273,6 +2273,57 @@ describe('PlaywrightSession notification capture', () => {
     expect(await session.capturedNotifications()).toEqual([])
   })
 
+  describe('file dialogs', () => {
+    const DIALOG_KEY = '__stagewright_fileDialogs'
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>)[DIALOG_KEY]
+    })
+
+    async function launchWithDialog(electron: Record<string, unknown>) {
+      const app = createFakeElectronApp([createFakePage('A')], electron)
+      const transport = new PlaywrightElectronTransport({
+        loadElectron: async () => ({ launch: async () => app }),
+      })
+      return transport.launch({ appPath: '/abs/main.js' })
+    }
+
+    it('arms, answers, reports and disarms through the main process', async () => {
+      const os: string[] = []
+      const dialog = {
+        showOpenDialog: async () => (os.push('open'), { canceled: true, filePaths: [] }),
+        showSaveDialogSync: () => (os.push('saveSync'), ''),
+      }
+      const session = await launchWithDialog({ dialog })
+      await expect(
+        session.armFileDialogs([{ kind: 'open', paths: ['/data/a.sql'] }]),
+      ).resolves.toEqual({ pending: 1, hooked: 'arm' })
+      await expect(dialog.showOpenDialog()).resolves.toEqual({
+        canceled: false,
+        filePaths: ['/data/a.sql'],
+      })
+      await expect(session.fileDialogEvents()).resolves.toMatchObject({
+        armed: true,
+        pending: 0,
+        events: [{ kind: 'open', answer: { paths: ['/data/a.sql'] } }],
+      })
+      await expect(session.disarmFileDialogs()).resolves.toMatchObject({ armed: false })
+      dialog.showSaveDialogSync()
+      expect(os).toEqual(['saveSync'])
+    })
+
+    it('refuses with TRANSPORT_UNSUPPORTED when the app has no dialog module', async () => {
+      const session = await launchWithDialog({})
+      await expect(session.armFileDialogs([])).rejects.toMatchObject({
+        code: 'TRANSPORT_UNSUPPORTED',
+      })
+      await expect(session.fileDialogEvents()).resolves.toEqual({
+        armed: false,
+        pending: 0,
+        events: [],
+      })
+    })
+  })
+
   it('rejects capture ops after dispose', async () => {
     const { session } = await launchWithNotifications()
     await session.dispose()

@@ -17,7 +17,7 @@ import { FakeSession, fullCapabilities, TestLifecycle } from '@electron-stagewri
 import { afterEach, describe, expect, it } from 'vitest'
 
 import packageJson from '../package.json' with { type: 'json' }
-import nativeUiPlugin from '../src/index.js'
+import nativeUiPlugin, { isAnswerPath } from '../src/index.js'
 
 /** A representative menu: a top-level View submenu with a checked checkbox + a disabled item + a role. */
 const SAMPLE_MENU: NativeMenu = {
@@ -502,6 +502,17 @@ describe('native-ui plugin', () => {
           append: true,
         }),
       ).toMatchObject({ pending: 2 })
+    })
+
+    it('accepts only fixed absolute paths, with a drive or share on Windows', () => {
+      expect(isAnswerPath('/data/in.sql', 'darwin')).toBe(true)
+      expect(isAnswerPath('data/in.sql', 'linux')).toBe(false)
+      expect(isAnswerPath('C:\\data\\in.sql', 'win32')).toBe(true)
+      expect(isAnswerPath('c:/data/in.sql', 'win32')).toBe(true)
+      expect(isAnswerPath('\\\\server\\share\\in.sql', 'win32')).toBe(true)
+      expect(isAnswerPath('\\data\\in.sql', 'win32')).toBe(false)
+      expect(isAnswerPath('/data/in.sql', 'win32')).toBe(false)
+      expect(isAnswerPath('C:data\\in.sql', 'win32')).toBe(false)
     })
 
     it('refuses relative or empty answers with BAD_ARGUMENT before queueing', async () => {

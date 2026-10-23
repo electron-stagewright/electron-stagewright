@@ -1482,11 +1482,9 @@ class PlaywrightSession implements TransportSession {
     )
     if (result === null) {
       throw new StagewrightError(
-        'INTERNAL_ERROR',
-        'The app has no Electron dialog module to hook.',
-        {
-          transport: TRANSPORT_ID,
-        },
+        'TRANSPORT_UNSUPPORTED',
+        'The app has no Electron dialog module to answer.',
+        { transport: TRANSPORT_ID, capability: 'armFileDialogs' },
       )
     }
     return result

@@ -237,9 +237,11 @@ try {
         if (win && typeof win.getTitle === 'function') event.window = win.getTitle()
       } catch (e) {}
       if (decided.reason) event.reason = decided.reason
+      var answer = decided.answer
+      var multi = event.options.properties && event.options.properties.indexOf('multiSelections') !== -1
+      if (answer.kind === 'open' && answer.paths.length > 1 && !multi) event.warning = 'multiple_paths'
       state.events.push(event)
       if (state.events.length > CAP) state.events.shift()
-      var answer = decided.answer
       if (kind === 'open') {
         var paths = answer.kind === 'open' ? answer.paths.slice() : []
         if (sync) return answer.kind === 'open' ? paths : undefined

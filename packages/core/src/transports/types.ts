@@ -267,6 +267,8 @@ export interface FileDialogEvent {
   readonly answer: FileDialogResponse
   /** Why a dialog was cancelled without a queued cancel. */
   readonly reason?: 'queue_empty' | 'kind_mismatch'
+  /** Several paths answered a dialog that did not allow `multiSelections`; a real picker returns one. */
+  readonly warning?: 'multiple_paths'
   readonly at: number
 }
 

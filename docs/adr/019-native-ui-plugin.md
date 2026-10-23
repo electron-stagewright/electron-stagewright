@@ -267,11 +267,13 @@ gains a file-dialog surface:
 - **Events.** `native_file_dialog_events` returns, oldest first, each dialog the app showed while armed:
   its kind, whether it was the sync form, the options the app passed (title, defaultPath, buttonLabel,
   message, filters, properties), the parent window's title, the answer given and, when cancelled
-  without a queued cancel, the reason (`queue_empty` or `kind_mismatch`). The buffer is bounded like
+  without a queued cancel, the reason (`queue_empty` or `kind_mismatch`), and `warning:
+"multiple_paths"` when several paths answered a dialog that did not allow `multiSelections`. The buffer is bounded like
   notification capture. `native_file_dialog_disarm` restores the real dialogs and returns the events.
-- **Visible to traces.** Arming and reading events are ordinary tool calls, so the trace records the
-  queued answers and every answer given, and a replayed trace re-arms the same answers. Nothing runs
-  through eval.
+- **Visible to traces.** Arming is an ordinary tool call, so the trace records the queued answers and
+  a replayed trace re-arms them; the answers actually given reach the trace when the agent reads
+  `native_file_dialog_events` or disarms, so a flow that should be auditable ends with one of them.
+  Nothing runs through eval.
 - **Launch-time hook.** When the session was launched with `instrumentNative`, the shim (ADR-020)
   installs the same hook before the app's main runs, so an app that captured the dialog functions at
   import (`const { showOpenDialog } = dialog`) is answered too. Otherwise the hook is installed when

@@ -107,7 +107,8 @@ Each path segment matches an item by its **label OR its role**, so role-based it
 - **`native_file_dialog_events`** `{ sessionId? }` — the dialogs the app showed since arming, oldest
   first: `kind`, `sync`, the `options` it passed (title, defaultPath, buttonLabel, message,
   nameFieldLabel, filters, properties), the parent `window` title, the `answer` given, and `reason`
-  (`queue_empty` or `kind_mismatch`) when it was cancelled without a queued cancel. Returns
+  (`queue_empty` or `kind_mismatch`) when it was cancelled without a queued cancel, and `warning:
+"multiple_paths"` when several paths answered a dialog without `multiSelections`. Returns
   `{ armed, pending, count, events }`.
 - **`native_file_dialog_disarm`** `{ sessionId? }` — let dialogs open the real OS pickers again, drop the
   queued answers, and return the events. Returns `{ armed, pending, count, events }`.
@@ -158,8 +159,9 @@ plugin. A tray with no listener for the event is refused, not faked.
 Answering a file dialog (`native_file_dialog_arm`) **modifies** app behaviour the way `electron_set_files`
 does for a file input: the app reads or writes the paths the agent queued. The agent supplies answers
 (data), never code, and the hook is fixed transport-owned source that passes calls through to the real
-dialog until armed, so it is **not** `--allow-eval` gated. Arming and the events are ordinary tool calls,
-so a trace records what was queued and every answer given.
+dialog until armed, so it is **not** `--allow-eval` gated. Arming is an ordinary tool call, so a trace
+records what was queued; end the flow with `native_file_dialog_events` (or disarm) so the answers given
+are in the trace too.
 
 ## Scope and limitations
 

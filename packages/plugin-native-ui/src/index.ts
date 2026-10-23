@@ -44,7 +44,7 @@ import {
   requireTransportCapability,
   sessionIdField,
 } from '@electron-stagewright/core/plugin-sdk'
-import { isAbsolute } from 'node:path'
+import { posix, win32 } from 'node:path'
 
 import { z } from 'zod'
 
@@ -88,6 +88,15 @@ function requireNativeUI(
     }
   }
   return { session: managed.session, sessionId: managed.id }
+}
+
+/**
+ * Whether `value` is a fixed absolute path. On Windows, `isAbsolute` also accepts "\\dir" and "/dir",
+ * which resolve against the app's current drive, so a drive letter or UNC share is required there.
+ */
+export function isAnswerPath(value: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform === 'win32') return win32.isAbsolute(value) && /^([a-zA-Z]:[\\/]|\\\\)/.test(value)
+  return posix.isAbsolute(value)
 }
 
 /** Build a fresh native-UI plugin whose notification state belongs to one server instance. */
@@ -361,7 +370,10 @@ export function createNativeUiPlugin(): StagewrightPlugin {
   const absolutePath = z
     .string()
     .min(1)
-    .refine((value) => isAbsolute(value), 'Answer paths must be absolute.')
+    .refine(
+      (value) => isAnswerPath(value),
+      'Answer paths must be absolute (on Windows, with a drive letter or a UNC share).',
+    )
 
   const fileDialogArmTool: AnyToolDefinition = defineTool({
     name: 'file_dialog_arm',
@@ -411,8 +423,9 @@ export function createNativeUiPlugin(): StagewrightPlugin {
     description: [
       'Return the native file dialogs the app showed since native_file_dialog_arm, oldest first: kind',
       '(open/save), sync, the options the app passed (title, defaultPath, buttonLabel, message, filters,',
-      'properties), the parent window title, the answer given, and reason (queue_empty or kind_mismatch)',
-      'when it was cancelled without a queued cancel. Returns: { ok, armed, pending, count, events }.',
+      'properties), the parent window title, the answer given, reason (queue_empty or kind_mismatch)',
+      'when it was cancelled without a queued cancel, and warning multiple_paths when several paths',
+      'answered a dialog without multiSelections. Returns: { ok, armed, pending, count, events }.',
       'Errors: native.UNSUPPORTED, NOT_RUNNING.',
     ].join(' '),
     inputSchema: z.object({ ...sessionField }),

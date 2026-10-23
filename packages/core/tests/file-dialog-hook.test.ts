@@ -90,6 +90,7 @@ describe('file-dialog bodies', () => {
       answer: { kind: 'open', paths: ['/data/a.sql', '/data/b.sql'] },
     })
     expect(state.events[0]?.options).not.toHaveProperty('securityScopedBookmarks')
+    expect(state.events[0]).not.toHaveProperty('warning')
     expect(JSON.parse(JSON.stringify(state))).toEqual(state)
   })
 
@@ -143,6 +144,13 @@ describe('file-dialog bodies', () => {
     expect(app.state().events).toHaveLength(1)
     expect(app.arm([{ kind: 'cancel' }, { kind: 'cancel' }])).toMatchObject({ pending: 2 })
     expect(app.state().events).toHaveLength(0)
+  })
+
+  it('warns when several paths answer a single-selection open dialog', async () => {
+    const app = fakeApp()
+    app.arm([{ kind: 'open', paths: ['/data/a.sql', '/data/b.sql'] }])
+    await app.dialog['showOpenDialog']?.({ properties: ['openFile'] })
+    expect(app.state().events[0]).toMatchObject({ warning: 'multiple_paths' })
   })
 
   it('keeps a bounded event buffer', () => {

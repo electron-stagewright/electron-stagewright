@@ -618,6 +618,9 @@ describe('CdpSession native-UI seam (honest-false)', () => {
     await expect(session.invokeTrayEvent(1, 'click')).rejects.toMatchObject({
       code: 'NOT_IMPLEMENTED',
     })
+    await expect(session.armFileDialogs([])).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+    await expect(session.fileDialogEvents()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+    await expect(session.disarmFileDialogs()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
   })
 })
 
