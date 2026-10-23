@@ -230,6 +230,44 @@ describe('trace plugin (in-process)', () => {
     }
   })
 
+  it('promotes recorded values into declared parameters of a v2 spec', async () => {
+    const file = await tmpFile()
+    const out = file.replace(/\.jsonl$/, '.replay.json')
+    const server = await createServer({ plugins: [tracePlugin], tools: [demoTool] })
+    try {
+      await server.dispatcher.dispatch('trace_start', { path: file })
+      await server.dispatcher.dispatch('demo_echo', { value: 'es' })
+      await server.dispatcher.dispatch('demo_echo', { value: 'es' })
+      await server.dispatcher.dispatch('trace_stop', {})
+      expect(
+        await server.dispatcher.dispatch('trace_promote', {
+          path: file,
+          parameters: { language: { type: 'string', enum: ['en', 'es'], value: 'es' } },
+        }),
+      ).toMatchObject({ ok: true, steps: 2, parameters: { language: 2 } })
+      const spec = JSON.parse(await readFile(out, 'utf8')) as Record<string, unknown>
+      expect(spec).toMatchObject({
+        version: 2,
+        parameters: { language: { type: 'string', enum: ['en', 'es'], default: 'es' } },
+        steps: [
+          { args: { value: { $param: 'language' } } },
+          { args: { value: { $param: 'language' } } },
+        ],
+      })
+
+      for (const parameters of [
+        { theme: { type: 'string', value: 'dark' } },
+        { language: { type: 'colour', value: 'es' } },
+      ]) {
+        expect(
+          await server.dispatcher.dispatch('trace_promote', { path: file, parameters }),
+        ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+      }
+    } finally {
+      await server.close().catch(() => undefined)
+    }
+  })
+
   it('reports an invalid output target when starting without leaving a fake active recording', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sw-trace-stop-fails-'))
     created.push(dir)

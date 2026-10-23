@@ -174,6 +174,10 @@ trace_stop {}
 
 To repeat the check in CI, promote a recorded trace to a reviewed replay spec with `trace_promote`
 and run it with `electron-stagewright-replay` (see
-[Run a promoted spec in CI](./capture-diagnostics.md#run-a-promoted-spec-in-ci)). A spec fixes its
-arguments today. Parameterizing it, so one spec covers each language or theme, is the planned next
-step in [ADR-026](../adr/026-workflow-composition.md) and needs its own ADR amendment first.
+[Run a promoted spec in CI](./capture-diagnostics.md#run-a-promoted-spec-in-ci)). To cover each
+language or theme with one spec, promote with `parameters`: every argument equal to the recorded
+value becomes a declared parameter, and the runner takes `--param language=es` per run.
+
+```json
+trace_promote { "path": "/abs/evidence/run-42/trace.jsonl", "parameters": { "language": { "type": "string", "enum": ["en", "es", "pt"], "value": "es" } } }
+```

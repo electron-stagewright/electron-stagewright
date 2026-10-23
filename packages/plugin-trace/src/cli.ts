@@ -28,8 +28,11 @@ import {
 } from '@electron-stagewright/core'
 
 import {
+  ReplayParameterError,
   parseReplaySpec,
+  prepareReplaySpec,
   replaySpec,
+  sensitiveArgumentKeys,
   type ReplaySpecOutcome,
   type ReplaySpecReport,
 } from './spec.js'
@@ -58,6 +61,12 @@ export interface ReplayCliOptions {
   readonly pluginConfigs: Readonly<Record<string, unknown>>
   readonly appRoot?: string
   readonly operationTimeoutMs?: number
+  /** `--param name=value` values, applied after the params file and environment. */
+  readonly parameters?: Readonly<Record<string, string>>
+  /** `--params-file`: a JSON object of parameter values. */
+  readonly paramsFile?: string
+  /** `--param-env name=ENV_VAR`: parameters read from the environment, e.g. secrets. */
+  readonly paramEnv?: Readonly<Record<string, string>>
 }
 
 export interface ReplayCliReport {
@@ -72,8 +81,10 @@ export interface ReplayCliReport {
     readonly skipped: number
   }
   readonly steps?: readonly ReplaySpecOutcome[]
+  /** The values a parameterized spec ran with; sensitive ones are redacted. */
+  readonly parameters?: Readonly<Record<string, unknown>>
   readonly error?: {
-    readonly code: 'MALFORMED_SPEC' | 'INFRASTRUCTURE'
+    readonly code: 'MALFORMED_SPEC' | 'INVALID_PARAMETERS' | 'INFRASTRUCTURE'
     readonly message: string
   }
 }
@@ -94,6 +105,8 @@ export interface ReplayCliDependencies {
   readonly readFile: (path: string, encoding: BufferEncoding) => Promise<string>
   readonly importPlugin: (spec: string) => Promise<StagewrightPlugin>
   readonly createServer: (options: CreateServerOptions) => Promise<ReplayServer>
+  /** Environment for `--param-env`; defaults to `process.env`. */
+  readonly env?: Readonly<Record<string, string | undefined>>
 }
 
 export interface ReplayCliIo {
@@ -137,6 +150,12 @@ function parsePluginConfig(value: string): readonly [string, unknown] {
       }`,
     )
   }
+}
+
+function parseAssignment(value: string, flag: string, what: string): readonly [string, string] {
+  const separator = value.indexOf('=')
+  if (separator <= 0) throw new Error(`${flag} expects <name>=<${what}>`)
+  return [value.slice(0, separator), value.slice(separator + 1)]
 }
 
 function parseAllowEval(value: string): EvalPolicy {
@@ -191,6 +210,9 @@ export function parseReplayCliArgs(argv: readonly string[]): ReplayCliOptions {
   const exclude: string[] = []
   const pluginSpecs: string[] = []
   const pluginConfigs: Record<string, unknown> = {}
+  const parameters: Record<string, string> = {}
+  const paramEnv: Record<string, string> = {}
+  let paramsFile: string | undefined
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -248,6 +270,24 @@ export function parseReplayCliArgs(argv: readonly string[]): ReplayCliOptions {
       index += 1
       continue
     }
+    if (arg === '--param') {
+      const [name, value] = parseAssignment(requireValue(argv, index, arg), arg, 'value')
+      parameters[name] = value
+      index += 1
+      continue
+    }
+    if (arg === '--param-env') {
+      const [name, variable] = parseAssignment(requireValue(argv, index, arg), arg, 'ENV_VAR')
+      paramEnv[name] = variable
+      index += 1
+      continue
+    }
+    if (arg === '--params-file') {
+      if (paramsFile !== undefined) throw new Error('--params-file may be specified only once')
+      paramsFile = requireValue(argv, index, arg)
+      index += 1
+      continue
+    }
     if (arg === '--plugin-config') {
       const [name, config] = parsePluginConfig(requireValue(argv, index, arg))
       pluginConfigs[name] = config
@@ -270,6 +310,9 @@ export function parseReplayCliArgs(argv: readonly string[]): ReplayCliOptions {
     ...(exclude.length > 0 ? { exclude } : {}),
     ...(appRoot !== undefined ? { appRoot } : {}),
     ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
+    ...(Object.keys(parameters).length > 0 ? { parameters } : {}),
+    ...(Object.keys(paramEnv).length > 0 ? { paramEnv } : {}),
+    ...(paramsFile !== undefined ? { paramsFile } : {}),
     pluginSpecs,
     pluginConfigs,
   }
@@ -286,6 +329,9 @@ export function formatReplayCliHelp(): string {
     '  --exclude <tool[,tool]>          Skip named tools.',
     '  --plugin <name|path>             Load a plugin used by the specification; repeatable.',
     '  --plugin-config <name>=<json>    Supply configuration for a loaded plugin.',
+    '  --param <name>=<value>           Value for a declared spec parameter; repeatable.',
+    '  --params-file <file.json>        A JSON object of parameter values.',
+    '  --param-env <name>=<ENV_VAR>     Read a parameter from the environment (secrets).',
     '  --allow-eval[=main,renderer|all] Enable the required eval tools (default: disabled).',
     '  --app-root <path>                Confine launches and file paths to this root.',
     '  --operation-timeout-ms <n>       Dispatch timeout in milliseconds (0 disables).',
@@ -293,14 +339,14 @@ export function formatReplayCliHelp(): string {
     '  --help, -h                       Print this help and exit.',
     '',
     'Exit codes: 0 passed; 1 checkpoint mismatch; 2 malformed spec; 3 app launch failed;',
-    '4 infrastructure error; 64 invalid CLI usage.',
+    '4 infrastructure error; 64 invalid CLI usage or parameter values.',
   ].join('\n')
 }
 
 function errorReport(
   source: string,
   exitCode: ReplayExitCode,
-  code: 'MALFORMED_SPEC' | 'INFRASTRUCTURE',
+  code: 'MALFORMED_SPEC' | 'INVALID_PARAMETERS' | 'INFRASTRUCTURE',
   message: string,
 ): ReplayCliReport {
   return {
@@ -330,7 +376,40 @@ function successReport(
       skipped: report.skipped,
     },
     steps: report.steps,
+    ...(report.parameters !== undefined ? { parameters: report.parameters } : {}),
   }
+}
+
+/** Merge parameter values: the params file, then `--param-env`, then `--param` (last wins). */
+async function suppliedParameters(
+  options: ReplayCliOptions,
+  deps: ReplayCliDependencies,
+): Promise<Record<string, unknown>> {
+  const supplied: Record<string, unknown> = {}
+  if (options.paramsFile !== undefined) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await deps.readFile(path.resolve(options.paramsFile), 'utf8'))
+    } catch (error) {
+      throw new ReplayParameterError(
+        'value',
+        `Could not read --params-file: ${asErrorMessage(error)}`,
+      )
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new ReplayParameterError('value', '--params-file must hold a JSON object.')
+    }
+    Object.assign(supplied, parsed)
+  }
+  const env = deps.env ?? process.env
+  for (const [name, variable] of Object.entries(options.paramEnv ?? {})) {
+    const value = env[variable]
+    if (value === undefined) {
+      throw new ReplayParameterError('value', `--param-env ${name}: ${variable} is not set.`)
+    }
+    supplied[name] = value
+  }
+  return Object.assign(supplied, options.parameters ?? {})
 }
 
 function printable(value: unknown): string {
@@ -417,12 +496,37 @@ export async function runReplayCli(
     return { exitCode: REPLAY_EXIT_CODES.MALFORMED_SPEC, report }
   }
 
+  let supplied: Record<string, unknown>
+  try {
+    supplied = await suppliedParameters(options, deps)
+    prepareReplaySpec(spec, supplied)
+  } catch (error) {
+    if (!(error instanceof ReplayParameterError)) throw error
+    const exitCode =
+      error.kind === 'spec' ? REPLAY_EXIT_CODES.MALFORMED_SPEC : REPLAY_EXIT_CODES.USAGE
+    const report = errorReport(
+      source,
+      exitCode,
+      error.kind === 'spec' ? 'MALFORMED_SPEC' : 'INVALID_PARAMETERS',
+      error.message,
+    )
+    emit(options, report, io)
+    return { exitCode, report }
+  }
   let server: ReplayServer | undefined
   let result: ReplayCliResult
   try {
     const plugins = await Promise.all(
       options.pluginSpecs.map((plugin) => deps.importPlugin(plugin)),
     )
+    // A loaded trace plugin records the args that carry secrets under their own names.
+    const secretKeys = sensitiveArgumentKeys(spec)
+    const pluginConfigs: Record<string, unknown> = { ...options.pluginConfigs }
+    if (secretKeys.length > 0 && plugins.some((plugin) => plugin.name === 'trace')) {
+      const current = (pluginConfigs['trace'] ?? {}) as { redact?: unknown }
+      const redact = Array.isArray(current.redact) ? (current.redact as string[]) : []
+      pluginConfigs['trace'] = { ...current, redact: [...new Set([...redact, ...secretKeys])] }
+    }
     const serverOptions: CreateServerOptions = {
       allowEval: options.allowEval,
       toolProfile: options.toolProfile,
@@ -432,9 +536,7 @@ export async function runReplayCli(
         ? { operationTimeoutMs: options.operationTimeoutMs }
         : {}),
       ...(plugins.length > 0 ? { plugins } : {}),
-      ...(Object.keys(options.pluginConfigs).length > 0
-        ? { pluginConfigs: options.pluginConfigs }
-        : {}),
+      ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
     }
     server = await deps.createServer(serverOptions)
     const liveServer = server
@@ -444,6 +546,7 @@ export async function runReplayCli(
       {
         ...(options.include !== undefined ? { include: options.include } : {}),
         ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
+        parameters: supplied,
       },
     )
     const launchFailed = replay.steps.some(
