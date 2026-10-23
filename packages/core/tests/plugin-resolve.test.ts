@@ -430,12 +430,14 @@ describe('electron_plugins introspection tool', () => {
         effectiveConfig: { redactValues: false, revealValues: false },
       })
       expect(safeStorage?.tools).toContainEqual({
-        name: 'storage_local_get',
+        name: 'storage_idb_get',
         state: 'disabled',
         disabledReason: { kind: 'eval_policy_disabled', target: 'renderer' },
       })
+      // Per-key Web Storage rides the no-eval seam, like the cookie tools.
+      expect(safeStorage?.tools).toContainEqual({ name: 'storage_local_get', state: 'enabled' })
       expect(safeStorage?.tools).toContainEqual({ name: 'storage_cookies', state: 'enabled' })
-      expect(enabledStorage?.tools).toContainEqual({ name: 'storage_local_get', state: 'enabled' })
+      expect(enabledStorage?.tools).toContainEqual({ name: 'storage_idb_get', state: 'enabled' })
     } finally {
       await safe.close().catch(() => undefined)
       await enabled.close().catch(() => undefined)

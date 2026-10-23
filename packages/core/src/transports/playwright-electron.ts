@@ -81,6 +81,7 @@ import {
   buildScrollIntoViewBody,
 } from './playwright-electron-bodies.js'
 import { originRelation } from './surface-origin.js'
+import { runDomStorage } from './dom-storage.js'
 import type {
   AttachOptions,
   ClickOptions,
@@ -112,6 +113,8 @@ import type {
   NotificationCaptureFilter,
   PressOptions,
   ReloadOptions,
+  WebStorageRequest,
+  WebStorageResponse,
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
@@ -1044,6 +1047,30 @@ class PlaywrightSession implements TransportSession {
         ...(c.domain !== undefined ? { domain: c.domain } : {}),
         ...(c.path !== undefined ? { path: c.path } : {}),
       })
+    }
+  }
+
+  async webStorage(request: WebStorageRequest): Promise<WebStorageResponse> {
+    this.requireRunning()
+    const { target, rootPage } = await this.activeRenderer()
+    const context = rootPage.context()
+    if (context.newCDPSession === undefined) {
+      throw new StagewrightError(
+        'TRANSPORT_UNSUPPORTED',
+        'This Playwright build cannot open a CDP session to reach Web Storage.',
+        { transport: TRANSPORT_ID, capability: 'webStorage' },
+      )
+    }
+    const cdp = await context.newCDPSession(rootPage)
+    try {
+      // A selected frame is matched by URL in the page's frame tree; the root page uses its main frame.
+      return await runDomStorage(
+        (method, params) => cdp.send(method, params),
+        { url: target === rootPage ? undefined : target.url() },
+        request,
+      )
+    } finally {
+      await cdp.detach().catch(() => undefined)
     }
   }
 

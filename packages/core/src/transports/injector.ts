@@ -81,6 +81,8 @@ import type {
   StopResult,
   StorageCookie,
   StorageSnapshot,
+  WebStorageRequest,
+  WebStorageResponse,
   SurfaceDescriptor,
   TransportCapabilities,
   TransportId,
@@ -439,6 +441,9 @@ class InjectorSession implements TransportSession {
   }
   storageSnapshot(): Promise<StorageSnapshot> {
     return Promise.reject(notImplemented('storageSnapshot'))
+  }
+  webStorage(_request: WebStorageRequest): Promise<WebStorageResponse> {
+    return Promise.reject(notImplemented('webStorage'))
   }
 
   // --- Native UI seam: not implemented on the injector stub (canAccessNativeUI: false). ---

@@ -5,24 +5,20 @@
  * localStorage value after ("the cart survived a reload"), read/set/remove a single
  * `localStorage` / `sessionStorage` key, or read/write IndexedDB records.
  *
- * This plugin is HYBRID — three families with different trust postures:
+ * This plugin is HYBRID — two trust postures:
  *
- * - **No-eval seam tools** (`storage_cookies`, `storage_set_cookie`, `storage_clear_cookies`,
- *   `storage_snapshot`) ride a dedicated TRANSPORT SEAM (Playwright's BrowserContext / the CDP Storage
- *   + Network domains), not eval, so they are NOT eval gated. They are gated on the transport's
- *   `canAccessStorage` capability (otherwise `storage.UNSUPPORTED`).
- * - **Per-key Web Storage tools** (`storage_local_*` / `storage_session_*` — get/set/remove/keys/clear)
- *   read and mutate a single `localStorage` / `sessionStorage` key, which needs renderer JavaScript, so
- *   they ride `transport.evaluate('renderer', …)` and ARE renderer-eval gated. They register only when
- *   the server permits renderer eval (`--allow-eval=renderer`, or bare `--allow-eval`) — the dispatcher
- *   hides them otherwise — and re-assert that grant at the tool boundary (`storage.EVAL_REQUIRED`) as
- *   defense in depth. They also require the transport's `supportsRendererEval` capability
- *   (`storage.UNSUPPORTED`). The agent supplies op/scope/key/value DATA, not code: the renderer body is
- *   a fixed source string (see `web-storage.ts`).
+ * - **No-eval seam tools** ride a dedicated TRANSPORT SEAM, not eval, and are gated on the transport's
+ *   `canAccessStorage` capability (otherwise `storage.UNSUPPORTED`): the cookie and snapshot tools
+ *   (`storage_cookies`, `storage_set_cookie`, `storage_clear_cookies`, `storage_snapshot`) through
+ *   Playwright's BrowserContext / the CDP Storage + Network domains, and the per-key Web Storage tools
+ *   (`storage_local_*` / `storage_session_*` — get/set/remove/keys/clear) through the CDP DOMStorage
+ *   domain, which reads and writes the active page's storage without running page JavaScript.
  * - **IndexedDB tools** (`storage_idb_*` — schema/get/keys/count/set/delete/clear) read and mutate
- *   records in EXISTING databases / object stores; also renderer-eval gated (the async `indexeddb.ts`
- *   body), bounded to existing databases/stores (it never creates or upgrades a schema) and refusing a
- *   missing one (`storage.NOT_FOUND`).
+ *   records in EXISTING databases / object stores. They run renderer JS (the async `indexeddb.ts`
+ *   body), so they are renderer-eval gated: registered only when the server permits renderer eval
+ *   (`--allow-eval=renderer`) and re-asserted at the boundary (`storage.EVAL_REQUIRED`). They are
+ *   bounded to existing databases/stores (never creating or upgrading a schema) and refuse a missing
+ *   one (`storage.NOT_FOUND`).
  *
  * SECURITY: a cookie VALUE can carry a secret (an auth token), so cookie values are redacted by default
  * before they reach the agent (`revealValues` opts out, mirroring the network plugin's
@@ -46,6 +42,10 @@ import {
   type StorageCookie,
   type StorageSnapshot,
   type StagewrightPlugin,
+  StagewrightError,
+  type WebStorageArea,
+  type WebStorageRequest,
+  type WebStorageResponse,
   type ToolContext,
   type ToolResult,
   type TransportSession,
@@ -57,13 +57,10 @@ import {
 } from '@electron-stagewright/core/plugin-sdk'
 import { z } from 'zod'
 
-import {
-  WEB_STORAGE_BODY,
-  type StorageScope,
-  type WebStorageRequest,
-  type WebStorageResult,
-} from './web-storage.js'
 import { INDEXEDDB_BODY, type IdbRequest, type IdbResult } from './indexeddb.js'
+
+/** Which Web Storage area a per-key tool targets. */
+type StorageScope = WebStorageArea
 
 /** Plugin namespace — must match {@link storagePlugin.name}; the loader prefixes its tools with it. */
 const STORAGE_NAMESPACE = 'storage'
@@ -293,22 +290,70 @@ export function createStoragePlugin(): StagewrightPlugin {
     },
   })
 
-  // --- Per-key Web Storage (localStorage / sessionStorage) — renderer-eval gated ---
+  // --- Per-key Web Storage (localStorage / sessionStorage) — no-eval storage seam ---
   //
-  // These tools run renderer JS (the no-eval seam above covers cookies + the read-only snapshot, not a
-  // single-key get/set/remove). They declare `requiresEvalFlag: true, evalTarget: 'renderer'`, so the
-  // dispatcher HIDES them unless the server permits renderer eval — that registration gate is the primary
-  // authorization. The runtime `requireRendererEval` re-assert below is C9 defense-in-depth: the transport
-  // `evaluate` method bypasses the tool-registration gate, so re-asserting at the boundary keeps an
-  // authorization bypass impossible even if a future change registered the tool unconditionally.
+  // The transport reads and writes the active surface's storage through the browser's DOMStorage
+  // protocol, not page JavaScript, so these tools need `canAccessStorage` like the cookie tools, not
+  // renderer eval (ADR-018 Status Update).
 
   /**
-   * Resolve the session + assert renderer eval is permitted (policy) AND supported (capability). Returns
-   * the session, or the plugin-error envelope to return instead. The renderer twin of the IPC plugin's
-   * `requireMainEval`: the policy check (`storage.EVAL_REQUIRED`) is normally unreachable via dispatch
-   * because the tool is hidden when renderer eval is off, but it is the documented re-assert; the
-   * capability check (`storage.UNSUPPORTED`) IS reachable — a session on a transport without
-   * `supportsRendererEval` (the injector) under a renderer-eval-on server.
+   * Run one {@link WebStorageRequest} through the storage seam. A storage failure the protocol reports
+   * (quota exceeded, an opaque origin) becomes `storage.ACCESS_FAILED`; session-level errors such as a
+   * dropped connection keep their core code.
+   */
+  async function runWebStorage(
+    session: TransportSession,
+    req: WebStorageRequest,
+    meta: PluginMeta,
+  ): Promise<{ result: WebStorageResponse } | { error: ToolResult }> {
+    let result: WebStorageResponse
+    try {
+      result = await session.webStorage(req)
+    } catch (err) {
+      if (err instanceof StagewrightError && err.code !== 'INTERNAL_ERROR') throw err
+      return {
+        error: makePluginError('storage.ACCESS_FAILED', {
+          ...meta,
+          message: `Storage access failed: ${err instanceof Error ? err.message : String(err)}`,
+        }),
+      }
+    }
+    if (
+      typeof result?.origin !== 'string' ||
+      (req.op === 'items' && !Array.isArray(result.entries))
+    ) {
+      return {
+        error: makePluginError('storage.ACCESS_FAILED', {
+          ...meta,
+          message: 'The transport returned no usable storage result.',
+        }),
+      }
+    }
+    return { result }
+  }
+
+  /** Read every item of `scope` as a Map, or the error envelope. */
+  async function readItems(
+    session: TransportSession,
+    scope: StorageScope,
+    meta: PluginMeta,
+  ): Promise<{ origin: string; items: Map<string, string> } | { error: ToolResult }> {
+    const run = await runWebStorage(session, { area: scope, op: 'items' }, meta)
+    if ('error' in run) return run
+    return { origin: run.result.origin, items: new Map(run.result.entries ?? []) }
+  }
+
+  /** Human label for a scope, used in tool titles/descriptions. */
+  function scopeNoun(scope: StorageScope): string {
+    return scope === 'session' ? 'sessionStorage' : 'localStorage'
+  }
+
+  /**
+   * Resolve the session + assert renderer eval is permitted (policy) AND supported (capability), for the
+   * IndexedDB tools. Returns the session, or the plugin-error envelope to return instead. The policy
+   * check (`storage.EVAL_REQUIRED`) is normally unreachable via dispatch because the tools are hidden
+   * when renderer eval is off; it is the documented re-assert. The capability check
+   * (`storage.UNSUPPORTED`) IS reachable — a session on a transport without `supportsRendererEval`.
    */
   function requireRendererEval(
     ctx: ToolContext,
@@ -320,7 +365,7 @@ export function createStoragePlugin(): StagewrightPlugin {
         error: makePluginError('storage.EVAL_REQUIRED', {
           ...meta,
           message:
-            'This storage tool runs renderer JS (per-key localStorage/sessionStorage or IndexedDB); start the server with --allow-eval=renderer (or bare --allow-eval) to enable it.',
+            'This storage tool runs renderer JS (IndexedDB); start the server with --allow-eval=renderer (or bare --allow-eval) to enable it.',
         }),
       }
     }
@@ -343,106 +388,6 @@ export function createStoragePlugin(): StagewrightPlugin {
     return { session: managed.session, sessionId: managed.id }
   }
 
-  /**
-   * The raw, UNTRUSTED shape of whatever `evaluate('renderer', WEB_STORAGE_BODY)` returns: every field is
-   * `unknown` until {@link isUsableWebStorageSuccess} validates it. The renderer body is fixed and returns
-   * the {@link WebStorageResult} shape, but `evaluate<T>` is an unchecked cast across the process boundary,
-   * so {@link runWebStorage} re-validates before the plugin trusts the result.
-   */
-  interface RawWebStorageResult {
-    readonly ok?: unknown
-    readonly origin?: unknown
-    readonly reason?: unknown
-    readonly value?: unknown
-    readonly items?: unknown
-    readonly keys?: unknown
-  }
-
-  /** Validate one `getMany` item: `{ key: string; value: string | null }`. */
-  function isWebStorageItem(
-    value: unknown,
-  ): value is { readonly key: string; readonly value: string | null } {
-    return (
-      typeof value === 'object' &&
-      value !== null &&
-      typeof (value as { readonly key?: unknown }).key === 'string' &&
-      ((value as { readonly value?: unknown }).value === null ||
-        typeof (value as { readonly value?: unknown }).value === 'string')
-    )
-  }
-
-  /**
-   * Validate that a raw renderer result is a usable success for `req`'s op: `ok === true`, a string
-   * `origin`, and the op-specific payload (a `string | null` `value` for `get`, a valid item array for
-   * `getMany`, a string-key array for `keys`; `set` / `remove` / `clear` need only `ok` + `origin`).
-   */
-  function isUsableWebStorageSuccess(
-    req: WebStorageRequest,
-    result: RawWebStorageResult,
-  ): result is Extract<WebStorageResult, { ok: true }> {
-    if (result.ok !== true || typeof result.origin !== 'string') return false
-    switch (req.op) {
-      case 'get':
-        return result.value === null || typeof result.value === 'string'
-      case 'getMany':
-        return Array.isArray(result.items) && result.items.every(isWebStorageItem)
-      case 'keys':
-        return Array.isArray(result.keys) && result.keys.every((key) => typeof key === 'string')
-      case 'set':
-      case 'remove':
-      case 'clear':
-        return true
-    }
-    return false
-  }
-
-  /**
-   * Run one {@link WebStorageRequest} in the renderer via the fixed {@link WEB_STORAGE_BODY}, returning
-   * the validated {@link WebStorageResult} success or the plugin-error envelope for a renderer
-   * storage-access failure (a quota-exceeded `setItem`, an opaque-origin context) or a malformed/absent
-   * result.
-   */
-  async function runWebStorage(
-    session: TransportSession,
-    req: WebStorageRequest,
-    meta: PluginMeta,
-  ): Promise<{ result: Extract<WebStorageResult, { ok: true }> } | { error: ToolResult }> {
-    const result = await session.evaluate<unknown>('renderer', WEB_STORAGE_BODY, req)
-    if (result === null || typeof result !== 'object' || !('ok' in result)) {
-      return {
-        error: makePluginError('storage.ACCESS_FAILED', {
-          ...meta,
-          message: 'The renderer returned no usable storage result.',
-        }),
-      }
-    }
-    const raw = result as RawWebStorageResult
-    if (raw.ok === false) {
-      return {
-        error: makePluginError('storage.ACCESS_FAILED', {
-          ...meta,
-          message: `Renderer storage access failed: ${
-            typeof raw.reason === 'string' ? raw.reason : 'unknown storage failure'
-          }`,
-        }),
-      }
-    }
-    if (!isUsableWebStorageSuccess(req, raw)) {
-      return {
-        error: makePluginError('storage.ACCESS_FAILED', {
-          ...meta,
-          message: 'The renderer returned no usable storage result.',
-        }),
-      }
-    }
-    return { result: raw }
-  }
-
-  /** Human label for a scope, used in tool titles/descriptions. */
-  function scopeNoun(scope: StorageScope): string {
-    return scope === 'session' ? 'sessionStorage' : 'localStorage'
-  }
-
   const evalGated = { requiresEvalFlag: true, evalTarget: 'renderer' } as const
 
   /**
@@ -456,12 +401,12 @@ export function createStoragePlugin(): StagewrightPlugin {
       name: `${scope}_get`,
       title: `Read a ${noun} item`,
       description: [
-        `Read one ${noun} value by \`key\`, or several at once with \`keys\`. Provide exactly one of`,
-        '`key` / `keys`. A missing key returns `value: null` (distinct from an empty string). Values are',
-        `returned VERBATIM (not redacted) — treat as sensitive if the app stores tokens in ${noun}.`,
+        `Read one ${noun} value by \`key\`, or several at once with \`keys\`, for the active page's origin`,
+        'without running page JS. Provide exactly one of `key` / `keys`. A missing key returns',
+        `\`value: null\` (distinct from an empty string). Values are returned VERBATIM (not redacted) —`,
+        `treat as sensitive if the app stores tokens in ${noun}.`,
         'Returns: { ok, scope, origin, key, value } or { ok, scope, origin, items }. Errors:',
-        'storage.EVAL_REQUIRED (renderer eval not enabled), storage.UNSUPPORTED, storage.ACCESS_FAILED,',
-        'NOT_RUNNING.',
+        'storage.UNSUPPORTED, storage.ACCESS_FAILED, NOT_RUNNING.',
       ].join(' '),
       inputSchema: z
         .object({
@@ -473,29 +418,25 @@ export function createStoragePlugin(): StagewrightPlugin {
           message: 'Provide exactly one of key or keys.',
         }),
       operationType: 'query',
-      ...evalGated,
       handler: async (args, ctx) => {
         const meta = { startedAt: ctx.startedAt, now: ctx.now }
-        const guard = requireRendererEval(ctx, args.sessionId, meta)
+        const guard = requireStorage(ctx, args.sessionId, meta)
         if ('error' in guard) return guard.error
+        const read = await readItems(guard.session, scope, meta)
+        if ('error' in read) return read.error
+        const valueOf = (key: string): string | null => read.items.get(key) ?? null
         if (args.keys !== undefined) {
-          const run = await runWebStorage(
-            guard.session,
-            { op: 'getMany', scope, keys: args.keys },
-            meta,
-          )
-          if ('error' in run) return run.error
           return makeSuccess(
-            { scope, origin: run.result.origin, items: run.result.items ?? [] },
+            {
+              scope,
+              origin: read.origin,
+              items: args.keys.map((key) => ({ key, value: valueOf(key) })),
+            },
             meta,
           )
         }
-        const run = await runWebStorage(guard.session, { op: 'get', scope, key: args.key }, meta)
-        if ('error' in run) return run.error
-        return makeSuccess(
-          { scope, origin: run.result.origin, key: args.key, value: run.result.value ?? null },
-          meta,
-        )
+        const key = args.key ?? ''
+        return makeSuccess({ scope, origin: read.origin, key, value: valueOf(key) }, meta)
       },
     })
 
@@ -503,9 +444,10 @@ export function createStoragePlugin(): StagewrightPlugin {
       name: `${scope}_set`,
       title: `Set a ${noun} item`,
       description: [
-        `Add or overwrite one ${noun} key with a string value (seed app state without app code).`,
-        'Returns: { ok, scope, origin, set }. Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED,',
-        'storage.ACCESS_FAILED (e.g. quota exceeded), NOT_RUNNING.',
+        `Add or overwrite one ${noun} key with a string value (seed app state such as a language,`,
+        'theme or feature flag without app code or eval; reload with electron_reload to apply it).',
+        'Returns: { ok, scope, origin, set }. Errors: storage.UNSUPPORTED, storage.ACCESS_FAILED (e.g.',
+        'quota exceeded), NOT_RUNNING.',
       ].join(' '),
       inputSchema: z.object({
         key: z.string().describe('The key to set.'),
@@ -513,14 +455,13 @@ export function createStoragePlugin(): StagewrightPlugin {
         ...sessionField,
       }),
       operationType: 'command',
-      ...evalGated,
       handler: async (args, ctx) => {
         const meta = { startedAt: ctx.startedAt, now: ctx.now }
-        const guard = requireRendererEval(ctx, args.sessionId, meta)
+        const guard = requireStorage(ctx, args.sessionId, meta)
         if ('error' in guard) return guard.error
         const run = await runWebStorage(
           guard.session,
-          { op: 'set', scope, key: args.key, value: args.value },
+          { area: scope, op: 'set', key: args.key, value: args.value },
           meta,
         )
         if ('error' in run) return run.error
@@ -533,20 +474,22 @@ export function createStoragePlugin(): StagewrightPlugin {
       title: `Remove a ${noun} item`,
       description: [
         `Remove one ${noun} key. Idempotent (removing an absent key still succeeds). Returns:`,
-        '{ ok, scope, origin, removed }. Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED,',
-        'storage.ACCESS_FAILED, NOT_RUNNING.',
+        '{ ok, scope, origin, removed }. Errors: storage.UNSUPPORTED, storage.ACCESS_FAILED, NOT_RUNNING.',
       ].join(' '),
       inputSchema: z.object({
         key: z.string().describe('The key to remove.'),
         ...sessionField,
       }),
       operationType: 'command',
-      ...evalGated,
       handler: async (args, ctx) => {
         const meta = { startedAt: ctx.startedAt, now: ctx.now }
-        const guard = requireRendererEval(ctx, args.sessionId, meta)
+        const guard = requireStorage(ctx, args.sessionId, meta)
         if ('error' in guard) return guard.error
-        const run = await runWebStorage(guard.session, { op: 'remove', scope, key: args.key }, meta)
+        const run = await runWebStorage(
+          guard.session,
+          { area: scope, op: 'remove', key: args.key },
+          meta,
+        )
         if ('error' in run) return run.error
         return makeSuccess({ scope, origin: run.result.origin, removed: args.key }, meta)
       },
@@ -557,20 +500,19 @@ export function createStoragePlugin(): StagewrightPlugin {
       title: `List ${noun} keys`,
       description: [
         `List every key in ${noun} (no values — cheap discovery before a targeted read). Returns:`,
-        '{ ok, scope, origin, count, keys }. Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED,',
-        'storage.ACCESS_FAILED, NOT_RUNNING.',
+        '{ ok, scope, origin, count, keys }. Errors: storage.UNSUPPORTED, storage.ACCESS_FAILED,',
+        'NOT_RUNNING.',
       ].join(' '),
       inputSchema: z.object({ ...sessionField }),
       operationType: 'query',
-      ...evalGated,
       handler: async (args, ctx) => {
         const meta = { startedAt: ctx.startedAt, now: ctx.now }
-        const guard = requireRendererEval(ctx, args.sessionId, meta)
+        const guard = requireStorage(ctx, args.sessionId, meta)
         if ('error' in guard) return guard.error
-        const run = await runWebStorage(guard.session, { op: 'keys', scope }, meta)
-        if ('error' in run) return run.error
-        const keys = run.result.keys ?? []
-        return makeSuccess({ scope, origin: run.result.origin, count: keys.length, keys }, meta)
+        const read = await readItems(guard.session, scope, meta)
+        if ('error' in read) return read.error
+        const keys = [...read.items.keys()]
+        return makeSuccess({ scope, origin: read.origin, count: keys.length, keys }, meta)
       },
     })
 
@@ -579,16 +521,15 @@ export function createStoragePlugin(): StagewrightPlugin {
       title: `Clear ${noun}`,
       description: [
         `Clear all of ${noun} for the active origin. Idempotent. Returns: { ok, scope, origin, cleared }.`,
-        'Errors: storage.EVAL_REQUIRED, storage.UNSUPPORTED, storage.ACCESS_FAILED, NOT_RUNNING.',
+        'Errors: storage.UNSUPPORTED, storage.ACCESS_FAILED, NOT_RUNNING.',
       ].join(' '),
       inputSchema: z.object({ ...sessionField }),
       operationType: 'command',
-      ...evalGated,
       handler: async (args, ctx) => {
         const meta = { startedAt: ctx.startedAt, now: ctx.now }
-        const guard = requireRendererEval(ctx, args.sessionId, meta)
+        const guard = requireStorage(ctx, args.sessionId, meta)
         if ('error' in guard) return guard.error
-        const run = await runWebStorage(guard.session, { op: 'clear', scope }, meta)
+        const run = await runWebStorage(guard.session, { area: scope, op: 'clear' }, meta)
         if ('error' in run) return run.error
         return makeSuccess({ scope, origin: run.result.origin, cleared: true }, meta)
       },

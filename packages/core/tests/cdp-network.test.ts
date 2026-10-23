@@ -696,11 +696,17 @@ describe('CdpSession storage seam (honest-true)', () => {
     })
   })
 
-  it('snapshots cookies plus best-effort localStorage via the DOMStorage domain', async () => {
+  it("snapshots cookies plus the active origin's localStorage via the DOMStorage domain", async () => {
     const { server, transport } = setup([{ ...T1, url: 'https://app.test/index.html' }])
     server.respond('Storage.getCookies', () => ({
       cookies: [{ name: 'auth', value: 'a', domain: 'app.test' }],
     }))
+    server.respond('Page.getFrameTree', () => ({
+      frameTree: {
+        frame: { id: 'T1', url: 'https://app.test/index.html', securityOrigin: 'https://app.test' },
+      },
+    }))
+    server.respond('Storage.getStorageKeyForFrame', () => ({ storageKey: 'https://app.test/' }))
     server.respond('DOMStorage.getDOMStorageItems', () => ({ entries: [['cart', '3-items']] }))
     const session = await transport.attach({ port: 9222 })
     const snap = await session.storageSnapshot()
@@ -708,6 +714,26 @@ describe('CdpSession storage seam (honest-true)', () => {
     expect(snap.origins).toEqual([
       { origin: 'https://app.test', localStorage: [{ name: 'cart', value: '3-items' }] },
     ])
+  })
+
+  it("reads a file:// page's localStorage by storage key", async () => {
+    const { server, transport } = setup([{ ...T1, url: 'file:///app/index.html' }])
+    server.respond('Storage.getCookies', () => ({ cookies: [] }))
+    server.respond('Page.getFrameTree', () => ({
+      frameTree: { frame: { id: 'T1', url: 'file:///app/index.html', securityOrigin: 'file://' } },
+    }))
+    server.respond('Storage.getStorageKeyForFrame', () => ({ storageKey: 'file:///' }))
+    let storageId: unknown
+    server.respond('DOMStorage.getDOMStorageItems', (params) => {
+      storageId = params?.['storageId']
+      return { entries: [['lang', 'es']] }
+    })
+    const session = await transport.attach({ port: 9222 })
+    const snap = await session.storageSnapshot()
+    expect(snap.origins).toEqual([
+      { origin: 'file://', localStorage: [{ name: 'lang', value: 'es' }] },
+    ])
+    expect(storageId).toEqual({ storageKey: 'file:///', isLocalStorage: true })
   })
 
   it('still returns the cookies when the localStorage read fails (best-effort)', async () => {

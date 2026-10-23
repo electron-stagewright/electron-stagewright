@@ -1,6 +1,6 @@
 # ADR-018: Storage plugin via a transport storage seam
 
-Status: Accepted (cookies + storage snapshot on both Playwright and CDP; per-key localStorage / sessionStorage and IndexedDB shipped via a renderer-eval gate — see Status Updates)
+Status: Accepted (cookies, storage snapshot and per-key localStorage / sessionStorage on the no-eval seam for Playwright and CDP; IndexedDB via a renderer-eval gate — see Status Updates)
 
 ## Context
 
@@ -230,3 +230,30 @@ Electron.
 - `packages/core/src/transports/cdp.ts` — the `Storage` / `Network` + `DOMStorage` implementation.
 - `packages/plugin-storage/src/index.ts` — the tools, capability gate, cookie-value redaction.
 - `packages/plugin-storage/tests/` — simulated-seam integration + the gated real-Electron smoke.
+
+## Status Update (2026-10-22) — per-key Web Storage moves to the no-eval seam
+
+Switching an app's language, theme or feature flags usually means writing `localStorage` and
+reloading. With the per-key tools behind `--allow-eval=renderer`, that everyday step needed the eval
+grant, which agents and operators reasonably keep off. A live check on Electron 42 showed the CDP
+`DOMStorage` domain reads and writes both Web Storage areas for any origin, `file://` included, when
+the storage area is addressed by its storage key (`Storage.getStorageKeyForFrame`), falling back to the
+security origin on older builds.
+
+The per-key tools therefore move to the storage seam and lose the eval gate, reversing the earlier
+"per-key Web Storage via a renderer-eval gate" decision for Web Storage only:
+
+- `TransportSession.webStorage({ area, op, key?, value? })` reads every item or sets, removes or
+  clears, for the active surface's frame. The Playwright transport sends it over a per-page CDP session
+  (a selected frame is matched by URL in the frame tree); the CDP transport uses the active renderer's
+  connection and frame id; the injector returns `NOT_IMPLEMENTED`.
+- The tools keep their names and results and are gated by `canAccessStorage`, like the cookie tools.
+  The fixed renderer body (`web-storage.ts`) is removed. A protocol storage failure is
+  `storage.ACCESS_FAILED`; session-level errors keep their core code.
+- The same rationale as section 1 applies: Web Storage access is a first-class browser-context
+  operation, not arbitrary JavaScript, so it should not inherit the eval threat model. Values stay
+  unredacted, and writing modifies app state just as seeding a cookie does.
+- IndexedDB keeps the renderer-eval gate: its body runs page JavaScript.
+
+The CDP snapshot's `localStorage` half uses the same helper, so it now works for `file://` pages
+instead of returning an empty list.

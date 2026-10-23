@@ -11,13 +11,13 @@ This plugin is **hybrid** — three families with different trust postures:
   `storage_snapshot`) ride a dedicated **transport seam** (Playwright's `BrowserContext` / the CDP
   `Storage` + `Network` domains), not eval, so they do **not** require `--allow-eval`. Cookies work fully
   on both the Playwright launch transport and a CDP attach session; the `localStorage` half of the
-  snapshot is full on Playwright and best-effort on CDP (see _Scope_).
-- **Per-key Web Storage tools** (`storage_local_*` / `storage_session_*`) read and mutate a single
-  `localStorage` / `sessionStorage` key, which needs renderer JavaScript — so they ride
-  `transport.evaluate('renderer', …)` and **are renderer-eval gated**. They register only under
-  `--allow-eval=renderer` (or bare `--allow-eval`); the dispatcher hides them otherwise.
+  snapshot covers every visited origin on Playwright and the active origin on CDP (see _Scope_).
+- **Per-key Web Storage tools** (`storage_local_*` / `storage_session_*`) read and mutate
+  `localStorage` / `sessionStorage` keys through the same seam: the CDP `DOMStorage` domain on both
+  transports, with no page JavaScript, so they do **not** require `--allow-eval` either. Typical use:
+  set a language, theme or feature flag, then `electron_reload`.
 - **IndexedDB tools** (`storage_idb_*`) read and write records in **existing** databases / object
-  stores; also renderer-eval gated. They operate on existing schemas only (they never create or upgrade
+  stores. They run renderer JavaScript, so they are renderer-eval gated (`--allow-eval=renderer`). They operate on existing schemas only (they never create or upgrade
   a database/store) and refuse a missing one with `storage.NOT_FOUND`.
 
 ## Load it
@@ -78,7 +78,7 @@ Storage **values are returned verbatim, not redacted** (see _Security_). Every r
 page's `origin` (Web Storage is per-origin).
 
 - **`storage_local_get`** / **`storage_session_get`** `{ key?, keys?, sessionId? }` — read one value by
-  `key`, or several with `keys` (one renderer round-trip). Provide exactly one of `key` / `keys`. A
+  `key`, or several with `keys` (one round-trip). Provide exactly one of `key` / `keys`. A
   missing key returns `value: null` (distinct from `""`). Returns `{ scope, origin, key, value }` or
   `{ scope, origin, items }`.
 - **`storage_local_set`** / **`storage_session_set`** `{ key, value, sessionId? }` — add or overwrite one
@@ -92,8 +92,8 @@ page's `origin` (Web Storage is per-origin).
 
 ### IndexedDB (renderer-eval gated, existing databases/stores only)
 
-Like the per-key tools these require `--allow-eval=renderer` (or bare `--allow-eval`) and the
-`supportsRendererEval` capability. They operate on **existing** databases and object stores — they never
+These require `--allow-eval=renderer` (or bare `--allow-eval`) and the `supportsRendererEval`
+capability. They operate on **existing** databases and object stores — they never
 create or upgrade a schema (a missing one is `storage.NOT_FOUND`). Record values are returned verbatim
 (set `redactValues` to mask them); structured-clone values that are not JSON (a `Blob` / `ArrayBuffer` /
 typed array, or a circular reference) come back as a typed placeholder (`{ __type, byteLength? }`).
@@ -140,14 +140,15 @@ rather than a cookie, treat the snapshot output as sensitive. Only cookie **valu
 The write path (`storage_set_cookie`) is not a secret surface: it uses the agent's own value, so it is
 never redacted. Writing **modifies app state** (seeding a cookie changes what the app sees on its next
 request), bounded by the transport's `canAccessStorage` capability and the operator's choice to load the
-plugin. The cookie + snapshot tools run **no app JavaScript** (they ride the transport's storage seam),
-so they are not `--allow-eval` gated.
+plugin. The cookie, snapshot and per-key Web Storage tools run **no app JavaScript** (they ride the
+transport's storage seam), so they are not `--allow-eval` gated. Writing Web Storage modifies app state
+the same way seeding a cookie does.
 
-**The per-key Web Storage tools and the IndexedDB tools DO run renderer JavaScript** and are therefore
-renderer-eval gated: they register only under `--allow-eval=renderer` (or bare `--allow-eval`) and
-re-assert that grant at the tool boundary (`storage.EVAL_REQUIRED`). The agent supplies the operation and
-the key/value as **data**, never code — the renderer body is a fixed source string. Web Storage and
-IndexedDB **values are returned verbatim** by default: they are app state, and redacting them would
+**The IndexedDB tools DO run renderer JavaScript** and are therefore renderer-eval gated: they register
+only under `--allow-eval=renderer` (or bare `--allow-eval`) and re-assert that grant at the tool boundary
+(`storage.EVAL_REQUIRED`). The agent supplies the operation and the key/value as **data**, never code —
+the renderer body is a fixed source string. Web Storage and IndexedDB **values are returned verbatim** by
+default: they are app state, and redacting them would
 defeat the read tools' assert-a-persisted-value purpose — the same asymmetry the snapshot documents.
 Treat the output as sensitive if the app stores tokens there; for IndexedDB, the `redactValues` config
 masks record values when you do not need them.
@@ -156,21 +157,19 @@ masks record values when you do not need them.
 
 - **Cookies + the storage snapshot, no eval.** Cookie CRUD and the snapshot are served by the transport's
   storage seam (Playwright's `BrowserContext`, the CDP `Storage` / `Network` domains), so no app JS runs.
-- **Per-key `localStorage` / `sessionStorage`, renderer-eval gated.** Single-key get/set/remove, key
-  listing, and clear for both Web Storage areas are served by `transport.evaluate('renderer', …)` — so
-  they need `--allow-eval=renderer` and the `supportsRendererEval` capability (the default Playwright
-  launch transport and a CDP attach session both qualify; the injector does not). The read-only
-  snapshot remains the no-eval way to assert `localStorage` when renderer eval is not granted.
+- **Per-key `localStorage` / `sessionStorage`, no eval.** Get/set/remove, key listing, and clear for
+  both Web Storage areas go through the CDP `DOMStorage` domain for the active surface's origin (the
+  default Playwright launch transport and a CDP attach session both qualify; the injector does not).
+  They work on `file://` apps too.
 - **IndexedDB, renderer-eval gated, existing schemas only.** `storage_idb_*` read/write records in
   databases and object stores that already exist; they never create or upgrade a schema (a version
   change would mutate the app's own data model), so a missing database/store is `storage.NOT_FOUND`.
   Values cross the wire as JSON: `Date` becomes an ISO string, and binary/circular values become a typed
   placeholder rather than failing the read.
-- **CDP snapshot is best-effort for `localStorage`.** On a CDP attach session, cookies are full; the
-  `localStorage` half of the snapshot rides the CDP `DOMStorage` domain and is best-effort (it returns
-  what the domain reports for the active origin, or an empty list if it cannot). Use the Playwright launch
-  transport for a complete `localStorage` snapshot.
+- **CDP snapshot covers the active origin.** On a CDP attach session, cookies are full; the
+  `localStorage` half of the snapshot covers the active page's origin (Playwright's covers every
+  visited origin). Use the Playwright launch transport for a multi-origin `localStorage` snapshot.
 - **Per-session target.** Each running app session accesses its own browser-context storage, keyed by the
-  unique session id. Cookie/snapshot tools require `canAccessStorage`; per-key Web Storage and IndexedDB
-  tools require `supportsRendererEval` plus the renderer-eval grant. Unsupported transports return
+  unique session id. Cookie, snapshot and per-key Web Storage tools require `canAccessStorage`;
+  IndexedDB tools require `supportsRendererEval` plus the renderer-eval grant. Unsupported transports return
   `storage.UNSUPPORTED`.
