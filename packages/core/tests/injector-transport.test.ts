@@ -303,6 +303,9 @@ describe('InjectorSession surface', () => {
     await expect(session.screenshot({ kind: 'index', index: 0 })).rejects.toMatchObject({
       code: 'NOT_IMPLEMENTED',
     })
+    await expect(session.armFileDialogs([])).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+    await expect(session.fileDialogEvents()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
+    await expect(session.disarmFileDialogs()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
   })
 
   it('dispose DETACHES without killing the app; methods reject afterwards', async () => {

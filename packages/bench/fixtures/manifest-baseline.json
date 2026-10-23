@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reason": "electron_set_window_size joins the testing and debug profiles (and full) so agents resize windows without eval and see when an app minimum size clamps the request; 3 percent gate unchanged.",
+  "reason": "plugin-native-ui gains native_file_dialog_arm/events/disarm so agents answer the app's open/save dialogs without eval_main; 3 percent gate unchanged.",
   "variants": {
     "core-safe": {
       "toolCount": 57,
@@ -1741,10 +1741,10 @@
       ]
     },
     "plugin-native-safe": {
-      "toolCount": 66,
-      "characters": 98708,
-      "utf8Bytes": 98834,
-      "bpe": 22474,
+      "toolCount": 69,
+      "characters": 102364,
+      "utf8Bytes": 102494,
+      "bpe": 23286,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1804,6 +1804,9 @@
         "electron_wait_for_selector",
         "electron_wait_for_state",
         "electron_windows_list",
+        "native_file_dialog_arm",
+        "native_file_dialog_disarm",
+        "native_file_dialog_events",
         "native_menu",
         "native_menu_invoke",
         "native_menu_item",
@@ -1869,18 +1872,18 @@
           "bpe": 485
         },
         {
-          "name": "electron_type_into_editor",
-          "characters": 2134,
-          "utf8Bytes": 2138,
-          "bpe": 480
+          "name": "native_file_dialog_arm",
+          "characters": 2141,
+          "utf8Bytes": 2143,
+          "bpe": 484
         }
       ]
     },
     "plugin-native-eval": {
-      "toolCount": 68,
-      "characters": 101723,
-      "utf8Bytes": 101849,
-      "bpe": 23175,
+      "toolCount": 71,
+      "characters": 105379,
+      "utf8Bytes": 105509,
+      "bpe": 23987,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1942,6 +1945,9 @@
         "electron_wait_for_selector",
         "electron_wait_for_state",
         "electron_windows_list",
+        "native_file_dialog_arm",
+        "native_file_dialog_disarm",
+        "native_file_dialog_events",
         "native_menu",
         "native_menu_invoke",
         "native_menu_item",
@@ -2007,10 +2013,10 @@
           "bpe": 485
         },
         {
-          "name": "electron_type_into_editor",
-          "characters": 2134,
-          "utf8Bytes": 2138,
-          "bpe": 480
+          "name": "native_file_dialog_arm",
+          "characters": 2141,
+          "utf8Bytes": 2143,
+          "bpe": 484
         }
       ]
     },
@@ -3374,10 +3380,10 @@
       ]
     },
     "all-safe": {
-      "toolCount": 111,
-      "characters": 153252,
-      "utf8Bytes": 153436,
-      "bpe": 34896,
+      "toolCount": 114,
+      "characters": 156908,
+      "utf8Bytes": 157096,
+      "bpe": 35708,
       "toolNames": [
         "a11y_audit",
         "clock_advance",
@@ -3451,6 +3457,9 @@
         "ipc_captured",
         "ipc_invoke",
         "ipc_stub",
+        "native_file_dialog_arm",
+        "native_file_dialog_disarm",
+        "native_file_dialog_events",
         "native_menu",
         "native_menu_invoke",
         "native_menu_item",
@@ -3555,10 +3564,10 @@
       ]
     },
     "all-eval": {
-      "toolCount": 120,
-      "characters": 165105,
-      "utf8Bytes": 165295,
-      "bpe": 37639,
+      "toolCount": 123,
+      "characters": 168761,
+      "utf8Bytes": 168955,
+      "bpe": 38451,
       "toolNames": [
         "a11y_audit",
         "clock_advance",
@@ -3634,6 +3643,9 @@
         "ipc_captured",
         "ipc_invoke",
         "ipc_stub",
+        "native_file_dialog_arm",
+        "native_file_dialog_disarm",
+        "native_file_dialog_events",
         "native_menu",
         "native_menu_invoke",
         "native_menu_item",

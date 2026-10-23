@@ -11,6 +11,8 @@
  * @module
  */
 
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -197,7 +199,98 @@ describe('native-ui plugin smoke (real Electron)', () => {
       expect(noListener.emitted).toBe(false)
       expect(noListener.reason).toBe('no_listener')
 
+      // On an instrumented session the file-dialog hook predates the app's main.
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_arm', { sessionId, responses: [] }),
+      ).toMatchObject({ ok: true, hooked: 'launch' })
+
       expect((await server.dispatcher.dispatch('electron_stop', { sessionId })).ok).toBe(true)
+    },
+    60_000,
+  )
+
+  it.skipIf(!RUN_E2E)(
+    'answers the app’s open and save dialogs from the armed queue',
+    async () => {
+      const server = await createServer({ plugins: [nativeUiPlugin] })
+      closers.push(() => server.close())
+      const outDir = await mkdtemp(path.join(tmpdir(), 'stagewright-dialogs-'))
+      closers.push(() => rm(outDir, { recursive: true, force: true }))
+      const picked = path.join(outDir, 'dump.sql')
+      const saved = path.join(outDir, 'export.csv')
+
+      const launched = (await server.dispatcher.dispatch('electron_launch', {
+        main: FIXTURE_MAIN,
+      })) as { ok: boolean; session_id?: string }
+      const sessionId = launched.session_id
+      if (typeof sessionId !== 'string') throw new Error('launch returned no session id')
+      const dispatch = (tool: string, args: Record<string, unknown> = {}) =>
+        server.dispatcher.dispatch(tool, { sessionId, ...args })
+
+      expect(
+        await dispatch('native_file_dialog_arm', {
+          responses: [
+            { kind: 'open', paths: [picked] },
+            { kind: 'save', path: saved },
+          ],
+        }),
+      ).toMatchObject({ ok: true, armed: true, pending: 2, hooked: 'arm' })
+
+      await dispatch('electron_click', { selector: '#open' })
+      expect(
+        await dispatch('electron_expect_text', { selector: '#picked', contains: 'dump.sql' }),
+      ).toMatchObject({ ok: true })
+      await dispatch('electron_click', { selector: '#save' })
+      expect(
+        await dispatch('electron_expect_text', { selector: '#saved', contains: 'export.csv' }),
+      ).toMatchObject({ ok: true })
+      expect(await readFile(saved, 'utf8')).toBe('id,name\n1,Ada\n')
+
+      // Nothing left in the queue: the next dialog is cancelled instead of opening an OS picker.
+      await dispatch('electron_click', { selector: '#open' })
+      expect(
+        await dispatch('electron_expect_text', { selector: '#picked', contains: 'CANCELLED' }),
+      ).toMatchObject({ ok: true })
+
+      expect(await dispatch('native_file_dialog_events')).toMatchObject({
+        ok: true,
+        armed: true,
+        pending: 0,
+        count: 3,
+        events: [
+          {
+            kind: 'open',
+            sync: false,
+            window: 'Native menu fixture',
+            options: {
+              title: 'Import SQL',
+              filters: [{ name: 'SQL', extensions: ['sql'] }],
+              properties: ['openFile'],
+            },
+            answer: { kind: 'open', paths: [picked] },
+          },
+          {
+            kind: 'save',
+            sync: true,
+            options: { title: 'Export', defaultPath: 'export.csv' },
+            answer: { kind: 'save', path: saved },
+          },
+          { kind: 'open', answer: { kind: 'cancel' }, reason: 'queue_empty' },
+        ],
+      })
+
+      expect(
+        await dispatch('native_file_dialog_arm', {
+          responses: [{ kind: 'save', path: 'relative/export.csv' }],
+        }),
+      ).toMatchObject({ ok: false, code: 'ABSOLUTE_PATH_REQUIRED' })
+
+      expect(await dispatch('native_file_dialog_disarm')).toMatchObject({
+        ok: true,
+        armed: false,
+        count: 3,
+      })
+      expect((await dispatch('electron_stop')).ok).toBe(true)
     },
     60_000,
   )

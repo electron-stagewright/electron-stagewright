@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  FILE_DIALOG_REGISTRY_GLOBAL,
   NOTIFICATION_HOOK_BODY,
   NOTIFICATION_REGISTRY_GLOBAL,
   TRAY_HOOK_BODY,
@@ -87,6 +88,8 @@ describe('buildInstrumentationShim', () => {
     // Both hooks run before the real main is imported.
     expect(shim.indexOf(TRAY_REGISTRY_GLOBAL)).toBeLessThan(shim.lastIndexOf('import('))
     expect(shim.indexOf(NOTIFICATION_REGISTRY_GLOBAL)).toBeLessThan(shim.lastIndexOf('import('))
+    expect(shim.indexOf(FILE_DIALOG_REGISTRY_GLOBAL)).toBeLessThan(shim.lastIndexOf('import('))
+    expect(shim).toContain("globalThis, 'launch')")
   })
 
   it('JSON-escapes the path into a string literal (no break-out)', () => {

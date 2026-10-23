@@ -240,6 +240,51 @@ export interface WindowSizeResult {
   readonly method: 'browser_window' | 'renderer'
 }
 
+/** A queued answer for the next native file dialog; paths are absolute. */
+export type FileDialogResponse =
+  | { readonly kind: 'open'; readonly paths: readonly string[] }
+  | { readonly kind: 'save'; readonly path: string }
+  | { readonly kind: 'cancel' }
+
+/** The options an app passed to a file dialog, reduced to data fields. */
+export interface FileDialogOptions {
+  readonly title?: string
+  readonly defaultPath?: string
+  readonly buttonLabel?: string
+  readonly message?: string
+  readonly nameFieldLabel?: string
+  readonly filters?: readonly { readonly name: string; readonly extensions: readonly string[] }[]
+  readonly properties?: readonly string[]
+}
+
+/** One file dialog the app showed while answers were armed, and the answer it got. */
+export interface FileDialogEvent {
+  readonly kind: 'open' | 'save'
+  readonly sync: boolean
+  readonly options: FileDialogOptions
+  /** Title of the parent window, when the app passed one. */
+  readonly window?: string
+  readonly answer: FileDialogResponse
+  /** Why a dialog was cancelled without a queued cancel. */
+  readonly reason?: 'queue_empty' | 'kind_mismatch'
+  /** Several paths answered a dialog that did not allow `multiSelections`; a real picker returns one. */
+  readonly warning?: 'multiple_paths'
+  readonly at: number
+}
+
+/** File-dialog answering state: whether armed, answers still queued, and the dialogs answered. */
+export interface FileDialogState {
+  readonly armed: boolean
+  readonly pending: number
+  readonly events: readonly FileDialogEvent[]
+}
+
+/** Result of arming: answers queued, and whether the hook predates the app's main or was added on arm. */
+export interface FileDialogArmResult {
+  readonly pending: number
+  readonly hooked: 'launch' | 'arm'
+}
+
 export interface ScreenshotOptions {
   /** Capture the full scrollable page rather than just the viewport. */
   readonly fullPage?: boolean
@@ -1011,6 +1056,21 @@ export interface TransportSession {
 
   /** Disarm notification capture: restore the original `Notification.show` and drop the buffer. Idempotent. */
   stopNotificationCapture(): Promise<void>
+
+  /**
+   * Answer the app's native open/save file dialogs from a FIFO queue (ADR-019 amendment). Without
+   * `append`, the queue and the recorded events start over. Gated by `canAccessNativeUI`.
+   */
+  armFileDialogs(
+    responses: readonly FileDialogResponse[],
+    opts?: { readonly append?: boolean },
+  ): Promise<FileDialogArmResult>
+
+  /** The dialogs answered since the last arm, and the answers still queued. */
+  fileDialogEvents(): Promise<FileDialogState>
+
+  /** Let dialogs reach the OS again; returns the dialogs answered and clears them. */
+  disarmFileDialogs(): Promise<FileDialogState>
 
   /**
    * Read the app's system-tray icons ({@link NativeTray}) from the main process. Requires the session to

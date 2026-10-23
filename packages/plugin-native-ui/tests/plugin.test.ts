@@ -17,7 +17,7 @@ import { FakeSession, fullCapabilities, TestLifecycle } from '@electron-stagewri
 import { afterEach, describe, expect, it } from 'vitest'
 
 import packageJson from '../package.json' with { type: 'json' }
-import nativeUiPlugin from '../src/index.js'
+import nativeUiPlugin, { isAnswerPath } from '../src/index.js'
 
 /** A representative menu: a top-level View submenu with a checked checkbox + a disabled item + a role. */
 const SAMPLE_MENU: NativeMenu = {
@@ -173,6 +173,9 @@ describe('native-ui plugin', () => {
       ['native_notifications_stop', {}],
       ['native_trays', {}],
       ['native_tray_invoke', { id: 0, event: 'click' }],
+      ['native_file_dialog_arm', { responses: [] }],
+      ['native_file_dialog_events', {}],
+      ['native_file_dialog_disarm', {}],
     ] as const) {
       expect(await server.dispatcher.dispatch(tool, { sessionId, ...args })).toMatchObject({
         ok: false,
@@ -433,5 +436,110 @@ describe('native-ui plugin', () => {
       event: 'click',
     })) as unknown as Record<string, unknown>
     expect(JSON.parse(JSON.stringify(res))).toEqual(res)
+  })
+
+  describe('file dialogs', () => {
+    const IN = process.platform === 'win32' ? 'C:\\data\\in.sql' : '/data/in.sql'
+    const OUT = process.platform === 'win32' ? 'C:\\out\\export.csv' : '/out/export.csv'
+
+    it('answers the app’s dialogs from the armed queue and reports them', async () => {
+      const session = new FakeSession()
+      const server = await open(session)
+      const sessionId = await launch(server)
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_arm', {
+          sessionId,
+          responses: [
+            { kind: 'open', paths: [IN] },
+            { kind: 'save', path: OUT },
+          ],
+        }),
+      ).toMatchObject({ ok: true, armed: true, pending: 2, hooked: 'arm' })
+
+      // The app shows its dialogs.
+      await expect(
+        session.electronDialog['showOpenDialog']?.({ title: 'Import' }),
+      ).resolves.toEqual({ canceled: false, filePaths: [IN] })
+      expect(session.electronDialog['showSaveDialogSync']?.({})).toBe(OUT)
+      await expect(session.electronDialog['showOpenDialog']?.({})).resolves.toMatchObject({
+        canceled: true,
+      })
+      expect(session.osFileDialogs).toEqual([])
+
+      const events = await server.dispatcher.dispatch('native_file_dialog_events', { sessionId })
+      expect(events).toMatchObject({
+        ok: true,
+        armed: true,
+        pending: 0,
+        count: 3,
+        events: [
+          { kind: 'open', sync: false, options: { title: 'Import' }, answer: { paths: [IN] } },
+          { kind: 'save', sync: true, answer: { path: OUT } },
+          { kind: 'open', answer: { kind: 'cancel' }, reason: 'queue_empty' },
+        ],
+      })
+      expect(JSON.parse(JSON.stringify(events))).toEqual(events)
+
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_disarm', { sessionId }),
+      ).toMatchObject({ ok: true, armed: false, count: 3 })
+      await session.electronDialog['showOpenDialog']?.({})
+      expect(session.osFileDialogs).toEqual(['showOpenDialog'])
+    })
+
+    it('appends to the queue when asked', async () => {
+      const session = new FakeSession()
+      const server = await open(session)
+      const sessionId = await launch(server)
+      await server.dispatcher.dispatch('native_file_dialog_arm', {
+        sessionId,
+        responses: [{ kind: 'cancel' }],
+      })
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_arm', {
+          sessionId,
+          responses: [{ kind: 'save', path: OUT }],
+          append: true,
+        }),
+      ).toMatchObject({ pending: 2 })
+    })
+
+    it('accepts only fixed absolute paths, with a drive or share on Windows', () => {
+      expect(isAnswerPath('/data/in.sql', 'darwin')).toBe(true)
+      expect(isAnswerPath('data/in.sql', 'linux')).toBe(false)
+      expect(isAnswerPath('C:\\data\\in.sql', 'win32')).toBe(true)
+      expect(isAnswerPath('c:/data/in.sql', 'win32')).toBe(true)
+      expect(isAnswerPath('\\\\server\\share\\in.sql', 'win32')).toBe(true)
+      expect(isAnswerPath('\\data\\in.sql', 'win32')).toBe(false)
+      expect(isAnswerPath('/data/in.sql', 'win32')).toBe(false)
+      expect(isAnswerPath('C:data\\in.sql', 'win32')).toBe(false)
+    })
+
+    it('refuses relative paths with ABSOLUTE_PATH_REQUIRED and bad answers with BAD_ARGUMENT', async () => {
+      const session = new FakeSession()
+      const server = await open(session)
+      const sessionId = await launch(server)
+      for (const [responses, path] of [
+        [[{ kind: 'open', paths: [IN, 'data/in.sql'] }], 'data/in.sql'],
+        [[{ kind: 'cancel' }, { kind: 'save', path: './export.csv' }], './export.csv'],
+      ] as const) {
+        expect(
+          await server.dispatcher.dispatch('native_file_dialog_arm', { sessionId, responses }),
+        ).toMatchObject({
+          ok: false,
+          code: 'ABSOLUTE_PATH_REQUIRED',
+          hint: 'Use an absolute path.',
+          details: { path },
+        })
+      }
+      for (const responses of [[{ kind: 'open', paths: [] }], [{ kind: 'rename', path: OUT }]]) {
+        expect(
+          await server.dispatcher.dispatch('native_file_dialog_arm', { sessionId, responses }),
+        ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+      }
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_events', { sessionId }),
+      ).toMatchObject({ armed: false, pending: 0, count: 0 })
+    })
   })
 })

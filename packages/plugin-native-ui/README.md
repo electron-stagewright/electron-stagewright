@@ -94,10 +94,36 @@ Each path segment matches an item by its **label OR its role**, so role-based it
   id) or `no_listener` (the tray has no handler for that event). Firing `right-click` runs the handler but
   does **not** auto-open the tray's context menu the way a native right-click does.
 
+### File dialogs
+
+- **`native_file_dialog_arm`** `{ responses, append?, sessionId? }` — queue answers for the app's native
+  open/save dialogs (`dialog.showOpenDialog` / `showSaveDialog`, async or sync), first in first out:
+  `{ kind: "open", paths }`, `{ kind: "save", path }` or `{ kind: "cancel" }`. Each dialog the app shows
+  takes the next answer instead of opening an OS picker. Once the queue is empty every dialog is
+  cancelled, so nothing hangs; a dialog of the other kind than the next answer is cancelled and leaves
+  that answer queued. Paths must be absolute. Without `append`, the queue and the recorded events start
+  over. Returns `{ armed, pending, hooked }`: `hooked` is `launch` when the session was launched with
+  `instrumentNative` (dialog functions the app captured at import are answered too), else `arm`.
+- **`native_file_dialog_events`** `{ sessionId? }` — the dialogs the app showed since arming, oldest
+  first: `kind`, `sync`, the `options` it passed (title, defaultPath, buttonLabel, message,
+  nameFieldLabel, filters, properties), the parent `window` title, the `answer` given, and `reason`
+  (`queue_empty` or `kind_mismatch`) when it was cancelled without a queued cancel, and `warning:
+"multiple_paths"` when several paths answered a dialog without `multiSelections`. Returns
+  `{ armed, pending, count, events }`.
+- **`native_file_dialog_disarm`** `{ sessionId? }` — let dialogs open the real OS pickers again, drop the
+  queued answers, and return the events. Returns `{ armed, pending, count, events }`.
+
+```json
+native_file_dialog_arm { "responses": [{ "kind": "open", "paths": ["/data/dump.sql"] }, { "kind": "save", "path": "/tmp/export.csv" }] }
+electron_click { "selector": "#import" }
+native_file_dialog_events {}
+```
+
 Error codes: `native.UNSUPPORTED` (the transport cannot access the native UI), `native.ALREADY_CAPTURING`
 (a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming), `native.NOT_INSTRUMENTED`
 (`native_trays` / `native_tray_invoke` without `instrumentNative`). Invalid arguments (an empty menu `path`
-or empty `titleContains`, a negative tray `id`, or an unknown tray `event`) are core `BAD_ARGUMENT`.
+or empty `titleContains`, a negative tray `id`, or an unknown tray `event`) are core `BAD_ARGUMENT`. A
+relative dialog answer path is core `ABSOLUTE_PATH_REQUIRED`, like `electron_set_files`.
 
 ## Security
 
@@ -130,6 +156,13 @@ event name (data), not code, so it is still **not** `--allow-eval` gated; it is 
 `canAccessNativeUI` capability, the `instrumentNative` launch opt-in, and the operator's choice to load the
 plugin. A tray with no listener for the event is refused, not faked.
 
+Answering a file dialog (`native_file_dialog_arm`) **modifies** app behaviour the way `electron_set_files`
+does for a file input: the app reads or writes the paths the agent queued. The agent supplies answers
+(data), never code, and the hook is fixed transport-owned source that passes calls through to the real
+dialog until armed, so it is **not** `--allow-eval` gated. Arming is an ordinary tool call, so a trace
+records what was queued; end the flow with `native_file_dialog_events` (or disarm) so the answers given
+are in the trace too.
+
 ## Scope and limitations
 
 - **Application menu (read + invoke), notification capture, and tray (read + invoke).** This plugin
@@ -144,6 +177,8 @@ plugin. A tray with no listener for the event is refused, not faked.
   The hook patches the shared `Notification.prototype`, so it catches every shown notification regardless of
   how the app referenced the class. Under a `titleContains` filter the buffer records all and filters at
   read, so on a very noisy app a matching startup notification could be evicted past the 1000 cap before the read.
+- **File dialogs answer `dialog.show*Dialog`.** Apps that open pickers another way (an `<input
+type="file">` in the page, or a native module) are not covered; use `electron_set_files` for inputs.
 - **Playwright launch transport only.** The application menu lives in the Electron main-process Node
   context; only the Playwright transport reaches it (`electronApp.evaluate`). A CDP attach session
   exposes renderer targets only, with no main-process context, so it returns

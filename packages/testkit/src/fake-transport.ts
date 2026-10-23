@@ -10,6 +10,10 @@
 
 import { matchesNetworkFilter } from '../../core/src/transports/network-filter.js'
 import { StagewrightError } from '../../core/src/errors/registry.js'
+import {
+  ARM_FILE_DIALOGS_BODY,
+  FILE_DIALOG_STATE_BODY,
+} from '../../core/src/transports/native-instrumentation.js'
 import type {
   ClickOptions,
   ClockInstallOptions,
@@ -52,6 +56,9 @@ import type {
   TrayInvokeResult,
   WindowDescriptor,
   WindowRef,
+  FileDialogArmResult,
+  FileDialogResponse,
+  FileDialogState,
   WindowSize,
   WindowSizeRequest,
   WindowSizeResult,
@@ -367,6 +374,64 @@ export class FakeSession implements TransportSession {
   }
   async stopNotificationCapture(): Promise<void> {
     this.notificationStopCalls += 1
+  }
+
+  /** Dialogs that reached the fake OS (calls the file-dialog hook let through), in order. */
+  readonly osFileDialogs: string[] = []
+
+  /**
+   * The app's `dialog` module: tests call it as the app would. Arming runs the transport's own hook,
+   * arm and state bodies against it, so answers come from the same code as on the launch transport.
+   */
+  readonly electronDialog: Record<string, (...args: unknown[]) => unknown> = {
+    showOpenDialog: async () => {
+      this.osFileDialogs.push('showOpenDialog')
+      return { canceled: true, filePaths: [] }
+    },
+    showOpenDialogSync: () => {
+      this.osFileDialogs.push('showOpenDialogSync')
+      return undefined
+    },
+    showSaveDialog: async () => {
+      this.osFileDialogs.push('showSaveDialog')
+      return { canceled: true, filePath: '' }
+    },
+    showSaveDialogSync: () => {
+      this.osFileDialogs.push('showSaveDialogSync')
+      return ''
+    },
+  }
+
+  readonly #dialogHost: Record<string, unknown> = {}
+
+  #runDialogBody<T>(body: string, arg: unknown): T {
+    // A fixed, in-repo body (the same string the launch transport runs in main); no outside input.
+    const run = new Function('electron', 'host', 'arg', body) as (
+      electron: unknown,
+      host: unknown,
+      arg: unknown,
+    ) => T
+    return run({ dialog: this.electronDialog }, this.#dialogHost, arg)
+  }
+
+  async armFileDialogs(
+    responses: readonly FileDialogResponse[],
+    opts: { readonly append?: boolean } = {},
+  ): Promise<FileDialogArmResult> {
+    const result = this.#runDialogBody<FileDialogArmResult | null>(ARM_FILE_DIALOGS_BODY, {
+      responses,
+      append: opts.append === true,
+    })
+    if (result === null) throw new Error('fake dialog module could not be hooked')
+    return result
+  }
+
+  async fileDialogEvents(): Promise<FileDialogState> {
+    return this.#runDialogBody<FileDialogState>(FILE_DIALOG_STATE_BODY, { disarm: false })
+  }
+
+  async disarmFileDialogs(): Promise<FileDialogState> {
+    return this.#runDialogBody<FileDialogState>(FILE_DIALOG_STATE_BODY, { disarm: true })
   }
 
   /** Trays the fake returns from `getTrays`; `null` models a session not launched with instrumentNative. */

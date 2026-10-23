@@ -90,6 +90,8 @@ import type {
   TransportSession,
   TrayEventName,
   TrayInvokeResult,
+  FileDialogArmResult,
+  FileDialogState,
   WindowDescriptor,
   WindowRef,
   WindowSizeRequest,
@@ -495,6 +497,18 @@ class InjectorSession implements TransportSession {
   }
   stopNotificationCapture(): Promise<void> {
     return Promise.reject(notImplemented('stopNotificationCapture'))
+  }
+
+  armFileDialogs(): Promise<FileDialogArmResult> {
+    return Promise.reject(notImplemented('armFileDialogs'))
+  }
+
+  fileDialogEvents(): Promise<FileDialogState> {
+    return Promise.reject(notImplemented('fileDialogEvents'))
+  }
+
+  disarmFileDialogs(): Promise<FileDialogState> {
+    return Promise.reject(notImplemented('disarmFileDialogs'))
   }
   getTrays(): Promise<readonly NativeTray[] | null> {
     return Promise.reject(notImplemented('getTrays'))
