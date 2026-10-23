@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { makeSuccess } from '../../errors/envelope.js'
 import {
   type FindHints,
+  MAX_NAME_CHARS,
   type TextMatches,
   findHints,
   hintNextActions,
@@ -78,7 +79,18 @@ const TEXT_SEARCH_BODY = `
 ${visitTargetElements.toString()}
 const q = arg.query.toLowerCase();
 const SKIP = new Set(['script', 'style', 'noscript', 'template', 'head', 'title']);
-const has = (node) => !SKIP.has(node.localName) && (node.textContent || '').toLowerCase().includes(q);
+const textOf = (node) => {
+  if (node.nodeType === 3) return node.data;
+  if (node.nodeType === 1 && SKIP.has(node.localName)) return '';
+  let out = '';
+  for (const child of node.childNodes) out += textOf(child);
+  return out;
+};
+// textContent is the cheap native filter; textOf drops text that only skipped descendants hold.
+const has = (node) =>
+  !SKIP.has(node.localName) &&
+  (node.textContent || '').toLowerCase().includes(q) &&
+  textOf(node).toLowerCase().includes(q);
 const hits = [];
 const descend = (el) => {
   let inner = false;
@@ -117,10 +129,10 @@ ranked.sort((a, b) => Number(b.visible) - Number(a.visible));
 return {
   count: hits.length,
   samples: ranked.slice(0, arg.max).map(({ el, visible }) => {
-    const text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+    const text = textOf(el).replace(/\\s+/g, ' ').trim();
     return {
       tag: el.localName,
-      text: text.length > 80 ? text.slice(0, 80) + '…' : text,
+      text: text.length > arg.maxChars ? text.slice(0, arg.maxChars) + '…' : text,
       selector: cssPath(el),
       visible,
     };
@@ -138,6 +150,7 @@ async function textMatches(
     const found = await session.evaluate<TextMatches>('renderer', TEXT_SEARCH_BODY, {
       query: query.trim(),
       max: MAX_TEXT_SAMPLES,
+      maxChars: MAX_NAME_CHARS,
     })
     return found.count > 0 ? found : undefined
   } catch {

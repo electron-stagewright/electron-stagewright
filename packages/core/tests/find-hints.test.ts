@@ -63,6 +63,20 @@ describe('findHints', () => {
 })
 
 describe('hintNextActions', () => {
+  it('suggests each call once', () => {
+    const query: FindQuery = { role: 'button', name_exact: 'Save', visible: true }
+    const hints = findHints(walk('<button style="display:none">Save</button>'), query)
+    expect(hintNextActions(query, hints)).toEqual([
+      'electron_find({ role: "button", name_exact: "Save" })',
+    ])
+  })
+
+  it('writes a call with no filters as an empty object', () => {
+    const query: FindQuery = { interactive: true }
+    const hints = findHints(walk('<main>Body</main>'), query)
+    expect(hintNextActions(query, hints)).toEqual(['electron_find({})'])
+  })
+
   it('builds concrete calls from the hints, at most three', () => {
     const query: FindQuery = { role: 'button', name_exact: 'Save', visible: true }
     const actions = hintNextActions(query, {

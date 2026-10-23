@@ -45,7 +45,9 @@ export interface TextMatches {
 
 const MAX_SIMILAR = 5
 const MAX_ROLES = 8
-const MAX_NAME_CHARS = 80
+const MIN_SIMILARITY = 0.4
+/** Longest name or text sample a hint echoes back. */
+export const MAX_NAME_CHARS = 80
 const STATE_FILTERS = ['visible', 'enabled', 'interactive'] as const
 
 function levenshtein(a: string, b: string): number {
@@ -74,8 +76,13 @@ function similarity(query: string, name: string): number {
   if (n.includes(q) || q.includes(n)) return 1
   const words = q.split(/\s+/).filter((word) => word.length > 2)
   const sharesWord = words.some((word) => n.includes(word))
-  const distance = levenshtein(q, n) / Math.max(q.length, n.length)
-  return Math.max(1 - distance, sharesWord ? 0.5 : 0)
+  const longest = Math.max(q.length, n.length)
+  // The length gap bounds the edit distance, so skip names that cannot reach the threshold.
+  const editScore =
+    1 - Math.abs(q.length - n.length) / longest < MIN_SIMILARITY
+      ? 0
+      : 1 - levenshtein(q, n) / longest
+  return Math.max(editScore, sharesWord ? 0.5 : 0)
 }
 
 function countByRole(entries: readonly SnapshotEntry[]): { role: string; count: number }[] {
@@ -95,12 +102,7 @@ function withoutKeys(query: FindQuery, keys: readonly string[]): FindQuery {
 /** Build {@link FindHints} for a query that matched no entry of `snapshot`. */
 export function findHints(snapshot: Snapshot, query: FindQuery): FindHints {
   const name = query.name_exact ?? query.name_contains
-  const hints: {
-    similar_names?: FindHintEntry[]
-    without_state_filters?: { count: number; filters: string[] }
-    other_roles?: { role: string; count: number }[]
-    roles_present?: { role: string; count: number }[]
-  } = {}
+  const hints: { -readonly [K in keyof FindHints]: FindHints[K] } = {}
 
   const filters = STATE_FILTERS.filter((key) => query[key] !== undefined)
   if (filters.length > 0) {
@@ -124,7 +126,7 @@ export function findHints(snapshot: Snapshot, query: FindQuery): FindHints {
     )
     const ranked = candidates
       .map((entry) => ({ entry, score: similarity(name, entry.name) }))
-      .filter(({ score }) => score >= 0.4)
+      .filter(({ score }) => score >= MIN_SIMILARITY)
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_SIMILAR)
     if (ranked.length > 0) {
@@ -143,7 +145,7 @@ export function findHints(snapshot: Snapshot, query: FindQuery): FindHints {
 
 function call(tool: string, args: object): string {
   const fields = Object.entries(args).map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-  return `${tool}({ ${fields.join(', ')} })`
+  return fields.length === 0 ? `${tool}({})` : `${tool}({ ${fields.join(', ')} })`
 }
 
 /** Turn {@link FindHints} into up to three concrete follow-up calls. */
@@ -169,5 +171,5 @@ export function hintNextActions(query: FindQuery, hints: FindHints): string[] {
     actions.push(call('electron_find', { ...query, role: otherRole.role }))
   const text = hints.text_matches?.samples.find((sample) => sample.selector !== null)
   if (text?.selector != null) actions.push(call('electron_get_text', { selector: text.selector }))
-  return actions.slice(0, 3)
+  return [...new Set(actions)].slice(0, 3)
 }

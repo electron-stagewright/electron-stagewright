@@ -32,6 +32,12 @@ function setupLive(
   opts: { failText?: boolean; prepare?: (document: Document) => void } = {},
 ) {
   const { window } = new JSDOM(html)
+  // JSDOM has no layout: treat anything under [hidden] as invisible.
+  Object.assign(window.HTMLElement.prototype, {
+    checkVisibility(this: HTMLElement) {
+      return this.closest('[hidden]') === null
+    },
+  })
   opts.prepare?.(window.document)
   const snapshot = walkAccessibilityTree(window.document, {})
   const css = { escape: (value: string) => value.replace(/[^\w-]/g, (c) => `\\${c}`) }
@@ -64,6 +70,7 @@ interface Hinted {
         readonly tag: string
         readonly text: string
         readonly selector: string | null
+        readonly visible: boolean
       }[]
     }
     readonly next_actions?: readonly string[]
@@ -212,6 +219,29 @@ describe('electron_find', () => {
       name_contains: 'grand total is',
     })) as SuccessResponse & FindResult & Hinted
     expect(split.hints?.text_matches?.samples[0]).toMatchObject({ tag: 'p', selector: '#note' })
+  })
+
+  it('lists visible text matches first and caps their text', async () => {
+    const long = `Grand total ${'x'.repeat(100)}`
+    const { dispatcher } = setupLive(
+      `<div hidden><span>Grand total hidden</span></div><p>${long}</p>`,
+    )
+    const res = (await dispatcher.dispatch('electron_find', {
+      name_contains: 'grand total',
+    })) as SuccessResponse & FindResult & Hinted
+    const samples = res.hints?.text_matches?.samples ?? []
+    expect(samples.map((sample) => sample.visible)).toEqual([true, false])
+    expect(samples[0]?.text).toBe(`${long.slice(0, 80)}…`)
+  })
+
+  it('ignores text that only a skipped element holds', async () => {
+    const { dispatcher } = setupLive(
+      '<div><style>.grand-total { color: red }</style><span>Total</span></div>',
+    )
+    const res = (await dispatcher.dispatch('electron_find', {
+      name_contains: 'grand-total',
+    })) as SuccessResponse & FindResult & Hinted
+    expect(res.hints?.text_matches).toBeUndefined()
   })
 
   it('searches open shadow roots and gives no selector inside them', async () => {
