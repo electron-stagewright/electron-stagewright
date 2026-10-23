@@ -158,7 +158,10 @@ describe('main-process resize body', () => {
   })
 })
 
-/** A page whose outer size reads as requested at once, while the real (clamped) size lands later. */
+/**
+ * A page like Blink's: the outer size reads as requested at once and stays so for a while, while
+ * the real (clamped) inner size lands with the resize event.
+ */
 function page(minHeight: number) {
   const listeners = new Set<() => void>()
   const scope = {
@@ -172,16 +175,21 @@ function page(minHeight: number) {
     resizeTo(width: number, height: number) {
       scope.outerWidth = width
       scope.outerHeight = height
+      const real = Math.max(height, minHeight)
       setTimeout(() => {
-        scope.outerHeight = Math.max(height, minHeight)
         scope.innerWidth = width
-        scope.innerHeight = scope.outerHeight - 28
+        scope.innerHeight = real - 28
         for (const listener of [...listeners]) listener()
       }, 200)
+      setTimeout(() => {
+        scope.outerHeight = real
+      }, 2000)
     },
     window: undefined as unknown,
+    globalThis: undefined as unknown,
   }
   scope.window = scope
+  scope.globalThis = scope
   return { scope, listeners }
 }
 
@@ -203,6 +211,16 @@ describe('renderer resize body', () => {
       method: 'renderer',
     })
     expect(listeners.size).toBe(0)
+  })
+
+  it('keeps the frame of the first resize while the outer size is stale', async () => {
+    const { scope } = page(450)
+    await runRenderer(scope, { width: 640, height: 300 })
+    // The outer height still reads 300 here; the next resize must not measure the frame from it.
+    await expect(runRenderer(scope, { width: 640, height: 520 })).resolves.toMatchObject({
+      outer: { width: 640, height: 520 },
+      content: { width: 640, height: 492 },
+    })
   })
 
   it('adds the frame for a content request', async () => {

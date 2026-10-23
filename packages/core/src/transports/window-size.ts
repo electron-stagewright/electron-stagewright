@@ -87,19 +87,22 @@ ${MAIN_RESIZE_BODY}
 
 /**
  * Renderer body: `window.resizeTo` sets the outer size, so a content request adds the frame. Blink
- * reports the requested outer size until the browser applies (and maybe clamps) it, so the read
- * waits for the page's resize event, which fires only for the real size.
+ * keeps reporting the requested outer size after the browser applied (and maybe clamped) it, while
+ * the inner size is real from the resize event on; so the outer size is derived from the inner one
+ * and a frame measured before this document's first resize.
  */
 export const RENDERER_RESIZE_BODY = `
 ${SETTLE_FN}
 const { width, height, content } = arg.request;
-const read = () => (content ? [innerWidth, innerHeight] : [outerWidth, outerHeight]);
+const frame = (globalThis.__stagewrightWindowFrame ??= [
+  outerWidth - innerWidth,
+  outerHeight - innerHeight,
+]);
+const read = () =>
+  content ? [innerWidth, innerHeight] : [innerWidth + frame[0], innerHeight + frame[1]];
 const before = read();
-const outer = [
-  content ? width + (outerWidth - innerWidth) : width,
-  content ? height + (outerHeight - innerHeight) : height,
-];
-if (outer[0] !== outerWidth || outer[1] !== outerHeight) {
+const outer = [content ? width + frame[0] : width, content ? height + frame[1] : height];
+if (outer[0] !== innerWidth + frame[0] || outer[1] !== innerHeight + frame[1]) {
   await new Promise((resolve) => {
     const done = () => { clearTimeout(timer); removeEventListener('resize', done); resolve(); };
     const timer = setTimeout(done, 1000);
@@ -109,7 +112,7 @@ if (outer[0] !== outerWidth || outer[1] !== outerHeight) {
 }
 await __swSettle(read, [width, height], before);
 return {
-  outer: { width: outerWidth, height: outerHeight },
+  outer: { width: innerWidth + frame[0], height: innerHeight + frame[1] },
   content: { width: innerWidth, height: innerHeight },
   minimum: null,
   maximum: null,
