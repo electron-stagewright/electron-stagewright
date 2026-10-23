@@ -139,7 +139,7 @@ function makeEvalTool(spec: EvalToolSpec): AnyToolDefinition {
         if (code === 'RENDERER_NAVIGATED') {
           return makeError(code, {
             ...meta,
-            message: `The renderer navigated during ${spec.name}; the call's result was lost.`,
+            message: `The renderer navigated during ${spec.name}; the call's result was lost. To reload on purpose, use electron_reload, which waits for the new page.`,
             next_actions: ['electron_wait_for_selector({ selector: "body" })'],
           })
         }
