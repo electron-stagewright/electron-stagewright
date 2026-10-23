@@ -15,6 +15,9 @@ app.whenReady().then(() => {
     show: true,
     webPreferences: { contextIsolation: true },
   })
+  // Opt-in minimum size ("WIDTHxHEIGHT") for the window-size smoke.
+  const minSize = /^(\d+)x(\d+)$/.exec(process.env.STAGEWRIGHT_FIXTURE_MIN_SIZE ?? '')
+  if (minSize) win.setMinimumSize(Number(minSize[1]), Number(minSize[2]))
   void win.loadFile(join(fixtureDir, 'index.html'))
 })
 

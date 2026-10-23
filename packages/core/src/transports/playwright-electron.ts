@@ -82,6 +82,7 @@ import {
 } from './playwright-electron-bodies.js'
 import { originRelation } from './surface-origin.js'
 import { runDomStorage } from './dom-storage.js'
+import { RESIZE_BY_TARGET_BODY } from './window-size.js'
 import type {
   AttachOptions,
   ClickOptions,
@@ -113,6 +114,8 @@ import type {
   NotificationCaptureFilter,
   PressOptions,
   ReloadOptions,
+  WindowSizeRequest,
+  WindowSizeResult,
   WebStorageRequest,
   WebStorageResponse,
   ScreenshotOptions,
@@ -1633,6 +1636,43 @@ class PlaywrightSession implements TransportSession {
     } finally {
       await cdp.detach().catch(() => undefined)
     }
+  }
+
+  async setWindowSize(target: WindowRef, request: WindowSizeRequest): Promise<WindowSizeResult> {
+    const app = this.requireRunning()
+    const page = await this.resolveWindow(app, target)
+    const context = page.context()
+    if (context.newCDPSession === undefined) {
+      throw new StagewrightError(
+        'TRANSPORT_UNSUPPORTED',
+        'This Playwright build cannot open a CDP session to find the native window.',
+        { transport: TRANSPORT_ID, capability: 'setWindowSize' },
+      )
+    }
+    const cdp = await context.newCDPSession(page)
+    let targetId: unknown
+    try {
+      const info = await cdp.send<{ readonly targetInfo?: { readonly targetId?: unknown } }>(
+        'Target.getTargetInfo',
+      )
+      targetId = info.targetInfo?.targetId
+    } finally {
+      await cdp.detach().catch(() => undefined)
+    }
+    const result =
+      typeof targetId === 'string'
+        ? await this.evaluate<WindowSizeResult | null>('main', RESIZE_BY_TARGET_BODY, {
+            targetId,
+            request,
+          })
+        : null
+    if (result === null) {
+      throw new StagewrightError('REF_NOT_FOUND', 'The page is not shown in a BrowserWindow.', {
+        transport: TRANSPORT_ID,
+        ref: target,
+      })
+    }
+    return result
   }
 
   async screenshot(target: WindowRef, opts: ScreenshotOptions = {}): Promise<Buffer> {

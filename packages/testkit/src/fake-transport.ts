@@ -52,6 +52,9 @@ import type {
   TrayInvokeResult,
   WindowDescriptor,
   WindowRef,
+  WindowSize,
+  WindowSizeRequest,
+  WindowSizeResult,
 } from '../../core/src/transports/index.js'
 
 import { fullCapabilities } from './capabilities.js'
@@ -407,6 +410,52 @@ export class FakeSession implements TransportSession {
 
   async reload(target: WindowRef, opts?: ReloadOptions): Promise<void> {
     this.reloadCalls.push({ target, ...(opts !== undefined ? { opts } : {}) })
+  }
+
+  /** Native window the fake resizes: outer size, frame around the content, and limits. */
+  windowFrame: {
+    outer: WindowSize
+    frame: WindowSize
+    minimum: WindowSize | null
+    maximum: WindowSize | null
+  } = {
+    outer: { width: 800, height: 600 },
+    frame: { width: 0, height: 28 },
+    minimum: null,
+    maximum: null,
+  }
+
+  /** Recorded setWindowSize calls. */
+  readonly setWindowSizeCalls: {
+    readonly target: WindowRef
+    readonly request: WindowSizeRequest
+  }[] = []
+
+  async setWindowSize(target: WindowRef, request: WindowSizeRequest): Promise<WindowSizeResult> {
+    this.setWindowSizeCalls.push({ target, request })
+    const { frame, minimum, maximum } = this.windowFrame
+    const clamp = (value: number, min = 0, max = 0) =>
+      Math.min(Math.max(value, min), max > 0 ? max : Infinity)
+    const outer = {
+      width: clamp(
+        request.width + (request.content === true ? frame.width : 0),
+        minimum?.width,
+        maximum?.width,
+      ),
+      height: clamp(
+        request.height + (request.content === true ? frame.height : 0),
+        minimum?.height,
+        maximum?.height,
+      ),
+    }
+    this.windowFrame = { ...this.windowFrame, outer }
+    return {
+      outer,
+      content: { width: outer.width - frame.width, height: outer.height - frame.height },
+      minimum,
+      maximum,
+      method: 'browser_window',
+    }
   }
 
   async screenshot(target: WindowRef, opts?: ScreenshotOptions): Promise<Buffer> {

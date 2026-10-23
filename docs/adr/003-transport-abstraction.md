@@ -642,3 +642,18 @@ the CDP transport sends it on the page target's connection; the injector rejects
 `TRANSPORT_UNSUPPORTED`, since it has no renderer. `electron_reload` builds on it: it tags the
 current document, waits until a new document replaces it, then applies the launch readiness check
 (now shared in `tools/lifecycle/ready.ts`, which also retries through a navigation).
+
+## Status Update — 2026-10-22: `setWindowSize` seam
+
+`TransportSession` gains `setWindowSize(target, { width, height, content })`, which resizes one
+native window and resolves once its size settles, with the outer and content sizes and, where the
+transport can read them, the window's minimum and maximum sizes. The Playwright transport finds
+the `BrowserWindow` from the page's DevTools target id and the injector by `BrowserWindow` id;
+both leave kiosk, fullscreen or maximized state first (waiting for the window manager) and call
+`setSize` / `setContentSize` in main. The CDP endpoint has neither a main process nor the
+`Browser` window domain, so the page calls `window.resizeTo`, which Electron applies to the native
+window (clamped by its limits) unless the app cancels `content-bounds-updated`; it cannot report
+the limits. Blink keeps reporting the requested outer size for a while after the browser applied
+the real one, while the inner size is real from the resize event on, so the page waits for that
+event and derives the outer size from the inner one and a frame measured before its first resize.
+`electron_set_window_size` builds on it.

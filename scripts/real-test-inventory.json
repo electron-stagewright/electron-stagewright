@@ -84,6 +84,10 @@
     "tests": 1
   },
   {
+    "path": "packages/core/tests/window-size-smoke.test.ts",
+    "tests": 3
+  },
+  {
     "path": "packages/plugin-a11y/tests/a11y-smoke.test.ts",
     "tests": 1
   },
