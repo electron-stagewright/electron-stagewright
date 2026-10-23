@@ -4,9 +4,9 @@
   "variants": {
     "core-safe": {
       "toolCount": 57,
-      "characters": 89893,
-      "utf8Bytes": 89995,
-      "bpe": 20524,
+      "characters": 89968,
+      "utf8Bytes": 90070,
+      "bpe": 20541,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -131,9 +131,9 @@
     },
     "core-eval": {
       "toolCount": 59,
-      "characters": 92908,
-      "utf8Bytes": 93010,
-      "bpe": 21225,
+      "characters": 92983,
+      "utf8Bytes": 93085,
+      "bpe": 21242,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -456,9 +456,9 @@
     },
     "testing-safe": {
       "toolCount": 51,
-      "characters": 81745,
-      "utf8Bytes": 81833,
-      "bpe": 18637,
+      "characters": 81820,
+      "utf8Bytes": 81908,
+      "bpe": 18654,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -577,9 +577,9 @@
     },
     "testing-eval": {
       "toolCount": 53,
-      "characters": 84760,
-      "utf8Bytes": 84848,
-      "bpe": 19338,
+      "characters": 84835,
+      "utf8Bytes": 84923,
+      "bpe": 19355,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -700,9 +700,9 @@
     },
     "debug-safe": {
       "toolCount": 49,
-      "characters": 75238,
-      "utf8Bytes": 75326,
-      "bpe": 17125,
+      "characters": 75313,
+      "utf8Bytes": 75401,
+      "bpe": 17142,
       "toolNames": [
         "electron_attach",
         "electron_check",
@@ -819,9 +819,9 @@
     },
     "debug-eval": {
       "toolCount": 51,
-      "characters": 78253,
-      "utf8Bytes": 78341,
-      "bpe": 17826,
+      "characters": 78328,
+      "utf8Bytes": 78416,
+      "bpe": 17843,
       "toolNames": [
         "electron_attach",
         "electron_check",
@@ -940,9 +940,9 @@
     },
     "plugin-a11y-safe": {
       "toolCount": 59,
-      "characters": 93240,
-      "utf8Bytes": 93342,
-      "bpe": 21274,
+      "characters": 93315,
+      "utf8Bytes": 93417,
+      "bpe": 21291,
       "toolNames": [
         "a11y_audit",
         "electron_assert_pattern",
@@ -1069,9 +1069,9 @@
     },
     "plugin-a11y-eval": {
       "toolCount": 61,
-      "characters": 96255,
-      "utf8Bytes": 96357,
-      "bpe": 21975,
+      "characters": 96330,
+      "utf8Bytes": 96432,
+      "bpe": 21992,
       "toolNames": [
         "a11y_audit",
         "electron_assert_pattern",
@@ -1200,9 +1200,9 @@
     },
     "plugin-clock-safe": {
       "toolCount": 66,
-      "characters": 96717,
-      "utf8Bytes": 96825,
-      "bpe": 22125,
+      "characters": 96792,
+      "utf8Bytes": 96900,
+      "bpe": 22142,
       "toolNames": [
         "clock_advance",
         "clock_install",
@@ -1336,9 +1336,9 @@
     },
     "plugin-clock-eval": {
       "toolCount": 68,
-      "characters": 99732,
-      "utf8Bytes": 99840,
-      "bpe": 22826,
+      "characters": 99807,
+      "utf8Bytes": 99915,
+      "bpe": 22843,
       "toolNames": [
         "clock_advance",
         "clock_install",
@@ -1474,9 +1474,9 @@
     },
     "plugin-ipc-safe": {
       "toolCount": 63,
-      "characters": 95819,
-      "utf8Bytes": 95929,
-      "bpe": 21850,
+      "characters": 95894,
+      "utf8Bytes": 96004,
+      "bpe": 21867,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1607,9 +1607,9 @@
     },
     "plugin-ipc-eval": {
       "toolCount": 65,
-      "characters": 98834,
-      "utf8Bytes": 98944,
-      "bpe": 22551,
+      "characters": 98909,
+      "utf8Bytes": 99019,
+      "bpe": 22568,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1742,9 +1742,9 @@
     },
     "plugin-native-safe": {
       "toolCount": 66,
-      "characters": 98633,
-      "utf8Bytes": 98759,
-      "bpe": 22457,
+      "characters": 98708,
+      "utf8Bytes": 98834,
+      "bpe": 22474,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -1878,9 +1878,9 @@
     },
     "plugin-native-eval": {
       "toolCount": 68,
-      "characters": 101648,
-      "utf8Bytes": 101774,
-      "bpe": 23158,
+      "characters": 101723,
+      "utf8Bytes": 101849,
+      "bpe": 23175,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2016,9 +2016,9 @@
     },
     "plugin-network-safe": {
       "toolCount": 63,
-      "characters": 97985,
-      "utf8Bytes": 98095,
-      "bpe": 22327,
+      "characters": 98060,
+      "utf8Bytes": 98170,
+      "bpe": 22344,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2149,9 +2149,9 @@
     },
     "plugin-network-eval": {
       "toolCount": 65,
-      "characters": 101000,
-      "utf8Bytes": 101110,
-      "bpe": 23028,
+      "characters": 101075,
+      "utf8Bytes": 101185,
+      "bpe": 23045,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2284,9 +2284,9 @@
     },
     "plugin-production-safe": {
       "toolCount": 59,
-      "characters": 92429,
-      "utf8Bytes": 92531,
-      "bpe": 21094,
+      "characters": 92504,
+      "utf8Bytes": 92606,
+      "bpe": 21111,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2413,9 +2413,9 @@
     },
     "plugin-production-eval": {
       "toolCount": 61,
-      "characters": 95444,
-      "utf8Bytes": 95546,
-      "bpe": 21795,
+      "characters": 95519,
+      "utf8Bytes": 95621,
+      "bpe": 21812,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2544,9 +2544,9 @@
     },
     "plugin-storage-safe": {
       "toolCount": 72,
-      "characters": 101417,
-      "utf8Bytes": 101543,
-      "bpe": 23116,
+      "characters": 101492,
+      "utf8Bytes": 101618,
+      "bpe": 23133,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2686,9 +2686,9 @@
     },
     "plugin-storage-eval": {
       "toolCount": 81,
-      "characters": 113270,
-      "utf8Bytes": 113402,
-      "bpe": 25859,
+      "characters": 113345,
+      "utf8Bytes": 113477,
+      "bpe": 25876,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2837,9 +2837,9 @@
     },
     "plugin-trace-safe": {
       "toolCount": 66,
-      "characters": 105220,
-      "utf8Bytes": 105334,
-      "bpe": 24029,
+      "characters": 105295,
+      "utf8Bytes": 105409,
+      "bpe": 24046,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2973,9 +2973,9 @@
     },
     "plugin-trace-eval": {
       "toolCount": 68,
-      "characters": 108235,
-      "utf8Bytes": 108349,
-      "bpe": 24730,
+      "characters": 108310,
+      "utf8Bytes": 108424,
+      "bpe": 24747,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -3111,9 +3111,9 @@
     },
     "plugin-visual-safe": {
       "toolCount": 61,
-      "characters": 97293,
-      "utf8Bytes": 97395,
-      "bpe": 22167,
+      "characters": 97368,
+      "utf8Bytes": 97470,
+      "bpe": 22184,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -3242,9 +3242,9 @@
     },
     "plugin-visual-eval": {
       "toolCount": 63,
-      "characters": 100308,
-      "utf8Bytes": 100410,
-      "bpe": 22868,
+      "characters": 100383,
+      "utf8Bytes": 100485,
+      "bpe": 22885,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -3375,9 +3375,9 @@
     },
     "all-safe": {
       "toolCount": 111,
-      "characters": 153177,
-      "utf8Bytes": 153361,
-      "bpe": 34879,
+      "characters": 153252,
+      "utf8Bytes": 153436,
+      "bpe": 34896,
       "toolNames": [
         "a11y_audit",
         "clock_advance",
@@ -3556,9 +3556,9 @@
     },
     "all-eval": {
       "toolCount": 120,
-      "characters": 165030,
-      "utf8Bytes": 165220,
-      "bpe": 37622,
+      "characters": 165105,
+      "utf8Bytes": 165295,
+      "bpe": 37639,
       "toolNames": [
         "a11y_audit",
         "clock_advance",

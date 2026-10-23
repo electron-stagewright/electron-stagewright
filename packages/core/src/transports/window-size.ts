@@ -9,16 +9,14 @@
 /**
  * Wait until the read size equals the target, or stops changing (sooner once it moved, later
  * when it never did), within one second: Linux window managers apply a resize asynchronously.
- * `minWaitMs` delays the first read until the browser has had time to answer.
  */
 const SETTLE_FN = `
-const __swSettle = async (read, target, before, minWaitMs = 0) => {
+const __swSettle = async (read, target, before) => {
   const same = (a, b) => a[0] === b[0] && a[1] === b[1];
   const start = Date.now();
-  if (minWaitMs > 0) await new Promise((resolve) => setTimeout(resolve, minWaitMs));
   let last = read();
-  let stableSince = Date.now();
-  while (Date.now() - start < 1000 + minWaitMs) {
+  let stableSince = start;
+  while (Date.now() - start < 1000) {
     const now = read();
     if (same(now, target)) return;
     if (!same(now, last)) { last = now; stableSince = Date.now(); }
@@ -33,17 +31,29 @@ const MAIN_RESIZE_BODY = `
 ${SETTLE_FN}
 if (!win) return null;
 const { width, height, content } = arg.request;
-let restored;
-if (win.isFullScreen()) {
-  restored = 'fullscreen';
-  await new Promise((resolve) => {
-    const timer = setTimeout(resolve, 2000);
-    win.once('leave-full-screen', () => { clearTimeout(timer); resolve(); });
-    win.setFullScreen(false);
+// Window managers restore asynchronously; a resize issued before they finish can be undone.
+const after = (event, action, ms) =>
+  new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); win.removeListener(event, done); resolve(); };
+    const timer = setTimeout(done, ms);
+    win.once(event, done);
+    action();
   });
-} else if (win.isMaximized()) {
-  restored = 'maximized';
-  win.unmaximize();
+let restored;
+if (win.isKiosk()) {
+  restored = 'kiosk';
+  win.setKiosk(false);
+}
+if (win.isFullScreen()) {
+  restored = restored ?? 'fullscreen';
+  await after('leave-full-screen', () => win.setFullScreen(false), 2000);
+} else if (typeof win.isSimpleFullScreen === 'function' && win.isSimpleFullScreen()) {
+  restored = restored ?? 'fullscreen';
+  win.setSimpleFullScreen(false);
+}
+if (win.isMaximized()) {
+  restored = restored ?? 'maximized';
+  await after('unmaximize', () => win.unmaximize(), 1000);
 }
 const read = () => (content ? win.getContentSize() : win.getSize());
 const before = read();
@@ -77,18 +87,27 @@ ${MAIN_RESIZE_BODY}
 
 /**
  * Renderer body: `window.resizeTo` sets the outer size, so a content request adds the frame. Blink
- * reports the requested size until the browser applies (and maybe clamps) it, hence the minimum wait.
+ * reports the requested outer size until the browser applies (and maybe clamps) it, so the read
+ * waits for the page's resize event, which fires only for the real size.
  */
 export const RENDERER_RESIZE_BODY = `
 ${SETTLE_FN}
 const { width, height, content } = arg.request;
 const read = () => (content ? [innerWidth, innerHeight] : [outerWidth, outerHeight]);
 const before = read();
-window.resizeTo(
+const outer = [
   content ? width + (outerWidth - innerWidth) : width,
   content ? height + (outerHeight - innerHeight) : height,
-);
-await __swSettle(read, [width, height], before, 150);
+];
+if (outer[0] !== outerWidth || outer[1] !== outerHeight) {
+  await new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); removeEventListener('resize', done); resolve(); };
+    const timer = setTimeout(done, 1000);
+    addEventListener('resize', done);
+    window.resizeTo(outer[0], outer[1]);
+  });
+}
+await __swSettle(read, [width, height], before);
 return {
   outer: { width: outerWidth, height: outerHeight },
   content: { width: innerWidth, height: innerHeight },

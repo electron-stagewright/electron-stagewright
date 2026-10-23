@@ -47,7 +47,8 @@ export const setWindowSizeTool: AnyToolDefinition = defineTool({
     'A maximized or fullscreen window is restored first. Returns: { ok, session_id, window_id,',
     'requested, actual, clamped, clamped_by?, window, content, min_size, max_size, restored_from?,',
     'method }; clamped_by is minimum_size, maximum_size or window_system; min_size/max_size are',
-    'null when unset or unknown (CDP attach resizes from the page and cannot read them). Errors:',
+    'null when unset or unknown. CDP attach resizes from the page: it cannot read the limits, and',
+    'content is the page viewport in CSS pixels (scaled by page zoom). Errors:',
     'REF_NOT_FOUND (no such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT.',
   ].join(' '),
   inputSchema: z.object({

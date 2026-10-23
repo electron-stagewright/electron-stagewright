@@ -235,8 +235,8 @@ export interface WindowSizeResult {
   /** The window's minimum / maximum outer size; null when none is set or the transport cannot tell. */
   readonly minimum: WindowSize | null
   readonly maximum: WindowSize | null
-  /** The window was maximized or fullscreen and was restored first. */
-  readonly restored_from?: 'maximized' | 'fullscreen'
+  /** The window was in kiosk, fullscreen or maximized state and was restored first. */
+  readonly restored_from?: 'kiosk' | 'fullscreen' | 'maximized'
   readonly method: 'browser_window' | 'renderer'
 }
 

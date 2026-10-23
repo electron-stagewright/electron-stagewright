@@ -334,7 +334,7 @@ Set the files of the <input type=file> identified by ref or selector. Paths must
 
 **Set a window’s size**
 
-Resize the active window (or windowId) to width x height, of the whole window or, with area "content", of its web content, without eval. Waits for the size to settle and reports what the window really got: an app minimum/maximum size or the screen can clamp it. A maximized or fullscreen window is restored first. Returns: { ok, session_id, window_id, requested, actual, clamped, clamped_by?, window, content, min_size, max_size, restored_from?, method }; clamped_by is minimum_size, maximum_size or window_system; min_size/max_size are null when unset or unknown (CDP attach resizes from the page and cannot read them). Errors: REF_NOT_FOUND (no such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT.
+Resize the active window (or windowId) to width x height, of the whole window or, with area "content", of its web content, without eval. Waits for the size to settle and reports what the window really got: an app minimum/maximum size or the screen can clamp it. A maximized or fullscreen window is restored first. Returns: { ok, session_id, window_id, requested, actual, clamped, clamped_by?, window, content, min_size, max_size, restored_from?, method }; clamped_by is minimum_size, maximum_size or window_system; min_size/max_size are null when unset or unknown. CDP attach resizes from the page: it cannot read the limits, and content is the page viewport in CSS pixels (scaled by page zoom). Errors: REF_NOT_FOUND (no such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT.
 
 - Operation: `command`
 

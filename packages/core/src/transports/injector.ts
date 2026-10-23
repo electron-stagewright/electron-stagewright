@@ -370,23 +370,25 @@ class InjectorSession implements TransportSession {
     return Promise.reject(unsupported('reload', 'supportsRendererEval'))
   }
 
-  async setWindowSize(target: WindowRef, request: WindowSizeRequest): Promise<WindowSizeResult> {
+  async #windowIdFor(
+    target: Exclude<WindowRef, { readonly kind: 'id' }>,
+  ): Promise<string | undefined> {
     const windows = await this.windowsList()
-    const window =
-      target.kind === 'id'
-        ? windows.find((candidate) => candidate.id === target.id)
-        : target.kind === 'index'
-          ? windows[target.index]
-          : windows.find((candidate) =>
-              typeof target.pattern === 'string'
-                ? candidate.title === target.pattern
-                : target.pattern.test(candidate.title),
-            )
+    if (target.kind === 'index') return windows[target.index]?.id
+    const { pattern } = target
+    return windows.find((candidate) =>
+      typeof pattern === 'string' ? candidate.title === pattern : pattern.test(candidate.title),
+    )?.id
+  }
+
+  async setWindowSize(target: WindowRef, request: WindowSizeRequest): Promise<WindowSizeResult> {
+    // An id needs no listing: the body answers null for a window that does not exist.
+    const windowId = target.kind === 'id' ? target.id : await this.#windowIdFor(target)
     const result =
-      window === undefined
+      windowId === undefined
         ? null
         : await this.evaluate<WindowSizeResult | null>('main', RESIZE_BY_ID_BODY, {
-            windowId: window.id,
+            windowId,
             request,
           })
     if (result === null) {
