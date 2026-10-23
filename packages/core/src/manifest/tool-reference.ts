@@ -144,6 +144,10 @@ export function renderToolReference(manifest: readonly ToolManifestEntry[]): str
     }`,
     '',
   )
+  out.push(
+    'For the call sequence that checks a UI change end to end, see [Verify a desktop change](docs/guides/verify-desktop-change.md).',
+    '',
+  )
 
   out.push('## Contents', '')
   for (const operationType of operationTypes) {

@@ -266,6 +266,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
         'ignore those updates, so always rely on the final tool response for completion and outcome.',
         'Screenshots and trace exports may include an artifact and resource_link. Read that MCP',
         'resource before artifact.expires_at; the local path remains available after the link expires.',
+        'To check a UI change end to end, follow the resource stagewright://docs/verify-desktop-change.',
       ].join(' '),
     },
   )

@@ -12,6 +12,7 @@ situation matches:
 | Deciding how to get a session against YOUR app                   | [Launch, attach, or inject](./launch-or-attach.md)                    |
 | Writing assertions an agent can act on                           | [Assert UI state](./assert-ui-state.md)                               |
 | Driving a code editor (Monaco, CodeMirror, EditContext)          | [Type into code editors](./type-into-code-editors.md)                 |
+| Checking a UI change end to end after you made it                | [Verify a desktop change](./verify-desktop-change.md)                 |
 | Debugging a flow — screenshots, console, dialogs, session traces | [Capture diagnostics](./capture-diagnostics.md)                       |
 | Coming from electron-driver                                      | [Migrate from electron-driver](./migrate-from-electron-driver.md)     |
 | Deciding whether and how to expose the server                    | [Security model](./security-model.md)                                 |
@@ -30,6 +31,7 @@ is _for_:
   [Try the packaged demo](./demo.md),
   [Launch, attach, or inject](./launch-or-attach.md), [Assert UI state](./assert-ui-state.md),
   [Type into code editors](./type-into-code-editors.md),
+  [Verify a desktop change](./verify-desktop-change.md),
   [Capture diagnostics](./capture-diagnostics.md),
   [Load, configure, and diagnose plugins](./plugins.md), and
   [Migrate from electron-driver](./migrate-from-electron-driver.md) each solve one job.

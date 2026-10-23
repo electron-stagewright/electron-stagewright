@@ -29,6 +29,13 @@ const DOCUMENTS = [
     source: 'docs/guides/concepts.md',
   },
   {
+    uri: 'stagewright://docs/verify-desktop-change',
+    name: 'verify-desktop-change',
+    title: 'Verify a desktop change',
+    description: 'The call sequence that checks a UI change: launch, act, assert, capture, stop.',
+    source: 'docs/guides/verify-desktop-change.md',
+  },
+  {
     uri: 'stagewright://docs/security',
     name: 'security',
     title: 'Electron Stagewright security model',
