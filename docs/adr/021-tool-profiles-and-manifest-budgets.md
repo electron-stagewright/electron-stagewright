@@ -174,3 +174,10 @@ growth stays within the 3% gate of the baseline set for the keyboard tools, so i
 `electron_reload` joins the `testing` and `debug` profiles next to the window tools, and `full`
 through the catalog. It replaces `location.reload()` in eval, which needed the eval flag and left
 the agent guessing how long to wait. `essential` is unchanged.
+
+## Status update (2026-10-22): `electron_set_window_size`
+
+`electron_set_window_size` joins the `testing` and `debug` profiles next to the window tools, and
+`full` through the catalog. It replaces `BrowserWindow.setSize` through eval and reports the size
+the window really got, since an app minimum size clamps requests silently. `essential` is
+unchanged.

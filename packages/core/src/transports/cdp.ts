@@ -97,6 +97,7 @@ import {
 import { buildScrollIntoViewBody } from './playwright-electron-bodies.js'
 import { originRelation } from './surface-origin.js'
 import { runDomStorage } from './dom-storage.js'
+import { RENDERER_RESIZE_BODY } from './window-size.js'
 import type {
   AttachOptions,
   ClickOptions,
@@ -128,6 +129,8 @@ import type {
   NotificationCaptureFilter,
   PressOptions,
   ReloadOptions,
+  WindowSizeRequest,
+  WindowSizeResult,
   WebStorageRequest,
   WebStorageResponse,
   ScreenshotOptions,
@@ -1291,6 +1294,13 @@ class CdpSession implements TransportSession {
     await this.#ensureConnected()
     const conn = await this.connectionFor(await this.#resolveTarget(target))
     await conn.send('Page.reload', { ignoreCache: opts.ignoreCache === true })
+  }
+
+  /** The endpoint exposes no main process or Browser window domain; the page resizes itself. */
+  async setWindowSize(target: WindowRef, request: WindowSizeRequest): Promise<WindowSizeResult> {
+    await this.#ensureConnected()
+    const conn = await this.connectionFor(await this.#resolveTarget(target))
+    return evaluateExpression<WindowSizeResult>(conn, RENDERER_RESIZE_BODY, { request })
   }
 
   async screenshot(target: WindowRef, opts: ScreenshotOptions = {}): Promise<Buffer> {

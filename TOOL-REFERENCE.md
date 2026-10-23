@@ -2,11 +2,11 @@
 
 > Generated from the dispatcher manifest — do not edit by hand. Run `pnpm docs:tools` to regenerate.
 
-The server exposes 58 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
+The server exposes 59 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
 
 ## Contents
 
-- [Command tools](#command-tools) (25)
+- [Command tools](#command-tools) (26)
 - [Dialog tools](#dialog-tools) (1)
 - [Eval tools](#eval-tools) (2)
 - [Logs tools](#logs-tools) (1)
@@ -328,6 +328,22 @@ Set the files of the <input type=file> identified by ref or selector. Paths must
 | `selector` | string | no | CSS selector. Provide ref OR selector, not both. |
 | `paths` | string[] | yes | Absolute file paths to attach. |
 | `timeoutMs` | integer | no | Actionability budget in ms (default 5000, clamped to 30000). |
+| `sessionId` | string | no | Target session id. Omit when a single session is running. |
+
+### `electron_set_window_size`
+
+**Set a window’s size**
+
+Resize the active window (or windowId) to width x height, of the whole window or, with area "content", of its web content, without eval. Waits for the size to settle and reports what the window really got: an app minimum/maximum size or the screen can clamp it. A maximized or fullscreen window is restored first. Returns: { ok, session_id, window_id, requested, actual, clamped, clamped_by?, window, content, min_size, max_size, restored_from?, method }; clamped_by is minimum_size, maximum_size or window_system; min_size/max_size are null when unset or unknown (CDP attach resizes from the page and cannot read them). Errors: REF_NOT_FOUND (no such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT.
+
+- Operation: `command`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `width` | integer | yes | Width in device-independent pixels. |
+| `height` | integer | yes | Height in device-independent pixels. |
+| `area` | string | no | Size the whole window (default) or only its web content area. |
+| `windowId` | string | no | Window to resize (from electron_windows_list). Default: active. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ### `electron_stop`

@@ -16,6 +16,7 @@ import { reloadTool } from './reload.js'
 import { detachTool, forceKillTool, stopTool } from './session-control.js'
 import { statusTool } from './status.js'
 import { switchWindowTool, windowsListTool } from './windows.js'
+import { setWindowSizeTool } from './window-size.js'
 import { surfacesListTool, switchSurfaceTool } from './surfaces.js'
 
 export { infoTool, makeInfoTool, type InfoToolDeps } from './info.js'
@@ -26,6 +27,7 @@ export { reloadTool } from './reload.js'
 export { stopTool, forceKillTool, detachTool } from './session-control.js'
 export { attachTool, injectTool } from './attach.js'
 export { windowsListTool, switchWindowTool } from './windows.js'
+export { setWindowSizeTool } from './window-size.js'
 export { surfacesListTool, switchSurfaceTool } from './surfaces.js'
 export { resolveWindow, type WindowSelector } from './window-ref.js'
 export { diagnoseLaunchError } from './diagnose.js'
@@ -61,6 +63,7 @@ export const LIFECYCLE_TOOLS: readonly AnyToolDefinition[] = [
   infoTool,
   windowsListTool,
   switchWindowTool,
+  setWindowSizeTool,
   reloadTool,
   surfacesListTool,
   switchSurfaceTool,

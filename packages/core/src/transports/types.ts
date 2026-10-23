@@ -217,6 +217,29 @@ export interface ReloadOptions {
   readonly ignoreCache?: boolean
 }
 
+/** A width and height in device-independent pixels. */
+export interface WindowSize {
+  readonly width: number
+  readonly height: number
+}
+
+/** What to resize: the outer window frame, or the content area when `content` is true. */
+export interface WindowSizeRequest extends WindowSize {
+  readonly content?: boolean
+}
+
+/** The window after the resize settled. */
+export interface WindowSizeResult {
+  readonly outer: WindowSize
+  readonly content: WindowSize
+  /** The window's minimum / maximum outer size; null when none is set or the transport cannot tell. */
+  readonly minimum: WindowSize | null
+  readonly maximum: WindowSize | null
+  /** The window was maximized or fullscreen and was restored first. */
+  readonly restored_from?: 'maximized' | 'fullscreen'
+  readonly method: 'browser_window' | 'renderer'
+}
+
 export interface ScreenshotOptions {
   /** Capture the full scrollable page rather than just the viewport. */
   readonly fullPage?: boolean
@@ -822,6 +845,9 @@ export interface TransportSession {
 
   /** Reload the given window's page. Resolves once the reload is issued, not when it is ready. */
   reload(target: WindowRef, opts?: ReloadOptions): Promise<void>
+
+  /** Resize the given native window and resolve once its size settles. */
+  setWindowSize(target: WindowRef, request: WindowSizeRequest): Promise<WindowSizeResult>
 
   /** Enumerate the current windows. */
   windowsList(): Promise<readonly WindowDescriptor[]>

@@ -53,6 +53,7 @@ import {
 import { copyDialogPolicy } from './dialog-policy.js'
 import type { FetchJson, KillProcess } from './cdp.js'
 import { assertLoopbackAttachTarget } from './loopback.js'
+import { RESIZE_BY_ID_BODY } from './window-size.js'
 import type {
   AttachOptions,
   ClockInstallOptions,
@@ -91,6 +92,8 @@ import type {
   TrayInvokeResult,
   WindowDescriptor,
   WindowRef,
+  WindowSizeRequest,
+  WindowSizeResult,
 } from './types.js'
 
 const TRANSPORT_ID: TransportId = 'injector'
@@ -365,6 +368,34 @@ class InjectorSession implements TransportSession {
 
   reload(): Promise<void> {
     return Promise.reject(unsupported('reload', 'supportsRendererEval'))
+  }
+
+  async setWindowSize(target: WindowRef, request: WindowSizeRequest): Promise<WindowSizeResult> {
+    const windows = await this.windowsList()
+    const window =
+      target.kind === 'id'
+        ? windows.find((candidate) => candidate.id === target.id)
+        : target.kind === 'index'
+          ? windows[target.index]
+          : windows.find((candidate) =>
+              typeof target.pattern === 'string'
+                ? candidate.title === target.pattern
+                : target.pattern.test(candidate.title),
+            )
+    const result =
+      window === undefined
+        ? null
+        : await this.evaluate<WindowSizeResult | null>('main', RESIZE_BY_ID_BODY, {
+            windowId: window.id,
+            request,
+          })
+    if (result === null) {
+      throw new StagewrightError('REF_NOT_FOUND', 'No such BrowserWindow in the injected app.', {
+        transport: TRANSPORT_ID,
+        ref: target,
+      })
+    }
+    return result
   }
 
   screenshot(): Promise<Buffer> {
