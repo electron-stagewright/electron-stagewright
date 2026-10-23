@@ -13,7 +13,8 @@
  * this plugin is NOT `--allow-eval` gated. It IS gated on the transport's `canAccessNativeUI` capability
  * (`native.UNSUPPORTED` otherwise). Tools (namespaced by the loader): `native_menu`, `native_menu_item`,
  * `native_menu_invoke`, `native_notifications_start`, `native_notifications`,
- * `native_notifications_stop`, `native_trays`, `native_tray_invoke`.
+ * `native_notifications_stop`, `native_trays`, `native_tray_invoke`, `native_file_dialog_arm`,
+ * `native_file_dialog_events`, `native_file_dialog_disarm`.
  *
  * Reading the menu, notification capture, and tray read are observation of app chrome — not a secret
  * surface (menu labels, shown notification text, and tray labels are no more sensitive than user-visible
@@ -43,6 +44,8 @@ import {
   requireTransportCapability,
   sessionIdField,
 } from '@electron-stagewright/core/plugin-sdk'
+import { isAbsolute } from 'node:path'
+
 import { z } from 'zod'
 
 /** Plugin namespace — must match {@link nativeUiPlugin.name}; the loader prefixes its tools with it. */
@@ -355,6 +358,93 @@ export function createNativeUiPlugin(): StagewrightPlugin {
     },
   })
 
+  const absolutePath = z
+    .string()
+    .min(1)
+    .refine((value) => isAbsolute(value), 'Answer paths must be absolute.')
+
+  const fileDialogArmTool: AnyToolDefinition = defineTool({
+    name: 'file_dialog_arm',
+    title: 'Answer native file dialogs',
+    description: [
+      'Queue answers for the app’s native open/save file dialogs (dialog.showOpenDialog / showSaveDialog,',
+      'async or sync), first in first out: { kind: "open", paths } | { kind: "save", path } | { kind:',
+      '"cancel" }, with absolute paths. Each dialog the app shows takes the next answer instead of opening',
+      'an OS picker; once the queue is empty every dialog is cancelled, so nothing hangs, and a dialog of',
+      'the other kind than the next answer is cancelled without using it. Replaces the queue and the',
+      'recorded events unless append is true. No eval. Returns: { ok, armed, pending, hooked } (hooked is',
+      'launch when electron_launch had instrumentNative, so dialog functions the app captured at import',
+      'are answered too, else arm). Errors: native.UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (relative path).',
+    ].join(' '),
+    inputSchema: z.object({
+      responses: z
+        .array(
+          z.discriminatedUnion('kind', [
+            z.object({ kind: z.literal('open'), paths: z.array(absolutePath).min(1) }),
+            z.object({ kind: z.literal('save'), path: absolutePath }),
+            z.object({ kind: z.literal('cancel') }),
+          ]),
+        )
+        .max(100)
+        .describe('Answers, in the order the dialogs will appear. Empty cancels every dialog.'),
+      append: z
+        .boolean()
+        .optional()
+        .describe('Add to the queued answers instead of replacing them.'),
+      ...sessionField,
+    }),
+    operationType: 'command',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const guard = requireNativeUI(ctx, args.sessionId, meta)
+      if ('error' in guard) return guard.error
+      const result = await guard.session.armFileDialogs(args.responses, {
+        append: args.append === true,
+      })
+      return makeSuccess({ armed: true, ...result }, meta)
+    },
+  })
+
+  const fileDialogEventsTool: AnyToolDefinition = defineTool({
+    name: 'file_dialog_events',
+    title: 'Read answered file dialogs',
+    description: [
+      'Return the native file dialogs the app showed since native_file_dialog_arm, oldest first: kind',
+      '(open/save), sync, the options the app passed (title, defaultPath, buttonLabel, message, filters,',
+      'properties), the parent window title, the answer given, and reason (queue_empty or kind_mismatch)',
+      'when it was cancelled without a queued cancel. Returns: { ok, armed, pending, count, events }.',
+      'Errors: native.UNSUPPORTED, NOT_RUNNING.',
+    ].join(' '),
+    inputSchema: z.object({ ...sessionField }),
+    operationType: 'query',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const guard = requireNativeUI(ctx, args.sessionId, meta)
+      if ('error' in guard) return guard.error
+      const state = await guard.session.fileDialogEvents()
+      return makeSuccess({ ...state, count: state.events.length }, meta)
+    },
+  })
+
+  const fileDialogDisarmTool: AnyToolDefinition = defineTool({
+    name: 'file_dialog_disarm',
+    title: 'Stop answering file dialogs',
+    description: [
+      'Let the app’s file dialogs open the real OS pickers again, drop any queued answers, and return the',
+      'dialogs answered since arming. Returns: { ok, armed, pending, count, events } (pending is what was',
+      'still queued). Errors: native.UNSUPPORTED, NOT_RUNNING.',
+    ].join(' '),
+    inputSchema: z.object({ ...sessionField }),
+    operationType: 'command',
+    handler: async (args, ctx) => {
+      const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const guard = requireNativeUI(ctx, args.sessionId, meta)
+      if ('error' in guard) return guard.error
+      const state = await guard.session.disarmFileDialogs()
+      return makeSuccess({ ...state, count: state.events.length }, meta)
+    },
+  })
+
   /**
    * The native-UI plugin. Load with `--plugin @electron-stagewright/plugin-native-ui` (NO eval flag — it
    * does not run agent-supplied JS) or `createServer({ plugins: [nativeUiPlugin] })`. No configuration.
@@ -395,6 +485,9 @@ export function createNativeUiPlugin(): StagewrightPlugin {
       notificationsStopTool,
       traysTool,
       trayInvokeTool,
+      fileDialogArmTool,
+      fileDialogEventsTool,
+      fileDialogDisarmTool,
     ],
     setup: (_config, context) => {
       sessionCleanup.setup(context)

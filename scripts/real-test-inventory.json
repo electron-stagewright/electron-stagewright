@@ -101,7 +101,7 @@
   },
   {
     "path": "packages/plugin-native-ui/tests/native-smoke.test.ts",
-    "tests": 1
+    "tests": 2
   },
   {
     "path": "packages/plugin-network/tests/network-smoke.test.ts",

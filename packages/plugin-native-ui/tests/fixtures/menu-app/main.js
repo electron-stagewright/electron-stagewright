@@ -4,9 +4,19 @@
 // into the page, a File > Notify item whose click shows a native notification, and (at startup, before
 // any agent could arm) a system Tray with a tooltip + context menu + a click handler AND a startup
 // Notification, so the smoke proves launch-time instrumentation catches the t=0 tray setup, fires the tray
-// handler via native_tray_invoke, AND captures the t=0 notification (tagged beforeArm). Quits when the
-// window closes.
-import { BrowserWindow, Menu, Notification, Tray, app, nativeImage } from 'electron'
+// handler via native_tray_invoke, AND captures the t=0 notification (tagged beforeArm). Its Open and
+// Save as buttons show native file dialogs. Quits when the window closes.
+import {
+  BrowserWindow,
+  Menu,
+  Notification,
+  Tray,
+  app,
+  dialog,
+  ipcMain,
+  nativeImage,
+} from 'electron'
+import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -61,6 +71,26 @@ const template = [
 let tray
 let mainWindow
 
+// The page's Open / Save as buttons: an async open dialog and a sync save dialog that writes a file,
+// so the smoke can answer both forms with native_file_dialog_arm.
+ipcMain.handle('fixture:open-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import SQL',
+    filters: [{ name: 'SQL', extensions: ['sql'] }],
+    properties: ['openFile'],
+  })
+  return result.canceled ? null : result.filePaths[0]
+})
+ipcMain.handle('fixture:save-file', (_event, content) => {
+  const target = dialog.showSaveDialogSync(mainWindow, {
+    title: 'Export',
+    defaultPath: 'export.csv',
+  })
+  if (!target) return null
+  writeFileSync(target, content)
+  return target
+})
+
 app.whenReady().then(() => {
   // A startup notification fires at t=0 — before any agent could arm capture. Launch-time instrumentation
   // (instrumentNative) must catch it; the smoke asserts it comes back tagged beforeArm.
@@ -90,7 +120,7 @@ app.whenReady().then(() => {
     width: 400,
     height: 300,
     show: true,
-    webPreferences: { contextIsolation: true },
+    webPreferences: { contextIsolation: true, preload: join(fixtureDir, 'preload.cjs') },
   })
   void mainWindow.loadFile(join(fixtureDir, 'index.html'))
 })

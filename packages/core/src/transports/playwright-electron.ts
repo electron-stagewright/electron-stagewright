@@ -45,6 +45,8 @@ import {
   type DefaultElectronStatus,
 } from '../runtime/default-electron.js'
 import {
+  ARM_FILE_DIALOGS_BODY,
+  FILE_DIALOG_STATE_BODY,
   NOTIFICATION_REGISTRY_GLOBAL,
   TRAY_REGISTRY_GLOBAL,
   buildInstrumentationShim,
@@ -113,6 +115,9 @@ import type {
   NetworkStub,
   NotificationCaptureFilter,
   PressOptions,
+  FileDialogArmResult,
+  FileDialogResponse,
+  FileDialogState,
   ReloadOptions,
   WindowSizeRequest,
   WindowSizeResult,
@@ -210,6 +215,10 @@ return {
   ...(target.getURL() ? { url: target.getURL() } : {}),
 };
 `
+
+/** Run an `(electron, host, arg)` instrumentation body in main against the real globals. */
+const onGlobalThis = (body: string): string =>
+  `return (function (electron, host, arg) {\n${body}\n})(electronApp, globalThis, arg)`
 
 /**
  * Default budget for a graceful `stop` before escalating to SIGKILL. A hung app
@@ -1457,6 +1466,44 @@ class PlaywrightSession implements TransportSession {
       },
       { body: '', arg: { key: NOTIFICATION_REGISTRY_GLOBAL } },
     )
+  }
+
+  // --- Native file dialogs: answer open/save dialogs from a queue (ADR-019 amendment). ---
+
+  async armFileDialogs(
+    responses: readonly FileDialogResponse[],
+    opts: { readonly append?: boolean } = {},
+  ): Promise<FileDialogArmResult> {
+    this.requireRunning()
+    const result = await this.evaluate<FileDialogArmResult | null>(
+      'main',
+      onGlobalThis(ARM_FILE_DIALOGS_BODY),
+      { responses, append: opts.append === true },
+    )
+    if (result === null) {
+      throw new StagewrightError(
+        'INTERNAL_ERROR',
+        'The app has no Electron dialog module to hook.',
+        {
+          transport: TRANSPORT_ID,
+        },
+      )
+    }
+    return result
+  }
+
+  async fileDialogEvents(): Promise<FileDialogState> {
+    this.requireRunning()
+    return this.evaluate<FileDialogState>('main', onGlobalThis(FILE_DIALOG_STATE_BODY), {
+      disarm: false,
+    })
+  }
+
+  async disarmFileDialogs(): Promise<FileDialogState> {
+    this.requireRunning()
+    return this.evaluate<FileDialogState>('main', onGlobalThis(FILE_DIALOG_STATE_BODY), {
+      disarm: true,
+    })
   }
 
   // --- Native trays: read the launch-time instrumentation registry (ADR-020). ---

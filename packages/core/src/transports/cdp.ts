@@ -128,6 +128,8 @@ import type {
   NetworkStubResponse,
   NotificationCaptureFilter,
   PressOptions,
+  FileDialogArmResult,
+  FileDialogState,
   ReloadOptions,
   WindowSizeRequest,
   WindowSizeResult,
@@ -1975,6 +1977,18 @@ class CdpSession implements TransportSession {
   }
   stopNotificationCapture(): Promise<void> {
     return Promise.reject(notImplemented('stopNotificationCapture'))
+  }
+
+  armFileDialogs(): Promise<FileDialogArmResult> {
+    return Promise.reject(notImplemented('armFileDialogs'))
+  }
+
+  fileDialogEvents(): Promise<FileDialogState> {
+    return Promise.reject(notImplemented('fileDialogEvents'))
+  }
+
+  disarmFileDialogs(): Promise<FileDialogState> {
+    return Promise.reject(notImplemented('disarmFileDialogs'))
   }
   getTrays(): Promise<readonly NativeTray[] | null> {
     return Promise.reject(notImplemented('getTrays'))

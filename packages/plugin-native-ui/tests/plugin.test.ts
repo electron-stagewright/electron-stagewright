@@ -173,6 +173,9 @@ describe('native-ui plugin', () => {
       ['native_notifications_stop', {}],
       ['native_trays', {}],
       ['native_tray_invoke', { id: 0, event: 'click' }],
+      ['native_file_dialog_arm', { responses: [] }],
+      ['native_file_dialog_events', {}],
+      ['native_file_dialog_disarm', {}],
     ] as const) {
       expect(await server.dispatcher.dispatch(tool, { sessionId, ...args })).toMatchObject({
         ok: false,
@@ -433,5 +436,91 @@ describe('native-ui plugin', () => {
       event: 'click',
     })) as unknown as Record<string, unknown>
     expect(JSON.parse(JSON.stringify(res))).toEqual(res)
+  })
+
+  describe('file dialogs', () => {
+    const IN = process.platform === 'win32' ? 'C:\\data\\in.sql' : '/data/in.sql'
+    const OUT = process.platform === 'win32' ? 'C:\\out\\export.csv' : '/out/export.csv'
+
+    it('answers the app’s dialogs from the armed queue and reports them', async () => {
+      const session = new FakeSession()
+      const server = await open(session)
+      const sessionId = await launch(server)
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_arm', {
+          sessionId,
+          responses: [
+            { kind: 'open', paths: [IN] },
+            { kind: 'save', path: OUT },
+          ],
+        }),
+      ).toMatchObject({ ok: true, armed: true, pending: 2, hooked: 'arm' })
+
+      // The app shows its dialogs.
+      await expect(
+        session.electronDialog['showOpenDialog']?.({ title: 'Import' }),
+      ).resolves.toEqual({ canceled: false, filePaths: [IN] })
+      expect(session.electronDialog['showSaveDialogSync']?.({})).toBe(OUT)
+      await expect(session.electronDialog['showOpenDialog']?.({})).resolves.toMatchObject({
+        canceled: true,
+      })
+      expect(session.osFileDialogs).toEqual([])
+
+      const events = await server.dispatcher.dispatch('native_file_dialog_events', { sessionId })
+      expect(events).toMatchObject({
+        ok: true,
+        armed: true,
+        pending: 0,
+        count: 3,
+        events: [
+          { kind: 'open', sync: false, options: { title: 'Import' }, answer: { paths: [IN] } },
+          { kind: 'save', sync: true, answer: { path: OUT } },
+          { kind: 'open', answer: { kind: 'cancel' }, reason: 'queue_empty' },
+        ],
+      })
+      expect(JSON.parse(JSON.stringify(events))).toEqual(events)
+
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_disarm', { sessionId }),
+      ).toMatchObject({ ok: true, armed: false, count: 3 })
+      await session.electronDialog['showOpenDialog']?.({})
+      expect(session.osFileDialogs).toEqual(['showOpenDialog'])
+    })
+
+    it('appends to the queue when asked', async () => {
+      const session = new FakeSession()
+      const server = await open(session)
+      const sessionId = await launch(server)
+      await server.dispatcher.dispatch('native_file_dialog_arm', {
+        sessionId,
+        responses: [{ kind: 'cancel' }],
+      })
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_arm', {
+          sessionId,
+          responses: [{ kind: 'save', path: OUT }],
+          append: true,
+        }),
+      ).toMatchObject({ pending: 2 })
+    })
+
+    it('refuses relative or empty answers with BAD_ARGUMENT before queueing', async () => {
+      const session = new FakeSession()
+      const server = await open(session)
+      const sessionId = await launch(server)
+      for (const responses of [
+        [{ kind: 'open', paths: ['data/in.sql'] }],
+        [{ kind: 'save', path: './export.csv' }],
+        [{ kind: 'open', paths: [] }],
+        [{ kind: 'rename', path: OUT }],
+      ]) {
+        expect(
+          await server.dispatcher.dispatch('native_file_dialog_arm', { sessionId, responses }),
+        ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+      }
+      expect(
+        await server.dispatcher.dispatch('native_file_dialog_events', { sessionId }),
+      ).toMatchObject({ armed: false, pending: 0, count: 0 })
+    })
   })
 })

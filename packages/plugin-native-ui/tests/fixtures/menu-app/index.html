@@ -13,5 +13,28 @@
     <pre id="invoked"></pre>
     <!-- The tray's click handler writes TRAY_CLICKED here, so the smoke can prove native_tray_invoke fired. -->
     <pre id="tray-clicked"></pre>
+    <!-- File dialogs answered by native_file_dialog_arm; each shows the path or CANCELLED. -->
+    <button
+      id="open"
+      onclick="
+        fixtureFiles
+          .open()
+          .then((p) => (document.getElementById('picked').textContent = p ?? 'CANCELLED'))
+      "
+    >
+      Open file…
+    </button>
+    <button
+      id="save"
+      onclick="
+        fixtureFiles
+          .save('id,name\n1,Ada\n')
+          .then((p) => (document.getElementById('saved').textContent = p ?? 'CANCELLED'))
+      "
+    >
+      Save as…
+    </button>
+    <pre id="picked"></pre>
+    <pre id="saved"></pre>
   </body>
 </html>

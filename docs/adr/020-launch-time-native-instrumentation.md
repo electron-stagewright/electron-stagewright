@@ -111,3 +111,10 @@ removed when the session disposes (idempotent, best-effort).
 - `packages/core/src/transports/playwright-electron.ts` — the shim writer, `getTrays`, `invokeTrayEvent`,
   the notification capture seam (adopt-or-install), temp cleanup.
 - `packages/core/tests/native-instrumentation.test.ts` — the hook bodies run against a fake electron module.
+
+## Status Update — 2026-10-23: file-dialog hook
+
+The shim installs a third fixed hook, `FILE_DIALOG_HOOK_BODY`, after the tray and notification hooks. It
+wraps the `dialog` open/save functions and passes every call through to the real dialog until the
+agent arms answers (ADR-019 amendment), so an instrumented app that captured those functions at import
+is answered too. A non-instrumented session installs the same hook when the agent first arms.

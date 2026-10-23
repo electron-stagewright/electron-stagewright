@@ -1,6 +1,6 @@
 # ADR-019: Native UI plugin via a transport native-UI seam
 
-Status: Accepted (application-menu read + invoke, notification capture incl. startup/t=0, and tray read + event invocation on the Playwright transport)
+Status: Accepted (application-menu read + invoke, notification capture incl. startup/t=0, tray read + event invocation, and file-dialog answering on the Playwright transport)
 
 ## Context
 
@@ -240,3 +240,42 @@ notifications too.
   assert-a-startup-notification case; the cap mirrors the network capture.
 - **Still not `--allow-eval` gated** (the agent supplies arm/read/stop, no code); CDP/injector are
   unaffected (they have no launch hook and capture nothing). This closes the native-UI follow-up set.
+
+## Amendment — 2026-10-23: native file dialogs
+
+`dialog.showOpenDialog` and `dialog.showSaveDialog` open real OS pickers the agent cannot drive, so
+import and export flows could only be tested by replacing those functions through `eval_main`, which
+needs the eval opt-in and leaves no record of what the app asked or was answered. The native-UI seam
+gains a file-dialog surface:
+
+- **Seam.** `TransportSession` gains `armFileDialogs(responses, { append })`, `fileDialogEvents()` and
+  `disarmFileDialogs()`, gated by the same `canAccessNativeUI` capability. The Playwright transport
+  installs a fixed hook (`FILE_DIALOG_HOOK_BODY`) that wraps `showOpenDialog`, `showOpenDialogSync`,
+  `showSaveDialog` and `showSaveDialogSync` on the `dialog` module. Until the agent arms, every call
+  passes through to the real dialog. CDP and injector reject the methods `NOT_IMPLEMENTED`, like the
+  rest of the seam.
+- **Answers are queued, first in first out.** `native_file_dialog_arm { responses }` queues answers:
+  `{ kind: 'open', paths }`, `{ kind: 'save', path }` or `{ kind: 'cancel' }`. Each dialog the app
+  shows takes the next answer, in the shape Electron returns for that form (a promise of
+  `{ canceled, filePaths }` / `{ canceled, filePath }`, or the sync value). A dialog that finds the
+  queue empty is cancelled, so an armed app never waits on a picker nobody will answer. A dialog whose
+  kind does not match the next answer (a save while an open answer waits) is cancelled and leaves that
+  answer queued, and the event says why.
+- **Absolute paths only.** Answer paths must be absolute; a relative one is refused with core
+  `BAD_ARGUMENT` before anything is queued, since the app would resolve it against its own working
+  directory.
+- **Events.** `native_file_dialog_events` returns, oldest first, each dialog the app showed while armed:
+  its kind, whether it was the sync form, the options the app passed (title, defaultPath, buttonLabel,
+  message, filters, properties), the parent window's title, the answer given and, when cancelled
+  without a queued cancel, the reason (`queue_empty` or `kind_mismatch`). The buffer is bounded like
+  notification capture. `native_file_dialog_disarm` restores the real dialogs and returns the events.
+- **Visible to traces.** Arming and reading events are ordinary tool calls, so the trace records the
+  queued answers and every answer given, and a replayed trace re-arms the same answers. Nothing runs
+  through eval.
+- **Launch-time hook.** When the session was launched with `instrumentNative`, the shim (ADR-020)
+  installs the same hook before the app's main runs, so an app that captured the dialog functions at
+  import (`const { showOpenDialog } = dialog`) is answered too. Otherwise the hook is installed when
+  the agent first arms; the arm result says which (`hooked: 'launch' | 'arm'`).
+- **Not `--allow-eval` gated.** The agent supplies answers (data), never code, and the hook is
+  transport-owned. Answering a dialog modifies app behaviour the way `electron_set_files` does for a
+  file input, so the security model gains a native-UI row for it.

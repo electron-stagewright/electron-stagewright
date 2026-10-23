@@ -173,9 +173,127 @@ try {
 }
 `
 
+/** The global key the file-dialog hook keeps its queue and events on; read by the file-dialog seam. */
+export const FILE_DIALOG_REGISTRY_GLOBAL = '__stagewright_fileDialogs'
+
+/**
+ * The file-dialog hook installer body. Given `electron`, `host` (`globalThis` at runtime) and `phase`
+ * (`'launch'` from the shim, `'arm'` from the seam), it wraps the four `dialog` open/save functions.
+ * Unarmed, they call the real dialog; armed, each call takes the next queued answer (FIFO), is cancelled
+ * when the queue is empty or the next answer is of the other kind, and is recorded. Idempotent, and
+ * runnable in tests via `new Function('electron', 'host', 'phase', FILE_DIALOG_HOOK_BODY)`.
+ */
+export const FILE_DIALOG_HOOK_BODY = `
+try {
+  var dialog = electron && electron.dialog
+  if (!dialog || typeof dialog.showOpenDialog !== 'function') return
+  var KEY = ${JSON.stringify(FILE_DIALOG_REGISTRY_GLOBAL)}
+  if (host[KEY] !== undefined) return
+  var CAP = 200
+  var state = { armed: false, queue: [], events: [], hookedAt: phase }
+  var pick = function (options) {
+    var out = {}
+    if (!options || typeof options !== 'object') return out
+    var keys = ['title', 'defaultPath', 'buttonLabel', 'message', 'nameFieldLabel']
+    keys.forEach(function (key) {
+      if (typeof options[key] === 'string') out[key] = options[key]
+    })
+    if (Array.isArray(options.filters)) {
+      out.filters = options.filters
+        .filter(function (f) { return f && typeof f === 'object' })
+        .map(function (f) {
+          return {
+            name: typeof f.name === 'string' ? f.name : '',
+            extensions: Array.isArray(f.extensions)
+              ? f.extensions.filter(function (e) { return typeof e === 'string' })
+              : [],
+          }
+        })
+    }
+    if (Array.isArray(options.properties)) {
+      out.properties = options.properties.filter(function (p) { return typeof p === 'string' })
+    }
+    return out
+  }
+  var next = function (kind) {
+    var head = state.queue[0]
+    if (head === undefined) return { answer: { kind: 'cancel' }, reason: 'queue_empty' }
+    if (head.kind === 'cancel') { state.queue.shift(); return { answer: head } }
+    if (head.kind !== kind) return { answer: { kind: 'cancel' }, reason: 'kind_mismatch' }
+    state.queue.shift()
+    return { answer: head }
+  }
+  var wrap = function (name, kind, sync) {
+    var original = dialog[name]
+    if (typeof original !== 'function') return
+    dialog[name] = function () {
+      if (!state.armed) return original.apply(this, arguments)
+      var args = Array.prototype.slice.call(arguments)
+      var hasWindow = args.length > 1 || (args[0] && typeof args[0].getTitle === 'function')
+      var win = hasWindow ? args[0] : undefined
+      var decided = next(kind)
+      var event = { kind: kind, sync: sync, options: pick(hasWindow ? args[1] : args[0]), answer: decided.answer, at: Date.now() }
+      try {
+        if (win && typeof win.getTitle === 'function') event.window = win.getTitle()
+      } catch (e) {}
+      if (decided.reason) event.reason = decided.reason
+      state.events.push(event)
+      if (state.events.length > CAP) state.events.shift()
+      var answer = decided.answer
+      if (kind === 'open') {
+        var paths = answer.kind === 'open' ? answer.paths.slice() : []
+        if (sync) return answer.kind === 'open' ? paths : undefined
+        return Promise.resolve({ canceled: answer.kind !== 'open', filePaths: paths })
+      }
+      var path = answer.kind === 'save' ? answer.path : ''
+      if (sync) return path
+      return Promise.resolve({ canceled: answer.kind !== 'save', filePath: path })
+    }
+  }
+  wrap('showOpenDialog', 'open', false)
+  wrap('showOpenDialogSync', 'open', true)
+  wrap('showSaveDialog', 'save', false)
+  wrap('showSaveDialogSync', 'save', true)
+  host[KEY] = state
+} catch (e) {
+  // Instrumentation must never break the app's own dialogs.
+}
+`
+
+/**
+ * Arm body over `(electron, host, arg)`: install the hook unless the launch shim did, then queue
+ * `arg.responses` (replacing the queue and events unless `arg.append`) and arm. Null without a dialog.
+ */
+export const ARM_FILE_DIALOGS_BODY = `
+(function (electron, host, phase) {${FILE_DIALOG_HOOK_BODY}})(electron, host, 'arm')
+var state = host[${JSON.stringify(FILE_DIALOG_REGISTRY_GLOBAL)}]
+if (!state) return null
+if (!arg.append) {
+  state.queue = []
+  state.events = []
+}
+arg.responses.forEach(function (response) { state.queue.push(response) })
+state.armed = true
+return { pending: state.queue.length, hooked: state.hookedAt }
+`
+
+/** State body over `(electron, host, arg)`; with `arg.disarm`, dialogs reach the OS again and it clears. */
+export const FILE_DIALOG_STATE_BODY = `
+var state = host[${JSON.stringify(FILE_DIALOG_REGISTRY_GLOBAL)}]
+if (!state) return { armed: false, pending: 0, events: [] }
+var result = { armed: state.armed, pending: state.queue.length, events: state.events.slice() }
+if (arg.disarm) {
+  state.armed = false
+  state.queue = []
+  state.events = []
+  result.armed = false
+}
+return result
+`
+
 /**
  * Build the self-contained shim-main source (CommonJS) that runs {@link TRAY_HOOK_BODY} and
- * {@link NOTIFICATION_HOOK_BODY} then loads `realMainPath`. The real main is embedded as a `file://` URL
+ * {@link NOTIFICATION_HOOK_BODY} (and {@link FILE_DIALOG_HOOK_BODY}) then loads `realMainPath`. The real main is embedded as a `file://` URL
  * so the shim's dynamic `import()` resolves a CommonJS or an ESM main identically.
  */
 export function buildInstrumentationShim(realMainPath: string): string {
@@ -194,6 +312,11 @@ try {
   (function (electron, host) {${NOTIFICATION_HOOK_BODY}})(require('electron'), globalThis)
 } catch (e) {
   console.error('[stagewright] native notification instrumentation failed:', e)
+}
+try {
+  (function (electron, host, phase) {${FILE_DIALOG_HOOK_BODY}})(require('electron'), globalThis, 'launch')
+} catch (e) {
+  console.error('[stagewright] native file-dialog instrumentation failed:', e)
 }
 import(${JSON.stringify(realMainUrl)}).catch(function (err) {
   // The real main failed to load/execute. Exit non-zero so the launch fails fast and transparently:
