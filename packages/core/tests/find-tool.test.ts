@@ -26,6 +26,50 @@ function setup(html: string) {
   return { dispatcher }
 }
 
+/** Walk `html` for the snapshot and run every other renderer body against the same DOM. */
+function setupLive(
+  html: string,
+  opts: { failText?: boolean; prepare?: (document: Document) => void } = {},
+) {
+  const { window } = new JSDOM(html)
+  opts.prepare?.(window.document)
+  const snapshot = walkAccessibilityTree(window.document, {})
+  const css = { escape: (value: string) => value.replace(/[^\w-]/g, (c) => `\\${c}`) }
+  const bodies: string[] = []
+  const sessions = new SessionManager()
+  sessions.register(
+    new FakeTransport(),
+    new FakeSession({
+      id: 'sess',
+      evaluate: async (_target, body, arg) => {
+        if (!body.includes('const q = arg.query')) return snapshot
+        bodies.push(body)
+        if (opts.failText === true) throw new Error('renderer gone')
+        return new Function('arg', 'document', 'CSS', body)(arg, window.document, css) as unknown
+      },
+    }),
+  )
+  const dispatcher = new Dispatcher({ sessions, snapshots: new SnapshotStore() })
+  dispatcher.register(makeFindTool({ loadBundle: () => '' }))
+  return { dispatcher, bodies, document: window.document }
+}
+
+interface Hinted {
+  readonly hints?: {
+    readonly similar_names?: readonly { readonly name: string }[]
+    readonly without_state_filters?: { readonly count: number }
+    readonly text_matches?: {
+      readonly count: number
+      readonly samples: readonly {
+        readonly tag: string
+        readonly text: string
+        readonly selector: string | null
+      }[]
+    }
+    readonly next_actions?: readonly string[]
+  }
+}
+
 function setupQueue(queue: readonly Snapshot[]) {
   const sessions = new SessionManager()
   const snapshots = new SnapshotStore()
@@ -129,6 +173,76 @@ describe('electron_find', () => {
     })) as SuccessResponse & FindResult
     expect(res).toMatchObject({ ok: true, count: 0 })
     expect(JSON.parse(JSON.stringify(res))).toEqual(res)
+  })
+
+  it('explains a zero-match query with hints and next actions', async () => {
+    const { dispatcher } = setupLive(
+      '<button style="display:none">Save</button><button>Save changes</button>',
+    )
+    const res = (await dispatcher.dispatch('electron_find', {
+      role: 'button',
+      name_exact: 'Save',
+      visible: true,
+    })) as SuccessResponse & FindResult & Hinted
+    expect(res.count).toBe(0)
+    expect(res.hints?.similar_names?.map((entry) => entry.name)).toContain('Save changes')
+    expect(res.hints?.without_state_filters?.count).toBe(1)
+    expect(res.hints?.next_actions?.[0]).toMatch(/^electron_find\(/)
+  })
+
+  it('finds the query in text content that is no accessible name, with a working selector', async () => {
+    const { dispatcher, document } = setupLive(
+      '<main><section><div class="row"><span>Total</span><span>Grand total: 42</span></div></section>' +
+        '<p id="note">The <b>grand</b> total is final</p><script>/* grand total */</script></main>',
+    )
+    const res = (await dispatcher.dispatch('electron_find', {
+      name_contains: 'grand total',
+    })) as SuccessResponse & FindResult & Hinted
+    const text = res.hints?.text_matches
+    expect(text?.count).toBe(2)
+    expect(text?.samples[0]).toMatchObject({ tag: 'span', text: 'Grand total: 42' })
+    const selector = text?.samples[0]?.selector ?? ''
+    expect(document.querySelector(selector)?.textContent).toBe('Grand total: 42')
+    expect(res.hints?.next_actions).toContain(
+      `electron_get_text({ selector: ${JSON.stringify(selector)} })`,
+    )
+
+    // Text split across inline elements matches on the innermost element holding all of it.
+    const split = (await dispatcher.dispatch('electron_find', {
+      name_contains: 'grand total is',
+    })) as SuccessResponse & FindResult & Hinted
+    expect(split.hints?.text_matches?.samples[0]).toMatchObject({ tag: 'p', selector: '#note' })
+  })
+
+  it('searches open shadow roots and gives no selector inside them', async () => {
+    const { dispatcher } = setupLive('<div id="host"></div>', {
+      prepare: (document) => {
+        const root = document.getElementById('host')?.attachShadow({ mode: 'open' })
+        if (root !== undefined) root.innerHTML = '<section><span>Shadow total</span></section>'
+      },
+    })
+    const res = (await dispatcher.dispatch('electron_find', {
+      name_contains: 'shadow total',
+    })) as SuccessResponse & FindResult & Hinted
+    expect(res.hints?.text_matches?.samples).toEqual([
+      expect.objectContaining({ tag: 'span', selector: null }),
+    ])
+  })
+
+  it('skips the text search when there are matches or no name, and survives its failure', async () => {
+    const found = setupLive('<button>Save</button>')
+    const hit = (await found.dispatcher.dispatch('electron_find', {
+      name_exact: 'Save',
+    })) as SuccessResponse & FindResult & Hinted
+    expect(hit.hints).toBeUndefined()
+    await found.dispatcher.dispatch('electron_find', { role: 'checkbox' })
+    expect(found.bodies).toEqual([])
+
+    const failing = setupLive('<div>Save</div>', { failText: true })
+    await expect(
+      failing.dispatcher.dispatch('electron_find', { name_exact: 'Save' }),
+    ).resolves.toMatchObject({ ok: true, count: 0 })
+    expect(failing.bodies).toHaveLength(1)
   })
 
   it('preserves stable snapshot refs when find walks and retags the renderer', async () => {

@@ -680,7 +680,7 @@ Assert the element identified by ref or selector is visible, polling until it is
 
 **Find elements by role and name**
 
-Find elements in the renderer by accessibility role + name + state — no CSS selectors. Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps the matches returned (count still reports the true total). Returns: { ok, surface_id, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
+Find elements in the renderer by accessibility role + name + state — no CSS selectors. Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps the matches returned (count still reports the true total). Returns: { ok, surface_id, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be null for non-interactive landmarks. On zero matches, hints may explain why: similar_names, without_state_filters, other_roles, roles_present, text_matches (text content, not accessible name, with a selector for electron_get_text / electron_exists) and next_actions. Errors: NOT_RUNNING (no session — call electron_launch first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).
 
 - Operation: `query`
 

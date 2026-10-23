@@ -11,11 +11,20 @@ import { z } from 'zod'
 
 import { makeSuccess } from '../../errors/envelope.js'
 import {
+  type FindHints,
+  type TextMatches,
+  findHints,
+  hintNextActions,
+} from '../../snapshot/find-hints.js'
+import {
   type FindQuery,
   type Snapshot,
   type SnapshotRole,
   findEntries,
 } from '../../snapshot/index.js'
+import { visitTargetElements } from '../../snapshot/resolve-target.js'
+import { MAX_SHADOW_DEPTH } from '../../snapshot/walker.js'
+import type { TransportSession } from '../../transports/index.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { loadInjectedWalker, runWalk } from './inject.js'
 import { reconcileRetagAndStore } from './refs.js'
@@ -55,9 +64,86 @@ const DESCRIPTION = [
   'Filters: role (exact), name_contains, name_exact, visible, enabled, interactive; limit caps',
   'the matches returned (count still reports the true total). Returns:',
   '{ ok, surface_id, matches: [{ ref, role, name, bbox }], count, truncated, renderer_reloaded }. A ref may be',
-  'null for non-interactive landmarks. Errors: NOT_RUNNING (no session — call electron_launch',
+  'null for non-interactive landmarks. On zero matches, hints may explain why: similar_names,',
+  'without_state_filters, other_roles, roles_present, text_matches (text content, not accessible',
+  'name, with a selector for electron_get_text / electron_exists) and next_actions.',
+  'Errors: NOT_RUNNING (no session — call electron_launch',
   'first; not retryable), BAD_ARGUMENT (multiple sessions live — pass sessionId).',
 ].join(' ')
+
+const MAX_TEXT_SAMPLES = 5
+
+/** Innermost elements whose text contains `arg.query`, visible ones first, with a CSS path for each. */
+const TEXT_SEARCH_BODY = `
+${visitTargetElements.toString()}
+const q = arg.query.toLowerCase();
+const SKIP = new Set(['script', 'style', 'noscript', 'template', 'head', 'title']);
+const has = (node) => !SKIP.has(node.localName) && (node.textContent || '').toLowerCase().includes(q);
+const hits = [];
+const descend = (el) => {
+  let inner = false;
+  for (const child of el.children) {
+    if (has(child)) { inner = true; descend(child); }
+  }
+  if (!inner) hits.push(el);
+};
+const roots = new Set([document]);
+visitTargetElements(document, ${MAX_SHADOW_DEPTH}, (el) => { roots.add(el.getRootNode()); return false; });
+for (const root of roots) {
+  if (root === document) { if (document.body !== null && has(document.body)) descend(document.body); }
+  else for (const child of root.children) if (has(child)) descend(child);
+}
+const cssPath = (el) => {
+  if (el.getRootNode() !== document) return null;
+  const parts = [];
+  for (let node = el; node !== null; node = node.parentElement) {
+    if (node.id !== '' && document.querySelectorAll('#' + CSS.escape(node.id)).length === 1) {
+      parts.unshift('#' + CSS.escape(node.id));
+      break;
+    }
+    if (node === document.body) { parts.unshift('body'); break; }
+    let index = 1;
+    for (let sib = node.previousElementSibling; sib !== null; sib = sib.previousElementSibling) {
+      if (sib.localName === node.localName) index++;
+    }
+    parts.unshift(CSS.escape(node.localName) + ':nth-of-type(' + index + ')');
+  }
+  return parts.join(' > ');
+};
+const visible = (el) =>
+  typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.getClientRects().length > 0;
+const ranked = hits.map((el) => ({ el, visible: visible(el) }));
+ranked.sort((a, b) => Number(b.visible) - Number(a.visible));
+return {
+  count: hits.length,
+  samples: ranked.slice(0, arg.max).map(({ el, visible }) => {
+    const text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+    return {
+      tag: el.localName,
+      text: text.length > 80 ? text.slice(0, 80) + '…' : text,
+      selector: cssPath(el),
+      visible,
+    };
+  }),
+};
+`
+
+/** Best-effort renderer text search; a failure only drops this hint. */
+async function textMatches(
+  session: Pick<TransportSession, 'evaluate'>,
+  query: string,
+): Promise<TextMatches | undefined> {
+  if (query.trim() === '') return undefined
+  try {
+    const found = await session.evaluate<TextMatches>('renderer', TEXT_SEARCH_BODY, {
+      query: query.trim(),
+      max: MAX_TEXT_SAMPLES,
+    })
+    return found.count > 0 ? found : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** Dependency seams for {@link makeFindTool} — injected by tests. */
 export interface FindToolDeps {
@@ -113,6 +199,19 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
         name: entry.name,
         bbox: entry.bbox,
       }))
+      let hints: FindHints | undefined
+      if (all.length === 0) {
+        const name = query.name_exact ?? query.name_contains
+        const text = name !== undefined ? await textMatches(managed.session, name) : undefined
+        const found = {
+          ...findHints(snapshot, query),
+          ...(text !== undefined ? { text_matches: text } : {}),
+        }
+        const nextActions = hintNextActions(query, found)
+        if (Object.keys(found).length > 0) {
+          hints = { ...found, ...(nextActions.length > 0 ? { next_actions: nextActions } : {}) }
+        }
+      }
       return makeSuccess(
         {
           surface_id: surface.id,
@@ -121,6 +220,7 @@ export function makeFindTool(deps: FindToolDeps = {}): AnyToolDefinition {
           count: all.length,
           truncated: all.length - matches.length,
           renderer_reloaded: reloaded,
+          ...(hints !== undefined ? { hints } : {}),
         },
         meta,
       )
