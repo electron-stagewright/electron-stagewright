@@ -261,8 +261,9 @@ gains a file-dialog surface:
   queue empty is cancelled, so an armed app never waits on a picker nobody will answer. A dialog whose
   kind does not match the next answer (a save while an open answer waits) is cancelled and leaves that
   answer queued, and the event says why.
-- **Absolute paths only.** Answer paths must be absolute; a relative one is refused with core
-  `BAD_ARGUMENT` before anything is queued, since the app would resolve it against its own working
+- **Absolute paths only.** Answer paths must be absolute (on Windows, with a drive letter or a UNC
+  share); a relative one is refused with core `ABSOLUTE_PATH_REQUIRED` before anything is queued, the
+  code the other path-taking tools return, since the app would resolve it against its own working
   directory.
 - **Events.** `native_file_dialog_events` returns, oldest first, each dialog the app showed while armed:
   its kind, whether it was the sync form, the options the app passed (title, defaultPath, buttonLabel,

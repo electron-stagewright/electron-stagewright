@@ -283,7 +283,7 @@ describe('native-ui plugin smoke (real Electron)', () => {
         await dispatch('native_file_dialog_arm', {
           responses: [{ kind: 'save', path: 'relative/export.csv' }],
         }),
-      ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+      ).toMatchObject({ ok: false, code: 'ABSOLUTE_PATH_REQUIRED' })
 
       expect(await dispatch('native_file_dialog_disarm')).toMatchObject({
         ok: true,

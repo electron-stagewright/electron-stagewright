@@ -515,16 +515,24 @@ describe('native-ui plugin', () => {
       expect(isAnswerPath('C:data\\in.sql', 'win32')).toBe(false)
     })
 
-    it('refuses relative or empty answers with BAD_ARGUMENT before queueing', async () => {
+    it('refuses relative paths with ABSOLUTE_PATH_REQUIRED and bad answers with BAD_ARGUMENT', async () => {
       const session = new FakeSession()
       const server = await open(session)
       const sessionId = await launch(server)
-      for (const responses of [
-        [{ kind: 'open', paths: ['data/in.sql'] }],
-        [{ kind: 'save', path: './export.csv' }],
-        [{ kind: 'open', paths: [] }],
-        [{ kind: 'rename', path: OUT }],
-      ]) {
+      for (const [responses, path] of [
+        [[{ kind: 'open', paths: [IN, 'data/in.sql'] }], 'data/in.sql'],
+        [[{ kind: 'cancel' }, { kind: 'save', path: './export.csv' }], './export.csv'],
+      ] as const) {
+        expect(
+          await server.dispatcher.dispatch('native_file_dialog_arm', { sessionId, responses }),
+        ).toMatchObject({
+          ok: false,
+          code: 'ABSOLUTE_PATH_REQUIRED',
+          hint: 'Use an absolute path.',
+          details: { path },
+        })
+      }
+      for (const responses of [[{ kind: 'open', paths: [] }], [{ kind: 'rename', path: OUT }]]) {
         expect(
           await server.dispatcher.dispatch('native_file_dialog_arm', { sessionId, responses }),
         ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })

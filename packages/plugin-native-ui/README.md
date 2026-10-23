@@ -122,8 +122,8 @@ native_file_dialog_events {}
 Error codes: `native.UNSUPPORTED` (the transport cannot access the native UI), `native.ALREADY_CAPTURING`
 (a capture is already armed), `native.NOT_CAPTURING` (read/stop before arming), `native.NOT_INSTRUMENTED`
 (`native_trays` / `native_tray_invoke` without `instrumentNative`). Invalid arguments (an empty menu `path`
-or empty `titleContains`, a negative tray `id`, an unknown tray `event`, or a relative dialog answer path)
-are core `BAD_ARGUMENT`.
+or empty `titleContains`, a negative tray `id`, or an unknown tray `event`) are core `BAD_ARGUMENT`. A
+relative dialog answer path is core `ABSOLUTE_PATH_REQUIRED`, like `electron_set_files`.
 
 ## Security
 

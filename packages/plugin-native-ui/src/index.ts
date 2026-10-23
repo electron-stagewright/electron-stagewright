@@ -27,6 +27,7 @@
 
 import {
   defineTool,
+  makeError,
   makePluginError,
   makeSuccess,
   readPackageVersion,
@@ -367,13 +368,10 @@ export function createNativeUiPlugin(): StagewrightPlugin {
     },
   })
 
-  const absolutePath = z
+  const answerPath = z
     .string()
     .min(1)
-    .refine(
-      (value) => isAnswerPath(value),
-      'Answer paths must be absolute (on Windows, with a drive letter or a UNC share).',
-    )
+    .describe('Absolute path (on Windows, with a drive letter or a UNC share).')
 
   const fileDialogArmTool: AnyToolDefinition = defineTool({
     name: 'file_dialog_arm',
@@ -386,14 +384,15 @@ export function createNativeUiPlugin(): StagewrightPlugin {
       'the other kind than the next answer is cancelled without using it. Replaces the queue and the',
       'recorded events unless append is true. No eval. Returns: { ok, armed, pending, hooked } (hooked is',
       'launch when electron_launch had instrumentNative, so dialog functions the app captured at import',
-      'are answered too, else arm). Errors: native.UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (relative path).',
+      'are answered too, else arm). Errors: ABSOLUTE_PATH_REQUIRED (a relative path; nothing is queued),',
+      'native.UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT.',
     ].join(' '),
     inputSchema: z.object({
       responses: z
         .array(
           z.discriminatedUnion('kind', [
-            z.object({ kind: z.literal('open'), paths: z.array(absolutePath).min(1) }),
-            z.object({ kind: z.literal('save'), path: absolutePath }),
+            z.object({ kind: z.literal('open'), paths: z.array(answerPath).min(1) }),
+            z.object({ kind: z.literal('save'), path: answerPath }),
             z.object({ kind: z.literal('cancel') }),
           ]),
         )
@@ -408,6 +407,22 @@ export function createNativeUiPlugin(): StagewrightPlugin {
     operationType: 'command',
     handler: async (args, ctx) => {
       const meta = { startedAt: ctx.startedAt, now: ctx.now }
+      const relative = args.responses
+        .flatMap((response) =>
+          response.kind === 'open'
+            ? response.paths
+            : response.kind === 'save'
+              ? [response.path]
+              : [],
+        )
+        .find((value) => !isAnswerPath(value))
+      if (relative !== undefined) {
+        return makeError('ABSOLUTE_PATH_REQUIRED', {
+          ...meta,
+          message: `Dialog answer paths must be absolute (on Windows, with a drive letter or a UNC share): ${relative}`,
+          details: { path: relative },
+        })
+      }
       const guard = requireNativeUI(ctx, args.sessionId, meta)
       if ('error' in guard) return guard.error
       const result = await guard.session.armFileDialogs(args.responses, {
