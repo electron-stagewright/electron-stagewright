@@ -138,13 +138,12 @@ const replaySpecV2Schema = z
       }),
   })
   .strict()
-const replaySpecSchema = z.union([replaySpecV1Schema, replaySpecV2Schema])
 
 export type ReplayNormalizer = z.infer<typeof normalizerSchema>
 export type ReplayMatcher = z.infer<typeof matcherSchema>
 export type ReplayStep = z.infer<typeof stepSchema>
 export type ReplayParameter = z.infer<typeof replayParameterSchema>
-export type ReplaySpec = z.infer<typeof replaySpecSchema>
+export type ReplaySpec = z.infer<typeof replaySpecV1Schema> | z.infer<typeof replaySpecV2Schema>
 
 /**
  * A parameter problem found before the first dispatch: `spec` when the spec itself is wrong (an
@@ -164,7 +163,9 @@ export class ReplayParameterError extends Error {
 export interface PreparedReplaySpec {
   readonly spec: ReplaySpec
   readonly parameters: Readonly<Record<string, unknown>>
-  readonly sensitiveValues: readonly string[]
+  /** The values safe to print: sensitive parameters are replaced by name, not by searching. */
+  readonly reportedParameters: Readonly<Record<string, unknown>>
+  readonly sensitiveValues: readonly (string | number)[]
 }
 
 export interface PromoteTraceOptions {
@@ -271,7 +272,11 @@ export function promoteTraceWithParameters(
     }
     replaced[name] = 0
   }
+  // A recorded session id becomes a session placeholder below; never a parameter.
+  const sessionIds = new Set(calls.map((recorded) => sessionIdOf(recorded.result)))
+  const redactedParameters = new Set<string>()
   const parameterize = (value: unknown): unknown => {
+    if (typeof value === 'string' && sessionIds.has(value)) return value
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       const match = parameters.find(([, parameter]) => parameter.value === value)
       if (match === undefined) return value
@@ -301,6 +306,7 @@ export function promoteTraceWithParameters(
         parameters.length > 0 ? parameterize(call.args) : call.args,
         redactions,
         'args',
+        (name) => redactedParameters.add(name),
       ),
       aliases,
     )
@@ -319,6 +325,14 @@ export function promoteTraceWithParameters(
     })
   }
 
+  for (const name of redactedParameters) {
+    if (options.parameters?.[name]?.definition.sensitive !== true) {
+      throw new ReplayParameterError(
+        'spec',
+        `Parameter "${name}" replaces a redacted argument; declare it sensitive so its value is not written as a default.`,
+      )
+    }
+  }
   for (const [name, count] of Object.entries(replaced)) {
     if (count === 0) {
       throw new ReplayParameterError(
@@ -344,7 +358,9 @@ export function promoteTraceWithParameters(
       parameters: Object.fromEntries(
         parameters.map(([name, { definition, value }]) => [
           name,
-          definition.sensitive === true ? definition : { ...definition, default: value },
+          definition.sensitive === true
+            ? withoutDefault(definition)
+            : { ...definition, default: value },
         ]),
       ) as Record<string, ReplayParameter>,
     },
@@ -415,7 +431,19 @@ export async function replaySpec(
   deps: ReplaySpecDeps,
   options: ReplaySpecOptions = {},
 ): Promise<ReplaySpecReport> {
-  const prepared = prepareReplaySpec(parseReplaySpec(input), options.parameters ?? {})
+  return runPreparedReplaySpec(
+    prepareReplaySpec(parseReplaySpec(input), options.parameters ?? {}),
+    deps,
+    options,
+  )
+}
+
+/** Run a spec {@link prepareReplaySpec} already validated and substituted. */
+export async function runPreparedReplaySpec(
+  prepared: PreparedReplaySpec,
+  deps: ReplaySpecDeps,
+  options: Omit<ReplaySpecOptions, 'parameters'> = {},
+): Promise<ReplaySpecReport> {
   const spec = prepared.spec
   const hide = (value: unknown) => redactValues(value, prepared.sensitiveValues)
   const include = options.include === undefined ? undefined : new Set(options.include)
@@ -457,7 +485,7 @@ export async function replaySpec(
     skipped,
     steps: outcomes,
     ...(spec.version === REPLAY_SPEC_PARAMETERIZED_VERSION
-      ? { parameters: hide(prepared.parameters) as Record<string, unknown> }
+      ? { parameters: prepared.reportedParameters }
       : {}),
   }
 }
@@ -489,7 +517,7 @@ export function prepareReplaySpec(
     )
   }
   for (const name of used) {
-    if (!(name in declared)) {
+    if (!Object.hasOwn(declared, name)) {
       throw new ReplayParameterError('spec', `Placeholder "${name}" has no declared parameter.`)
     }
   }
@@ -513,7 +541,7 @@ export function prepareReplaySpec(
   }
 
   for (const name of Object.keys(supplied)) {
-    if (!(name in declared)) {
+    if (!Object.hasOwn(declared, name)) {
       throw new ReplayParameterError(
         'value',
         `Unknown parameter "${name}"; the spec declares ${
@@ -522,10 +550,11 @@ export function prepareReplaySpec(
       )
     }
   }
-  const values: Record<string, unknown> = {}
-  const sensitiveValues: string[] = []
+  const values: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+  const reportedParameters: Record<string, unknown> = {}
+  const sensitiveValues: (string | number)[] = []
   for (const [name, definition] of Object.entries(declared)) {
-    const raw = name in supplied ? supplied[name] : definition.default
+    const raw = Object.hasOwn(supplied, name) ? supplied[name] : definition.default
     if (raw === undefined) {
       throw new ReplayParameterError('value', `Missing a value for parameter "${name}".`)
     }
@@ -535,7 +564,10 @@ export function prepareReplaySpec(
       throw new ReplayParameterError('value', `Parameter "${name}" ${problem}.`)
     }
     values[name] = value
-    if (definition.sensitive === true) sensitiveValues.push(String(value))
+    reportedParameters[name] = definition.sensitive === true ? REDACTED : value
+    if (definition.sensitive === true && (typeof value === 'string' || typeof value === 'number')) {
+      sensitiveValues.push(value)
+    }
   }
 
   const substitute = (value: unknown): unknown => substitutePlaceholders(value, values)
@@ -548,8 +580,9 @@ export function prepareReplaySpec(
         expect: substituteExpect(step.expect, substitute),
       })),
     },
-    parameters: values,
-    sensitiveValues: sensitiveValues.filter((value) => value.length > 0),
+    parameters: { ...values },
+    reportedParameters,
+    sensitiveValues: sensitiveValues.filter((value) => value !== ''),
   }
 }
 
@@ -613,7 +646,7 @@ function substitutePlaceholders(
   values: Readonly<Record<string, unknown>>,
 ): unknown {
   const name = placeholderName(value)
-  if (name !== undefined) return values[name]
+  if (name !== undefined) return Object.hasOwn(values, name) ? values[name] : undefined
   if (Array.isArray(value)) return value.map((item) => substitutePlaceholders(item, values))
   if (!isObject(value)) return value
   return Object.fromEntries(
@@ -627,8 +660,7 @@ function coerceParameterValue(definition: ReplayParameter, raw: unknown): unknow
   if (definition.type === 'boolean') return raw === 'true' ? true : raw === 'false' ? false : raw
   if (definition.type === 'number' || definition.type === 'integer') {
     const trimmed = raw.trim()
-    const number = trimmed === '' ? Number.NaN : Number(trimmed)
-    return Number.isFinite(number) ? number : raw
+    return /^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : raw
   }
   return raw
 }
@@ -688,11 +720,24 @@ function isFixedAbsolutePath(value: string): boolean {
   )
 }
 
-/** Replace every occurrence of a sensitive value inside strings with the redaction marker. */
-function redactValues(value: unknown, secrets: readonly string[]): unknown {
+/** Shorter secrets are only redacted as whole values; inside text they would match everywhere. */
+const MIN_SUBSTRING_SECRET = 4
+
+/** Replace sensitive values: equal leaves, and occurrences of longer string secrets inside text. */
+function redactValues(value: unknown, secrets: readonly (string | number)[]): unknown {
   if (secrets.length === 0) return value
+  const equalsSecret = (leaf: string | number) =>
+    secrets.some((secret) => String(secret) === String(leaf))
+  if (typeof value === 'number') return equalsSecret(value) ? REDACTED : value
   if (typeof value === 'string') {
-    return secrets.reduce((text, secret) => text.split(secret).join(REDACTED), value)
+    if (equalsSecret(value)) return REDACTED
+    return secrets.reduce<string>(
+      (text, secret) =>
+        typeof secret === 'string' && secret.length >= MIN_SUBSTRING_SECRET
+          ? text.split(secret).join(REDACTED)
+          : text,
+      value,
+    )
   }
   if (Array.isArray(value)) return value.map((item) => redactValues(item, secrets))
   if (!isObject(value)) return value
@@ -850,26 +895,43 @@ function normalizeValue(value: unknown, normalizers: ReadonlySet<ReplayNormalize
   return out
 }
 
+function withoutDefault(definition: ReplayParameter): ReplayParameter {
+  const copy: Record<string, unknown> = { ...definition }
+  delete copy['default']
+  return copy as ReplayParameter
+}
+
+/** Redact `scope.*` rule paths; a placeholder on such a path is kept and reported to `onPlaceholder`. */
 function redactScopedValue(
   value: unknown,
   rules: readonly string[],
   scope: 'args' | 'result',
+  onPlaceholder?: (name: string) => void,
 ): unknown {
   let current = clone(value)
   for (const rule of rules) {
     const parts = rule.split('.').filter((part) => part.length > 0)
     if (parts[0] !== scope) continue
-    current = redactPath(current, parts.slice(1))
+    current = redactPath(current, parts.slice(1), onPlaceholder)
   }
   return current
 }
 
-function redactPath(value: unknown, parts: readonly string[]): unknown {
-  if (parts.length === 0) return placeholderName(value) !== undefined ? value : REDACTED
+function redactPath(
+  value: unknown,
+  parts: readonly string[],
+  onPlaceholder?: (name: string) => void,
+): unknown {
+  if (parts.length === 0) {
+    const name = placeholderName(value)
+    if (name === undefined) return REDACTED
+    onPlaceholder?.(name)
+    return value
+  }
   if (!isObject(value)) return value
   const [head, ...tail] = parts
   if (head === undefined || !(head in value)) return value
-  return { ...value, [head]: redactPath(value[head], tail) }
+  return { ...value, [head]: redactPath(value[head], tail, onPlaceholder) }
 }
 
 function replaceSessionIds(value: unknown, aliases: ReadonlyMap<string, string>): unknown {

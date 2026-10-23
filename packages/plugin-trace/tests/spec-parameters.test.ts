@@ -65,6 +65,58 @@ const languageSpec = () =>
   )
 
 describe('replaySpec with parameters', () => {
+  it('redacts sensitive numbers and short secrets by value, and by name in parameters', async () => {
+    const pinSpec = spec(
+      { pin: { type: 'integer', sensitive: true }, code: { type: 'string', sensitive: true } },
+      [
+        {
+          tool: 'unlock',
+          args: { pin: { $param: 'pin' }, code: { $param: 'code' } },
+          expect: { result: { mode: 'exact', value: { never: true } } },
+        },
+      ],
+    )
+    const report = await replaySpec(
+      pinSpec,
+      { dispatch: async () => result({ pin: 4821, pinText: '4821', code: 'ab', note: 'a cab' }) },
+      { parameters: { pin: '4821', code: 'ab' } },
+    )
+    expect(report.parameters).toEqual({ pin: '[redacted]', code: '[redacted]' })
+    expect(report.steps[0]?.actual).toMatchObject({
+      pin: '[redacted]',
+      pinText: '[redacted]',
+      code: '[redacted]',
+      // A two-character secret is not searched for inside other text.
+      note: 'a cab',
+    })
+  })
+
+  it('treats inherited object keys as undeclared and unknown', () => {
+    const step = { tool: 't', args: { x: { $param: 'constructor' } }, expect: { ok: true } }
+    expect(() =>
+      prepareReplaySpec(
+        spec({ a: { type: 'string' } }, [step, { ...step, args: { y: { $param: 'a' } } }]),
+        {
+          a: 'v',
+        },
+      ),
+    ).toThrow(/Placeholder "constructor" has no declared parameter/)
+    const ok = spec({ a: { type: 'string' } }, [{ ...step, args: { y: { $param: 'a' } } }])
+    expect(() => prepareReplaySpec(ok, { a: 'v', toString: 'x' })).toThrow(
+      /Unknown parameter "toString"/,
+    )
+  })
+
+  it('accepts only decimal numbers from strings', () => {
+    const numberSpec = spec({ n: { type: 'number' } }, [
+      { tool: 't', args: { n: { $param: 'n' } }, expect: { ok: true } },
+    ])
+    expect(prepareReplaySpec(numberSpec, { n: '-1.5' }).parameters).toEqual({ n: -1.5 })
+    for (const raw of ['0x10', '1e3', ' ', 'Infinity']) {
+      expect(() => prepareReplaySpec(numberSpec, { n: raw })).toThrow(/must be a number/)
+    }
+  })
+
   it('substitutes whole values in args and matchers, coercing CLI strings', async () => {
     const calls: { tool: string; args: unknown }[] = []
     const report = await replaySpec(
@@ -248,6 +300,33 @@ describe('promoteTraceWithParameters', () => {
     expect(promoted.spec.steps[3]?.args).toMatchObject({ token: { $param: 'token' } })
     // The promoted spec runs: every placeholder is declared and used.
     expect(() => prepareReplaySpec(promoted.spec, { token: 'x' })).not.toThrow()
+  })
+
+  it('never writes a sensitive default, refuses a redacted value without sensitive, and skips session ids', () => {
+    const sensitive = promoteTraceWithParameters(calls, {
+      parameters: {
+        token: {
+          definition: { type: 'string', sensitive: true, default: 'tok-123' },
+          value: 'tok-123',
+        },
+      },
+    })
+    expect(sensitive.spec.version === 2 && sensitive.spec.parameters['token']).toEqual({
+      type: 'string',
+      sensitive: true,
+    })
+    expect(() =>
+      promoteTraceWithParameters(calls, {
+        parameters: { token: { definition: { type: 'string' }, value: 'tok-123' } },
+        redactions: ['args.token'],
+      }),
+    ).toThrow(/replaces a redacted argument; declare it sensitive/)
+    // "s1" is the recorded session id: it stays a session placeholder, so the parameter matches nothing.
+    expect(() =>
+      promoteTraceWithParameters(calls, {
+        parameters: { session: { definition: { type: 'string' }, value: 's1' } },
+      }),
+    ).toThrow(/matched no recorded argument value/)
   })
 
   it('refuses a parameter that matches nothing or breaks its own constraints', () => {

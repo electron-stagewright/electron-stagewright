@@ -31,8 +31,9 @@ import {
   ReplayParameterError,
   parseReplaySpec,
   prepareReplaySpec,
-  replaySpec,
+  runPreparedReplaySpec,
   sensitiveArgumentKeys,
+  type PreparedReplaySpec,
   type ReplaySpecOutcome,
   type ReplaySpecReport,
 } from './spec.js'
@@ -387,14 +388,21 @@ async function suppliedParameters(
 ): Promise<Record<string, unknown>> {
   const supplied: Record<string, unknown> = {}
   if (options.paramsFile !== undefined) {
-    let parsed: unknown
+    let text: string
     try {
-      parsed = JSON.parse(await deps.readFile(path.resolve(options.paramsFile), 'utf8'))
+      text = await deps.readFile(path.resolve(options.paramsFile), 'utf8')
     } catch (error) {
       throw new ReplayParameterError(
         'value',
         `Could not read --params-file: ${asErrorMessage(error)}`,
       )
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      // JSON.parse quotes the input in its message, which may hold secrets.
+      throw new ReplayParameterError('value', '--params-file is not valid JSON.')
     }
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       throw new ReplayParameterError('value', '--params-file must hold a JSON object.')
@@ -496,10 +504,9 @@ export async function runReplayCli(
     return { exitCode: REPLAY_EXIT_CODES.MALFORMED_SPEC, report }
   }
 
-  let supplied: Record<string, unknown>
+  let prepared: PreparedReplaySpec
   try {
-    supplied = await suppliedParameters(options, deps)
-    prepareReplaySpec(spec, supplied)
+    prepared = prepareReplaySpec(spec, await suppliedParameters(options, deps))
   } catch (error) {
     if (!(error instanceof ReplayParameterError)) throw error
     const exitCode =
@@ -540,13 +547,12 @@ export async function runReplayCli(
     }
     server = await deps.createServer(serverOptions)
     const liveServer = server
-    const replay = await replaySpec(
-      spec,
+    const replay = await runPreparedReplaySpec(
+      prepared,
       { dispatch: (tool, args) => liveServer.dispatcher.dispatch(tool, args) },
       {
         ...(options.include !== undefined ? { include: options.include } : {}),
         ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
-        parameters: supplied,
       },
     )
     const launchFailed = replay.steps.some(

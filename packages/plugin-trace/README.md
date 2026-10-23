@@ -72,7 +72,9 @@ warn_threshold }`. For an agent to self-limit mid-session without the full token
   (e.g. `{ "language": { "type": "string", "enum": ["en", "es"], "value": "es" } }`) turns every
   argument exactly equal to `value` into a placeholder and writes a version 2 spec that declares
   the parameter with `value` as its default (no default for a `sensitive` one); the result counts
-  the values each parameter replaced, and one that replaces nothing is `BAD_ARGUMENT`.
+  the values each parameter replaced, and one that replaces nothing is `BAD_ARGUMENT`. A parameter
+  placed on a redacted argument (such as `args.token`) must be `sensitive`, so its value is never
+  written as a default.
 
 Error codes: `trace.ALREADY_RECORDING`, `trace.NOT_RECORDING`, `trace.ARTIFACT_NOT_FOUND`,
 `trace.ARTIFACT_INVALID`, `trace.ARTIFACT_WRITE_FAILED`, `trace.BUDGET_EXCEEDED`.
@@ -175,8 +177,10 @@ Types are `string` (`enum`, `pattern`, `minLength`, `maxLength`), `number` and `
 share). Every check runs before the first step: a placeholder without a declared parameter, a
 declared parameter no step uses, or an invalid default is a malformed spec (exit `2`); an unknown,
 missing or invalid supplied value is invalid usage (exit `64`, error code `INVALID_PARAMETERS`).
-A `sensitive` value is replaced with `[redacted]` wherever it appears in the report, and when the
-trace plugin is loaded the runner adds the argument names that carry it to the trace `redact` list.
+A `sensitive` parameter is `[redacted]` by name in the report's `parameters`; in expected and actual
+values any leaf equal to it is redacted, and a sensitive string of four or more characters is also
+redacted inside longer text. When the trace plugin is loaded the runner adds the argument names that
+carry it to the trace `redact` list.
 The report lists the values a run used under `parameters`.
 
 ## Headless replay

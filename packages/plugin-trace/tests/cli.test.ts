@@ -274,6 +274,26 @@ describe('runReplayCli', () => {
       })
     })
 
+    it('reports an invalid params file without echoing its content', async () => {
+      const { io, output } = captureIo()
+      const replay = await runReplayCli(options({ paramsFile: '/tmp/params.json' }), io, {
+        readFile: async (file) =>
+          file.endsWith('params.json') ? '{"token": super-secret-value' : JSON.stringify(paramSpec),
+        importPlugin: async () => {
+          throw new Error('unexpected plugin import')
+        },
+        createServer: vi.fn(),
+        env: {},
+      })
+      expect(replay).toMatchObject({
+        exitCode: REPLAY_EXIT_CODES.USAGE,
+        report: {
+          error: { code: 'INVALID_PARAMETERS', message: '--params-file is not valid JSON.' },
+        },
+      })
+      expect(output.join('')).not.toContain('super-secret-value')
+    })
+
     it('refuses bad values with exit 64 and bad specs with exit 2, before any server starts', async () => {
       const cases: [unknown, Partial<ReplayCliOptions>, number, string][] = [
         [

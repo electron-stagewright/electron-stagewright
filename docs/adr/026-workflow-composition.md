@@ -205,11 +205,14 @@ knows version 1 refuses a version 2 spec instead of running its placeholders as 
   invalid default (malformed spec, exit `2`), and an unknown, missing or invalid supplied value
   (`INVALID_PARAMETERS`, exit `64`). Values come from `--param name=value`, `--params-file` and
   `--param-env name=ENV_VAR`.
-- **Sensitive values.** A `sensitive` parameter's value is replaced with `[redacted]` everywhere it
-  appears in the replay report, including inside expected and actual values, and the report's
-  `parameters` lists it redacted. When the trace plugin is loaded, the runner adds the argument
-  names that receive a sensitive value to the trace `redact` list, so a recording keeps it out.
-  `trace_promote` writes no default for a sensitive parameter.
+- **Sensitive values.** The report's `parameters` lists a `sensitive` parameter as `[redacted]` by
+  name. In expected and actual values, any leaf equal to a sensitive string or number is redacted,
+  and a sensitive string of four or more characters is also redacted inside longer text (shorter
+  ones would match everywhere). When the trace plugin is loaded, the runner adds the argument names
+  that receive a sensitive value to the trace `redact` list. `trace_promote` writes no default for a
+  sensitive parameter and refuses a non-sensitive one placed on a redacted argument, so a recorded
+  secret never lands in the committed spec. An unreadable `--params-file` is reported without
+  quoting its content.
 - **Normal dispatch.** After substitution every step goes through the dispatcher unchanged:
   validation, eval gating, guards, timeouts, progress, observers and envelopes.
 - **Promotion helper.** `trace_promote` takes `parameters` with the recorded value of each one,
