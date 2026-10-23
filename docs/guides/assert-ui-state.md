@@ -19,6 +19,9 @@ element. Prefer refs in agent flows: they survive markup refactors that break CS
 when one does go stale the error carries recovery data instead of a dead end:
 
 - `REF_NOT_FOUND` includes `similar_refs` — current elements that resemble the one you meant.
+- A find that matches nothing returns `hints`: close names, matches a `visible` / `enabled` /
+  `interactive` filter hid, the name under other roles, and elements whose text content (not
+  accessible name) holds it, with a selector for `electron_get_text` / `electron_exists`.
 - Every snapshot and find response carries `renderer_reloaded`; when `true`, the renderer
   reloaded since your last read and ALL refs are suspect — take a fresh snapshot.
 

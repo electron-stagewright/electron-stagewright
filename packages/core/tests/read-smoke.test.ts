@@ -26,7 +26,7 @@ import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { READ_TOOLS } from '../src/tools/read/index.js'
 import { launchTool, stopTool } from '../src/tools/lifecycle/index.js'
-import { snapshotTool } from '../src/tools/snapshot/index.js'
+import { findTool, snapshotTool } from '../src/tools/snapshot/index.js'
 import { typeTool } from '../src/tools/interaction/index.js'
 import { PlaywrightElectronTransport } from '../src/transports/index.js'
 
@@ -51,7 +51,14 @@ describe('read smoke (real Electron)', () => {
       const snapshots = new SnapshotStore()
       const transports = new TransportRegistry({ transports: [new PlaywrightElectronTransport()] })
       const dispatcher = new Dispatcher({ sessions, snapshots, transports })
-      dispatcher.registerAll([launchTool, snapshotTool, typeTool, stopTool, ...READ_TOOLS])
+      dispatcher.registerAll([
+        launchTool,
+        snapshotTool,
+        findTool,
+        typeTool,
+        stopTool,
+        ...READ_TOOLS,
+      ])
 
       const launched = await dispatcher.dispatch('electron_launch', { main: FIXTURE_MAIN })
       const sessionId = (launched as SuccessResponse & { session_id: string }).session_id
@@ -103,6 +110,40 @@ describe('read smoke (real Electron)', () => {
       })) as SuccessResponse & { focused: { role: string } | null }
       // After typing, the text input holds focus.
       expect(focused.focused?.role).toBe('textbox')
+
+      // A zero-match find explains itself: a close name, and text that is no accessible name.
+      const near = (await dispatcher.dispatch('electron_find', {
+        sessionId,
+        role: 'button',
+        name_exact: 'Pong',
+      })) as SuccessResponse & { count: number; hints?: { similar_names?: { name: string }[] } }
+      expect(near.count).toBe(0)
+      expect(near.hints?.similar_names?.map((entry) => entry.name)).toContain('Ping')
+
+      await dispatcher.dispatch('electron_type', {
+        sessionId,
+        selector: '#editor',
+        text: 'Invoice grand total',
+      })
+      const byText = (await dispatcher.dispatch('electron_find', {
+        sessionId,
+        name_contains: 'grand total',
+      })) as SuccessResponse & {
+        count: number
+        hints?: {
+          text_matches?: { samples: { selector: string | null; visible: boolean }[] }
+          next_actions?: string[]
+        }
+      }
+      expect(byText.count).toBe(0)
+      const sample = byText.hints?.text_matches?.samples[0]
+      expect(sample).toMatchObject({ selector: '#editor', visible: true })
+      expect(byText.hints?.next_actions).toContain('electron_get_text({ selector: "#editor" })')
+      const read = (await dispatcher.dispatch('electron_get_text', {
+        sessionId,
+        selector: sample?.selector,
+      })) as SuccessResponse & { text: string }
+      expect(read.text).toBe('Invoice grand total')
 
       const stopped = await dispatcher.dispatch('electron_stop', { sessionId })
       expect(stopped.ok).toBe(true)
