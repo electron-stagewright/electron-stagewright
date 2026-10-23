@@ -9,6 +9,7 @@
 
 import {
   type EvalPolicy,
+  StagewrightError,
   type StagewrightServer,
   type TransportCapabilities,
 } from '@electron-stagewright/core'
@@ -17,11 +18,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import packageJson from '../package.json' with { type: 'json' }
 import storagePlugin from '../src/index.js'
-import {
-  WEB_STORAGE_BODY,
-  type WebStorageRequest,
-  type WebStorageResult,
-} from '../src/web-storage.js'
 import { INDEXEDDB_BODY, type IdbRequest, type IdbResult } from '../src/indexeddb.js'
 
 const lifecycle = new TestLifecycle()
@@ -48,67 +44,21 @@ async function open(
   return server
 }
 
-/**
- * A FakeSession whose `evaluate('renderer', WEB_STORAGE_BODY, req)` asserts that the plugin relays the
- * REAL fixed body, then simulates the storage result against an in-memory store seeded per scope. The
- * renderer body itself is covered in web-storage.test.ts; these tests focus on the plugin's relay +
- * result shaping without launching Electron. `evalCalls` records every request the plugin sent so a
- * test can assert the relayed op/scope/key.
- */
+/** A FakeSession whose storage seam holds the given localStorage / sessionStorage items. */
 function webStorageSession(seed?: {
   local?: Record<string, string>
   session?: Record<string, string>
   origin?: string
-}): { session: FakeSession; evalCalls: WebStorageRequest[] } {
-  const local = new Map<string, string>(Object.entries(seed?.local ?? {}))
-  const sess = new Map<string, string>(Object.entries(seed?.session ?? {}))
-  const origin = seed?.origin ?? 'https://app.example.com'
-  const evalCalls: WebStorageRequest[] = []
-  const session = new FakeSession({
-    evaluate: async (target, body, arg) => {
-      expect(target).toBe('renderer')
-      expect(body).toBe(WEB_STORAGE_BODY)
-      const req = arg as WebStorageRequest
-      evalCalls.push(req)
-      const store = req.scope === 'session' ? sess : local
-      const result = ((): WebStorageResult => {
-        switch (req.op) {
-          case 'get':
-            return {
-              ok: true,
-              origin,
-              value: store.has(req.key as string) ? (store.get(req.key as string) as string) : null,
-            }
-          case 'getMany':
-            return {
-              ok: true,
-              origin,
-              items: (req.keys ?? []).map((k) => ({
-                key: k,
-                value: store.has(k) ? (store.get(k) as string) : null,
-              })),
-            }
-          case 'set':
-            store.set(req.key as string, req.value as string)
-            return { ok: true, origin }
-          case 'remove':
-            store.delete(req.key as string)
-            return { ok: true, origin }
-          case 'keys': {
-            const keys = [...store.keys()]
-            return { ok: true, origin, keys }
-          }
-          case 'clear':
-            store.clear()
-            return { ok: true, origin }
-          default:
-            return { ok: false, origin, reason: 'unsupported_op' }
-        }
-      })()
-      return result
-    },
-  })
-  return { session, evalCalls }
+}): FakeSession {
+  const session = new FakeSession()
+  for (const [key, value] of Object.entries(seed?.local ?? {})) {
+    session.webStorageAreas.local.set(key, value)
+  }
+  for (const [key, value] of Object.entries(seed?.session ?? {})) {
+    session.webStorageAreas.session.set(key, value)
+  }
+  if (seed?.origin !== undefined) session.webStorageOrigin = seed.origin
+  return session
 }
 
 async function launch(server: StagewrightServer): Promise<string> {
@@ -318,53 +268,35 @@ describe('storage plugin', () => {
 
 const RENDERER_ON: EvalPolicy = { main: false, renderer: true }
 
-describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
-  it('hides the per-key tools unless the server permits renderer eval (registration gate)', async () => {
-    const off = await open(new FakeSession()) // no allowEval → renderer eval denied
-    const offNames = off.dispatcher.listManifest().map((e) => e.name)
-    expect(offNames).not.toContain('storage_local_get')
-    expect(offNames).not.toContain('storage_session_set')
-    // The no-eval seam tools stay visible regardless.
-    expect(offNames).toContain('storage_snapshot')
+describe('storage plugin — per-key web storage (no-eval seam)', () => {
+  const PER_KEY_TOOLS = [
+    'storage_local_get',
+    'storage_local_set',
+    'storage_local_remove',
+    'storage_local_keys',
+    'storage_local_clear',
+    'storage_session_get',
+    'storage_session_set',
+    'storage_session_remove',
+    'storage_session_keys',
+    'storage_session_clear',
+  ]
 
-    const on = await open(new FakeSession(), { allowEval: RENDERER_ON })
-    const onNames = on.dispatcher.listManifest().map((e) => e.name)
-    for (const t of [
-      'storage_local_get',
-      'storage_local_set',
-      'storage_local_remove',
-      'storage_local_keys',
-      'storage_local_clear',
-      'storage_session_get',
-      'storage_session_set',
-      'storage_session_remove',
-      'storage_session_keys',
-      'storage_session_clear',
-    ]) {
-      expect(onNames).toContain(t)
+  it('registers the per-key tools without renderer eval and marks none eval gated', async () => {
+    const server = await open(new FakeSession()) // no allowEval
+    const manifest = server.dispatcher.listManifest()
+    for (const name of PER_KEY_TOOLS) {
+      const entry = manifest.find((e) => e.name === name)
+      expect(entry).toBeDefined()
+      expect(entry).not.toMatchObject({ requiresEvalFlag: true })
     }
+    // IndexedDB still runs renderer JS and stays hidden without the eval grant.
+    expect(manifest.map((e) => e.name)).not.toContain('storage_idb_get')
   })
 
-  it('dispatching a hidden per-key tool names --allow-eval=renderer (not a bare unknown tool)', async () => {
-    const server = await open(new FakeSession())
-    const sessionId = await launch(server)
-    const res = (await server.dispatcher.dispatch('storage_local_get', {
-      sessionId,
-      key: 'k',
-    })) as { ok: boolean; code?: string; error?: string }
-    expect(res).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
-    expect(res.error).toContain('--allow-eval=renderer')
-  })
-
-  it('marks the per-key tools as renderer-eval gated in the manifest', async () => {
-    const server = await open(new FakeSession(), { allowEval: RENDERER_ON })
-    const entry = server.dispatcher.listManifest().find((e) => e.name === 'storage_local_get')
-    expect(entry).toMatchObject({ requiresEvalFlag: true, evalTarget: 'renderer' })
-  })
-
-  it('reads a localStorage key and surfaces the origin (relaying the right request)', async () => {
-    const { session, evalCalls } = webStorageSession({ local: { cart: '3-items' } })
-    const server = await open(session, { allowEval: RENDERER_ON })
+  it('reads a localStorage key through the seam and surfaces the origin', async () => {
+    const session = webStorageSession({ local: { cart: '3-items' } })
+    const server = await open(session)
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'cart' }),
@@ -375,21 +307,20 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
       key: 'cart',
       value: '3-items',
     })
-    expect(evalCalls).toEqual([{ op: 'get', scope: 'local', key: 'cart' }])
+    expect(session.webStorageCalls).toEqual([{ area: 'local', op: 'items' }])
   })
 
   it('returns value:null for an absent key', async () => {
-    const { session } = webStorageSession()
-    const server = await open(session, { allowEval: RENDERER_ON })
+    const server = await open(webStorageSession())
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'nope' }),
     ).toMatchObject({ ok: true, value: null })
   })
 
-  it('reads several keys at once with keys[] (the multi-key variant)', async () => {
-    const { session, evalCalls } = webStorageSession({ local: { a: '1', b: '2' } })
-    const server = await open(session, { allowEval: RENDERER_ON })
+  it('reads several keys at once with keys[] in one seam call', async () => {
+    const session = webStorageSession({ local: { a: '1', b: '2' } })
+    const server = await open(session)
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, keys: ['a', 'z', 'b'] }),
@@ -402,12 +333,12 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
         { key: 'b', value: '2' },
       ],
     })
-    expect(evalCalls[0]).toEqual({ op: 'getMany', scope: 'local', keys: ['a', 'z', 'b'] })
+    expect(session.webStorageCalls).toHaveLength(1)
   })
 
   it('rejects a get with neither key nor keys, and with both, as BAD_ARGUMENT', async () => {
-    const { session, evalCalls } = webStorageSession()
-    const server = await open(session, { allowEval: RENDERER_ON })
+    const session = webStorageSession()
+    const server = await open(session)
     const sessionId = await launch(server)
     expect(await server.dispatcher.dispatch('storage_local_get', { sessionId })).toMatchObject({
       ok: false,
@@ -416,17 +347,23 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'a', keys: ['b'] }),
     ).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
-    expect(evalCalls).toEqual([]) // schema rejected before the seam
+    expect(session.webStorageCalls).toEqual([]) // schema rejected before the seam
   })
 
   it('sets, lists, removes, and clears localStorage through the seam', async () => {
-    const { session } = webStorageSession()
-    const server = await open(session, { allowEval: RENDERER_ON })
+    const session = webStorageSession()
+    const server = await open(session)
     const sessionId = await launch(server)
 
     expect(
       await server.dispatcher.dispatch('storage_local_set', { sessionId, key: 'k', value: 'v' }),
     ).toMatchObject({ ok: true, scope: 'local', set: 'k' })
+    expect(session.webStorageCalls.at(-1)).toEqual({
+      area: 'local',
+      op: 'set',
+      key: 'k',
+      value: 'v',
+    })
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'k' }),
     ).toMatchObject({ value: 'v' })
@@ -441,7 +378,6 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'k' }),
     ).toMatchObject({ value: null })
-    // Seed two, then clear.
     await server.dispatcher.dispatch('storage_local_set', { sessionId, key: 'a', value: '1' })
     await server.dispatcher.dispatch('storage_local_set', { sessionId, key: 'b', value: '2' })
     expect(await server.dispatcher.dispatch('storage_local_clear', { sessionId })).toMatchObject({
@@ -454,16 +390,10 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
   })
 
   it('supports empty-string Web Storage keys consistently', async () => {
-    const { session } = webStorageSession()
-    const server = await open(session, { allowEval: RENDERER_ON })
+    const server = await open(webStorageSession())
     const sessionId = await launch(server)
-
     expect(
-      await server.dispatcher.dispatch('storage_local_set', {
-        sessionId,
-        key: '',
-        value: 'blank',
-      }),
+      await server.dispatcher.dispatch('storage_local_set', { sessionId, key: '', value: 'blank' }),
     ).toMatchObject({ ok: true, set: '' })
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, key: '' }),
@@ -477,34 +407,34 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
   })
 
   it('targets sessionStorage independently of localStorage', async () => {
-    const { session, evalCalls } = webStorageSession({ local: { k: 'L' }, session: { k: 'S' } })
-    const server = await open(session, { allowEval: RENDERER_ON })
+    const session = webStorageSession({ local: { k: 'L' }, session: { k: 'S' } })
+    const server = await open(session)
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('storage_session_get', { sessionId, key: 'k' }),
     ).toMatchObject({ ok: true, scope: 'session', value: 'S' })
-    expect(evalCalls[0]).toMatchObject({ op: 'get', scope: 'session' })
+    expect(session.webStorageCalls[0]).toEqual({ area: 'session', op: 'items' })
   })
 
-  it('rejects a transport without renderer eval with storage.UNSUPPORTED', async () => {
-    // Policy permits renderer eval (so the tool registers), but the transport cannot do it.
-    const { session } = webStorageSession()
+  it('rejects a transport without storage access with storage.UNSUPPORTED', async () => {
+    const session = webStorageSession()
     const server = await open(session, {
-      allowEval: RENDERER_ON,
-      capabilities: fullCapabilities({ supportsRendererEval: false }),
+      capabilities: fullCapabilities({ canAccessStorage: false }),
     })
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'k' }),
     ).toMatchObject({ ok: false, code: 'storage.UNSUPPORTED' })
+    expect(session.webStorageCalls).toEqual([])
   })
 
-  it('maps a renderer storage-access failure to storage.ACCESS_FAILED', async () => {
-    const session = new FakeSession({
-      evaluate: async () =>
-        ({ ok: false, origin: null, reason: 'quota exceeded' }) satisfies WebStorageResult,
-    })
-    const server = await open(session, { allowEval: RENDERER_ON })
+  it('maps a storage protocol failure to storage.ACCESS_FAILED with its message', async () => {
+    const session = webStorageSession()
+    session.webStorageError = new StagewrightError(
+      'INTERNAL_ERROR',
+      'CDP DOMStorage.setDOMStorageItem failed: QuotaExceededError',
+    )
+    const server = await open(session)
     const sessionId = await launch(server)
     const res = (await server.dispatcher.dispatch('storage_local_set', {
       sessionId,
@@ -512,34 +442,54 @@ describe('storage plugin — per-key web storage (renderer-eval gated)', () => {
       value: 'v',
     })) as { ok: boolean; code?: string; error?: string }
     expect(res).toMatchObject({ ok: false, code: 'storage.ACCESS_FAILED' })
-    expect(res.error).toContain('quota exceeded')
+    expect(res.error).toContain('QuotaExceededError')
   })
 
-  it('maps an absent/malformed renderer result to storage.ACCESS_FAILED', async () => {
-    const session = new FakeSession({ evaluate: async () => undefined })
-    const server = await open(session, { allowEval: RENDERER_ON })
+  it('keeps session-level errors as their core code', async () => {
+    const session = webStorageSession()
+    session.webStorageError = new StagewrightError('SESSION_DISCONNECTED', 'app exited')
+    const server = await open(session)
     const sessionId = await launch(server)
     expect(await server.dispatcher.dispatch('storage_local_keys', { sessionId })).toMatchObject({
       ok: false,
-      code: 'storage.ACCESS_FAILED',
+      code: 'SESSION_DISCONNECTED',
     })
   })
 
-  it('maps malformed successful renderer payloads to storage.ACCESS_FAILED', async () => {
-    const session = new FakeSession({ evaluate: async () => ({ ok: true }) })
-    const server = await open(session, { allowEval: RENDERER_ON })
+  it('maps a Playwright protocol storage error to storage.ACCESS_FAILED', async () => {
+    const session = webStorageSession()
+    session.webStorageError = new Error(
+      'Protocol error (DOMStorage.setDOMStorageItem): QuotaExceededError',
+    )
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await expect(
+      server.dispatcher.dispatch('storage_local_set', { sessionId, key: 'k', value: 'v' }),
+    ).resolves.toMatchObject({ ok: false, code: 'storage.ACCESS_FAILED' })
+  })
+
+  it('does not report a closed window as a storage failure', async () => {
+    const session = webStorageSession()
+    session.webStorageError = new Error('Target page, context or browser has been closed')
+    const server = await open(session)
+    const sessionId = await launch(server)
+    const res = await server.dispatcher.dispatch('storage_local_keys', { sessionId })
+    expect(res).toMatchObject({ ok: false })
+    expect(res).not.toMatchObject({ code: 'storage.ACCESS_FAILED' })
+  })
+
+  it('maps a malformed seam result to storage.ACCESS_FAILED', async () => {
+    const session = webStorageSession()
+    session.webStorage = async () => ({ origin: 'x' }) // no entries for an items read
+    const server = await open(session)
     const sessionId = await launch(server)
     expect(
       await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'k' }),
-    ).toMatchObject({
-      ok: false,
-      code: 'storage.ACCESS_FAILED',
-    })
+    ).toMatchObject({ ok: false, code: 'storage.ACCESS_FAILED' })
   })
 
   it('returns wire-serialisable per-key payloads (no round-trip loss)', async () => {
-    const { session } = webStorageSession({ local: { a: '1', b: '2' } })
-    const server = await open(session, { allowEval: RENDERER_ON })
+    const server = await open(webStorageSession({ local: { a: '1', b: '2' } }))
     const sessionId = await launch(server)
     for (const [tool, args] of [
       ['storage_local_get', { key: 'a' }],

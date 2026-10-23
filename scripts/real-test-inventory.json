@@ -109,7 +109,7 @@
   },
   {
     "path": "packages/plugin-storage/tests/storage-smoke.test.ts",
-    "tests": 1
+    "tests": 3
   },
   {
     "path": "packages/plugin-trace/tests/replay-smoke.test.ts",

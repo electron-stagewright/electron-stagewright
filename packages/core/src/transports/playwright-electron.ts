@@ -81,6 +81,7 @@ import {
   buildScrollIntoViewBody,
 } from './playwright-electron-bodies.js'
 import { originRelation } from './surface-origin.js'
+import { runDomStorage } from './dom-storage.js'
 import type {
   AttachOptions,
   ClickOptions,
@@ -112,6 +113,8 @@ import type {
   NotificationCaptureFilter,
   PressOptions,
   ReloadOptions,
+  WebStorageRequest,
+  WebStorageResponse,
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
@@ -1047,10 +1050,75 @@ class PlaywrightSession implements TransportSession {
     }
   }
 
+  async webStorage(request: WebStorageRequest): Promise<WebStorageResponse> {
+    this.requireRunning()
+    const { target, rootPage } = await this.activeRenderer()
+    return this.domStorage(target, rootPage, request)
+  }
+
+  /** Run a Web Storage request for `target`, a page or a frame inside `rootPage`, over CDP. */
+  private async domStorage(
+    target: RendererTarget,
+    rootPage: PWPage,
+    request: WebStorageRequest,
+  ): Promise<WebStorageResponse> {
+    const context = rootPage.context()
+    if (context.newCDPSession === undefined) {
+      throw new StagewrightError(
+        'TRANSPORT_UNSUPPORTED',
+        'This Playwright build cannot open a CDP session to reach Web Storage.',
+        { transport: TRANSPORT_ID, capability: 'webStorage' },
+      )
+    }
+    // An out-of-process frame has its own CDP target, where it is the main frame; an in-process
+    // frame has none and is matched by URL in its page's frame tree.
+    let cdp: PWCdpSession | undefined
+    let selector: { url?: string } = {}
+    if (target !== rootPage) {
+      cdp = await context.newCDPSession(target).catch(() => undefined)
+      if (cdp === undefined) selector = { url: target.url() }
+    }
+    cdp ??= await context.newCDPSession(rootPage)
+    const session = cdp
+    try {
+      return await runDomStorage(
+        (method, params) => session.send(method, params),
+        selector,
+        request,
+      )
+    } finally {
+      await session.detach().catch(() => undefined)
+    }
+  }
+
   async storageSnapshot(): Promise<StorageSnapshot> {
     this.requireRunning()
-    const ctx = (await this.activePage()).context()
-    const state = await ctx.storageState()
+    const page = await this.activePage()
+    const ctx = page.context()
+    let state: Awaited<ReturnType<typeof ctx.storageState>>
+    try {
+      state = await ctx.storageState()
+    } catch {
+      // storageState opens a helper page per frame origin, which Electron refuses (Target.createTarget
+      // is not supported) when the app has a cross-origin frame. Fall back to the cookies plus the
+      // active page's localStorage, as the CDP transport reports.
+      const cookies = (await ctx.cookies()).map(pwCookieToStorage)
+      const local = await this.domStorage(page, page, { area: 'local', op: 'items' }).catch(
+        () => undefined,
+      )
+      return {
+        cookies,
+        origins:
+          local === undefined
+            ? []
+            : [
+                {
+                  origin: local.origin,
+                  localStorage: (local.entries ?? []).map(([name, value]) => ({ name, value })),
+                },
+              ],
+      }
+    }
     return {
       cookies: state.cookies.map(pwCookieToStorage),
       origins: state.origins.map((o) => ({

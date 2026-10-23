@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reason": "Add electron_reload (testing, debug and full) plus the screenshot freshness fields since the last baseline; essential unchanged; 3 percent gate unchanged.",
+  "reason": "Per-key localStorage/sessionStorage tools move from the renderer-eval gate to the no-eval storage seam (ADR-018), so plugin-storage-safe lists them; their descriptions drop the eval error; 3 percent gate unchanged.",
   "variants": {
     "core-safe": {
       "toolCount": 56,
@@ -2525,10 +2525,10 @@
       ]
     },
     "plugin-storage-safe": {
-      "toolCount": 61,
-      "characters": 92416,
-      "utf8Bytes": 92532,
-      "bpe": 21097,
+      "toolCount": 71,
+      "characters": 99610,
+      "utf8Bytes": 99734,
+      "bpe": 22711,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2589,6 +2589,16 @@
         "electron_windows_list",
         "storage_clear_cookies",
         "storage_cookies",
+        "storage_local_clear",
+        "storage_local_get",
+        "storage_local_keys",
+        "storage_local_remove",
+        "storage_local_set",
+        "storage_session_clear",
+        "storage_session_get",
+        "storage_session_keys",
+        "storage_session_remove",
+        "storage_session_set",
         "storage_set_cookie",
         "storage_snapshot"
       ],
@@ -2657,8 +2667,8 @@
     },
     "plugin-storage-eval": {
       "toolCount": 80,
-      "characters": 111459,
-      "utf8Bytes": 111589,
+      "characters": 111463,
+      "utf8Bytes": 111593,
       "bpe": 25454,
       "toolNames": [
         "electron_assert_pattern",
@@ -3340,10 +3350,10 @@
       ]
     },
     "all-safe": {
-      "toolCount": 100,
-      "characters": 144176,
-      "utf8Bytes": 144350,
-      "bpe": 32860,
+      "toolCount": 110,
+      "characters": 151370,
+      "utf8Bytes": 151552,
+      "bpe": 34474,
       "toolNames": [
         "a11y_audit",
         "clock_advance",
@@ -3432,6 +3442,16 @@
         "production_validate",
         "storage_clear_cookies",
         "storage_cookies",
+        "storage_local_clear",
+        "storage_local_get",
+        "storage_local_keys",
+        "storage_local_remove",
+        "storage_local_set",
+        "storage_session_clear",
+        "storage_session_get",
+        "storage_session_keys",
+        "storage_session_remove",
+        "storage_session_set",
         "storage_set_cookie",
         "storage_snapshot",
         "trace_budget",
@@ -3511,8 +3531,8 @@
     },
     "all-eval": {
       "toolCount": 119,
-      "characters": 163219,
-      "utf8Bytes": 163407,
+      "characters": 163223,
+      "utf8Bytes": 163411,
       "bpe": 37217,
       "toolNames": [
         "a11y_audit",

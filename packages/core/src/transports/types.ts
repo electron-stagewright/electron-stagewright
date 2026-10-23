@@ -627,10 +627,30 @@ export interface StorageOrigin {
   readonly localStorage: readonly { readonly name: string; readonly value: string }[]
 }
 
+/** Which Web Storage area a {@link WebStorageRequest} targets. */
+export type WebStorageArea = 'local' | 'session'
+
+/**
+ * One Web Storage operation on the active surface's origin, performed through the browser's storage
+ * protocol rather than page JavaScript: read every item, or set, remove or clear.
+ */
+export interface WebStorageRequest {
+  readonly area: WebStorageArea
+  readonly op: 'items' | 'set' | 'remove' | 'clear'
+  readonly key?: string
+  readonly value?: string
+}
+
+/** The outcome of a {@link WebStorageRequest}: the origin it ran against, and `entries` for `items`. */
+export interface WebStorageResponse {
+  readonly origin: string
+  readonly entries?: readonly (readonly [string, string])[]
+}
+
 /**
  * A point-in-time snapshot of the app's storage: every cookie plus each visited origin's localStorage.
- * Read-only and JSON-serialisable — the no-eval way to ASSERT storage state (localStorage runtime
- * writes need eval; see the storage plugin). Cookie values are redacted by the plugin before the agent.
+ * Read-only and JSON-serialisable — the no-eval way to ASSERT storage state. Cookie values are
+ * redacted by the plugin before the agent.
  */
 export interface StorageSnapshot {
   readonly cookies: readonly StorageCookie[]
@@ -935,6 +955,9 @@ export interface TransportSession {
 
   /** Read a point-in-time {@link StorageSnapshot} — every cookie plus each visited origin's localStorage. */
   storageSnapshot(): Promise<StorageSnapshot>
+
+  /** Read or change the active surface's localStorage / sessionStorage without running page JS. */
+  webStorage(request: WebStorageRequest): Promise<WebStorageResponse>
 
   // --- Native UI surface (requires `capabilities.canAccessNativeUI`) ---
   // Read and invoke the app's native chrome (the application menu + system trays) from the main process,

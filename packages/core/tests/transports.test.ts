@@ -58,6 +58,7 @@ const FAKE_SESSION: TransportSession = {
   evaluate: async <T = unknown>() => undefined as T,
   screenshot: async () => Buffer.alloc(0),
   reload: async () => undefined,
+  webStorage: async () => ({ origin: 'https://app.example.com', entries: [] }),
   windowsList: async () => [],
   activateWindow: async () => ({
     id: 'fake-window',

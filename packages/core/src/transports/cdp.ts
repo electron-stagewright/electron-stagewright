@@ -96,6 +96,7 @@ import {
 // the Playwright bodies for historical reasons but has no Playwright coupling.
 import { buildScrollIntoViewBody } from './playwright-electron-bodies.js'
 import { originRelation } from './surface-origin.js'
+import { runDomStorage } from './dom-storage.js'
 import type {
   AttachOptions,
   ClickOptions,
@@ -127,6 +128,8 @@ import type {
   NotificationCaptureFilter,
   PressOptions,
   ReloadOptions,
+  WebStorageRequest,
+  WebStorageResponse,
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
@@ -1889,26 +1892,33 @@ class CdpSession implements TransportSession {
     await this.#ensureConnected()
     const conn = await this.#pageConnection()
     const cookies = await this.#allBrowserCookies()
-    // localStorage is best-effort on CDP: read the active page's origin via DOMStorage. A failure
-    // (no origin, file:// scheme, domain disabled) leaves localStorage empty — the cookies still return.
+    // CDP sees the active page's origin only (Playwright's storageState covers every visited one). A
+    // failure leaves localStorage empty; the cookies still return.
     const origins: { origin: string; localStorage: { name: string; value: string }[] }[] = []
     try {
-      const origin = await this.#activeOrigin()
-      if (origin !== undefined) {
-        await conn.send('DOMStorage.enable').catch(() => undefined)
-        const items = await conn.send<{ entries?: readonly [string, string][] }>(
-          'DOMStorage.getDOMStorageItems',
-          { storageId: { securityOrigin: origin, isLocalStorage: true } },
-        )
-        origins.push({
-          origin,
-          localStorage: (items.entries ?? []).map(([name, value]) => ({ name, value })),
-        })
-      }
+      const local = await runDomStorage(
+        (method, params) => conn.send(method, params),
+        {},
+        { area: 'local', op: 'items' },
+      )
+      origins.push({
+        origin: local.origin,
+        localStorage: (local.entries ?? []).map(([name, value]) => ({ name, value })),
+      })
     } catch {
-      // best-effort; cookies are the reliable part of the CDP snapshot
+      // cookies are still returned without the localStorage half
     }
     return { cookies, origins }
+  }
+
+  async webStorage(request: WebStorageRequest): Promise<WebStorageResponse> {
+    await this.#ensureConnected()
+    const renderer = await this.#activeRenderer()
+    return runDomStorage(
+      (method, params) => renderer.conn.send(method, params),
+      { frameId: renderer.record.frameId },
+      request,
+    )
   }
 
   /** All cookies in the attached browser context. Prefer the modern Storage domain; fall back to page cookies. */
@@ -1935,16 +1945,6 @@ class CdpSession implements TransportSession {
       urls: [...urls],
     })
     return (res.cookies ?? []).map(cdpCookieToStorage)
-  }
-
-  /** The active page target's URL origin, for the localStorage snapshot; undefined when not derivable. */
-  async #activeOrigin(): Promise<string | undefined> {
-    try {
-      const target = await this.#activeTarget()
-      return new URL(target.url).origin
-    } catch {
-      return undefined
-    }
   }
 
   // --- Native UI seam: not reachable over CDP (canAccessNativeUI: false). ---

@@ -36,6 +36,8 @@ import type {
   NotificationCaptureFilter,
   PressOptions,
   ReloadOptions,
+  WebStorageRequest,
+  WebStorageResponse,
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
@@ -302,6 +304,38 @@ export class FakeSession implements TransportSession {
   }
   async storageSnapshot(): Promise<StorageSnapshot> {
     return { cookies: this.storageCookies, origins: this.storageOrigins }
+  }
+
+  /** In-memory Web Storage areas the fake `webStorage` reads and writes. */
+  readonly webStorageAreas = {
+    local: new Map<string, string>(),
+    session: new Map<string, string>(),
+  }
+  /** Origin reported by `webStorage`. */
+  webStorageOrigin = 'https://app.example.com'
+  /** When set, `webStorage` rejects with this error (to exercise access failures). */
+  webStorageError: Error | undefined = undefined
+  /** Recorded `webStorage` requests, in order. */
+  readonly webStorageCalls: WebStorageRequest[] = []
+
+  async webStorage(request: WebStorageRequest): Promise<WebStorageResponse> {
+    this.webStorageCalls.push(request)
+    if (this.webStorageError !== undefined) throw this.webStorageError
+    const store = this.webStorageAreas[request.area]
+    const origin = this.webStorageOrigin
+    switch (request.op) {
+      case 'items':
+        return { origin, entries: [...store.entries()] }
+      case 'set':
+        store.set(request.key ?? '', request.value ?? '')
+        return { origin }
+      case 'remove':
+        store.delete(request.key ?? '')
+        return { origin }
+      case 'clear':
+        store.clear()
+        return { origin }
+    }
   }
 
   /** The application menu the fake returns from `getApplicationMenu` (null by default). */
