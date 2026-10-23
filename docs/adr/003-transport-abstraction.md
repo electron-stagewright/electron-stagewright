@@ -632,3 +632,13 @@ Two injector fixes came out of the same checks:
 - Main evaluation now receives the electron module as `electronApp` (also `arguments[0]`) and the
   JSON `arg`, the same contract as the Playwright launch transport, so `electron_info` and the IPC
   plugin's main-process bodies run on inject sessions too.
+
+## Status Update — 2026-10-22: `reload` seam
+
+`TransportSession` gains `reload(target, { ignoreCache })`, which issues `Page.reload` for one
+window and resolves once the reload is issued, not when the new page is ready. The Playwright
+transport sends it over a per-page CDP session (the same route it uses to label root surfaces);
+the CDP transport sends it on the page target's connection; the injector rejects it with
+`TRANSPORT_UNSUPPORTED`, since it has no renderer. `electron_reload` builds on it: it tags the
+current document, waits until a new document replaces it, then applies the launch readiness check
+(now shared in `tools/lifecycle/ready.ts`, which also retries through a navigation).

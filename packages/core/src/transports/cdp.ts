@@ -126,6 +126,7 @@ import type {
   NetworkStubResponse,
   NotificationCaptureFilter,
   PressOptions,
+  ReloadOptions,
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
@@ -1281,6 +1282,12 @@ class CdpSession implements TransportSession {
   async #pageConnection(): Promise<CdpConnection> {
     const page = await this.#activeTarget()
     return this.connectionFor(page)
+  }
+
+  async reload(target: WindowRef, opts: ReloadOptions = {}): Promise<void> {
+    await this.#ensureConnected()
+    const conn = await this.connectionFor(await this.#resolveTarget(target))
+    await conn.send('Page.reload', { ignoreCache: opts.ignoreCache === true })
   }
 
   async screenshot(target: WindowRef, opts: ScreenshotOptions = {}): Promise<Buffer> {

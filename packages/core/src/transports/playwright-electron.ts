@@ -111,6 +111,7 @@ import type {
   NetworkStub,
   NotificationCaptureFilter,
   PressOptions,
+  ReloadOptions,
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
@@ -1545,6 +1546,25 @@ class PlaywrightSession implements TransportSession {
         Function('arg', `"use strict"; return (async () => {\n${input.body}\n})()`)(input.arg),
       payload,
     )
+  }
+
+  async reload(target: WindowRef, opts: ReloadOptions = {}): Promise<void> {
+    const app = this.requireRunning()
+    const page = await this.resolveWindow(app, target)
+    const context = page.context()
+    if (context.newCDPSession === undefined) {
+      throw new StagewrightError(
+        'TRANSPORT_UNSUPPORTED',
+        'This Playwright build cannot open a CDP session to reload the page.',
+        { transport: TRANSPORT_ID, capability: 'reload' },
+      )
+    }
+    const cdp = await context.newCDPSession(page)
+    try {
+      await cdp.send('Page.reload', { ignoreCache: opts.ignoreCache === true })
+    } finally {
+      await cdp.detach().catch(() => undefined)
+    }
   }
 
   async screenshot(target: WindowRef, opts: ScreenshotOptions = {}): Promise<Buffer> {

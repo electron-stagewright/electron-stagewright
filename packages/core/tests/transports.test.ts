@@ -57,6 +57,7 @@ const FAKE_SESSION: TransportSession = {
   console: { transport: 'playwright-electron' },
   evaluate: async <T = unknown>() => undefined as T,
   screenshot: async () => Buffer.alloc(0),
+  reload: async () => undefined,
   windowsList: async () => [],
   activateWindow: async () => ({
     id: 'fake-window',

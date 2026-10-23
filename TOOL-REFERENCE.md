@@ -2,11 +2,11 @@
 
 > Generated from the dispatcher manifest — do not edit by hand. Run `pnpm docs:tools` to regenerate.
 
-The server exposes 57 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
+The server exposes 58 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
 
 ## Contents
 
-- [Command tools](#command-tools) (24)
+- [Command tools](#command-tools) (25)
 - [Dialog tools](#dialog-tools) (1)
 - [Eval tools](#eval-tools) (2)
 - [Logs tools](#logs-tools) (1)
@@ -247,6 +247,22 @@ Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focu
 | `timeoutMs` | integer | no | Actionability budget in ms (default 5000, clamped to 30000). |
 | `waitForFocusMs` | integer | no | No target: wait up to this many ms for an editable element to take focus. |
 | `requireEditable` | boolean | no | Fail with NO_FOCUSED_EDITABLE unless keys go to an editable element. |
+| `sessionId` | string | no | Target session id. Omit when a single session is running. |
+
+### `electron_reload`
+
+**Reload a window**
+
+Reload the active window (or windowId, which also selects it) and wait, within readyTimeoutMs (default 5000), for the new page to render, like electron_launch; then optionally for waitForSelector to be visible. Use it instead of location.reload() in eval. ignoreCache does a hard reload. Refs from before the reload are gone. Returns: { ok, session_id, renderer_ready, url }. Errors: WAIT_TIMEOUT (waitForSelector not visible in time; retryable), REF_NOT_FOUND (no such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (invalid selector).
+
+- Operation: `command`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `ignoreCache` | boolean | no | Bypass the HTTP cache (hard reload). |
+| `waitForSelector` | string | no | Once the page is ready, wait for this selector to be visible. |
+| `readyTimeoutMs` | integer | no | Budget in ms for the new page and waitForSelector. Default 5000. |
+| `windowId` | string | no | Window to reload and select. Default: active. |
 | `sessionId` | string | no | Target session id. Omit when a single session is running. |
 
 ### `electron_scroll`

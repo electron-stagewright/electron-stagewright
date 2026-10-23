@@ -211,6 +211,12 @@ export interface StopResult {
 }
 
 /** Options accepted by `TransportSession.screenshot`. */
+/** Options for {@link TransportSession.reload}. */
+export interface ReloadOptions {
+  /** Bypass the HTTP cache, like a hard reload. */
+  readonly ignoreCache?: boolean
+}
+
 export interface ScreenshotOptions {
   /** Capture the full scrollable page rather than just the viewport. */
   readonly fullPage?: boolean
@@ -793,6 +799,9 @@ export interface TransportSession {
 
   /** Capture a screenshot of the given window. */
   screenshot(target: WindowRef, opts?: ScreenshotOptions): Promise<Buffer>
+
+  /** Reload the given window's page. Resolves once the reload is issued, not when it is ready. */
+  reload(target: WindowRef, opts?: ReloadOptions): Promise<void>
 
   /** Enumerate the current windows. */
   windowsList(): Promise<readonly WindowDescriptor[]>

@@ -35,6 +35,7 @@ import type {
   NetworkStub,
   NotificationCaptureFilter,
   PressOptions,
+  ReloadOptions,
   ScreenshotOptions,
   ScrollOptions,
   StopOptions,
@@ -365,6 +366,13 @@ export class FakeSession implements TransportSession {
     arg?: unknown,
   ): Promise<T> {
     return (await this.#evaluate(target, body, arg)) as T
+  }
+
+  /** Recorded reload calls, for asserting window targeting and cache bypass. */
+  readonly reloadCalls: { readonly target: WindowRef; readonly opts?: ReloadOptions }[] = []
+
+  async reload(target: WindowRef, opts?: ReloadOptions): Promise<void> {
+    this.reloadCalls.push({ target, ...(opts !== undefined ? { opts } : {}) })
   }
 
   async screenshot(target: WindowRef, opts?: ScreenshotOptions): Promise<Buffer> {

@@ -18,6 +18,7 @@ export type {
   InjectOptions,
   StopOptions,
   StopResult,
+  ReloadOptions,
   ScreenshotOptions,
   InteractionOptions,
   ClickOptions,

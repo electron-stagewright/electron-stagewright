@@ -361,6 +361,10 @@ class InjectorSession implements TransportSession {
     return Promise.reject(unsupported('activateSurface', 'supportsSurfaceTargeting'))
   }
 
+  reload(): Promise<void> {
+    return Promise.reject(unsupported('reload', 'supportsRendererEval'))
+  }
+
   screenshot(): Promise<Buffer> {
     return Promise.reject(notImplemented('screenshot'))
   }

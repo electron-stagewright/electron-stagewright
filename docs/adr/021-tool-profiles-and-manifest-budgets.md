@@ -168,3 +168,9 @@ unchanged). From this point each change that grows the manifest records its own 
 `waitForFrame` (default true, about 17 ms per capture on the launch and CDP transports) and
 `settleMs`, and returns `content_sha256`, `same_as_previous`, `overwrote` and `frame_waited`. The
 growth stays within the 3% gate of the baseline set for the keyboard tools, so it does not move.
+
+## Status update (2026-10-22): `electron_reload`
+
+`electron_reload` joins the `testing` and `debug` profiles next to the window tools, and `full`
+through the catalog. It replaces `location.reload()` in eval, which needed the eval flag and left
+the agent guessing how long to wait. `essential` is unchanged.

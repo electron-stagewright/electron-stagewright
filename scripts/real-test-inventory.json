@@ -64,6 +64,10 @@
     "tests": 1
   },
   {
+    "path": "packages/core/tests/reload-smoke.test.ts",
+    "tests": 2
+  },
+  {
     "path": "packages/core/tests/screenshot-freshness-smoke.test.ts",
     "tests": 2
   },
