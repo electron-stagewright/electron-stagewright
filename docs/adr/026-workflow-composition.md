@@ -175,3 +175,11 @@ parameterized composition when evidence requires it.
   experimental deferred execution and polling semantics.
 - [laststance Electron MCP migration](https://github.com/laststance/electron-mcp-server/blob/main/MIGRATION.md) —
   migration from a nested command tool to granular top-level tools.
+
+## Status update (2026-10-23): desktop verification recipe
+
+The launch-to-evidence check agents repeat after each UI change ships as a documented, host-visible
+recipe, as Decision 2 allows: the guide [Verify a desktop change](../guides/verify-desktop-change.md),
+also served as the MCP resource `stagewright://docs/verify-desktop-change` and named in the server
+instructions. No tool executes it. Running it unattended uses promoted replay specifications;
+parameterizing them stays the next candidate under Decision 3 and still needs its own amendment.

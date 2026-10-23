@@ -228,6 +228,7 @@ function renderNav(
           { target: 'guides/launch-or-attach.html', label: 'Launch, attach, or inject' },
           { target: 'guides/assert-ui-state.html', label: 'Assert UI state' },
           { target: 'guides/type-into-code-editors.html', label: 'Type into code editors' },
+          { target: 'guides/verify-desktop-change.html', label: 'Verify a desktop change' },
           { target: 'guides/capture-diagnostics.html', label: 'Capture diagnostics' },
           { target: 'guides/plugins.html', label: 'Load, configure, and diagnose plugins' },
           {

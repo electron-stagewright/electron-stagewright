@@ -4,6 +4,8 @@
 
 The server exposes 59 tools across 7 operation types. Tools marked with a "Requires `--allow-eval…`" label register only when the eval policy permits that target.
 
+For the call sequence that checks a UI change end to end, see [Verify a desktop change](docs/guides/verify-desktop-change.md).
+
 ## Contents
 
 - [Command tools](#command-tools) (26)

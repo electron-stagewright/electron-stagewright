@@ -7,6 +7,8 @@
  *    eval-gated tools) or in the corresponding plugin's tool list. A current doc citing a renamed or
  *    misspelled tool fails CI the same way TOOL-REFERENCE drift does. Wildcard family mentions
  *    (`electron_expect_*`) are validated as prefixes.
+ * 1b. **Call drift** — every `tool_name { …json… }` line in a guide's json code blocks parses and
+ *    passes that tool's live input schema, so an example with a renamed or invalid argument fails CI.
  * 2. **Relative-link integrity** — every relative markdown link in the public docs (guides, ADRs,
  *    the root README, GitHub community files, llms.txt) must resolve to a file that exists AND is
  *    tracked-eligible (not gitignored). This mechanises the content-policy rule that tracked files
@@ -22,6 +24,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { createServer } from '../src/server/server.js'
+import { DEFAULT_TOOLS } from '../src/tools/index.js'
+import type { AnyToolDefinition } from '../src/tools/types.js'
 import { NOOP_LOGGER } from '../src/server/logger.js'
 import a11yPlugin from '../../plugin-a11y/src/index.js'
 import clockPlugin from '../../plugin-clock/src/index.js'
@@ -183,6 +187,50 @@ describe('public guides — tool-name drift', () => {
       }
     }
     expect(unknown, `Guides mention tools that do not exist:\n${unknown.join('\n')}`).toEqual([])
+  })
+})
+
+/** A `tool { args }` line inside a ```json block: the call shape the guides use. */
+const CALL_LINE = /^\s*([a-z][a-z0-9_]*) (\{.*\})\s*$/
+
+function collectToolDefinitions(): ReadonlyMap<string, AnyToolDefinition> {
+  const tools = new Map<string, AnyToolDefinition>()
+  for (const tool of DEFAULT_TOOLS) tools.set(tool.name, tool)
+  for (const plugin of FIRST_PARTY_PLUGINS) {
+    for (const tool of plugin.tools ?? []) tools.set(`${plugin.name}_${tool.name}`, tool)
+  }
+  return tools
+}
+
+describe('public guides — call drift', () => {
+  it('every tool call in a guide parses and passes the tool’s input schema', async () => {
+    const tools = collectToolDefinitions()
+    const problems: string[] = []
+    let checked = 0
+    for (const doc of await loadMarkdown(GUIDES_DIR)) {
+      for (const block of doc.text.matchAll(/```json\n([\s\S]*?)```/g)) {
+        for (const line of (block[1] ?? '').split('\n')) {
+          const match = CALL_LINE.exec(line)
+          const name = match?.[1]
+          if (name === undefined || !tools.has(name)) continue
+          const where = `${path.basename(doc.file)}: ${line.trim()}`
+          let args: unknown
+          try {
+            args = JSON.parse(match?.[2] ?? '')
+          } catch {
+            problems.push(`${where} — not JSON`)
+            continue
+          }
+          const parsed = tools.get(name)?.inputSchema.safeParse(args)
+          checked += 1
+          if (parsed?.success !== true) {
+            problems.push(`${where} — ${parsed?.error.issues.map((i) => i.message).join('; ')}`)
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(20)
+    expect(problems, `Guide calls that no longer validate:\n${problems.join('\n')}`).toEqual([])
   })
 })
 
