@@ -7,7 +7,7 @@
  *    eval-gated tools) or in the corresponding plugin's tool list. A current doc citing a renamed or
  *    misspelled tool fails CI the same way TOOL-REFERENCE drift does. Wildcard family mentions
  *    (`electron_expect_*`) are validated as prefixes.
- * 1b. **Call drift** — every `tool_name { …json… }` line in a guide's json code blocks parses and
+ * 1b. **Call drift** — every `tool_name { …json… }` line in a current doc's json code blocks names a real tool, parses, and
  *    passes that tool's live input schema, so an example with a renamed or invalid argument fails CI.
  * 2. **Relative-link integrity** — every relative markdown link in the public docs (guides, ADRs,
  *    the root README, GitHub community files, llms.txt) must resolve to a file that exists AND is
@@ -193,6 +193,26 @@ describe('public guides — tool-name drift', () => {
 /** A `tool { args }` line inside a ```json block: the call shape the guides use. */
 const CALL_LINE = /^\s*([a-z][a-z0-9_]*) (\{.*\})\s*$/
 
+/** Keys the schema dropped while parsing: zod strips unknown keys, so a renamed argument would pass. */
+function droppedKeys(input: unknown, output: unknown, at = ''): string[] {
+  if (Array.isArray(input) && Array.isArray(output)) {
+    return input.flatMap((item, i) => droppedKeys(item, output[i], `${at}[${i}]`))
+  }
+  if (
+    typeof input !== 'object' ||
+    input === null ||
+    typeof output !== 'object' ||
+    output === null
+  ) {
+    return []
+  }
+  return Object.entries(input).flatMap(([key, value]) =>
+    key in output
+      ? droppedKeys(value, (output as Record<string, unknown>)[key], `${at}.${key}`)
+      : [`${at}.${key}`.slice(1)],
+  )
+}
+
 function collectToolDefinitions(): ReadonlyMap<string, AnyToolDefinition> {
   const tools = new Map<string, AnyToolDefinition>()
   for (const tool of DEFAULT_TOOLS) tools.set(tool.name, tool)
@@ -203,17 +223,21 @@ function collectToolDefinitions(): ReadonlyMap<string, AnyToolDefinition> {
 }
 
 describe('public guides — call drift', () => {
-  it('every tool call in a guide parses and passes the tool’s input schema', async () => {
+  it('every tool call in a public doc names a tool, parses, and passes its input schema', async () => {
     const tools = collectToolDefinitions()
     const problems: string[] = []
     let checked = 0
-    for (const doc of await loadMarkdown(GUIDES_DIR)) {
+    for (const doc of await loadCurrentPublicDocs()) {
       for (const block of doc.text.matchAll(/```json\n([\s\S]*?)```/g)) {
         for (const line of (block[1] ?? '').split('\n')) {
           const match = CALL_LINE.exec(line)
           const name = match?.[1]
-          if (name === undefined || !tools.has(name)) continue
+          if (name === undefined) continue
           const where = `${path.basename(doc.file)}: ${line.trim()}`
+          if (!tools.has(name)) {
+            problems.push(`${where} — no such tool`)
+            continue
+          }
           let args: unknown
           try {
             args = JSON.parse(match?.[2] ?? '')
@@ -225,6 +249,10 @@ describe('public guides — call drift', () => {
           checked += 1
           if (parsed?.success !== true) {
             problems.push(`${where} — ${parsed?.error.issues.map((i) => i.message).join('; ')}`)
+          } else {
+            const unknown = droppedKeys(args, parsed.data)
+            if (unknown.length > 0)
+              problems.push(`${where} — unknown argument ${unknown.join(', ')}`)
           }
         }
       }

@@ -17,8 +17,8 @@ settings, and trace (optional) records the run.
 electron-stagewright --plugin native-ui --plugin storage --plugin trace
 ```
 
-Pick one directory for this run's evidence, such as `/abs/evidence/run-42`. Every path the tools
-take is absolute.
+Pick a new directory for each run's evidence, such as `/abs/evidence/run-42`, so screenshots and
+traces from different runs never mix. Every path the tools take is absolute.
 
 <!-- stagewright-resource:begin -->
 
@@ -26,18 +26,19 @@ take is absolute.
 
 Every step is an ordinary tool call; stop or change course between any two.
 
-1. `electron_launch { main, env, instrumentNative: true }` against a throwaway profile.
+1. `electron_launch { main, env }` against a throwaway profile.
 2. `storage_local_set { key, value }` for flags, language and theme, then
    `electron_reload { waitForSelector }`.
 3. `electron_dialog_handler { action: "dismiss" }`; `electron_find` the telemetry or tour button
    (read `hints` when it matches nothing); `electron_click`.
 4. `native_file_dialog_arm { responses }` before an import or export.
-5. `electron_snapshot { format: "text" }` as the baseline.
+5. `electron_snapshot { format: "text" }` and `electron_console_logs { type: "error" }` as the
+   baseline.
 6. Act: `electron_click`, `electron_keyboard_type { text, requireEditable: true }`,
    `native_menu_invoke`, or `electron_set_window_size` (check `clamped`).
 7. `electron_snapshot { format: "text", since: "last" }` to see what changed.
 8. `electron_expect_*` on the result; `native_file_dialog_events` for dialogs.
-9. `electron_console_logs { type: "error" }`.
+9. `electron_console_logs { type: "error", since }` with the newest baseline timestamp.
 10. `electron_expect_visible` on the changed element, then `electron_screenshot { path }` with a path
     no other capture uses.
 11. `electron_stop`.
@@ -50,12 +51,16 @@ Each step, with example calls and the traps the tools report, is under _Step by 
 ## Step by step
 
 1. **Launch a clean session.** Point the app at a throwaway profile, the way your app supports it
-   (an env var or a flag), so earlier runs cannot leak state. `instrumentNative` installs the
-   file-dialog hook before the app's main runs.
+   (an env var or a flag), so earlier runs cannot leak state.
 
    ```json
-   electron_launch { "main": "/abs/app/main.js", "env": { "APP_PROFILE_DIR": "/abs/evidence/run-42/profile" }, "instrumentNative": true }
+   electron_launch { "main": "/abs/app/main.js", "env": { "APP_PROFILE_DIR": "/abs/evidence/run-42/profile" } }
    ```
+
+   Add `"instrumentNative": true` only when the app keeps its own reference to the dialog functions
+   (`const { showOpenDialog } = dialog` at import): it installs the file-dialog hook before the
+   app's main runs, by starting the app through a small wrapper main, so `process.argv[1]` points at
+   that wrapper. Without it, arming installs the hook.
 
 2. **Seed settings, then reload.** Feature flags, language and theme usually live in
    `localStorage`; values are strings, so encode objects as JSON. Reload instead of
@@ -84,10 +89,12 @@ Each step, with example calls and the traps the tools report, is under _Step by 
    native_file_dialog_arm { "responses": [{ "kind": "open", "paths": ["/abs/fixtures/dump.sql"] }, { "kind": "save", "path": "/abs/evidence/run-42/export.csv" }] }
    ```
 
-5. **Take a baseline** in the compact text format.
+5. **Take a baseline** in the compact text format, and read the console errors already there
+   (from startup or first-run screens) so step 9 only shows new ones.
 
    ```json
    electron_snapshot { "format": "text" }
+   electron_console_logs { "type": "error" }
    ```
 
 6. **Act.** Click, type, invoke a menu item, or resize the window for a layout check. Typing
@@ -115,10 +122,11 @@ Each step, with example calls and the traps the tools report, is under _Step by 
    native_file_dialog_events {}
    ```
 
-9. **Check the console** for errors raised during the run.
+9. **Check the console** for errors raised by the change: pass the `timestamp` of the newest
+   baseline entry plus one as `since` (omit it when the baseline had none).
 
    ```json
-   electron_console_logs { "type": "error" }
+   electron_console_logs { "type": "error", "since": 1761235200001 }
    ```
 
 10. **Keep evidence.** Assert the changed element is visible first, then capture to a path no other
