@@ -723,7 +723,7 @@ function isFixedAbsolutePath(value: string): boolean {
 /** Shorter secrets are only redacted as whole values; inside text they would match everywhere. */
 const MIN_SUBSTRING_SECRET = 4
 
-/** Replace sensitive values: equal leaves, and occurrences of longer string secrets inside text. */
+/** Replace sensitive values: equal leaves, and occurrences of longer secrets (any type) inside text. */
 function redactValues(value: unknown, secrets: readonly (string | number)[]): unknown {
   if (secrets.length === 0) return value
   const equalsSecret = (leaf: string | number) =>
@@ -731,13 +731,10 @@ function redactValues(value: unknown, secrets: readonly (string | number)[]): un
   if (typeof value === 'number') return equalsSecret(value) ? REDACTED : value
   if (typeof value === 'string') {
     if (equalsSecret(value)) return REDACTED
-    return secrets.reduce<string>(
-      (text, secret) =>
-        typeof secret === 'string' && secret.length >= MIN_SUBSTRING_SECRET
-          ? text.split(secret).join(REDACTED)
-          : text,
-      value,
-    )
+    return secrets.reduce<string>((text, secret) => {
+      const needle = String(secret)
+      return needle.length >= MIN_SUBSTRING_SECRET ? text.split(needle).join(REDACTED) : text
+    }, value)
   }
   if (Array.isArray(value)) return value.map((item) => redactValues(item, secrets))
   if (!isObject(value)) return value

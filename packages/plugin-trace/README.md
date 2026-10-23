@@ -178,8 +178,8 @@ share). Every check runs before the first step: a placeholder without a declared
 declared parameter no step uses, or an invalid default is a malformed spec (exit `2`); an unknown,
 missing or invalid supplied value is invalid usage (exit `64`, error code `INVALID_PARAMETERS`).
 A `sensitive` parameter is `[redacted]` by name in the report's `parameters`; in expected and actual
-values any leaf equal to it is redacted, and a sensitive string of four or more characters is also
-redacted inside longer text. When the trace plugin is loaded the runner adds the argument names that
+values any leaf equal to it is redacted, and a sensitive value whose text has four or more
+characters (string or number) is also redacted inside longer text; shorter ones only as whole values. When the trace plugin is loaded the runner adds the argument names that
 carry it to the trace `redact` list.
 The report lists the values a run used under `parameters`.
 

@@ -78,13 +78,23 @@ describe('replaySpec with parameters', () => {
     )
     const report = await replaySpec(
       pinSpec,
-      { dispatch: async () => result({ pin: 4821, pinText: '4821', code: 'ab', note: 'a cab' }) },
+      {
+        dispatch: async () =>
+          result({
+            pin: 4821,
+            pinText: '4821',
+            sentence: 'PIN 4821 accepted',
+            code: 'ab',
+            note: 'a cab',
+          }),
+      },
       { parameters: { pin: '4821', code: 'ab' } },
     )
     expect(report.parameters).toEqual({ pin: '[redacted]', code: '[redacted]' })
     expect(report.steps[0]?.actual).toMatchObject({
       pin: '[redacted]',
       pinText: '[redacted]',
+      sentence: 'PIN [redacted] accepted',
       code: '[redacted]',
       // A two-character secret is not searched for inside other text.
       note: 'a cab',
