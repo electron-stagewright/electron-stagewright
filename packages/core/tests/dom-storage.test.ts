@@ -69,6 +69,26 @@ describe('runDomStorage', () => {
     })
   })
 
+  it("addresses a frame missing from this connection's tree by its URL origin, not the top page", async () => {
+    const { send, calls } = cdp()
+    await expect(
+      runDomStorage(send, { url: 'http://localhost:4000/child' }, { area: 'local', op: 'items' }),
+    ).resolves.toMatchObject({ origin: 'http://localhost:4000' })
+    expect(calls.find((c) => c.method === 'DOMStorage.getDOMStorageItems')?.params).toEqual({
+      storageId: { securityOrigin: 'http://localhost:4000', isLocalStorage: true },
+    })
+  })
+
+  it('turns the DOMStorage domain off again after each operation', async () => {
+    const { send, calls } = cdp()
+    await runDomStorage(send, {}, { area: 'local', op: 'items' })
+    expect(commands(calls)).toEqual([
+      'DOMStorage.enable',
+      'DOMStorage.getDOMStorageItems',
+      'DOMStorage.disable',
+    ])
+  })
+
   it('falls back to the security origin when the build has no storage keys', async () => {
     const { send, calls } = cdp({ storageKey: false })
     await runDomStorage(send, {}, { area: 'local', op: 'items' })
@@ -82,12 +102,9 @@ describe('runDomStorage', () => {
     await runDomStorage(send, {}, { area: 'local', op: 'set', key: 'theme', value: 'dark' })
     await runDomStorage(send, {}, { area: 'local', op: 'remove', key: 'theme' })
     await runDomStorage(send, {}, { area: 'session', op: 'clear' })
-    expect(commands(calls)).toEqual([
-      'DOMStorage.enable',
+    expect(commands(calls).filter((method) => !method.endsWith('able'))).toEqual([
       'DOMStorage.setDOMStorageItem',
-      'DOMStorage.enable',
       'DOMStorage.removeDOMStorageItem',
-      'DOMStorage.enable',
       'DOMStorage.clear',
     ])
     expect(calls.find((c) => c.method === 'DOMStorage.clear')?.params).toEqual({

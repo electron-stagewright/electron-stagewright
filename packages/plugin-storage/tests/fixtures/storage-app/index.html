@@ -19,6 +19,13 @@
       localStorage.setItem('cart', '3-items')
       document.getElementById('origin').textContent = location.origin
       document.getElementById('lang').textContent = 'lang:' + (localStorage.getItem('lang') ?? '')
+      // The top page embeds itself from localhost, a different site than 127.0.0.1, so the smoke has a
+      // cross-origin frame with its own storage.
+      if (location.search === '') {
+        const frame = document.createElement('iframe')
+        frame.src = `http://localhost:${location.port}/?child`
+        document.body.append(frame)
+      }
       // Re-read document.cookie on demand, so the smoke can assert a seeded (non-httpOnly) cookie is
       // visible to the page — proving the seeded cookie reached the real Chromium cookie store.
       document.getElementById('read').addEventListener('click', () => {

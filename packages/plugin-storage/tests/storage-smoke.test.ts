@@ -308,6 +308,43 @@ async function checkLanguageSwitch(server: Server, sessionId: string): Promise<v
   })
 }
 
+/** Select the cross-origin child frame and check its storage is separate from the top page's. */
+async function checkFrameStorage(server: Server, sessionId: string): Promise<void> {
+  type Surfaces = Envelope & { surfaces: ReadonlyArray<{ id: string; kind: string; url?: string }> }
+  let child: { id: string } | undefined
+  for (let attempt = 0; attempt < 50 && child === undefined; attempt++) {
+    const listed = (await server.dispatcher.dispatch('electron_surfaces_list', {
+      sessionId,
+    })) as unknown as Surfaces
+    child = listed.surfaces.find((s) => s.kind === 'frame' && (s.url ?? '').includes('localhost'))
+    if (child === undefined) await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  expect(child).toBeDefined()
+  const root = (
+    (await server.dispatcher.dispatch('electron_surfaces_list', {
+      sessionId,
+    })) as unknown as Surfaces
+  ).surfaces.find((s) => s.kind !== 'frame')
+  await server.dispatcher.dispatch('electron_switch_surface', { sessionId, surfaceId: child?.id })
+  // The child wrote its own cart on load, in its own origin.
+  const read = (await server.dispatcher.dispatch('storage_local_get', {
+    sessionId,
+    key: 'cart',
+  })) as unknown as Envelope & { origin: string; value: string | null }
+  expect(read).toMatchObject({ ok: true, value: '3-items' })
+  expect(read.origin).toMatch(/^http:\/\/localhost:\d+$/)
+  await server.dispatcher.dispatch('storage_local_set', { sessionId, key: 'where', value: 'child' })
+
+  await server.dispatcher.dispatch('electron_switch_surface', { sessionId, surfaceId: root?.id })
+  expect(
+    await server.dispatcher.dispatch('storage_local_get', { sessionId, key: 'where' }),
+  ).toMatchObject({
+    ok: true,
+    origin: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/),
+    value: null,
+  })
+}
+
 describe('storage plugin smoke without eval (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
     'switches a language through localStorage and a reload on the launch transport',
@@ -324,6 +361,7 @@ describe('storage plugin smoke without eval (real Electron)', () => {
           selector: '#lang',
         })
         await checkLanguageSwitch(server, launched.session_id)
+        await checkFrameStorage(server, launched.session_id)
       } finally {
         await server.dispatcher.dispatch('electron_stop', { sessionId: launched.session_id })
       }
@@ -370,6 +408,7 @@ describe('storage plugin smoke without eval (real Electron)', () => {
         selector: '#lang',
       })
       await checkLanguageSwitch(server, attached.session_id)
+      await checkFrameStorage(server, attached.session_id)
       await server.dispatcher.dispatch('electron_detach', { sessionId: attached.session_id })
     },
     60_000,

@@ -297,9 +297,9 @@ export function createStoragePlugin(): StagewrightPlugin {
   // renderer eval (ADR-018 Status Update).
 
   /**
-   * Run one {@link WebStorageRequest} through the storage seam. A storage failure the protocol reports
-   * (quota exceeded, an opaque origin) becomes `storage.ACCESS_FAILED`; session-level errors such as a
-   * dropped connection keep their core code.
+   * Run one {@link WebStorageRequest} through the storage seam. A failed DOMStorage command (quota
+   * exceeded, an opaque origin) becomes `storage.ACCESS_FAILED`; anything else, such as a closed window
+   * or a dropped connection, keeps its own code.
    */
   async function runWebStorage(
     session: TransportSession,
@@ -310,11 +310,16 @@ export function createStoragePlugin(): StagewrightPlugin {
     try {
       result = await session.webStorage(req)
     } catch (err) {
-      if (err instanceof StagewrightError && err.code !== 'INTERNAL_ERROR') throw err
+      // Only a failed DOMStorage command is a storage failure; a closed window or a dropped session is not.
+      const message = err instanceof Error ? err.message : String(err)
+      const storageFailure =
+        message.includes('DOMStorage.') &&
+        (!(err instanceof StagewrightError) || err.code === 'INTERNAL_ERROR')
+      if (!storageFailure) throw err
       return {
         error: makePluginError('storage.ACCESS_FAILED', {
           ...meta,
-          message: `Storage access failed: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Storage access failed: ${message}`,
         }),
       }
     }

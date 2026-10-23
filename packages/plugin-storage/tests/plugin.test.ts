@@ -456,6 +456,28 @@ describe('storage plugin — per-key web storage (no-eval seam)', () => {
     })
   })
 
+  it('maps a Playwright protocol storage error to storage.ACCESS_FAILED', async () => {
+    const session = webStorageSession()
+    session.webStorageError = new Error(
+      'Protocol error (DOMStorage.setDOMStorageItem): QuotaExceededError',
+    )
+    const server = await open(session)
+    const sessionId = await launch(server)
+    await expect(
+      server.dispatcher.dispatch('storage_local_set', { sessionId, key: 'k', value: 'v' }),
+    ).resolves.toMatchObject({ ok: false, code: 'storage.ACCESS_FAILED' })
+  })
+
+  it('does not report a closed window as a storage failure', async () => {
+    const session = webStorageSession()
+    session.webStorageError = new Error('Target page, context or browser has been closed')
+    const server = await open(session)
+    const sessionId = await launch(server)
+    const res = await server.dispatcher.dispatch('storage_local_keys', { sessionId })
+    expect(res).toMatchObject({ ok: false })
+    expect(res).not.toMatchObject({ code: 'storage.ACCESS_FAILED' })
+  })
+
   it('maps a malformed seam result to storage.ACCESS_FAILED', async () => {
     const session = webStorageSession()
     session.webStorage = async () => ({ origin: 'x' }) // no entries for an items read

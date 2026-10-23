@@ -140,7 +140,7 @@ export interface PWContext {
   clearCookies(options?: { name?: string; domain?: string; path?: string }): Promise<void>
   storageState(): Promise<PWStorageState>
   /** Open a short-lived CDP session scoped to one page. */
-  newCDPSession?(page: PWPage): Promise<PWCdpSession>
+  newCDPSession?(page: PWPage | PWFrame): Promise<PWCdpSession>
 }
 
 /** Minimal Chromium DevTools session used only to identify a Playwright page's target id. */
