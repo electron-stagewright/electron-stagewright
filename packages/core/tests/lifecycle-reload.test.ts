@@ -4,10 +4,13 @@
  * the existing codes.
  */
 
+import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
+import { SnapshotStore } from '../src/server/snapshot-store.js'
+import { walkAccessibilityTree } from '../src/snapshot/index.js'
 import { reloadTool } from '../src/tools/lifecycle/reload.js'
 import type { TransportCapabilities, WindowDescriptor } from '../src/transports/index.js'
 import { fullCapabilities } from '../../testkit/src/capabilities.js'
@@ -23,6 +26,8 @@ const SETTINGS: WindowDescriptor = {
 }
 
 interface Renderer {
+  /** Throw a navigation error on the first mark attempt. */
+  navigatingMark?: boolean
   /** How many same-document checks still see the old document. */
   oldDocumentChecks?: number
   /** Throw a navigation error on the first same-document check. */
@@ -39,9 +44,14 @@ function renderer(state: Renderer = {}): { evaluate: FakeEvaluate; bodies: strin
   let oldChecks = state.oldDocumentChecks ?? 1
   let navigating = state.navigatingFirst === true
   let navigatingReady = state.navigatingReady === true
+  let navigatingMark = state.navigatingMark === true
   const evaluate: FakeEvaluate = async (_target, body) => {
     if (body.includes('__stagewrightReloadMark = arg.mark')) {
       bodies.push('mark')
+      if (navigatingMark) {
+        navigatingMark = false
+        throw new Error('CDP Runtime.evaluate failed: Inspected target navigated or closed')
+      }
       return true
     }
     if (body.includes('__stagewrightReloadMark === arg.mark')) {
@@ -78,11 +88,12 @@ function renderer(state: Renderer = {}): { evaluate: FakeEvaluate; bodies: strin
 
 function setup(evaluate: FakeEvaluate, capabilities?: TransportCapabilities) {
   const sessions = new SessionManager()
+  const snapshots = new SnapshotStore()
   const session = new FakeSession({ id: 'sess', evaluate, windows: [MAIN, SETTINGS] })
   sessions.register(new FakeTransport(capabilities !== undefined ? { capabilities } : {}), session)
-  const dispatcher = new Dispatcher({ sessions })
+  const dispatcher = new Dispatcher({ sessions, snapshots })
   dispatcher.register(reloadTool)
-  return { dispatcher, session }
+  return { dispatcher, session, snapshots }
 }
 
 describe('electron_reload', () => {
@@ -166,6 +177,34 @@ describe('electron_reload', () => {
     )
     expect(session.activateWindowCalls).toEqual([{ kind: 'id', id: 'w2' }])
     expect(session.reloadCalls[0]?.target).toEqual({ kind: 'id', id: 'w2' })
+  })
+
+  it('reloads from the window root when an iframe surface is selected', async () => {
+    const { dispatcher, session } = setup(renderer().evaluate)
+    await expect(dispatcher.dispatch('electron_reload', {})).resolves.toMatchObject({ ok: true })
+    // Selecting the window resets the surface to its root before the document is tagged.
+    expect(session.activateWindowCalls).toEqual([{ kind: 'id', id: 'w1' }])
+  })
+
+  it('forgets the stored snapshot, whose refs belong to the old page', async () => {
+    const { dispatcher, snapshots } = setup(renderer().evaluate)
+    snapshots.set(
+      'sess',
+      walkAccessibilityTree(new JSDOM('<button>Go</button>').window.document, {}),
+    )
+    await dispatcher.dispatch('electron_reload', {})
+    expect(snapshots.get('sess')).toBeUndefined()
+  })
+
+  it('tags the document again when it was already navigating', async () => {
+    const page = renderer({ navigatingMark: true, oldDocumentChecks: 0 })
+    const { dispatcher, session } = setup(page.evaluate)
+    await expect(dispatcher.dispatch('electron_reload', {})).resolves.toMatchObject({
+      ok: true,
+      renderer_ready: true,
+    })
+    expect(page.bodies.slice(0, 2)).toEqual(['mark', 'mark'])
+    expect(session.reloadCalls).toHaveLength(1)
   })
 
   it('refuses a transport without renderer evaluation', async () => {

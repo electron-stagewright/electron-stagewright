@@ -22,7 +22,15 @@ import { SnapshotStore } from '../src/server/snapshot-store.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { EVAL_TOOLS } from '../src/tools/eval/index.js'
 import { attachTool } from '../src/tools/lifecycle/attach.js'
-import { detachTool, launchTool, reloadTool, stopTool } from '../src/tools/lifecycle/index.js'
+import {
+  detachTool,
+  launchTool,
+  reloadTool,
+  stopTool,
+  surfacesListTool,
+  switchSurfaceTool,
+  windowsListTool,
+} from '../src/tools/lifecycle/index.js'
 import { waitForSelectorTool } from '../src/tools/wait/index.js'
 import { CDPTransport, PlaywrightElectronTransport } from '../src/transports/index.js'
 
@@ -53,6 +61,9 @@ function newDispatcher(transport: CDPTransport | PlaywrightElectronTransport): D
     attachTool,
     detachTool,
     reloadTool,
+    surfacesListTool,
+    switchSurfaceTool,
+    windowsListTool,
     waitForSelectorTool,
     ...EVAL_TOOLS,
   ])
@@ -90,6 +101,37 @@ async function checkReload(dispatcher: Dispatcher, sessionId: string): Promise<v
       readyTimeoutMs: 1000,
     }),
   ).resolves.toMatchObject({ ok: false, code: 'WAIT_TIMEOUT' })
+
+  // An explicit window id reloads that window.
+  const listed = (await dispatcher.dispatch('electron_windows_list', {
+    sessionId,
+  })) as SuccessResponse & {
+    windows: { id: string }[]
+  }
+  await expect(
+    dispatcher.dispatch('electron_reload', { sessionId, windowId: listed.windows[0]?.id }),
+  ).resolves.toMatchObject({ ok: true, renderer_ready: true })
+
+  // With an iframe surface selected, the reload still completes from the window root.
+  await dispatcher.dispatch('electron_eval_renderer', {
+    sessionId,
+    code: `const frame = document.createElement('iframe');
+      frame.srcdoc = '<button>Inner</button>';
+      document.body.append(frame);
+      await new Promise((resolve) => frame.addEventListener('load', resolve));
+      return true`,
+  })
+  const surfaces = (await dispatcher.dispatch('electron_surfaces_list', {
+    sessionId,
+  })) as SuccessResponse & {
+    surfaces: { id: string; kind: string }[]
+  }
+  const frame = surfaces.surfaces.find((surface) => surface.kind === 'frame')
+  expect(frame).toBeDefined()
+  await dispatcher.dispatch('electron_switch_surface', { sessionId, surfaceId: frame?.id })
+  await expect(
+    dispatcher.dispatch('electron_reload', { sessionId, waitForSelector: '#ping' }),
+  ).resolves.toMatchObject({ ok: true, renderer_ready: true })
 }
 
 describe('reload smoke (real Electron)', () => {

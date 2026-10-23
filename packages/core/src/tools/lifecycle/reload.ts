@@ -61,21 +61,32 @@ export const reloadTool: AnyToolDefinition = defineTool({
     const meta = { startedAt: ctx.startedAt, now: ctx.now, session_id: managed.id }
     assertCapability(managed.transport, 'supportsRendererEval')
     const session = managed.session
-    if (args.windowId !== undefined) {
-      await session.activateWindow({ kind: 'id', id: args.windowId })
-    }
     const windows = await session.windowsList()
-    const active = windows.find((window) => window.focused) ?? windows[0]
-    if (active === undefined) {
+    const windowId = args.windowId ?? (windows.find((window) => window.focused) ?? windows[0])?.id
+    if (windowId === undefined) {
       return makeError('REF_NOT_FOUND', { ...meta, message: 'No Electron window to reload.' })
     }
+    // Selecting the window also resets the surface to its root: a selected iframe is replaced too.
+    await session.activateWindow({ kind: 'id', id: windowId })
 
     const deadline = ctx.now() + (args.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS)
     const remaining = (): number => Math.max(0, deadline - ctx.now())
     const mark = randomUUID()
-    await session.evaluate('renderer', MARK_BODY, { mark })
+    // A page that is already navigating cannot be tagged yet; try again on its next document.
+    for (;;) {
+      ctx.signal?.throwIfAborted()
+      try {
+        await session.evaluate('renderer', MARK_BODY, { mark })
+        break
+      } catch (err) {
+        if (!isRendererNavigation(err) || remaining() === 0) throw err
+      }
+      await sleep(Math.min(NEW_DOCUMENT_POLL_MS, remaining()), ctx.signal)
+    }
     ctx.signal?.throwIfAborted()
-    await session.reload({ kind: 'id', id: active.id }, { ignoreCache: args.ignoreCache === true })
+    await session.reload({ kind: 'id', id: windowId }, { ignoreCache: args.ignoreCache === true })
+    // Refs from the stored snapshot point into the page being replaced.
+    ctx.snapshots.clear(managed.id)
 
     // The old document keeps the mark until it unloads; checks during the swap may fail outright.
     let reloaded = false
@@ -114,7 +125,10 @@ export const reloadTool: AnyToolDefinition = defineTool({
       }
     }
 
-    const url = await session.evaluate<unknown>('renderer', URL_BODY).catch(() => active.url ?? '')
+    const url = await session.evaluate<unknown>('renderer', URL_BODY).catch(async () => {
+      const after = await session.windowsList().catch(() => [])
+      return after.find((window) => window.id === windowId)?.url ?? ''
+    })
     return makeSuccess(
       {
         session_id: managed.id,
