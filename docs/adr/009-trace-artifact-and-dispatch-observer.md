@@ -241,3 +241,10 @@ app launch, infrastructure, and CLI usage. Filters preserve the session creator 
 dependent step, so narrowing a run never leaves a stale placeholder. The package smoke packs the
 plugin, installs it outside the monorepo beside core, and proves the published bin against a real
 Electron app.
+
+## Status Update (2026-10-23) — parameterized replay specifications
+
+Promoted specs gain a version 2 with declared, typed parameters and whole-value placeholders, and
+the headless runner gains `--param`, `--params-file` and `--param-env`. The rules, validation and
+redaction policy are recorded in the [ADR-026](./026-workflow-composition.md) amendment.
+`trace_promote` can declare parameters from recorded values.

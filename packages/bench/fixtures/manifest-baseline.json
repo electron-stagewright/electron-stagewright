@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reason": "plugin-native-ui gains native_file_dialog_arm/events/disarm so agents answer the app's open/save dialogs without eval_main; 3 percent gate unchanged.",
+  "reason": "trace_promote documents and accepts parameters for version 2 replay specs (ADR-026 amendment); 3 percent gate unchanged.",
   "variants": {
     "core-safe": {
       "toolCount": 57,
@@ -2843,9 +2843,9 @@
     },
     "plugin-trace-safe": {
       "toolCount": 66,
-      "characters": 105295,
-      "utf8Bytes": 105409,
-      "bpe": 24046,
+      "characters": 106256,
+      "utf8Bytes": 106370,
+      "bpe": 24257,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -2928,16 +2928,16 @@
           "bpe": 1041
         },
         {
+          "name": "trace_promote",
+          "characters": 4187,
+          "utf8Bytes": 4187,
+          "bpe": 944
+        },
+        {
           "name": "electron_snapshot",
           "characters": 3596,
           "utf8Bytes": 3602,
           "bpe": 792
-        },
-        {
-          "name": "trace_promote",
-          "characters": 3226,
-          "utf8Bytes": 3226,
-          "bpe": 733
         },
         {
           "name": "trace_view",
@@ -2979,9 +2979,9 @@
     },
     "plugin-trace-eval": {
       "toolCount": 68,
-      "characters": 108310,
-      "utf8Bytes": 108424,
-      "bpe": 24747,
+      "characters": 109271,
+      "utf8Bytes": 109385,
+      "bpe": 24958,
       "toolNames": [
         "electron_assert_pattern",
         "electron_attach",
@@ -3066,16 +3066,16 @@
           "bpe": 1041
         },
         {
+          "name": "trace_promote",
+          "characters": 4187,
+          "utf8Bytes": 4187,
+          "bpe": 944
+        },
+        {
           "name": "electron_snapshot",
           "characters": 3596,
           "utf8Bytes": 3602,
           "bpe": 792
-        },
-        {
-          "name": "trace_promote",
-          "characters": 3226,
-          "utf8Bytes": 3226,
-          "bpe": 733
         },
         {
           "name": "trace_view",
@@ -3381,9 +3381,9 @@
     },
     "all-safe": {
       "toolCount": 114,
-      "characters": 156908,
-      "utf8Bytes": 157096,
-      "bpe": 35708,
+      "characters": 157869,
+      "utf8Bytes": 158057,
+      "bpe": 35919,
       "toolNames": [
         "a11y_audit",
         "clock_advance",
@@ -3514,16 +3514,16 @@
           "bpe": 1041
         },
         {
+          "name": "trace_promote",
+          "characters": 4187,
+          "utf8Bytes": 4187,
+          "bpe": 944
+        },
+        {
           "name": "electron_snapshot",
           "characters": 3596,
           "utf8Bytes": 3602,
           "bpe": 792
-        },
-        {
-          "name": "trace_promote",
-          "characters": 3226,
-          "utf8Bytes": 3226,
-          "bpe": 733
         },
         {
           "name": "trace_view",
@@ -3565,9 +3565,9 @@
     },
     "all-eval": {
       "toolCount": 123,
-      "characters": 168761,
-      "utf8Bytes": 168955,
-      "bpe": 38451,
+      "characters": 169722,
+      "utf8Bytes": 169916,
+      "bpe": 38662,
       "toolNames": [
         "a11y_audit",
         "clock_advance",
@@ -3707,16 +3707,16 @@
           "bpe": 1041
         },
         {
+          "name": "trace_promote",
+          "characters": 4187,
+          "utf8Bytes": 4187,
+          "bpe": 944
+        },
+        {
           "name": "electron_snapshot",
           "characters": 3596,
           "utf8Bytes": 3602,
           "bpe": 792
-        },
-        {
-          "name": "trace_promote",
-          "characters": 3226,
-          "utf8Bytes": 3226,
-          "bpe": 733
         },
         {
           "name": "trace_view",

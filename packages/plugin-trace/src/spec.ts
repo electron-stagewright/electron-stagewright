@@ -15,6 +15,10 @@ import type { TraceCallRecord } from './recorder.js'
 
 export const REPLAY_SPEC_FORMAT = 'stagewright-replay' as const
 export const REPLAY_SPEC_VERSION = 1 as const
+/** Version for a spec that declares parameters (ADR-026 amendment); v1 runners refuse it. */
+export const REPLAY_SPEC_PARAMETERIZED_VERSION = 2 as const
+const PARAM_KEY = '$param'
+const PARAM_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
 const SESSION_TOKEN_PREFIX = '$stagewright.session.'
 const REDACTED = '[redacted]'
 const MAX_REPORT_VALUE_CHARS = 1000
@@ -64,29 +68,127 @@ const stepSchema = z
   })
   .strict()
 
-const replaySpecSchema = z
+const parameterCommon = {
+  description: z.string().max(500).optional(),
+  sensitive: z.boolean().optional(),
+}
+const boundsSchema = { minimum: z.number().optional(), maximum: z.number().optional() }
+export const replayParameterSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('string'),
+      ...parameterCommon,
+      default: z.string().optional(),
+      enum: z.array(z.string()).min(1).optional(),
+      pattern: z.string().min(1).max(MAX_REGEX_SOURCE_CHARS).optional(),
+      minLength: z.number().int().min(0).optional(),
+      maxLength: z.number().int().min(0).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('number'),
+      ...parameterCommon,
+      ...boundsSchema,
+      default: z.number().optional(),
+      enum: z.array(z.number()).min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('integer'),
+      ...parameterCommon,
+      ...boundsSchema,
+      default: z.number().int().optional(),
+      enum: z.array(z.number().int()).min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({ type: z.literal('boolean'), ...parameterCommon, default: z.boolean().optional() })
+    .strict(),
+  z
+    .object({ type: z.literal('path'), ...parameterCommon, default: z.string().optional() })
+    .strict(),
+])
+
+const specBody = {
+  format: z.literal(REPLAY_SPEC_FORMAT),
+  app: z
+    .object({ main: z.string().min(1) })
+    .strict()
+    .optional(),
+  normalizers: z.array(normalizerSchema).default([]),
+  redactions: z.array(z.string().min(1)).default([]),
+  steps: z.array(stepSchema),
+}
+const replaySpecV1Schema = z
+  .object({ ...specBody, version: z.literal(REPLAY_SPEC_VERSION) })
+  .strict()
+const replaySpecV2Schema = z
   .object({
-    format: z.literal(REPLAY_SPEC_FORMAT),
-    version: z.literal(REPLAY_SPEC_VERSION),
-    app: z
-      .object({ main: z.string().min(1) })
-      .strict()
-      .optional(),
-    normalizers: z.array(normalizerSchema).default([]),
-    redactions: z.array(z.string().min(1)).default([]),
-    steps: z.array(stepSchema),
+    ...specBody,
+    version: z.literal(REPLAY_SPEC_PARAMETERIZED_VERSION),
+    parameters: z
+      .record(
+        z.string().regex(PARAM_NAME, 'parameter names are letters, digits and _'),
+        replayParameterSchema,
+      )
+      .refine((value) => Object.keys(value).length > 0, {
+        message: 'a version 2 spec declares at least one parameter',
+      }),
   })
   .strict()
 
 export type ReplayNormalizer = z.infer<typeof normalizerSchema>
 export type ReplayMatcher = z.infer<typeof matcherSchema>
 export type ReplayStep = z.infer<typeof stepSchema>
-export type ReplaySpec = z.infer<typeof replaySpecSchema>
+export type ReplayParameter = z.infer<typeof replayParameterSchema>
+export type ReplaySpec = z.infer<typeof replaySpecV1Schema> | z.infer<typeof replaySpecV2Schema>
+
+/**
+ * A parameter problem found before the first dispatch: `spec` when the spec itself is wrong (an
+ * undeclared or unused parameter, an invalid default), `value` when a supplied value is.
+ */
+export class ReplayParameterError extends Error {
+  constructor(
+    readonly kind: 'spec' | 'value',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ReplayParameterError'
+  }
+}
+
+/** A spec with every placeholder replaced, plus the values used and which ones to redact. */
+export interface PreparedReplaySpec {
+  readonly spec: ReplaySpec
+  readonly parameters: Readonly<Record<string, unknown>>
+  /** The values safe to print: sensitive parameters are replaced by name, not by searching. */
+  readonly reportedParameters: Readonly<Record<string, unknown>>
+  readonly sensitiveValues: readonly (string | number)[]
+}
 
 export interface PromoteTraceOptions {
   readonly redactions?: readonly string[]
   readonly include?: readonly string[]
   readonly exclude?: readonly string[]
+  /**
+   * Turn recorded argument values into parameters: every argument exactly equal to `value` becomes
+   * a placeholder, and the spec declares the parameter with `value` as its default (none when
+   * sensitive). A parameter whose value matches no argument is an error.
+   */
+  readonly parameters?: Readonly<
+    Record<
+      string,
+      { readonly definition: ReplayParameter; readonly value: string | number | boolean }
+    >
+  >
+}
+
+/** A promoted spec and how many argument values each parameter replaced. */
+export interface PromotedReplaySpec {
+  readonly spec: ReplaySpec
+  readonly replaced: Readonly<Record<string, number>>
 }
 
 export interface ReplaySpecDeps {
@@ -96,6 +198,8 @@ export interface ReplaySpecDeps {
 export interface ReplaySpecOptions {
   readonly include?: readonly string[]
   readonly exclude?: readonly string[]
+  /** Values for a version 2 spec's parameters; strings are coerced to the declared type. */
+  readonly parameters?: Readonly<Record<string, unknown>>
 }
 
 export interface ReplaySpecOutcome {
@@ -114,13 +218,30 @@ export interface ReplaySpecReport {
   readonly mismatched: number
   readonly skipped: number
   readonly steps: readonly ReplaySpecOutcome[]
+  /** The values a parameterized spec ran with; sensitive ones are redacted. */
+  readonly parameters?: Readonly<Record<string, unknown>>
 }
 
 /** Validate an untrusted JSON value as a promoted replay specification. */
 export function parseReplaySpec(value: unknown): ReplaySpec {
-  const parsed = replaySpecSchema.safeParse(value)
+  // Validate against the declared version's schema so errors name the actual problem.
+  const version =
+    typeof value === 'object' && value !== null
+      ? (value as { version?: unknown }).version
+      : undefined
+  const parsed = (
+    version === REPLAY_SPEC_PARAMETERIZED_VERSION ? replaySpecV2Schema : replaySpecV1Schema
+  ).safeParse(value)
   if (parsed.success) return parsed.data
-  throw new Error(`Invalid replay spec: ${parsed.error.issues[0]?.message ?? 'unknown error'}`)
+  throw new Error(`Invalid replay spec: ${describeIssue(parsed.error.issues[0])}`)
+}
+
+/** The innermost message of a zod issue, prefixed with its path (record keys nest their issue). */
+function describeIssue(issue: z.core.$ZodIssue | undefined): string {
+  if (issue === undefined) return 'unknown error'
+  const nested = 'issues' in issue && Array.isArray(issue.issues) ? issue.issues[0] : undefined
+  const where = issue.path.length > 0 ? `${issue.path.join('.')}: ` : ''
+  return `${where}${nested !== undefined ? describeIssue(nested as z.core.$ZodIssue) : issue.message}`
 }
 
 /** Promote raw calls into a reviewable spec with stable session placeholders and pre-write redaction. */
@@ -128,6 +249,46 @@ export function promoteTrace(
   calls: readonly TraceCallRecord[],
   options: PromoteTraceOptions = {},
 ): ReplaySpec {
+  return promoteTraceWithParameters(calls, options).spec
+}
+
+/** {@link promoteTrace}, also reporting how many values each requested parameter replaced. */
+export function promoteTraceWithParameters(
+  calls: readonly TraceCallRecord[],
+  options: PromoteTraceOptions = {},
+): PromotedReplaySpec {
+  const parameters = Object.entries(options.parameters ?? {})
+  const replaced: Record<string, number> = {}
+  for (const [name, { definition, value }] of parameters) {
+    if (!PARAM_NAME.test(name)) {
+      throw new ReplayParameterError(
+        'spec',
+        `Parameter name "${name}" must be letters, digits and _.`,
+      )
+    }
+    const problem = checkParameterValue(definition, value)
+    if (problem !== undefined) {
+      throw new ReplayParameterError('spec', `Parameter "${name}" value ${problem}.`)
+    }
+    replaced[name] = 0
+  }
+  // A recorded session id becomes a session placeholder below; never a parameter.
+  const sessionIds = new Set(calls.map((recorded) => sessionIdOf(recorded.result)))
+  const redactedParameters = new Set<string>()
+  const parameterize = (value: unknown): unknown => {
+    if (typeof value === 'string' && sessionIds.has(value)) return value
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      const match = parameters.find(([, parameter]) => parameter.value === value)
+      if (match === undefined) return value
+      replaced[match[0]] = (replaced[match[0]] ?? 0) + 1
+      return { [PARAM_KEY]: match[0] }
+    }
+    if (Array.isArray(value)) return value.map(parameterize)
+    if (!isObject(value)) return value
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, parameterize(child)]),
+    )
+  }
   const include = options.include === undefined ? undefined : new Set(options.include)
   const exclude = options.exclude === undefined ? undefined : new Set(options.exclude)
   const redactions = [...new Set([...DEFAULT_PROMOTION_REDACTIONS, ...(options.redactions ?? [])])]
@@ -140,7 +301,15 @@ export function promoteTrace(
   // resolve. This also closes dependencies for a producer that itself uses another session.
   const selectedCalls = selectCallsWithSessionProducers(calls, include, exclude)
   for (const call of selectedCalls) {
-    const args = replaceSessionIds(redactScopedValue(call.args, redactions, 'args'), aliases)
+    const args = replaceSessionIds(
+      redactScopedValue(
+        parameters.length > 0 ? parameterize(call.args) : call.args,
+        redactions,
+        'args',
+        (name) => redactedParameters.add(name),
+      ),
+      aliases,
+    )
     const recordedSession = sessionIdOf(call.result)
     let captureSession: string | undefined
     if (recordedSession !== undefined && !aliases.has(recordedSession)) {
@@ -156,15 +325,46 @@ export function promoteTrace(
     })
   }
 
+  for (const name of redactedParameters) {
+    if (options.parameters?.[name]?.definition.sensitive !== true) {
+      throw new ReplayParameterError(
+        'spec',
+        `Parameter "${name}" replaces a redacted argument; declare it sensitive so its value is not written as a default.`,
+      )
+    }
+  }
+  for (const [name, count] of Object.entries(replaced)) {
+    if (count === 0) {
+      throw new ReplayParameterError(
+        'spec',
+        `Parameter "${name}" matched no recorded argument value.`,
+      )
+    }
+  }
   const launch = selectedCalls.find((call) => call.tool === 'electron_launch')
   const main = launch === undefined ? undefined : mainOf(launch.args)
-  return {
+  const body = {
     format: REPLAY_SPEC_FORMAT,
-    version: REPLAY_SPEC_VERSION,
     ...(main !== undefined ? { app: { main } } : {}),
-    normalizers: ['session_id', 'timestamps', 'absolute_paths'],
+    normalizers: ['session_id', 'timestamps', 'absolute_paths'] as ReplayNormalizer[],
     redactions,
     steps,
+  }
+  if (parameters.length === 0) return { spec: { ...body, version: REPLAY_SPEC_VERSION }, replaced }
+  return {
+    spec: {
+      ...body,
+      version: REPLAY_SPEC_PARAMETERIZED_VERSION,
+      parameters: Object.fromEntries(
+        parameters.map(([name, { definition, value }]) => [
+          name,
+          definition.sensitive === true
+            ? withoutDefault(definition)
+            : { ...definition, default: value },
+        ]),
+      ) as Record<string, ReplayParameter>,
+    },
+    replaced,
   }
 }
 
@@ -231,7 +431,21 @@ export async function replaySpec(
   deps: ReplaySpecDeps,
   options: ReplaySpecOptions = {},
 ): Promise<ReplaySpecReport> {
-  const spec = parseReplaySpec(input)
+  return runPreparedReplaySpec(
+    prepareReplaySpec(parseReplaySpec(input), options.parameters ?? {}),
+    deps,
+    options,
+  )
+}
+
+/** Run a spec {@link prepareReplaySpec} already validated and substituted. */
+export async function runPreparedReplaySpec(
+  prepared: PreparedReplaySpec,
+  deps: ReplaySpecDeps,
+  options: Omit<ReplaySpecOptions, 'parameters'> = {},
+): Promise<ReplaySpecReport> {
+  const spec = prepared.spec
+  const hide = (value: unknown) => redactValues(value, prepared.sensitiveValues)
   const include = options.include === undefined ? undefined : new Set(options.include)
   const exclude = options.exclude === undefined ? undefined : new Set(options.exclude)
   const executableSteps = selectStepsWithSessionProducers(spec.steps, include, exclude)
@@ -254,12 +468,279 @@ export async function replaySpec(
       const session = sessionIdOf(result)
       if (session !== undefined) sessions.set(step.captureSession, session)
     }
-    const outcome = evaluateStep(step, normalized, spec.redactions, index)
+    const evaluated = evaluateStep(step, normalized, spec.redactions, index)
+    const outcome = {
+      ...evaluated,
+      expected: hide(evaluated.expected),
+      actual: hide(evaluated.actual),
+    }
     outcomes.push(outcome)
     if (outcome.matched) matched += 1
     else mismatched += 1
   }
-  return { passed: mismatched === 0, matched, mismatched, skipped, steps: outcomes }
+  return {
+    passed: mismatched === 0,
+    matched,
+    mismatched,
+    skipped,
+    steps: outcomes,
+    ...(spec.version === REPLAY_SPEC_PARAMETERIZED_VERSION
+      ? { parameters: prepared.reportedParameters }
+      : {}),
+  }
+}
+
+/**
+ * Validate a spec's parameters and the supplied values, then replace every placeholder. Throws
+ * {@link ReplayParameterError} before anything runs: an undeclared, unused or malformed
+ * placeholder, an invalid default, or an unknown, missing or invalid supplied value.
+ */
+export function prepareReplaySpec(
+  spec: ReplaySpec,
+  supplied: Readonly<Record<string, unknown>>,
+): PreparedReplaySpec {
+  const declared: Readonly<Record<string, ReplayParameter>> =
+    spec.version === REPLAY_SPEC_PARAMETERIZED_VERSION ? spec.parameters : {}
+  const used = new Set<string>()
+  for (const [index, step] of spec.steps.entries()) {
+    const where = `step ${index + 1} (${step.tool})`
+    for (const name of placeholdersIn(step.args, `${where} args`)) used.add(name)
+    const matcher = step.expect.result
+    if (matcher?.mode === 'exact' || matcher?.mode === 'subset') {
+      for (const name of placeholdersIn(matcher.value, `${where} expect`)) used.add(name)
+    }
+  }
+  if (spec.version === REPLAY_SPEC_VERSION && used.size > 0) {
+    throw new ReplayParameterError(
+      'spec',
+      'Placeholders need a version 2 spec that declares parameters.',
+    )
+  }
+  for (const name of used) {
+    if (!Object.hasOwn(declared, name)) {
+      throw new ReplayParameterError('spec', `Placeholder "${name}" has no declared parameter.`)
+    }
+  }
+  for (const [name, definition] of Object.entries(declared)) {
+    if (!used.has(name)) {
+      throw new ReplayParameterError('spec', `Parameter "${name}" is declared but no step uses it.`)
+    }
+    if (
+      definition.type === 'string' &&
+      definition.pattern !== undefined &&
+      !isSafeRegex(definition.pattern)
+    ) {
+      throw new ReplayParameterError('spec', `Parameter "${name}" has an unsafe pattern.`)
+    }
+    if (definition.default !== undefined) {
+      const problem = checkParameterValue(definition, definition.default)
+      if (problem !== undefined) {
+        throw new ReplayParameterError('spec', `Parameter "${name}" default ${problem}.`)
+      }
+    }
+  }
+
+  for (const name of Object.keys(supplied)) {
+    if (!Object.hasOwn(declared, name)) {
+      throw new ReplayParameterError(
+        'value',
+        `Unknown parameter "${name}"; the spec declares ${
+          Object.keys(declared).join(', ') || 'none'
+        }.`,
+      )
+    }
+  }
+  const values: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+  const reportedParameters: Record<string, unknown> = {}
+  const sensitiveValues: (string | number)[] = []
+  for (const [name, definition] of Object.entries(declared)) {
+    const raw = Object.hasOwn(supplied, name) ? supplied[name] : definition.default
+    if (raw === undefined) {
+      throw new ReplayParameterError('value', `Missing a value for parameter "${name}".`)
+    }
+    const value = coerceParameterValue(definition, raw)
+    const problem = checkParameterValue(definition, value)
+    if (problem !== undefined) {
+      throw new ReplayParameterError('value', `Parameter "${name}" ${problem}.`)
+    }
+    values[name] = value
+    reportedParameters[name] = definition.sensitive === true ? REDACTED : value
+    if (definition.sensitive === true && (typeof value === 'string' || typeof value === 'number')) {
+      sensitiveValues.push(value)
+    }
+  }
+
+  const substitute = (value: unknown): unknown => substitutePlaceholders(value, values)
+  return {
+    spec: {
+      ...spec,
+      steps: spec.steps.map((step) => ({
+        ...step,
+        args: substitute(step.args),
+        expect: substituteExpect(step.expect, substitute),
+      })),
+    },
+    parameters: { ...values },
+    reportedParameters,
+    sensitiveValues: sensitiveValues.filter((value) => value !== ''),
+  }
+}
+
+function substituteExpect(
+  expect: ReplayStep['expect'],
+  substitute: (value: unknown) => unknown,
+): ReplayStep['expect'] {
+  const matcher = expect.result
+  if (matcher === undefined || (matcher.mode !== 'exact' && matcher.mode !== 'subset'))
+    return expect
+  return { ...expect, result: { ...matcher, value: substitute(matcher.value) } }
+}
+
+/** Argument property names that receive a sensitive parameter, for a trace's `redact` list. */
+export function sensitiveArgumentKeys(spec: ReplaySpec): readonly string[] {
+  if (spec.version !== REPLAY_SPEC_PARAMETERIZED_VERSION) return []
+  const sensitive = new Set(
+    Object.entries(spec.parameters)
+      .filter(([, definition]) => definition.sensitive === true)
+      .map(([name]) => name),
+  )
+  const keys = new Set<string>()
+  const visit = (value: unknown, key: string | undefined): void => {
+    const name = placeholderName(value)
+    if (name !== undefined) {
+      if (sensitive.has(name) && key !== undefined) keys.add(key)
+      return
+    }
+    if (Array.isArray(value)) value.forEach((item) => visit(item, key))
+    else if (isObject(value)) for (const [child, item] of Object.entries(value)) visit(item, child)
+  }
+  for (const step of spec.steps) visit(step.args, undefined)
+  return [...keys]
+}
+
+/** The parameter a `{ "$param": name }` value refers to, or undefined for any other value. */
+function placeholderName(value: unknown): string | undefined {
+  if (!isObject(value) || !(PARAM_KEY in value)) return undefined
+  const name = value[PARAM_KEY]
+  return Object.keys(value).length === 1 && typeof name === 'string' ? name : undefined
+}
+
+function placeholdersIn(value: unknown, where: string): string[] {
+  if (isObject(value) && PARAM_KEY in value) {
+    const name = placeholderName(value)
+    if (name === undefined) {
+      throw new ReplayParameterError(
+        'spec',
+        `${where}: a placeholder is exactly { "${PARAM_KEY}": "<name>" }, with no other keys.`,
+      )
+    }
+    return [name]
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => placeholdersIn(item, where))
+  if (!isObject(value)) return []
+  return Object.values(value).flatMap((item) => placeholdersIn(item, where))
+}
+
+function substitutePlaceholders(
+  value: unknown,
+  values: Readonly<Record<string, unknown>>,
+): unknown {
+  const name = placeholderName(value)
+  if (name !== undefined) return Object.hasOwn(values, name) ? values[name] : undefined
+  if (Array.isArray(value)) return value.map((item) => substitutePlaceholders(item, values))
+  if (!isObject(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, substitutePlaceholders(child, values)]),
+  )
+}
+
+/** Accept the string form a CLI flag carries for numbers and booleans. */
+function coerceParameterValue(definition: ReplayParameter, raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw
+  if (definition.type === 'boolean') return raw === 'true' ? true : raw === 'false' ? false : raw
+  if (definition.type === 'number' || definition.type === 'integer') {
+    const trimmed = raw.trim()
+    return /^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : raw
+  }
+  return raw
+}
+
+/** Why `value` does not fit `definition`, or undefined when it does. */
+function checkParameterValue(definition: ReplayParameter, value: unknown): string | undefined {
+  switch (definition.type) {
+    case 'boolean':
+      return typeof value === 'boolean' ? undefined : 'must be true or false'
+    case 'path':
+      return typeof value === 'string' && isFixedAbsolutePath(value)
+        ? undefined
+        : 'must be an absolute path (on Windows, with a drive letter or a UNC share)'
+    case 'string': {
+      if (typeof value !== 'string') return 'must be a string'
+      if (definition.enum !== undefined && !definition.enum.includes(value)) {
+        return `must be one of ${definition.enum.join(', ')}`
+      }
+      if (definition.minLength !== undefined && value.length < definition.minLength) {
+        return `must be at least ${definition.minLength} characters`
+      }
+      if (definition.maxLength !== undefined && value.length > definition.maxLength) {
+        return `must be at most ${definition.maxLength} characters`
+      }
+      if (definition.pattern !== undefined) {
+        try {
+          if (!new RegExp(definition.pattern, 'u').test(value))
+            return `must match ${definition.pattern}`
+        } catch {
+          return `has an invalid pattern ${definition.pattern}`
+        }
+      }
+      return undefined
+    }
+    case 'number':
+    case 'integer': {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return 'must be a number'
+      if (definition.type === 'integer' && !Number.isInteger(value)) return 'must be an integer'
+      if (definition.enum !== undefined && !definition.enum.includes(value)) {
+        return `must be one of ${definition.enum.join(', ')}`
+      }
+      if (definition.minimum !== undefined && value < definition.minimum) {
+        return `must be at least ${definition.minimum}`
+      }
+      if (definition.maximum !== undefined && value > definition.maximum) {
+        return `must be at most ${definition.maximum}`
+      }
+      return undefined
+    }
+  }
+}
+
+function isFixedAbsolutePath(value: string): boolean {
+  return (
+    /^(?:[A-Za-z]:[\\/]|\\\\)/.test(value) ||
+    (process.platform !== 'win32' && value.startsWith('/'))
+  )
+}
+
+/** Shorter secrets are only redacted as whole values; inside text they would match everywhere. */
+const MIN_SUBSTRING_SECRET = 4
+
+/** Replace sensitive values: equal leaves, and occurrences of longer secrets (any type) inside text. */
+function redactValues(value: unknown, secrets: readonly (string | number)[]): unknown {
+  if (secrets.length === 0) return value
+  const equalsSecret = (leaf: string | number) =>
+    secrets.some((secret) => String(secret) === String(leaf))
+  if (typeof value === 'number') return equalsSecret(value) ? REDACTED : value
+  if (typeof value === 'string') {
+    if (equalsSecret(value)) return REDACTED
+    return secrets.reduce<string>((text, secret) => {
+      const needle = String(secret)
+      return needle.length >= MIN_SUBSTRING_SECRET ? text.split(needle).join(REDACTED) : text
+    }, value)
+  }
+  if (Array.isArray(value)) return value.map((item) => redactValues(item, secrets))
+  if (!isObject(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, redactValues(child, secrets)]),
+  )
 }
 
 /** Keep captured session creators when a replay filter chooses one of their dependent steps. */
@@ -411,26 +892,43 @@ function normalizeValue(value: unknown, normalizers: ReadonlySet<ReplayNormalize
   return out
 }
 
+function withoutDefault(definition: ReplayParameter): ReplayParameter {
+  const copy: Record<string, unknown> = { ...definition }
+  delete copy['default']
+  return copy as ReplayParameter
+}
+
+/** Redact `scope.*` rule paths; a placeholder on such a path is kept and reported to `onPlaceholder`. */
 function redactScopedValue(
   value: unknown,
   rules: readonly string[],
   scope: 'args' | 'result',
+  onPlaceholder?: (name: string) => void,
 ): unknown {
   let current = clone(value)
   for (const rule of rules) {
     const parts = rule.split('.').filter((part) => part.length > 0)
     if (parts[0] !== scope) continue
-    current = redactPath(current, parts.slice(1))
+    current = redactPath(current, parts.slice(1), onPlaceholder)
   }
   return current
 }
 
-function redactPath(value: unknown, parts: readonly string[]): unknown {
-  if (parts.length === 0) return REDACTED
+function redactPath(
+  value: unknown,
+  parts: readonly string[],
+  onPlaceholder?: (name: string) => void,
+): unknown {
+  if (parts.length === 0) {
+    const name = placeholderName(value)
+    if (name === undefined) return REDACTED
+    onPlaceholder?.(name)
+    return value
+  }
   if (!isObject(value)) return value
   const [head, ...tail] = parts
   if (head === undefined || !(head in value)) return value
-  return { ...value, [head]: redactPath(value[head], tail) }
+  return { ...value, [head]: redactPath(value[head], tail, onPlaceholder) }
 }
 
 function replaceSessionIds(value: unknown, aliases: ReadonlyMap<string, string>): unknown {

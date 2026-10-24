@@ -27,6 +27,7 @@ import path from 'node:path'
 import {
   VERSION,
   defineTool,
+  makeError,
   makePluginError,
   makeSuccess,
   readPackageVersion,
@@ -52,7 +53,13 @@ import {
   type ParsedTrace,
 } from './recorder.js'
 import { replayTrace } from './replay.js'
-import { promoteTrace, serializeReplaySpec } from './spec.js'
+import {
+  ReplayParameterError,
+  promoteTraceWithParameters,
+  replayParameterSchema,
+  serializeReplaySpec,
+  type PromoteTraceOptions,
+} from './spec.js'
 import { renderTraceHtml } from './viewer.js'
 
 /**
@@ -622,9 +629,13 @@ export function createTracePlugin(): StagewrightPlugin {
       'ids with stable placeholders, keeps any required session creator, and applies named args.*',
       'redactions BEFORE writing. Use it as',
       'the starting point for committed regression checks; add result matchers intentionally rather',
-      'than treating every raw response as a brittle oracle. Returns: { ok, path, source, steps }.',
+      'than treating every raw response as a brittle oracle. parameters turns recorded values into',
+      'declared parameters of a v2 spec: every argument exactly equal to a parameter value becomes',
+      '{ "$param": name }, with that value as the default (none when sensitive). Returns: { ok, path,',
+      'source, steps, parameters? } (parameters counts the values each one replaced).',
       'Portable results also include expiring artifact metadata and an MCP resource_link.',
-      'Errors: trace.ARTIFACT_NOT_FOUND, trace.ARTIFACT_INVALID, trace.ARTIFACT_WRITE_FAILED.',
+      'Errors: trace.ARTIFACT_NOT_FOUND, trace.ARTIFACT_INVALID, trace.ARTIFACT_WRITE_FAILED,',
+      'BAD_ARGUMENT (a parameter value that matches no argument or breaks its own constraints).',
     ].join(' '),
     inputSchema: z.object({
       path: z.string().describe('Source trace artifact (JSONL).'),
@@ -648,11 +659,23 @@ export function createTracePlugin(): StagewrightPlugin {
         .array(z.string())
         .optional()
         .describe('Skip matching calls unless one is required to create a selected session.'),
+      parameters: z
+        .record(
+          z.string(),
+          z.object({ value: z.union([z.string(), z.number(), z.boolean()]) }).catchall(z.unknown()),
+        )
+        .optional()
+        .describe(
+          'Parameters to declare, e.g. { "language": { "type": "string", "enum": ["en","es"],' +
+            ' "value": "es" } }: the recorded value plus type, description, sensitive, enum,' +
+            ' pattern, minLength/maxLength or minimum/maximum.',
+        ),
     }),
     outputSchema: z.object({
       path: z.string(),
       source: z.string(),
       steps: z.number().int().nonnegative(),
+      parameters: z.record(z.string(), z.number().int().nonnegative()).optional(),
       ...artifactOutputFields,
     }),
     operationType: 'command',
@@ -667,11 +690,30 @@ export function createTracePlugin(): StagewrightPlugin {
           : target.endsWith('.jsonl')
             ? `${target.slice(0, -'.jsonl'.length)}.replay.json`
             : `${target}.replay.json`
-      const spec = promoteTrace(loaded.parsed.calls, {
-        ...(args.redactions !== undefined ? { redactions: args.redactions } : {}),
-        ...(args.include !== undefined ? { include: args.include } : {}),
-        ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
-      })
+      const parameters: Record<string, NonNullable<PromoteTraceOptions['parameters']>[string]> = {}
+      for (const [name, { value, ...rest }] of Object.entries(args.parameters ?? {})) {
+        const definition = replayParameterSchema.safeParse(rest)
+        if (!definition.success) {
+          return makeError('BAD_ARGUMENT', {
+            ...meta,
+            message: `Parameter "${name}": ${definition.error.issues[0]?.message ?? 'invalid definition'}.`,
+          })
+        }
+        parameters[name] = { definition: definition.data, value }
+      }
+      let promoted: ReturnType<typeof promoteTraceWithParameters>
+      try {
+        promoted = promoteTraceWithParameters(loaded.parsed.calls, {
+          ...(args.redactions !== undefined ? { redactions: args.redactions } : {}),
+          ...(args.include !== undefined ? { include: args.include } : {}),
+          ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
+          ...(Object.keys(parameters).length > 0 ? { parameters } : {}),
+        })
+      } catch (err) {
+        if (!(err instanceof ReplayParameterError)) throw err
+        return makeError('BAD_ARGUMENT', { ...meta, message: err.message })
+      }
+      const spec = promoted.spec
       ctx.signal?.throwIfAborted()
       const serialized = serializeReplaySpec(spec)
       try {
@@ -690,6 +732,7 @@ export function createTracePlugin(): StagewrightPlugin {
           path: out,
           source: target,
           steps: spec.steps.length,
+          ...(Object.keys(parameters).length > 0 ? { parameters: promoted.replaced } : {}),
           ...ctx.artifacts?.publish(Buffer.from(serialized), 'application/json', 'replay.json'),
         },
         meta,

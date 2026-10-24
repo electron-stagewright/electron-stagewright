@@ -183,3 +183,43 @@ recipe, as Decision 2 allows: the guide [Verify a desktop change](../guides/veri
 also served as the MCP resource `stagewright://docs/verify-desktop-change` and named in the server
 instructions. No tool executes it. Running it unattended uses promoted replay specifications;
 parameterizing them stays the next candidate under Decision 3 and still needs its own amendment.
+
+## Amendment (2026-10-23): parameterized replay specifications
+
+Decision 3's first composition enhancement ships within its constraints. A `stagewright-replay`
+spec at `version: 2` declares `parameters`; version 1 specs are unchanged, and a runner that only
+knows version 1 refuses a version 2 spec instead of running its placeholders as literal data.
+
+- **Declared and typed.** Each parameter has a type (`string`, `number`, `integer`, `boolean`,
+  `path`) and optional `enum`, `pattern`, `minLength` / `maxLength`, `minimum` / `maximum`,
+  `default`, `description` and `sensitive`. A `path` must be absolute. A `pattern` passes the same
+  nested-quantifier guard as regex matchers.
+- **Whole values only.** A placeholder is the JSON value `{ "$param": "<name>" }` with no other
+  keys, allowed inside step `args` and `exact` / `subset` matcher values. There is no string
+  interpolation, no dynamic key, and no placeholder in tool names, session captures, normalizers,
+  redactions or the step list, so tool names and control flow stay fixed in the reviewed file.
+  There are no loops, branches or result-to-argument flows; a matrix of inputs is one run per value
+  set, driven by CI.
+- **Validated before any side effect.** Before the first dispatch the runner refuses a placeholder
+  without a declared parameter, a declared parameter no step uses, a malformed placeholder or an
+  invalid default (malformed spec, exit `2`), and an unknown, missing or invalid supplied value
+  (`INVALID_PARAMETERS`, exit `64`). Values come from `--param name=value`, `--params-file` and
+  `--param-env name=ENV_VAR`.
+- **Sensitive values.** The report's `parameters` lists a `sensitive` parameter as `[redacted]` by
+  name. In expected and actual values, any leaf equal to a sensitive string or number is redacted,
+  and a sensitive value whose text has four or more characters (a string or a number) is also
+  redacted inside longer text; shorter ones would match everywhere, so they are redacted only as
+  whole values. When the trace plugin is loaded, the runner adds the argument names
+  that receive a sensitive value to the trace `redact` list. `trace_promote` writes no default for a
+  sensitive parameter and refuses a non-sensitive one placed on a redacted argument, so a recorded
+  secret never lands in the committed spec. An unreadable `--params-file` is reported without
+  quoting its content.
+- **Normal dispatch.** After substitution every step goes through the dispatcher unchanged:
+  validation, eval gating, guards, timeouts, progress, observers and envelopes.
+- **Promotion helper.** `trace_promote` takes `parameters` with the recorded value of each one,
+  replaces every argument exactly equal to it with a placeholder, declares the parameter with that
+  value as default, and reports how many values each one replaced; a parameter that matches
+  nothing is refused rather than written as an unused declaration.
+
+The engine lives in `packages/plugin-trace/src/spec.ts` (`prepareReplaySpec`) and the flags in
+`packages/plugin-trace/src/cli.ts`.

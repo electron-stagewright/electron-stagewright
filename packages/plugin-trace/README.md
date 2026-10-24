@@ -62,13 +62,19 @@ warn_threshold }`. For an agent to self-limit mid-session without the full token
   report (inline CSS/JS, no external assets) and return `{ path, source, calls, bytes }`, where
   `path` is the written report. With no `out` the report is written next to the trace with a
   `.html` extension.
-- **`trace_promote`** `{ path, out?, redactions?, include?, exclude? }` — turn a diagnostic trace
+- **`trace_promote`** `{ path, out?, redactions?, include?, exclude?, parameters? }` — turn a diagnostic trace
   into a reviewable `stagewright-replay` v1 JSON spec. It retains tool args plus explicit `ok`
   checkpoints, replaces captured session ids with stable placeholders, and redacts sensitive args
   before writing (password/token/authorization/cookie defaults plus any named `args.*` fields).
   When filters select a later session-bound call, it retains the earlier session creator so the
   resulting spec remains runnable.
-  Add result matchers intentionally when a regression needs to observe a value.
+  Add result matchers intentionally when a regression needs to observe a value. `parameters`
+  (e.g. `{ "language": { "type": "string", "enum": ["en", "es"], "value": "es" } }`) turns every
+  argument exactly equal to `value` into a placeholder and writes a version 2 spec that declares
+  the parameter with `value` as its default (no default for a `sensitive` one); the result counts
+  the values each parameter replaced, and one that replaces nothing is `BAD_ARGUMENT`. A parameter
+  placed on a redacted argument (such as `args.token`) must be `sensitive`, so its value is never
+  written as a default.
 
 Error codes: `trace.ALREADY_RECORDING`, `trace.NOT_RECORDING`, `trace.ARTIFACT_NOT_FOUND`,
 `trace.ARTIFACT_INVALID`, `trace.ARTIFACT_WRITE_FAILED`, `trace.BUDGET_EXCEEDED`.
@@ -140,6 +146,43 @@ copy arbitrary result payloads from the diagnostic trace. Reviewers can add a re
 where a behavior matters: `exact`, `subset`, `regex`, or `ignore`, with optional numeric tolerance
 for exact/subset comparisons. Unsafe nested-quantifier regexes are refused by the runner.
 
+### Parameters (version 2)
+
+A spec that runs the same flow for several inputs (each language, theme or window size) declares
+typed parameters and uses `{ "$param": "<name>" }` as a whole JSON value inside step `args` or an
+`exact` / `subset` matcher value. Nothing else can be parameterized: no string interpolation, no
+dynamic keys, no tool names or control flow. A matrix runs one spec per value set.
+
+```json
+{
+  "format": "stagewright-replay",
+  "version": 2,
+  "parameters": {
+    "language": { "type": "string", "enum": ["en", "es"], "default": "en" },
+    "dump": { "type": "path", "description": "SQL file to import" },
+    "apiToken": { "type": "string", "sensitive": true }
+  },
+  "steps": [
+    {
+      "tool": "storage_local_set",
+      "args": { "key": "language", "value": { "$param": "language" } },
+      "expect": { "ok": true }
+    }
+  ]
+}
+```
+
+Types are `string` (`enum`, `pattern`, `minLength`, `maxLength`), `number` and `integer` (`enum`,
+`minimum`, `maximum`), `boolean`, and `path` (absolute; on Windows with a drive letter or UNC
+share). Every check runs before the first step: a placeholder without a declared parameter, a
+declared parameter no step uses, or an invalid default is a malformed spec (exit `2`); an unknown,
+missing or invalid supplied value is invalid usage (exit `64`, error code `INVALID_PARAMETERS`).
+A `sensitive` parameter is `[redacted]` by name in the report's `parameters`; in expected and actual
+values any leaf equal to it is redacted, and a sensitive value whose text has four or more
+characters (string or number) is also redacted inside longer text; shorter ones only as whole values. When the trace plugin is loaded the runner adds the argument names that
+carry it to the trace `redact` list.
+The report lists the values a run used under `parameters`.
+
 ## Headless replay
 
 The package also ships `electron-stagewright-replay`, a standalone CI runner for a committed
@@ -156,6 +199,8 @@ launch (`3`), infrastructure failure (`4`), and invalid CLI usage (`64`). It acc
 `--include` / `--exclude`, `--plugin` / `--plugin-config`, `--allow-eval`, `--app-root`,
 `--operation-timeout-ms`, and `--tool-profile` where a spec needs the same core configuration as
 an MCP run. Filtered execution retains the session creator required by a selected later step.
+Supply parameter values with `--param name=value` (repeatable), `--params-file values.json` (a
+JSON object), and `--param-env name=ENV_VAR` for secrets; later sources win in that order.
 
 On Linux CI, run Electron under Xvfb and preserve the JSON report even when its non-zero exit code
 correctly fails the job:

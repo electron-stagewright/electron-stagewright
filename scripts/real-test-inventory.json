@@ -117,7 +117,7 @@
   },
   {
     "path": "packages/plugin-trace/tests/replay-smoke.test.ts",
-    "tests": 1
+    "tests": 2
   },
   {
     "path": "packages/plugin-visual/tests/visual-smoke.test.ts",

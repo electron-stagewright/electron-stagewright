@@ -153,6 +153,22 @@ Add `--plugin`, `--plugin-config`, `--allow-eval`, or the same confinement/timeo
 MCP server when the spec needs them. `--include` and `--exclude` narrow a run while retaining the
 session creator required by a selected later call.
 
+A version 2 spec declares typed parameters, so one reviewed file covers each language or theme.
+Pass values with `--param`, `--params-file`, or `--param-env` for secrets, and let a CI matrix run
+one value set per job; invalid values stop the run before the app launches (exit `64`):
+
+```yaml
+strategy:
+  matrix:
+    language: [en, es, pt]
+steps:
+  - name: Replay Electron regression
+    run: >-
+      xvfb-run --auto-servernum electron-stagewright-replay tests/regressions/import.replay.json
+      --param language=${{ matrix.language }} --param-env apiToken=APP_TOKEN --json
+      > replay-report-${{ matrix.language }}.json
+```
+
 The token accounting exists because the trace's first consumer is an agent operating under a
 context budget: it shows which tools cost the most before the budget bites.
 

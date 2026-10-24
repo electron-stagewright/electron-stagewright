@@ -13,7 +13,7 @@
  * @module
  */
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer } from '@electron-stagewright/core'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { REPLAY_EXIT_CODES, runReplayCli, type ReplayCliIo } from '../src/cli.js'
 import tracePlugin from '../src/index.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
@@ -108,6 +109,71 @@ describe('trace replay smoke (real Electron)', () => {
       } finally {
         await replayServer.close().catch(() => undefined)
       }
+    },
+    60_000,
+  )
+
+  it.skipIf(!RUN_E2E)(
+    'runs one parameterized spec with different values through the headless runner',
+    async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), 'sw-replay-params-'))
+      created.push(dir)
+      const specPath = path.join(dir, 'type-name.replay.json')
+      await writeFile(
+        specPath,
+        JSON.stringify({
+          format: 'stagewright-replay',
+          version: 2,
+          parameters: {
+            main: { type: 'path' },
+            name: { type: 'string', minLength: 1, default: 'Ada' },
+          },
+          steps: [
+            { tool: 'electron_launch', args: { main: { $param: 'main' } }, expect: { ok: true } },
+            {
+              tool: 'electron_type',
+              args: { selector: '#name', text: { $param: 'name' } },
+              expect: { ok: true },
+            },
+            {
+              tool: 'electron_get_value',
+              args: { selector: '#name' },
+              expect: { result: { mode: 'subset', value: { value: { $param: 'name' } } } },
+            },
+            { tool: 'electron_stop', args: {}, expect: { ok: true } },
+          ],
+        }),
+      )
+      const io: ReplayCliIo = { stdout: () => undefined, stderr: () => undefined }
+      const run = (parameters: Record<string, string>) =>
+        runReplayCli(
+          {
+            command: 'run',
+            specPath,
+            json: true,
+            allowEval: { main: false, renderer: false },
+            toolProfile: 'full',
+            pluginSpecs: [],
+            pluginConfigs: {},
+            parameters,
+          },
+          io,
+        )
+
+      for (const name of ['Ada', 'Grace Hopper']) {
+        const replay = await run({ main: FIXTURE_MAIN, name })
+        expect(replay.exitCode).toBe(REPLAY_EXIT_CODES.SUCCESS)
+        expect(replay.report).toMatchObject({
+          passed: true,
+          summary: { matched: 4, mismatched: 0 },
+          parameters: { main: FIXTURE_MAIN, name },
+        })
+      }
+      // A value that breaks the declaration stops before the app launches.
+      await expect(run({ main: FIXTURE_MAIN, name: '' })).resolves.toMatchObject({
+        exitCode: REPLAY_EXIT_CODES.USAGE,
+        report: { error: { code: 'INVALID_PARAMETERS' } },
+      })
     },
     60_000,
   )
