@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { runDoctorChecks } from '../src/doctor.js'
+import { NPX_PREFIX_REMEDY } from '../src/runtime/default-electron.js'
 
 const READY_DEPS = {
   nodeVersion: 'v24.5.0',
@@ -124,26 +125,36 @@ describe('runDoctorChecks', () => {
     expect(electronHint).toContain('pnpm exec install-electron')
   })
 
-  it('names the project copy npx reused instead of installing a peer beside the server', async () => {
-    const report = await runDoctorChecks(
-      { allowEvalMain: false, allowEvalRenderer: false },
-      {
-        ...READY_DEPS,
-        resolvePackage: async (name) => {
-          if (name === 'playwright') throw new Error("Cannot find module 'playwright/package.json'")
+  it.each(['playwright', 'electron'] as const)(
+    'reports a project %s copy without inferring how the server was started',
+    async (peer) => {
+      const report = await runDoctorChecks(
+        { allowEvalMain: false, allowEvalRenderer: false },
+        {
+          ...READY_DEPS,
+          resolvePackage: async (name) => {
+            if (name === peer) throw new Error(`Cannot find module '${peer}/package.json'`)
+          },
+          findProjectCopy: (name) => (name === peer ? `/work/app/node_modules/${peer}` : undefined),
         },
-        findProjectCopy: (name) =>
-          name === 'playwright' ? '/work/app/node_modules/playwright' : undefined,
-      },
-    )
+      )
 
-    const playwright = report.checks.find((check) => check.id === 'playwright')
-    expect(playwright?.status).toBe('fail')
-    expect(playwright?.hint).toContain('/work/app/node_modules/playwright')
-    expect(playwright?.hint).toContain('--prefix ~/')
-    expect(playwright?.details).toEqual({ project_copy: '/work/app/node_modules/playwright' })
-    expect(report.checks.find((check) => check.id === 'electron')?.status).toBe('pass')
-  })
+      const check = report.checks.find((check) => check.id === peer)
+      expect(report.ok).toBe(false)
+      expect(check?.status).toBe('fail')
+      expect(check?.hint).toContain(`/work/app/node_modules/${peer}`)
+      expect(check?.hint).toContain('not resolvable by the server')
+      expect(check?.hint).toContain(NPX_PREFIX_REMEDY)
+      expect(check?.hint).toContain('in every npx command for this server')
+      expect(check?.hint).not.toContain('npx reused')
+      expect(check?.details).toEqual({ project_copy: `/work/app/node_modules/${peer}` })
+      expect(
+        report.checks.find(
+          (other) => other.id === (peer === 'electron' ? 'playwright' : 'electron'),
+        )?.status,
+      ).toBe('pass')
+    },
+  )
 
   it('keeps the generic peer hint when the project has no copy either', async () => {
     const report = await runDoctorChecks(

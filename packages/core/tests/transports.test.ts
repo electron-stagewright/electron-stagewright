@@ -650,21 +650,25 @@ describe('PlaywrightElectronTransport', () => {
     expect(launched).toEqual([])
   })
 
-  it('skips the default-runtime check when the caller names an executable', async () => {
-    let inspected = false
-    const electron = await loadPlaywrightElectron({
-      importPlaywright: async () => ({
-        _electron: { launch: () => Promise.reject(new Error('launched')) },
-      }),
-      inspectElectron: async () => {
-        inspected = true
-        return { ok: true }
-      },
-    })
+  it.each(['package_missing', 'binary_missing'] as const)(
+    'launches a named executable even when the default runtime has %s',
+    async (reason) => {
+      let inspected = false
+      const app = createFakeElectronApp([])
+      const electron = await loadPlaywrightElectron({
+        importPlaywright: async () => ({
+          _electron: { launch: async () => app },
+        }),
+        inspectElectron: async () => {
+          inspected = true
+          return { ok: false, reason, message: 'Default Electron is unavailable.' }
+        },
+      })
 
-    await expect(electron.launch({ executablePath: '/abs/Electron' })).rejects.toThrow('launched')
-    expect(inspected).toBe(false)
-  })
+      await expect(electron.launch({ executablePath: '/abs/Electron' })).resolves.toBe(app)
+      expect(inspected).toBe(false)
+    },
+  )
 
   it('maps a main-process appPath to Playwright args instead of executablePath', () => {
     const opts = buildPlaywrightLaunchOptions({
