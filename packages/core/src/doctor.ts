@@ -146,7 +146,7 @@ function findProjectCopy(name: 'playwright' | 'electron'): string | undefined {
 }
 
 /** Describe the resolution boundary and offer the npx remedy only conditionally. */
-export function npxSkippedPeerHint(name: string, projectCopy: string): string {
+export function projectCopyPeerHint(name: string, projectCopy: string): string {
   return `${name} is available in the current project (${projectCopy}) but is not resolvable by the server. ${NPX_PREFIX_REMEDY}`
 }
 
@@ -256,7 +256,7 @@ async function packageCheck(
         cause instanceof Error ? cause.message : String(cause)
       }`,
       hint:
-        projectCopy !== undefined ? `${npxSkippedPeerHint(name, projectCopy)} ${remedy}` : remedy,
+        projectCopy !== undefined ? `${projectCopyPeerHint(name, projectCopy)} ${remedy}` : remedy,
       ...(projectCopy !== undefined ? { details: { project_copy: projectCopy } } : {}),
     }
   }

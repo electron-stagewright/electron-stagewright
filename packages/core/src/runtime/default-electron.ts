@@ -19,7 +19,7 @@ export const INSTALL_ELECTRON_REMEDY =
 
 /** `npx --package` skips a package the project at the working directory already has. */
 export const NPX_PREFIX_REMEDY =
-  'If the server runs through npx inside a project that already has this package, add --prefix ~/ after -y so npx installs it beside the server.'
+  'If the server runs through npx inside a project that already has this package, add --prefix ~/ after -y in every npx command for this server so npx installs it beside the server.'
 
 export type DefaultElectronStatus =
   | { readonly ok: true; readonly version?: string }

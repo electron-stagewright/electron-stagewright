@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { runDoctorChecks } from '../src/doctor.js'
+import { NPX_PREFIX_REMEDY } from '../src/runtime/default-electron.js'
 
 const READY_DEPS = {
   nodeVersion: 'v24.5.0',
@@ -143,8 +144,8 @@ describe('runDoctorChecks', () => {
       expect(check?.status).toBe('fail')
       expect(check?.hint).toContain(`/work/app/node_modules/${peer}`)
       expect(check?.hint).toContain('not resolvable by the server')
-      expect(check?.hint).toContain('If the server runs through npx')
-      expect(check?.hint).toContain('--prefix ~/')
+      expect(check?.hint).toContain(NPX_PREFIX_REMEDY)
+      expect(check?.hint).toContain('in every npx command for this server')
       expect(check?.hint).not.toContain('npx reused')
       expect(check?.details).toEqual({ project_copy: `/work/app/node_modules/${peer}` })
       expect(
