@@ -9,7 +9,11 @@ import { constants } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 
-import { INSTALL_ELECTRON_REMEDY, inspectDefaultElectron } from './runtime/default-electron.js'
+import {
+  INSTALL_ELECTRON_REMEDY,
+  NPX_PREFIX_REMEDY,
+  inspectDefaultElectron,
+} from './runtime/default-electron.js'
 import {
   inventoryNativeAddons,
   probeElectronRuntime,
@@ -124,8 +128,8 @@ async function resolvePackage(name: 'playwright' | 'electron'): Promise<void> {
   createRequire(import.meta.url).resolve(`${name}/package.json`)
 }
 
-// `npx --package` installs only what the project at the working directory lacks, so a peer the
-// project already has at that version never lands beside core.
+// A project copy does not establish how the server was installed or started. It can explain
+// a missing peer under npx, but also occurs with separate local server/project installations.
 function findProjectCopy(name: 'playwright' | 'electron'): string | undefined {
   const manifest = `${name}/package.json`
   try {
@@ -141,9 +145,9 @@ function findProjectCopy(name: 'playwright' | 'electron'): string | undefined {
   }
 }
 
-/** Hint for a peer `npx` left out of its install because the current project already had it. */
+/** Describe the resolution boundary and offer the npx remedy only conditionally. */
 export function npxSkippedPeerHint(name: string, projectCopy: string): string {
-  return `npx reused ${name} from the current project (${projectCopy}) instead of installing it beside the server. Add --prefix ~/ after -y in every npx command for this server so npx installs the whole --package list.`
+  return `${name} is available in the current project (${projectCopy}) but is not resolvable by the server. ${NPX_PREFIX_REMEDY}`
 }
 
 async function packageVersion(name: 'playwright' | 'electron'): Promise<string | undefined> {
