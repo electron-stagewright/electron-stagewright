@@ -26,23 +26,23 @@ the binary with Electron's `install-electron` bin using the same package list, t
 current project already has that version, which would leave the server unable to load it:
 
 ```bash
-npx -y --prefix ~/ --package @electron-stagewright/core@0.6.3 \
+npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
   --package playwright@1.63.0 --package electron@42.11.10 install-electron
-npx -y --prefix ~/ --package @electron-stagewright/core@0.6.3 \
+npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
   --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright doctor --json
 ```
 
 Then configure or run the normal server command:
 
 ```bash
-npx -y --prefix ~/ --package @electron-stagewright/core@0.6.3 \
+npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
   --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright
 ```
 
 Or install all three once and run the bin directly:
 
 ```bash
-npm install -g @electron-stagewright/core@0.6.3 playwright@1.63.0 electron@42.11.10
+npm install -g @electron-stagewright/core@0.7.0 playwright@1.63.0 electron@42.11.10
 install-electron
 electron-stagewright
 ```
@@ -81,7 +81,7 @@ Useful CLI flags:
 
 ```bash
 claude mcp add electron-stagewright -- \
-  npx -y --prefix ~/ --package @electron-stagewright/core@0.6.3 \
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
   --package playwright@1.63.0 --package electron@42.11.10 \
   electron-stagewright --tool-profile essential
 ```
