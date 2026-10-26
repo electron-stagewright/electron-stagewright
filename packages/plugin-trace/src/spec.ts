@@ -341,7 +341,7 @@ export function promoteTraceWithParameters(
       )
     }
   }
-  const launch = selectedCalls.find((call) => call.tool === 'electron_launch')
+  const launch = steps.find((step) => step.tool === 'electron_launch')
   const main = launch === undefined ? undefined : mainOf(launch.args)
   const body = {
     format: REPLAY_SPEC_FORMAT,
@@ -471,8 +471,8 @@ export async function runPreparedReplaySpec(
     const evaluated = evaluateStep(step, normalized, spec.redactions, index)
     const outcome = {
       ...evaluated,
-      expected: hide(evaluated.expected),
-      actual: hide(evaluated.actual),
+      expected: capValue(hide(evaluated.expected)),
+      actual: capValue(hide(evaluated.actual)),
     }
     outcomes.push(outcome)
     if (outcome.matched) matched += 1
@@ -798,7 +798,7 @@ function evaluateStep(
       matched: false,
       matcher: 'ok',
       expected: step.expect.ok,
-      actual: capValue(redact(result)),
+      actual: redact(result),
       message: `expected ok=${String(step.expect.ok)}`,
     }
   }
@@ -821,8 +821,8 @@ function evaluateStep(
     tool: step.tool,
     matched,
     matcher: matcher.mode,
-    expected: capValue(expected),
-    actual: capValue(actual),
+    expected,
+    actual,
     ...(matched ? {} : { message: `${matcher.mode} matcher did not match` }),
   }
 }
