@@ -136,7 +136,7 @@ describe('replaySpec with parameters', () => {
     )
     expect(promoted.spec.steps[0]?.args).toEqual({ main: { $param: 'main' } })
     expect(promoted.spec.app).toBeUndefined()
-    expect(JSON.stringify(promoted.spec)).not.toContain(main)
+    expect(JSON.stringify(promoted.spec)).not.toContain('private-project')
     expect(() => prepareReplaySpec(promoted.spec, { main })).not.toThrow()
   })
 
