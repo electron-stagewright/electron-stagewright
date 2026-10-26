@@ -158,9 +158,7 @@ dynamic keys, no tool names or control flow. A matrix runs one spec per value se
   "format": "stagewright-replay",
   "version": 2,
   "parameters": {
-    "language": { "type": "string", "enum": ["en", "es"], "default": "en" },
-    "dump": { "type": "path", "description": "SQL file to import" },
-    "apiToken": { "type": "string", "sensitive": true }
+    "language": { "type": "string", "enum": ["en", "es"], "default": "en" }
   },
   "steps": [
     {
@@ -200,7 +198,9 @@ launch (`3`), infrastructure failure (`4`), and invalid CLI usage (`64`). It acc
 `--operation-timeout-ms`, and `--tool-profile` where a spec needs the same core configuration as
 an MCP run. Filtered execution retains the session creator required by a selected later step.
 Supply parameter values with `--param name=value` (repeatable), `--params-file values.json` (a
-JSON object), and `--param-env name=ENV_VAR` for secrets; later sources win in that order.
+JSON object), and `--param-env name=ENV_VAR` for secrets. Values from the file are
+loaded first, environment values override them, and explicit `--param` values have
+the highest precedence, regardless of the order of those flags on the command line.
 
 On Linux CI, run Electron under Xvfb and preserve the JSON report even when its non-zero exit code
 correctly fails the job:
