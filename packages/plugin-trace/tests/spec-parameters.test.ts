@@ -65,6 +65,81 @@ const languageSpec = () =>
   )
 
 describe('replaySpec with parameters', () => {
+  it.each(['ok', 'exact', 'subset'] as const)(
+    'redacts escaped and oversized sensitive report values before capping (%s)',
+    async (mode) => {
+      const secret = 'synthetic-"quoted"\nline\\path-' + 'private-fixture-'.repeat(100)
+      const input = spec({ token: { type: 'string', sensitive: true } }, [
+        {
+          tool: 'fixture',
+          args: { token: { $param: 'token' } },
+          expect:
+            mode === 'ok'
+              ? { ok: false }
+              : { result: { mode, value: result({ token: { $param: 'token' } }) } },
+        },
+      ])
+      const report = await replaySpec(
+        input,
+        {
+          dispatch: async () => result({ token: secret }),
+        },
+        { parameters: { token: secret } },
+      )
+      expect(report.passed).toBe(mode !== 'ok')
+      expect(report.steps[0]?.actual).toMatchObject({ token: '[redacted]' })
+      if (mode !== 'ok') expect(report.steps[0]?.expected).toMatchObject({ token: '[redacted]' })
+      expect(JSON.stringify(report)).not.toContain('synthetic-')
+      expect(JSON.stringify(report)).not.toContain('private-fixture-')
+    },
+  )
+
+  it('compares original values even when redacted report values are equal', async () => {
+    const input = spec({ token: { type: 'string', sensitive: true } }, [
+      {
+        tool: 'fixture',
+        args: { token: { $param: 'token' } },
+        expect: { result: { mode: 'subset', value: { token: '[redacted]' } } },
+      },
+    ])
+    const report = await replaySpec(
+      input,
+      {
+        dispatch: async () => result({ token: 'synthetic-sensitive-value' }),
+      },
+      { parameters: { token: 'synthetic-sensitive-value' } },
+    )
+    expect(report.passed).toBe(false)
+    expect(report.steps[0]?.actual).toMatchObject({ token: '[redacted]' })
+    expect(report.steps[0]?.expected).toMatchObject({ token: '[redacted]' })
+  })
+
+  it('omits sensitive parameterized launch paths from app metadata', () => {
+    const main =
+      process.platform === 'win32'
+        ? 'C:\\synthetic\\private-project\\main.js'
+        : '/synthetic/private-project/main.js'
+    const promoted = promoteTraceWithParameters(
+      [
+        {
+          tool: 'electron_launch',
+          args: { main },
+          result: result({}),
+          ok: true,
+        } as TraceCallRecord,
+      ],
+      {
+        parameters: {
+          main: { definition: { type: 'path', sensitive: true }, value: main },
+        },
+      },
+    )
+    expect(promoted.spec.steps[0]?.args).toEqual({ main: { $param: 'main' } })
+    expect(promoted.spec.app).toBeUndefined()
+    expect(JSON.stringify(promoted.spec)).not.toContain('private-project')
+    expect(() => prepareReplaySpec(promoted.spec, { main })).not.toThrow()
+  })
+
   it('redacts sensitive numbers and short secrets by value, and by name in parameters', async () => {
     const pinSpec = spec(
       { pin: { type: 'integer', sensitive: true }, code: { type: 'string', sensitive: true } },
