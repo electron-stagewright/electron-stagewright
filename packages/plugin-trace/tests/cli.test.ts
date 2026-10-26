@@ -207,6 +207,8 @@ describe('runReplayCli', () => {
         parseReplayCliArgs([
           'spec.json',
           '--param',
+          'language=en',
+          '--param',
           'language=es',
           '--param',
           'query=a=b',
@@ -306,6 +308,12 @@ describe('runReplayCli', () => {
         [
           paramSpec,
           { paramEnv: { token: 'UNSET_VAR' } },
+          REPLAY_EXIT_CODES.USAGE,
+          'INVALID_PARAMETERS',
+        ],
+        [
+          paramSpec,
+          { paramEnv: { token: 'UNSET_VAR' }, parameters: { token: 't' } },
           REPLAY_EXIT_CODES.USAGE,
           'INVALID_PARAMETERS',
         ],
