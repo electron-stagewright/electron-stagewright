@@ -158,16 +158,45 @@ dynamic keys, no tool names or control flow. A matrix runs one spec per value se
   "format": "stagewright-replay",
   "version": 2,
   "parameters": {
-    "language": { "type": "string", "enum": ["en", "es"], "default": "en" }
+    "main": { "type": "path", "description": "App entry point" },
+    "language": { "type": "string", "enum": ["en", "es"], "default": "en" },
+    "apiToken": { "type": "string", "sensitive": true }
   },
   "steps": [
     {
+      "tool": "electron_launch",
+      "args": { "main": { "$param": "main" } },
+      "captureSession": "$stagewright.session.1",
+      "expect": { "ok": true }
+    },
+    {
       "tool": "storage_local_set",
-      "args": { "key": "language", "value": { "$param": "language" } },
+      "args": {
+        "sessionId": "$stagewright.session.1",
+        "key": "language",
+        "value": { "$param": "language" }
+      },
+      "expect": { "ok": true }
+    },
+    {
+      "tool": "electron_type",
+      "args": {
+        "sessionId": "$stagewright.session.1",
+        "selector": "#api-token",
+        "text": { "$param": "apiToken" }
+      },
       "expect": { "ok": true }
     }
   ]
 }
+```
+
+`storage_local_set` comes from the storage plugin, so the run loads it:
+
+```sh
+electron-stagewright-replay settings.replay.json \
+  --plugin @electron-stagewright/plugin-storage \
+  --param main=/abs/app/main.js --param language=es --param-env apiToken=APP_TOKEN --json
 ```
 
 Types are `string` (`enum`, `pattern`, `minLength`, `maxLength`), `number` and `integer` (`enum`,
@@ -199,8 +228,10 @@ launch (`3`), infrastructure failure (`4`), and invalid CLI usage (`64`). It acc
 `--operation-timeout-ms`, and `--tool-profile` where a spec needs the same core configuration as
 an MCP run. Filtered execution retains the session creator required by a selected later step.
 Supply parameter values with `--param name=value` (repeatable), `--params-file values.json` (a
-JSON object), and `--param-env name=ENV_VAR` for secrets. Whatever the flag order, `--param`
-overrides `--param-env`, which overrides the file.
+JSON object), and `--param-env name=ENV_VAR` for secrets. When sources set the same name,
+`--param` beats `--param-env`, which beats the file, whatever the flag order; within one flag the
+last occurrence wins. Every source given is still read, so an unset `--param-env` variable fails
+the run even when `--param` supplies that name.
 
 On Linux CI, run Electron under Xvfb and preserve the JSON report even when its non-zero exit code
 correctly fails the job:

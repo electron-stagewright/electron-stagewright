@@ -331,6 +331,7 @@ export function formatReplayCliHelp(): string {
     '  --plugin <name|path>             Load a plugin used by the specification; repeatable.',
     '  --plugin-config <name>=<json>    Supply configuration for a loaded plugin.',
     '  --param <name>=<value>           Value for a declared spec parameter; repeatable.',
+    '                                   Precedence: --param, then --param-env, then the file.',
     '  --params-file <file.json>        A JSON object of parameter values.',
     '  --param-env <name>=<ENV_VAR>     Read a parameter from the environment (secrets).',
     '  --allow-eval[=main,renderer|all] Enable the required eval tools (default: disabled).',
