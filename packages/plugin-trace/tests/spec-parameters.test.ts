@@ -115,7 +115,10 @@ describe('replaySpec with parameters', () => {
   })
 
   it('omits sensitive parameterized launch paths from app metadata', () => {
-    const main = '/synthetic/private-project/main.js'
+    const main =
+      process.platform === 'win32'
+        ? 'C:\\synthetic\\private-project\\main.js'
+        : '/synthetic/private-project/main.js'
     const promoted = promoteTraceWithParameters(
       [
         {
