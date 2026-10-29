@@ -7,9 +7,11 @@ import { makeSuccess } from '../src/errors/envelope.js'
 import type { StagewrightPlugin } from '../src/plugins/types.js'
 import { createServer } from '../src/server/server.js'
 import {
+  coveringToolProfile,
   DEBUG_CORE_TOOL_NAMES,
   DEFAULT_TOOLS,
   ESSENTIAL_CORE_TOOL_NAMES,
+  excludedCoreToolProfileHints,
   resolveCoreToolProfile,
   TESTING_CORE_TOOL_NAMES,
 } from '../src/tools/index.js'
@@ -99,6 +101,19 @@ describe('core tool profiles', () => {
       code: 'BAD_ARGUMENT',
       error: expect.stringContaining('--allow-eval=renderer'),
     })
+  })
+
+  it('never hints a sideways swap that drops tools the active profile supplies', () => {
+    expect(
+      excludedCoreToolProfileHints(DEFAULT_TOOLS, 'testing').get('electron_console_logs'),
+    ).toBe('full')
+    expect(excludedCoreToolProfileHints(DEFAULT_TOOLS, 'debug').get('electron_keyboard_type')).toBe(
+      'full',
+    )
+    expect(excludedCoreToolProfileHints(DEFAULT_TOOLS, 'essential').get('electron_inject')).toBe(
+      'debug',
+    )
+    expect(coveringToolProfile(DEFAULT_TOOLS, 'essential', ['electron_eval_main'])).toBeUndefined()
   })
 
   it('combines an essential profile with eval authorization by target', async () => {

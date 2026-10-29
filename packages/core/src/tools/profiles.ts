@@ -134,7 +134,25 @@ export function resolveCoreToolProfile(
 }
 
 /**
- * Map each safe core tool excluded by `profile` to the first alternative profile that contains it.
+ * The first profile, in {@link TOOL_PROFILES} order, that keeps every safe core tool of `current`
+ * and adds `wanted`. A restart replaces the core tool set, so a sideways swap would drop tools the
+ * agent already uses. Eval-gated names never resolve here: no profile grants them.
+ */
+export function coveringToolProfile(
+  definitions: Iterable<AnyToolDefinition>,
+  current: ToolProfile,
+  wanted: Iterable<string>,
+): ToolProfile | undefined {
+  const safe = [...definitions].filter((definition) => definition.requiresEvalFlag !== true)
+  const required = [...selectedSafeNames(current, safe), ...wanted]
+  return TOOL_PROFILES.find((candidate) => {
+    const names = selectedSafeNames(candidate, safe)
+    return required.every((name) => names.has(name))
+  })
+}
+
+/**
+ * Map each safe core tool excluded by `profile` to the {@link coveringToolProfile} that adds it.
  * The dispatcher uses this only to turn an otherwise opaque unknown-tool error into an actionable
  * restart hint; eval-gated tools remain governed by the more specific eval-policy hint.
  */
@@ -144,14 +162,11 @@ export function excludedCoreToolProfileHints(
 ): ReadonlyMap<string, ToolProfile> {
   const safe = [...definitions].filter((definition) => definition.requiresEvalFlag !== true)
   const selectedNames = selectedSafeNames(profile, safe)
-  const alternatives = TOOL_PROFILES.filter((candidate) => candidate !== profile)
   const hints = new Map<string, ToolProfile>()
   for (const definition of safe) {
     if (selectedNames.has(definition.name)) continue
-    const alternative = alternatives.find((candidate) =>
-      selectedSafeNames(candidate, safe).has(definition.name),
-    )
-    if (alternative !== undefined) hints.set(definition.name, alternative)
+    const covering = coveringToolProfile(safe, profile, [definition.name])
+    if (covering !== undefined) hints.set(definition.name, covering)
   }
   return hints
 }

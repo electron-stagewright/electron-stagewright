@@ -39,6 +39,7 @@ export { EVAL_TOOLS } from './eval/index.js'
 export { OBSERVE_TOOLS } from './observe/index.js'
 export { EXPECT_TOOLS } from './expect/index.js'
 export {
+  coveringToolProfile,
   DEBUG_CORE_TOOL_NAMES,
   ESSENTIAL_CORE_TOOL_NAMES,
   excludedCoreToolProfileHints,

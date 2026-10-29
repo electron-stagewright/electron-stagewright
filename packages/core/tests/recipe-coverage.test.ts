@@ -110,7 +110,12 @@ describe('verify recipe coverage', () => {
       const client = await connect(profile)
       const flags = '--tool-profile full --plugin storage --plugin native-ui'
       expect(client.getInstructions()).toContain(flags)
-      expect(await recipeText(client)).toContain(flags)
+      expect(await recipeText(client)).toMatch(
+        new RegExp(
+          `^> This server lacks tools the verify-desktop-change recipe uses .*${flags}`,
+          'm',
+        ),
+      )
       const first = (await client.readResource({ uri: 'stagewright://manifest/profile' }))
         .contents[0]
       expect(first !== undefined && 'text' in first ? first.text : '').toContain(flags)
