@@ -255,6 +255,66 @@ describe('runDoctorChecks', () => {
     })
   })
 
+  it('treats a missing server Electron as a warning when the project Electron resolves', async () => {
+    const projectDeps = {
+      ...READY_DEPS,
+      resolvePackage: async (name: 'playwright' | 'electron') => {
+        if (name === 'electron') throw new Error('Cannot find package electron')
+      },
+      resolveProjectElectron: async () => ({
+        ok: true as const,
+        electron: {
+          executablePath: '/app/node_modules/electron/dist/electron',
+          packageJsonPath: '/app/node_modules/electron/package.json',
+          version: '44.9.1',
+        },
+      }),
+      readDeclaredElectronVersion: async () => '44.9.1',
+      probeElectronRuntime: async () => ({
+        electron: '44.9.1',
+        node: '24.22.0',
+        v8: '15.2.124.43-electron.0',
+        nodeModuleVersion: '149',
+      }),
+      inventoryNativeAddons: async () => ({ paths: [], truncated: false }),
+    }
+    const opts = { allowEvalMain: false, allowEvalRenderer: false }
+
+    const withRoot = await runDoctorChecks({ ...opts, appRoot: '/app' }, projectDeps)
+    expect(withRoot.ok).toBe(true)
+    expect(withRoot.checks.find((check) => check.id === 'electron')).toMatchObject({
+      status: 'warn',
+      message: expect.stringContaining('Launches use the project Electron'),
+      hint: expect.stringContaining('runtime:"server"'),
+    })
+
+    const withoutRoot = await runDoctorChecks(opts, projectDeps)
+    expect(withoutRoot.ok).toBe(false)
+    expect(withoutRoot.checks.find((check) => check.id === 'electron')?.status).toBe('fail')
+
+    const unresolved = await runDoctorChecks(
+      { ...opts, appRoot: '/app' },
+      {
+        ...projectDeps,
+        resolveProjectElectron: async () => ({ ok: false as const, message: 'no electron' }),
+      },
+    )
+    expect(unresolved.ok).toBe(false)
+    expect(unresolved.checks.find((check) => check.id === 'electron')?.status).toBe('fail')
+
+    const broken = await runDoctorChecks(
+      { ...opts, appRoot: '/app' },
+      {
+        ...projectDeps,
+        probeElectronRuntime: async () => {
+          throw new Error('probe crashed')
+        },
+      },
+    )
+    expect(broken.ok).toBe(false)
+    expect(broken.checks.find((check) => check.id === 'electron')?.status).toBe('fail')
+  })
+
   it('keeps doctor diagnostic-only when the app-root Electron resolution fails', async () => {
     const report = await runDoctorChecks(
       {

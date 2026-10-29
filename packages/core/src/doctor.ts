@@ -265,6 +265,17 @@ async function packageCheck(
   }
 }
 
+/** Under --app-root with a project Electron that runs, the server's own copy is only a fallback. */
+function optionalServerElectron(check: DoctorCheck): DoctorCheck {
+  if (check.status !== 'fail') return check
+  return {
+    id: check.id,
+    status: 'warn',
+    message: `${check.message} Launches use the project Electron under --app-root.`,
+    hint: 'Only runtime:"server", or a project Electron whose fuses block Playwright, falls back to the server Electron; add --package electron@<version> if you need that fallback.',
+  }
+}
+
 function displayCheck(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): DoctorCheck {
   if (platform !== 'linux') {
     return {
@@ -448,7 +459,11 @@ async function inspectProjectRuntime(
   appRoot: string | undefined,
   server: ServerRuntimeDetails,
   deps: DoctorDeps,
-): Promise<{ readonly check: DoctorCheck; readonly details?: ProjectRuntimeDetails }> {
+): Promise<{
+  readonly check: DoctorCheck
+  readonly details?: ProjectRuntimeDetails
+  readonly resolved?: boolean
+}> {
   if (appRoot === undefined) {
     return { check: projectRuntimeCheck(undefined, server, undefined, undefined, undefined) }
   }
@@ -499,6 +514,7 @@ async function inspectProjectRuntime(
     return {
       check: projectRuntimeCheck(appRoot, server, details, resolution, undefined),
       details,
+      resolved: true,
     }
   } catch (cause) {
     const details: ProjectRuntimeDetails = {
@@ -531,7 +547,9 @@ export async function runDoctorChecks(
   const checks = [
     nodeCheck(deps.nodeVersion ?? process.version),
     await packageCheck('playwright', resolve, projectCopyOf),
-    await packageCheck('electron', resolve, projectCopyOf),
+    projectRuntime.resolved === true
+      ? optionalServerElectron(await packageCheck('electron', resolve, projectCopyOf))
+      : await packageCheck('electron', resolve, projectCopyOf),
     displayCheck(platform, env),
     await directoryCheck('app_root', opts.appRoot, inspect),
     await directoryCheck('screenshot_dir', opts.screenshotDir, inspect),
