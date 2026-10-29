@@ -117,7 +117,7 @@ disable the inspect channel Playwright needs falls back to the server runtime wi
 `runtime_fallback` reason instead of failing; an explicit `runtime: "project"` still reports
 `FUSES_BLOCK_LAUNCH`.
 
-`doctor` follows the new default: when the project Electron resolves, a server without its own
+`doctor` follows the new default: when the project Electron resolves and its probe runs, a server without its own
 Electron package reports the `electron` check as `warn` instead of `fail`, because only
-`runtime: "server"` or a project without Electron would use it. Without `--app-root`, or when the
-project resolution fails, the check still fails.
+`runtime: "server"` or the fuses fallback would use it. Without `--app-root`, or when the project
+resolution or probe fails, the check still fails.

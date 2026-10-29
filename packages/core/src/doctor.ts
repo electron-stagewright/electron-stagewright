@@ -265,13 +265,14 @@ async function packageCheck(
   }
 }
 
-/** Under --app-root with a resolvable project Electron, the server's own copy is only a fallback. */
+/** Under --app-root with a project Electron that runs, the server's own copy is only a fallback. */
 function optionalServerElectron(check: DoctorCheck): DoctorCheck {
   if (check.status !== 'fail') return check
   return {
-    ...check,
+    id: check.id,
     status: 'warn',
-    message: `${check.message} Launches use the project Electron under --app-root, so only runtime:"server" needs it.`,
+    message: `${check.message} Launches use the project Electron under --app-root.`,
+    hint: 'Only runtime:"server", or a project Electron whose fuses block Playwright, falls back to the server Electron; add --package electron@<version> if you need that fallback.',
   }
 }
 
@@ -527,7 +528,6 @@ async function inspectProjectRuntime(
     return {
       check: projectRuntimeCheck(appRoot, server, details, resolution, failureMessage(cause)),
       details,
-      resolved: true,
     }
   }
 }

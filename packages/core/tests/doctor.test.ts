@@ -284,7 +284,8 @@ describe('runDoctorChecks', () => {
     expect(withRoot.ok).toBe(true)
     expect(withRoot.checks.find((check) => check.id === 'electron')).toMatchObject({
       status: 'warn',
-      message: expect.stringContaining('only runtime:"server" needs it'),
+      message: expect.stringContaining('Launches use the project Electron'),
+      hint: expect.stringContaining('runtime:"server"'),
     })
 
     const withoutRoot = await runDoctorChecks(opts, projectDeps)
@@ -300,6 +301,18 @@ describe('runDoctorChecks', () => {
     )
     expect(unresolved.ok).toBe(false)
     expect(unresolved.checks.find((check) => check.id === 'electron')?.status).toBe('fail')
+
+    const broken = await runDoctorChecks(
+      { ...opts, appRoot: '/app' },
+      {
+        ...projectDeps,
+        probeElectronRuntime: async () => {
+          throw new Error('probe crashed')
+        },
+      },
+    )
+    expect(broken.ok).toBe(false)
+    expect(broken.checks.find((check) => check.id === 'electron')?.status).toBe('fail')
   })
 
   it('keeps doctor diagnostic-only when the app-root Electron resolution fails', async () => {

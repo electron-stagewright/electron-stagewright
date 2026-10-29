@@ -124,8 +124,8 @@ deliberately want that explicit binary.
 
 Because launches use the project's Electron, the server does not need an Electron package of its
 own: `doctor` reports a missing server Electron as a warning, not a failure, when the project's
-resolves. Keep one in the server's package list only for `runtime: "server"` or for projects
-without Electron.
+resolves and runs. Keep one in the server's package list only for `runtime: "server"`, for a
+project Electron whose fuses block Playwright, or for projects without Electron.
 
 Run a non-mutating comparison before launch when native modules are involved:
 
