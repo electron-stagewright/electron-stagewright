@@ -1,7 +1,7 @@
 {
   "name": "@electron-stagewright/core",
   "mcpName": "io.github.electron-stagewright/core",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Agentic UX testing for real Electron apps: launch, inspect, interact, assert, and capture evidence through MCP.",
   "type": "module",
   "license": "MIT",

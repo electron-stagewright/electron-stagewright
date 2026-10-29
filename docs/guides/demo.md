@@ -18,13 +18,13 @@ has Playwright or Electron:
 
 ```sh
 npx -y --prefix ~/ \
-  --package @electron-stagewright/core@0.7.0 \
+  --package @electron-stagewright/core@0.8.0 \
   --package @electron-stagewright/demo@0.1.0 \
   --package playwright@1.63.0 \
   --package electron@42.11.10 \
   install-electron
 npx -y --prefix ~/ \
-  --package @electron-stagewright/core@0.7.0 \
+  --package @electron-stagewright/core@0.8.0 \
   --package @electron-stagewright/demo@0.1.0 \
   --package playwright@1.63.0 \
   --package electron@42.11.10 \
@@ -47,7 +47,7 @@ Use `npx` as the command and include the demo package before the CLI and `--demo
 
 ```sh
 claude mcp add electron-stagewright-demo -- \
-  npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.8.0 \
   --package @electron-stagewright/demo@0.1.0 --package playwright@1.63.0 \
   --package electron@42.11.10 electron-stagewright --demo
 ```
@@ -66,7 +66,7 @@ Add this entry to `claude_desktop_config.json`, then fully restart Claude Deskto
         "--prefix",
         "~/",
         "--package",
-        "@electron-stagewright/core@0.7.0",
+        "@electron-stagewright/core@0.8.0",
         "--package",
         "@electron-stagewright/demo@0.1.0",
         "--package",
