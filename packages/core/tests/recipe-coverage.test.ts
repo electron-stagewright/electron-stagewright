@@ -12,6 +12,7 @@ import { VERIFY_RECIPE_URI } from '../src/resources/index.js'
 import { recipeCoverageNote, recipeToolNames } from '../src/server/recipe-coverage.js'
 import { createServer, type StagewrightServer } from '../src/server/server.js'
 import { DEFAULT_TOOLS } from '../src/tools/index.js'
+import { resolveCoreToolProfile, type ToolProfile } from '../src/tools/profiles.js'
 
 const opened: { client: Client; server: StagewrightServer }[] = []
 
@@ -24,7 +25,7 @@ afterEach(async () => {
   )
 })
 
-async function connect(toolProfile: 'essential' | 'full', withPlugins = false): Promise<Client> {
+async function connect(toolProfile: ToolProfile, withPlugins = false): Promise<Client> {
   const server = await createServer({
     logger: NOOP_LOGGER,
     toolProfile,
@@ -69,31 +70,52 @@ describe('verify recipe coverage', () => {
     expect(recipeCoverageNote(() => true, 'full', DEFAULT_TOOLS)).toBeUndefined()
   })
 
-  it('names the smallest covering profile and the missing plugins', () => {
+  it('names a profile covering the whole recipe and only the missing plugins', () => {
     const note = recipeCoverageNote(
       (name) => name !== 'electron_reload' && !name.startsWith('storage_'),
       'essential',
       DEFAULT_TOOLS,
     )
     expect(note).toContain('(storage_local_set, electron_reload)')
-    expect(note).toContain('--tool-profile testing --plugin storage;')
+    expect(note).toContain('--tool-profile full --plugin storage;')
     expect(note).not.toContain('native-ui')
   })
 
-  it('leaves the profile out for a caller-supplied tool set', () => {
-    const note = recipeCoverageNote((name) => name !== 'electron_reload', 'custom', DEFAULT_TOOLS)
-    expect(note).toContain('(electron_reload)')
-    expect(note).toContain('Skip those steps.')
-  })
+  it.each(['testing', 'debug'] as const)(
+    'recommends the complete recipe instead of swapping missing tools from %s',
+    (profile) => {
+      const names = new Set(resolveCoreToolProfile(DEFAULT_TOOLS, profile).map((tool) => tool.name))
+      const note = recipeCoverageNote((name) => names.has(name), profile, DEFAULT_TOOLS)
+      expect(note).toContain('--tool-profile full --plugin storage --plugin native-ui;')
+      expect(note).not.toContain('electron_reload')
+    },
+  )
 
-  it('tells an essential server without plugins how to run the recipe', async () => {
-    const client = await connect('essential')
-    const flags = '--tool-profile full --plugin storage --plugin native-ui'
-    expect(client.getInstructions()).toContain(flags)
-    expect(await recipeText(client)).toContain(
-      `> This server lacks tools the verify-desktop-change recipe uses`,
-    )
-  })
+  it.each([
+    { missing: ['electron_reload'], instruction: 'Skip those steps.' },
+    { missing: ['electron_reload', 'storage_local_set'], instruction: '--plugin storage;' },
+  ])(
+    'leaves the profile out for a caller-supplied tool set missing $missing',
+    ({ missing, instruction }) => {
+      const note = recipeCoverageNote((name) => !missing.includes(name), 'custom', DEFAULT_TOOLS)
+      expect(note).toContain('electron_reload')
+      expect(note).not.toContain('--tool-profile')
+      expect(note).toContain(instruction)
+    },
+  )
+
+  it.each(['essential', 'testing', 'debug'] as const)(
+    'gives a %s server a complete restart hint in every recipe surface',
+    async (profile) => {
+      const client = await connect(profile)
+      const flags = '--tool-profile full --plugin storage --plugin native-ui'
+      expect(client.getInstructions()).toContain(flags)
+      expect(await recipeText(client)).toContain(flags)
+      const first = (await client.readResource({ uri: 'stagewright://manifest/profile' }))
+        .contents[0]
+      expect(first !== undefined && 'text' in first ? first.text : '').toContain(flags)
+    },
+  )
 
   it('only asks a full server for the plugins', async () => {
     const client = await connect('full')

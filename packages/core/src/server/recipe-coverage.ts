@@ -40,15 +40,17 @@ export function recipeCoverageNote(
   profile: ToolProfile | 'custom',
   coreDefinitions: readonly AnyToolDefinition[],
 ): string | undefined {
-  const missing = recipeToolNames().filter((name) => !has(name))
+  const recipeTools = recipeToolNames()
+  const missing = recipeTools.filter((name) => !has(name))
   if (missing.length === 0) return undefined
 
   const missingCore = missing.filter((name) => name.startsWith('electron_'))
   const flags: string[] = []
   if (missingCore.length > 0 && profile !== 'custom') {
+    const requiredCore = recipeTools.filter((name) => name.startsWith('electron_'))
     const covering = TOOL_PROFILES.find((candidate) => {
       const names = new Set(resolveCoreToolProfile(coreDefinitions, candidate).map((d) => d.name))
-      return missingCore.every((name) => names.has(name))
+      return requiredCore.every((name) => names.has(name))
     })
     if (covering !== undefined) flags.push(`--tool-profile ${covering}`)
   }
