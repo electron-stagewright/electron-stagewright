@@ -36,6 +36,10 @@ electron_launch { "main": "/abs/path/to/app/main.js" }
   and stays on Playwright. Both paths must be absolute.
 - `args`, `env`, and `cwd` shape the spawn. Environment variables that would alter the runtime
   (e.g. `NODE_OPTIONS`) are rejected with `BAD_ARGUMENT`.
+- On macOS and Linux a credential-store switch keeps `safeStorage` off the OS keychain, so a
+  Keychain prompt cannot block startup; see [the credential-store default](#credential-store-default).
+  It goes before your `args`, so an app reading a positional argument from `process.argv` should
+  skip switches.
 - The call resolves when the first window exists AND the renderer finished its initial render
   (bounded by `readyTimeoutMs`, default 5000 ms) — so a snapshot right after launch sees content.
 
@@ -75,10 +79,13 @@ failed handshake reaps the process before returning. Electron documents
 [`--remote-debugging-port`](https://www.electronjs.org/docs/latest/api/command-line-switches#--remote-debugging-portport)
 as the HTTP CDP endpoint switch.
 
+### Credential-store default
+
 Every launch, development or packaged, defaults to `"credentialStore": "testing"`:
 
 - macOS receives `--use-mock-keychain`, avoiding a Keychain prompt that can block startup;
-- Linux receives `--password-store=basic` unless `args` already selects another password store;
+- Linux receives `--password-store=basic` unless `args` already selects another password store
+  before any `--`;
 - Windows receives no credential-store switch.
 
 This default is for reliable automation, not security verification. A mock macOS keychain or

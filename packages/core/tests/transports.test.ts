@@ -735,6 +735,11 @@ describe('PlaywrightElectronTransport', () => {
       args: ['--password-store=gnome-libsecret'],
       expected: ['/abs/main.js', '--password-store=gnome-libsecret'],
     },
+    {
+      platform: 'darwin' as const,
+      args: ['--', '--use-mock-keychain'],
+      expected: ['/abs/main.js', '--use-mock-keychain', '--', '--use-mock-keychain'],
+    },
   ])(
     'keeps a $platform development launch off the OS credential store by default',
     ({ platform, args, expected }) => {
@@ -806,6 +811,24 @@ describe('PlaywrightElectronTransport', () => {
 
     expect(pageA.screenshotCalls).toBe(1)
     expect(pageB.screenshotCalls).toBe(0)
+  })
+
+  it('hands the default credential-store switch to Playwright on launch', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    let received: { args?: readonly string[] } | undefined
+    const transport = new PlaywrightElectronTransport({
+      platform: 'linux',
+      loadElectron: async () => ({
+        launch: async (opts) => {
+          received = opts
+          return app
+        },
+      }),
+    })
+
+    await transport.launch({ appPath: '/abs/main.js', args: ['--dev'] })
+
+    expect(received?.args).toEqual(['/abs/main.js', '--password-store=basic', '--dev'])
   })
 
   it('waits for the first window before returning a launched session', async () => {

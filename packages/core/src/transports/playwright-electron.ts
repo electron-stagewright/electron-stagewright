@@ -401,6 +401,8 @@ export interface PlaywrightElectronTransportOptions {
    * test seam; defaults to 10s.
    */
   readonly windowRecoveryBudgetMs?: number
+  /** Platform override for the credential-store default. Defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform
 }
 
 export interface PlaywrightLaunchOptions {
@@ -2491,10 +2493,12 @@ export class PlaywrightElectronTransport implements ITransport {
   public readonly id: TransportId = TRANSPORT_ID
   private readonly loadElectron: () => Promise<PWElectron>
   private readonly windowRecoveryBudgetMs: number | undefined
+  private readonly platform: NodeJS.Platform
 
   constructor(opts: PlaywrightElectronTransportOptions = {}) {
     this.loadElectron = opts.loadElectron ?? loadPlaywrightElectron
     this.windowRecoveryBudgetMs = opts.windowRecoveryBudgetMs
+    this.platform = opts.platform ?? process.platform
   }
 
   public readonly capabilities: TransportCapabilities = {
@@ -2549,7 +2553,7 @@ export class PlaywrightElectronTransport implements ITransport {
         )
       }
     }
-    const launchOpts = buildPlaywrightLaunchOptions(effectiveOpts)
+    const launchOpts = buildPlaywrightLaunchOptions(effectiveOpts, this.platform)
     let app: PWElectronApp
     try {
       app = await electron.launch(launchOpts)
