@@ -120,3 +120,12 @@ retryable `OPERATION_TIMEOUT` envelope (`details.timeout_ms` carries the budget)
 - `packages/core/src/cli.ts` — `--operation-timeout-ms` parsing.
 - `packages/core/tests/dispatcher.test.ts`, `packages/core/tests/resilience.test.ts` — the
   hung-handler bound, no-wedge recovery, opt-out, and the misconfig warning.
+
+## Status update (2026-10-29): launch `timeoutMs` cap
+
+`electron_launch` accepted any `timeoutMs`, and Playwright granted that budget to process start and
+to the first-window wait separately. A launch blocked before its first window, retried with
+`timeoutMs: 120000`, ran into this backstop and returned `OPERATION_TIMEOUT`, so the agent never
+saw the `LAUNCH_TIMEOUT` hint about a blocked main process. `timeoutMs` is now capped at 50 000 ms
+and shared by both phases; with the 60 000 ms `readyTimeoutMs` cap, a launch ends before the default
+120 s backstop.

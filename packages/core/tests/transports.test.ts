@@ -831,6 +831,31 @@ describe('PlaywrightElectronTransport', () => {
     expect(received?.args).toEqual(['/abs/main.js', '--password-store=basic', '--dev'])
   })
 
+  it('gives firstWindow only the part of timeoutMs that launch left', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const page = await app.firstWindow()
+    let windowTimeout: number | undefined
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({
+        launch: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          return {
+            ...app,
+            firstWindow: async (options?: { timeout?: number }) => {
+              windowTimeout = options?.timeout
+              return page
+            },
+          }
+        },
+      }),
+    })
+
+    await transport.launch({ appPath: '/abs/main.js', timeoutMs: 1000 })
+
+    expect(windowTimeout).toBeGreaterThan(0)
+    expect(windowTimeout).toBeLessThanOrEqual(960)
+  })
+
   it('waits for the first window before returning a launched session', async () => {
     const app = createFakeElectronApp([createFakePage('A')])
     const transport = new PlaywrightElectronTransport({

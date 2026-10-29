@@ -2554,6 +2554,8 @@ export class PlaywrightElectronTransport implements ITransport {
       }
     }
     const launchOpts = buildPlaywrightLaunchOptions(effectiveOpts, this.platform)
+    // One budget covers both phases; Playwright would otherwise grant timeoutMs to each.
+    const deadline = opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : undefined
     let app: PWElectronApp
     try {
       app = await electron.launch(launchOpts)
@@ -2578,7 +2580,7 @@ export class PlaywrightElectronTransport implements ITransport {
     let initialPage: PWPage
     try {
       initialPage = await app.firstWindow(
-        opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : undefined,
+        deadline !== undefined ? { timeout: Math.max(1, deadline - Date.now()) } : undefined,
       )
     } catch (cause) {
       try {

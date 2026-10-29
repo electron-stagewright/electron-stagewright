@@ -52,7 +52,8 @@ electron_wait_for_selector { "selector": "#app", "state": "visible", "timeoutMs"
 
 Failure modes worth knowing: `SINGLE_INSTANCE_LOCK` (another copy of the app holds Electron's
 single-instance lock — close it first), `ALREADY_RUNNING` (one live session per server by default;
-pass `allowMultiple: true` to run several), `LAUNCH_TIMEOUT` (no window within `timeoutMs`;
+pass `allowMultiple: true` to run several), `LAUNCH_TIMEOUT` (no window within `timeoutMs`, at most
+50 000 ms so the launch ends before the dispatch backstop;
 retryable; usually a main process blocked before its first window, for example on an OS prompt
 under `"credentialStore": "system"` or on a startup dialog), and `LAUNCH_FAILED` (the packaged app
 could not start or exited before a driveable renderer appeared).

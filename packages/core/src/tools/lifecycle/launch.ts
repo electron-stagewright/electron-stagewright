@@ -34,6 +34,12 @@ import { awaitRendererReady, DEFAULT_READY_TIMEOUT_MS, MAX_READY_TIMEOUT_MS } fr
 import { registerWithWindows } from './session-init.js'
 
 /**
+ * Upper bound on `timeoutMs`. With the 60s readyTimeoutMs cap it keeps a launch under the 120s
+ * dispatch backstop, so a blocked app surfaces as LAUNCH_TIMEOUT with its hint, not OPERATION_TIMEOUT.
+ */
+export const MAX_LAUNCH_TIMEOUT_MS = 50_000
+
+/**
  * Upper bound on concurrently-live sessions. Each launch spawns a real Electron process tree
  * (a parent plus heavyweight Chromium children), so without a cap a client looping
  * `electron_launch({ allowMultiple: true })` could exhaust host memory/PIDs. The limit is
@@ -86,7 +92,15 @@ const inputSchema = z.object({
     .optional()
     .describe('Environment variables for the spawned process.'),
   cwd: z.string().optional().describe('Working directory for the spawned process.'),
-  timeoutMs: z.number().int().positive().optional().describe('Max wait for the first window.'),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_LAUNCH_TIMEOUT_MS)
+    .optional()
+    .describe(
+      `Max wait (ms) for the app to start and show its first window. Capped at ${MAX_LAUNCH_TIMEOUT_MS} so it plus readyTimeoutMs stays under the dispatch timeout backstop.`,
+    ),
   credentialStore: z
     .enum(['testing', 'system'])
     .optional()

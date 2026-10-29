@@ -226,7 +226,7 @@ Launch an Electron app and start a driving session. Provide main (absolute path 
 | `args` | string[] | no | Extra CLI args appended after the entry. |
 | `env` | object | no | Environment variables for the spawned process. |
 | `cwd` | string | no | Working directory for the spawned process. |
-| `timeoutMs` | integer | no | Max wait for the first window. |
+| `timeoutMs` | integer | no | Max wait (ms) for the app to start and show its first window. Capped at 50000 so it plus readyTimeoutMs stays under the dispatch timeout backstop. |
 | `credentialStore` | string | no | Default "testing" avoids blocking credential prompts with --use-mock-keychain on macOS or --password-store=basic on Linux. Use "system" to verify genuine safeStorage behavior. |
 | `readyTimeoutMs` | integer | no | Max wait (ms) for the renderer DOM to finish its initial render before returning. Default 5000; 0 returns immediately with renderer_ready reflecting the instantaneous state. Capped at 60000 to stay under the dispatch timeout backstop. |
 | `allowMultiple` | boolean | no | Allow launching when a session already exists. Default false (single instance). |
