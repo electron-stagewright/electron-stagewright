@@ -35,7 +35,7 @@ and gives `--app-root` a stable security boundary.
 
   ```sh
   cd /absolute/path/to/your-electron-app
-  pnpm add --save-dev --save-exact @electron-stagewright/core@0.7.0 playwright@1.63.0
+  pnpm add --save-dev --save-exact @electron-stagewright/core@0.8.0 playwright@1.63.0
   # Only when the project does not already pin a compatible Electron:
   pnpm add --save-dev --save-exact electron@42.11.10
   # Electron fetches its binary on first use; download it now, outside any MCP session:
@@ -79,7 +79,7 @@ and gives `--app-root` a stable security boundary.
       "--prefix",
       "~/",
       "--package",
-      "@electron-stagewright/core@0.7.0",
+      "@electron-stagewright/core@0.8.0",
       "--package",
       "playwright@1.63.0",
       "--package",
@@ -107,7 +107,7 @@ and gives `--app-root` a stable security boundary.
       "--prefix",
       "~/",
       "--package",
-      "@electron-stagewright/core@0.7.0",
+      "@electron-stagewright/core@0.8.0",
       "--package",
       "playwright@1.63.0",
       "--package",
@@ -125,9 +125,9 @@ and gives `--app-root` a stable security boundary.
   terminal:
 
   ```sh
-  npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.8.0 \
     --package playwright@1.63.0 --package electron@42.11.10 install-electron
-  npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.8.0 \
     --package playwright@1.63.0 --package electron@42.11.10 \
     electron-stagewright doctor --json \
     --app-root /absolute/path/to/your-electron-app
@@ -152,7 +152,7 @@ and gives `--app-root` a stable security boundary.
   reproduce and upgrade together.
 
   ```sh
-  pnpm add --global --save-exact @electron-stagewright/core@0.7.0 \
+  pnpm add --global --save-exact @electron-stagewright/core@0.8.0 \
     playwright@1.63.0 electron@42.11.10
   install-electron
   ```
@@ -199,7 +199,7 @@ picked above:
 
 ```sh
 claude mcp add electron-stagewright -- \
-  npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.8.0 \
   --package playwright@1.63.0 --package electron@42.11.10 \
   electron-stagewright --tool-profile essential
 ```
@@ -215,7 +215,7 @@ Run the terminal bootstrap above first, then register the server with `codex mcp
 
 ```sh
 codex mcp add electron-stagewright -- \
-  npx -y --prefix ~/ --package @electron-stagewright/core@0.7.0 \
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.8.0 \
   --package playwright@1.63.0 --package electron@42.11.10 \
   electron-stagewright --tool-profile essential
 ```
@@ -229,7 +229,7 @@ command = "npx"
 args = [
   "-y",
   "--prefix", "~/",
-  "--package", "@electron-stagewright/core@0.7.0",
+  "--package", "@electron-stagewright/core@0.8.0",
   "--package", "playwright@1.63.0",
   "--package", "electron@42.11.10",
   "electron-stagewright",
@@ -308,7 +308,7 @@ VS Code reads `.vscode/mcp.json` in the workspace. Its top-level key is `servers
         "--prefix",
         "~/",
         "--package",
-        "@electron-stagewright/core@0.7.0",
+        "@electron-stagewright/core@0.8.0",
         "--package",
         "playwright@1.63.0",
         "--package",
@@ -343,7 +343,7 @@ one array:
         "--prefix",
         "~/",
         "--package",
-        "@electron-stagewright/core@0.7.0",
+        "@electron-stagewright/core@0.8.0",
         "--package",
         "playwright@1.63.0",
         "--package",
@@ -372,7 +372,7 @@ Node.js:
 ```json
 {
   "command": "/Users/you/.local/share/fnm/aliases/default/bin/npx",
-  "args": ["-y", "--prefix", "~/", "--package", "@electron-stagewright/core@0.7.0", "..."],
+  "args": ["-y", "--prefix", "~/", "--package", "@electron-stagewright/core@0.8.0", "..."],
   "env": { "PATH": "/Users/you/.local/share/fnm/aliases/default/bin:/usr/bin:/bin" }
 }
 ```
@@ -441,7 +441,7 @@ With `npx`, server flags follow the `electron-stagewright` bin name:
     "--prefix",
     "~/",
     "--package",
-    "@electron-stagewright/core@0.7.0",
+    "@electron-stagewright/core@0.8.0",
     "--package",
     "playwright@1.63.0",
     "--package",
