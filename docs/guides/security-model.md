@@ -20,8 +20,8 @@ vulnerability see [SECURITY.md](../../.github/SECURITY.md).
   sensitive. Configure plugin redaction before capture.
 - Set `--app-root` when an agent can select application paths, and write artifacts to an
   operator-controlled directory.
-- For a target-owned Electron runtime, configure `--app-root` yourself and use
-  `runtime: "project"`; never make the project root an agent-supplied value.
+- For a target-owned Electron runtime, configure `--app-root` yourself; launches then use the
+  project's Electron. Never make the project root an agent-supplied value.
 - Load only trusted first-party or reviewed plugins. Plugins are in-process code, not sandboxed.
 
 Resource reads expose only bundled public guidance. They never read the operator's filesystem,
@@ -170,9 +170,9 @@ rejected payload can be correlated with the logs without ever being recorded.
   IndexedDB record values are also returned verbatim by default; set the storage plugin's
   `redactValues: true` when you need record presence/shape but not the values.
 - **Set `--app-root`** when launching untrusted or agent-chosen app paths, to confine
-  the launch surface. When native addons require the app's Electron ABI, use that same
-  operator-configured root with `runtime: "project"`; do not loosen confinement to follow a hoisted
-  package outside it.
+  the launch surface. When native addons require the app's Electron ABI, that same
+  operator-configured root supplies the launch runtime by default; do not loosen confinement to
+  follow a hoisted package outside it.
 
 ## Deploying safely — checklist
 

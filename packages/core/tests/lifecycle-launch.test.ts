@@ -39,7 +39,10 @@ function setup(
     packagedTransport?: FakeTransport
     appRoot?: string
     launchDefaultMain?: string
-    resolveProjectElectron?: (appRoot: string) => Promise<ProjectElectronResolution>
+    resolveProjectElectron?: (
+      appRoot: string,
+      fromFile?: string,
+    ) => Promise<ProjectElectronResolution>
     inspectElectronFuses?: (
       executablePath: string,
     ) => Promise<ElectronLaunchFuseInspection | undefined>
@@ -185,6 +188,66 @@ describe('electron_launch', () => {
         runtime_fallback: 'No electron package is installed under the app root.',
       })
       expect(transport.lastLaunchOptions?.executablePath).toBeUndefined()
+    })
+
+    it('falls back to the server Electron when the project binary blocks Playwright', async () => {
+      const transport = new CapturingTransport({
+        session: new FakeSession({ id: 'implicit-fuses', windows: [WIN] }),
+      })
+      const { dispatcher } = setup({
+        appRoot: root,
+        transport,
+        resolveProjectElectron: found,
+        inspectElectronFuses: async () =>
+          ({ blocks_playwright_launch: true }) as unknown as ElectronLaunchFuseInspection,
+      })
+
+      const res = await dispatcher.dispatch('electron_launch', {
+        main: path.join(root, 'main.js'),
+      })
+
+      expect(res).toMatchObject({
+        ok: true,
+        runtime_source: 'default',
+        runtime_fallback: expect.stringContaining('EnableNodeCliInspectArguments'),
+      })
+      expect(transport.lastLaunchOptions?.executablePath).toBeUndefined()
+    })
+
+    it('leaves an explicit executablePath and a packaged launch alone', async () => {
+      let resolved = 0
+      const resolveProjectElectron = async () => {
+        resolved += 1
+        return found()
+      }
+      const binary = path.join(root, 'bin', 'electron')
+      const explicit = await setup({ appRoot: root, resolveProjectElectron }).dispatcher.dispatch(
+        'electron_launch',
+        { main: path.join(root, 'main.js'), executablePath: binary },
+      )
+      expect(explicit).toMatchObject({ ok: true, runtime_source: 'explicit' })
+      const packaged = await setup({ appRoot: root, resolveProjectElectron }).dispatcher.dispatch(
+        'electron_launch',
+        { executablePath: binary },
+      )
+      expect(packaged).toMatchObject({ ok: true, launch_mode: 'packaged' })
+      expect(resolved).toBe(0)
+    })
+
+    it('resolves from the launched main so a workspace package wins', async () => {
+      let from: string | undefined
+      const { dispatcher } = setup({
+        appRoot: root,
+        resolveProjectElectron: async (_appRoot, fromFile) => {
+          from = fromFile
+          return found()
+        },
+      })
+      const main = path.join(root, 'packages', 'desktop', 'main.js')
+
+      await dispatcher.dispatch('electron_launch', { main })
+
+      expect(from).toBe(main)
     })
 
     it('keeps the server Electron for runtime "server"', async () => {

@@ -167,7 +167,10 @@ export interface LaunchToolDeps {
   /** Existence check for preflight. Defaults to `fs.existsSync`. */
   readonly fileExists?: (path: string) => boolean
   /** App-root Electron resolver. Injected by tests; defaults to the constrained filesystem resolver. */
-  readonly resolveProjectElectron?: (appRoot: string) => Promise<ProjectElectronResolution>
+  readonly resolveProjectElectron?: (
+    appRoot: string,
+    fromFile?: string,
+  ) => Promise<ProjectElectronResolution>
   /** Read-only Electron fuse inspector. Injected by tests; failures/unknown states do not block. */
   readonly inspectElectronFuses?: (
     executablePath: string,
@@ -222,7 +225,9 @@ function toLaunchOptions(args: z.infer<typeof inputSchema>): LaunchOptions {
  */
 export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
   const fileExists = deps.fileExists ?? existsSync
-  const resolveFromProject = deps.resolveProjectElectron ?? resolveProjectElectron
+  const resolveFromProject =
+    deps.resolveProjectElectron ??
+    ((appRoot: string, fromFile?: string) => resolveProjectElectron(appRoot, {}, fromFile))
   const inspectFuses = deps.inspectElectronFuses ?? inspectElectronLaunchFuses
   return defineTool({
     name: 'electron_launch',
@@ -278,6 +283,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         let runtimeSource: 'default' | 'project' | 'explicit' =
           executablePath === undefined ? 'default' : 'explicit'
         let runtimeFallback: string | undefined
+        let runtimeImplicit = false
         // With --app-root the operator already chose the project, so its own Electron is the
         // default: native addons match its ABI. A project without one keeps the server runtime.
         if (
@@ -287,12 +293,13 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           ctx.appRoot !== undefined
         ) {
           phase('Resolving project Electron runtime')
-          const resolution = await resolveFromProject(ctx.appRoot)
+          const resolution = await resolveFromProject(ctx.appRoot, main)
           ctx.signal?.throwIfAborted()
           if (resolution.ok) {
             executablePath = resolution.electron.executablePath
             resolvedProjectRoot = resolution.rootPath
             runtimeSource = 'project'
+            runtimeImplicit = true
           } else {
             runtimeFallback = resolution.message
           }
@@ -309,7 +316,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
               ],
             })
           }
-          const resolution = await resolveFromProject(ctx.appRoot)
+          const resolution = await resolveFromProject(ctx.appRoot, main)
           if (!resolution.ok) {
             return makeError('BAD_ARGUMENT', {
               ...meta,
@@ -377,7 +384,15 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
 
         if (executablePath !== undefined && !packagedLaunch) {
           phase('Inspecting Electron launch compatibility')
-          const fuses = await inspectFuses(executablePath)
+          let fuses = await inspectFuses(executablePath)
+          if (fuses?.blocks_playwright_launch === true && runtimeImplicit) {
+            runtimeFallback =
+              'The project Electron disables EnableNodeCliInspectArguments, which Playwright needs; the server Electron was used instead.'
+            runtimeSource = 'default'
+            executablePath = undefined
+            resolvedProjectRoot = undefined
+            fuses = undefined
+          }
           if (fuses?.blocks_playwright_launch === true) {
             return makeError('FUSES_BLOCK_LAUNCH', {
               ...meta,

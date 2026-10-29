@@ -128,20 +128,24 @@ export async function resolveElectronExecutableFromPackageManifest(
 
 /**
  * Resolve Electron from the app root, rejecting Node module-resolution fallback above the root.
- * Node resolves only `electron/package.json` from the target root. The package's `path.txt` then
+ * Node resolves only `electron/package.json`, from `fromFile` (the app's main, so a workspace
+ * package's own Electron wins over the root's) or else from the target root. The package's `path.txt` then
  * identifies its installed binary, so this preflight never evaluates the target app or dependency
  * entry points.
  */
 export async function resolveProjectElectron(
   appRoot: string,
   deps: ProjectElectronDeps = {},
+  fromFile?: string,
 ): Promise<ProjectElectronResolution> {
   const canonicalRealpath = deps.realpath ?? realpath
   const requireFrom = deps.createRequire ?? createRequire
   const resolvedRoot = resolve(appRoot)
   try {
     const canonicalRoot = await canonicalRealpath(resolvedRoot)
-    const appRequire = requireFrom(join(canonicalRoot, 'package.json'))
+    const appRequire = requireFrom(
+      fromFile !== undefined ? resolve(fromFile) : join(canonicalRoot, 'package.json'),
+    )
     const packageJsonPath = appRequire.resolve('electron/package.json')
     const electron = await resolveElectronExecutableFromPackageManifest(packageJsonPath, deps)
     if (!isWithinRoot(canonicalRoot, electron.executablePath)) {

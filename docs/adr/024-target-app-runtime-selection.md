@@ -109,3 +109,10 @@ own Electron keeps the server runtime and the response carries `runtime_fallback
 resolver's reason, so the launch is never worse than before. `runtime: "server"` selects the server
 runtime explicitly, and `runtime: "project"` keeps its strict behavior. Without `--app-root` nothing
 changes: the root is still never derived from an agent-supplied path.
+
+Resolution now starts from the launched `main` instead of the root's `package.json`, so in a
+workspace a desktop package's own Electron wins over a different version installed at the root.
+Both results must still sit inside the canonical root. An implicit project binary whose fuses
+disable the inspect channel Playwright needs falls back to the server runtime with a
+`runtime_fallback` reason instead of failing; an explicit `runtime: "project"` still reports
+`FUSES_BLOCK_LAUNCH`.
