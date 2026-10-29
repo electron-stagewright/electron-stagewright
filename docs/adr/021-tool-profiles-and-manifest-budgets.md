@@ -190,5 +190,6 @@ agent on a narrower surface had no sign of this, and fell back to scripts outsid
 server now reads the tool names from the generated recipe, and when any is unregistered it appends
 one sentence to the instructions, the recipe resource and `stagewright://manifest/profile`. That
 sentence names the missing tools, the smallest profile that has the missing core tools, and the
-`--plugin` short names. It does not change profile membership or plugin loading, and `tools/list`
-is unchanged, so no manifest variant moves.
+`--plugin` short names. A direct call to a tool of an unloaded first-party plugin now gets the same
+kind of restart hint as an excluded profile tool. Profile membership, plugin loading and
+`tools/list` are unchanged, so no manifest variant moves.

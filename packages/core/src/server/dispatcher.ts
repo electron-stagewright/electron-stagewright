@@ -47,6 +47,7 @@ import {
   routeByOperationType,
 } from '../errors/operation-type.js'
 import { StagewrightError } from '../errors/registry.js'
+import { FIRST_PARTY_PLUGIN_PACKAGES } from '../plugins/resolve.js'
 import { runWithSessionContext } from '../errors/session-context.js'
 import type { ArtifactStore } from '../resources/artifacts.js'
 import { toolResponseJsonSchema } from '../tools/output-schema.js'
@@ -530,6 +531,20 @@ export class Dispatcher {
         message: `Tool "${name}" is excluded by the active core tool profile.`,
         next_actions: [
           `Ask the operator to restart the server with --tool-profile ${profile} to enable ${name}.`,
+        ],
+        startedAt,
+        now: this.#now,
+      })
+    }
+    const namespace = name.slice(0, Math.max(0, name.indexOf('_')))
+    if (
+      Object.hasOwn(FIRST_PARTY_PLUGIN_PACKAGES, namespace) &&
+      ![...this.#tools.keys()].some((registered) => registered.startsWith(`${namespace}_`))
+    ) {
+      return makeError('BAD_ARGUMENT', {
+        message: `Tool "${name}" comes from the first-party ${namespace} plugin, which this server did not load.`,
+        next_actions: [
+          `Ask the operator to restart the server with --plugin ${namespace} to enable ${name}.`,
         ],
         startedAt,
         now: this.#now,

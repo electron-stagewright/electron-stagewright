@@ -27,7 +27,7 @@ const dynamicImport: PluginModuleLoader = async (target) =>
  * Stable short names for the first-party packages shipped from this monorepo. The CLI still
  * requires an explicit `--plugin`; this is an ergonomic package-name expansion, never discovery.
  */
-const FIRST_PARTY_PLUGIN_PACKAGES = {
+export const FIRST_PARTY_PLUGIN_PACKAGES = {
   a11y: '@electron-stagewright/plugin-a11y',
   clock: '@electron-stagewright/plugin-clock',
   ipc: '@electron-stagewright/plugin-ipc',

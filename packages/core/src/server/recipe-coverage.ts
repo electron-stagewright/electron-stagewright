@@ -5,11 +5,9 @@
  * @module
  */
 
-import { GENERATED_AGENT_RESOURCE_DOCUMENTS } from '../resources/generated-documents.js'
+import { GENERATED_AGENT_RESOURCE_DOCUMENTS, VERIFY_RECIPE_URI } from '../resources/index.js'
 import { resolveCoreToolProfile, TOOL_PROFILES, type ToolProfile } from '../tools/profiles.js'
 import type { AnyToolDefinition } from '../tools/types.js'
-
-export const VERIFY_RECIPE_URI = 'stagewright://docs/verify-desktop-change'
 
 /** `--plugin` short name for each first-party tool prefix the recipe uses. */
 export const RECIPE_PLUGIN_PREFIXES: Readonly<Record<string, string>> = {
@@ -17,12 +15,15 @@ export const RECIPE_PLUGIN_PREFIXES: Readonly<Record<string, string>> = {
   storage: 'storage',
 }
 
-/** Every concrete tool name the generated recipe mentions, in order of first mention. */
-export function recipeToolNames(): readonly string[] {
-  const recipe = GENERATED_AGENT_RESOURCE_DOCUMENTS.find((doc) => doc.uri === VERIFY_RECIPE_URI)
-  const names = recipe?.text.match(/\b[a-z]+_[a-z_]*[a-z]\b/g) ?? []
+const RECIPE_TEXT =
+  GENERATED_AGENT_RESOURCE_DOCUMENTS.find((doc) => doc.uri === VERIFY_RECIPE_URI)?.text ?? ''
+
+/** Every concrete tool name the recipe mentions, in order of first mention. */
+export function recipeToolNames(text: string = RECIPE_TEXT): readonly string[] {
+  const names = text.match(/\b[a-z]+_[a-z_]*[a-z]\b/g) ?? []
   return [...new Set(names)].filter(
-    (name) => name.startsWith('electron_') || toolPrefix(name) in RECIPE_PLUGIN_PREFIXES,
+    (name) =>
+      name.startsWith('electron_') || Object.hasOwn(RECIPE_PLUGIN_PREFIXES, toolPrefix(name)),
   )
 }
 

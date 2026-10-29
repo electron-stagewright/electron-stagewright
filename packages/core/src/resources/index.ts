@@ -12,12 +12,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 import { GENERATED_AGENT_RESOURCE_DOCUMENTS } from './generated-documents.js'
-import { VERIFY_RECIPE_URI } from '../server/recipe-coverage.js'
 import { VERSION } from '../version.js'
 import type { ToolProfile } from '../tools/profiles.js'
 
 /** Stable URI for the compact, server-specific tool-profile resource. */
 export const ACTIVE_PROFILE_RESOURCE_URI = 'stagewright://manifest/profile'
+
+/** URI of the verify-desktop-change recipe, which carries the server's recipe-coverage note. */
+export const VERIFY_RECIPE_URI = 'stagewright://docs/verify-desktop-change'
 
 interface AgentResourceRegistration {
   /** The selected named core profile, or custom when callers supplied their own tool collection. */
