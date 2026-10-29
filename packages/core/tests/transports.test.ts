@@ -671,12 +671,15 @@ describe('PlaywrightElectronTransport', () => {
   )
 
   it('maps a main-process appPath to Playwright args instead of executablePath', () => {
-    const opts = buildPlaywrightLaunchOptions({
-      appPath: '/abs/main.js',
-      args: ['--dev'],
-      cwd: '/tmp/app',
-      timeoutMs: 123,
-    })
+    const opts = buildPlaywrightLaunchOptions(
+      {
+        appPath: '/abs/main.js',
+        args: ['--dev'],
+        cwd: '/tmp/app',
+        timeoutMs: 123,
+      },
+      'win32',
+    )
     expect(opts).toMatchObject({
       args: ['/abs/main.js', '--dev'],
       cwd: '/tmp/app',
@@ -686,22 +689,71 @@ describe('PlaywrightElectronTransport', () => {
   })
 
   it('supports an explicit Electron executable plus a main entry', () => {
-    const opts = buildPlaywrightLaunchOptions({
-      executablePath: '/Applications/MyApp.app/Contents/MacOS/MyApp',
-      appPath: '/abs/main.js',
-      args: ['--flag'],
-    })
+    const opts = buildPlaywrightLaunchOptions(
+      {
+        executablePath: '/Applications/MyApp.app/Contents/MacOS/MyApp',
+        appPath: '/abs/main.js',
+        args: ['--flag'],
+      },
+      'win32',
+    )
     expect(opts.executablePath).toBe('/Applications/MyApp.app/Contents/MacOS/MyApp')
     expect(opts.args).toEqual(['/abs/main.js', '--flag'])
   })
 
   it('allows executable-only launches for packaged apps', () => {
-    const opts = buildPlaywrightLaunchOptions({
-      executablePath: '/Applications/MyApp.app/Contents/MacOS/MyApp',
-      args: ['--flag'],
-    })
+    const opts = buildPlaywrightLaunchOptions(
+      {
+        executablePath: '/Applications/MyApp.app/Contents/MacOS/MyApp',
+        args: ['--flag'],
+      },
+      'win32',
+    )
     expect(opts.executablePath).toBe('/Applications/MyApp.app/Contents/MacOS/MyApp')
     expect(opts.args).toEqual(['--flag'])
+  })
+
+  it.each([
+    {
+      platform: 'darwin' as const,
+      args: undefined,
+      expected: ['/abs/main.js', '--use-mock-keychain'],
+    },
+    {
+      platform: 'linux' as const,
+      args: undefined,
+      expected: ['/abs/main.js', '--password-store=basic'],
+    },
+    { platform: 'win32' as const, args: undefined, expected: ['/abs/main.js'] },
+    {
+      platform: 'darwin' as const,
+      args: ['--use-mock-keychain'],
+      expected: ['/abs/main.js', '--use-mock-keychain'],
+    },
+    {
+      platform: 'linux' as const,
+      args: ['--password-store=gnome-libsecret'],
+      expected: ['/abs/main.js', '--password-store=gnome-libsecret'],
+    },
+  ])(
+    'keeps a $platform development launch off the OS credential store by default',
+    ({ platform, args, expected }) => {
+      const opts = buildPlaywrightLaunchOptions(
+        { appPath: '/abs/main.js', ...(args !== undefined ? { args } : {}) },
+        platform,
+      )
+      expect(opts.args).toEqual(expected)
+    },
+  )
+
+  it('adds no credential-store switch under credentialStore "system"', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const opts = buildPlaywrightLaunchOptions(
+        { appPath: '/abs/main.js', credentialStore: 'system' },
+        platform,
+      )
+      expect(opts.args).toEqual(['/abs/main.js'])
+    }
   })
 
   it('merges caller env over process.env instead of replacing the environment', () => {

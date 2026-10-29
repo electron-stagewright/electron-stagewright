@@ -66,6 +66,7 @@ import type {
   PWResponse,
   PWRoute,
 } from './playwright-electron-api.js'
+import { credentialStoreArgs } from './credential-store.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
 import {
   bodyCapturePlan,
@@ -490,19 +491,27 @@ function mergeEnv(
   return { ...base, ...env }
 }
 
-export function buildPlaywrightLaunchOptions(opts: LaunchOptions): PlaywrightLaunchOptions {
+export function buildPlaywrightLaunchOptions(
+  opts: LaunchOptions,
+  platform: NodeJS.Platform = process.platform,
+): PlaywrightLaunchOptions {
   if (opts.appPath === undefined && opts.executablePath === undefined) {
     throw new StagewrightError('BAD_ARGUMENT', 'launch requires appPath or executablePath.', {
       transport: TRANSPORT_ID,
     })
   }
 
-  const args = opts.appPath !== undefined ? [opts.appPath, ...(opts.args ?? [])] : opts.args
+  const callerArgs = opts.args ?? []
+  const switches = [
+    ...credentialStoreArgs(callerArgs, opts.credentialStore ?? 'testing', platform),
+    ...callerArgs,
+  ]
+  const args = opts.appPath !== undefined ? [opts.appPath, ...switches] : switches
   const env = mergeEnv(opts.env)
 
   return {
     ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
-    ...(args !== undefined ? { args } : {}),
+    ...(args.length > 0 ? { args } : {}),
     ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
     ...(env !== undefined ? { env } : {}),
     ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),

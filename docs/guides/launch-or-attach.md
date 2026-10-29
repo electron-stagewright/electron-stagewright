@@ -49,8 +49,9 @@ electron_wait_for_selector { "selector": "#app", "state": "visible", "timeoutMs"
 Failure modes worth knowing: `SINGLE_INSTANCE_LOCK` (another copy of the app holds Electron's
 single-instance lock — close it first), `ALREADY_RUNNING` (one live session per server by default;
 pass `allowMultiple: true` to run several), `LAUNCH_TIMEOUT` (no window within `timeoutMs`;
-retryable), and `LAUNCH_FAILED` (the packaged app could not start or exited before a driveable
-renderer appeared).
+retryable; usually a main process blocked before its first window, for example on an OS prompt
+under `"credentialStore": "system"` or on a startup dialog), and `LAUNCH_FAILED` (the packaged app
+could not start or exited before a driveable renderer appeared).
 `FUSES_BLOCK_LAUNCH` applies only to a `main`-based Playwright launch whose selected runtime disables
 Electron's Node CLI inspect fuse. For a shipped build, omit `main` and launch the executable over
 CDP instead. Unknown or unreadable fuse state does not block a Playwright launch.
@@ -74,7 +75,7 @@ failed handshake reaps the process before returning. Electron documents
 [`--remote-debugging-port`](https://www.electronjs.org/docs/latest/api/command-line-switches#--remote-debugging-portport)
 as the HTTP CDP endpoint switch.
 
-Packaged launches default to `"credentialStore": "testing"`:
+Every launch, development or packaged, defaults to `"credentialStore": "testing"`:
 
 - macOS receives `--use-mock-keychain`, avoiding a Keychain prompt that can block startup;
 - Linux receives `--password-store=basic` unless `args` already selects another password store;

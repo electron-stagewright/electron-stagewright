@@ -41,7 +41,7 @@ export const ERROR_CODES = {
   LAUNCH_TIMEOUT: {
     http: 408,
     retryable: true,
-    hint: 'Check main process startup time.',
+    hint: 'No window appeared in time. The main process may be blocked before creating one: an unanswered OS prompt (such as Keychain access under credentialStore "system"), a startup dialog, or an await that never settles. Otherwise raise timeoutMs.',
   },
   LAUNCH_FAILED: {
     http: 500,
