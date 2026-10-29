@@ -29,8 +29,10 @@ Every step is an ordinary tool call; stop or change course between any two.
 1. `electron_launch { main, env }` against a throwaway profile.
 2. `storage_local_set { key, value }` for flags, language and theme, then
    `electron_reload { waitForSelector }`.
-3. `electron_dialog_handler { action: "dismiss" }`; `electron_find` the telemetry or tour button
-   (read `hints` when it matches nothing); `electron_click`.
+3. `electron_dialog_handler { action: "dismiss" }`. First-run screens can open seconds after
+   launch: `electron_wait_for_selector` on each one you expect, `electron_find` its button (read
+   `hints` when it matches nothing), `electron_click`, then `electron_wait_for_selector` with
+   `state: "hidden"`.
 4. `native_file_dialog_arm { responses }` before an import or export.
 5. `electron_snapshot { format: "text" }` and `electron_console_logs { type: "error" }` as the
    baseline.
@@ -76,10 +78,18 @@ Each step, with example calls and the traps the tools report, is under _Step by 
    selector. A find that matches nothing returns `hints` (close names, filtered matches, text that
    is not an accessible name) and `next_actions`. Answer `alert` / `confirm` dialogs up front.
 
+   Tours, what's-new panels and extra tabs often open on a timer after the first render, so a
+   snapshot right after launch misses them and a later click lands on the overlay. Wait for each
+   one you expect before acting, and for it to close after you dismiss it. A `WAIT_TIMEOUT` on the
+   first wait means it did not show in this run; carry on. When the app keeps a "seen" flag in
+   `localStorage`, seeding it in step 2 skips the screen.
+
    ```json
    electron_dialog_handler { "action": "dismiss" }
-   electron_find { "role": "button", "name_contains": "Decline" }
+   electron_wait_for_selector { "selector": "[role=dialog]", "timeoutMs": 10000 }
+   electron_find { "role": "button", "name_contains": "Skip" }
    electron_click { "ref": 3 }
+   electron_wait_for_selector { "selector": "[role=dialog]", "state": "hidden" }
    ```
 
 4. **Arm file dialogs** when the change touches import or export. Each open or save dialog takes
