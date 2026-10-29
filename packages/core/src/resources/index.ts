@@ -18,6 +18,9 @@ import type { ToolProfile } from '../tools/profiles.js'
 /** Stable URI for the compact, server-specific tool-profile resource. */
 export const ACTIVE_PROFILE_RESOURCE_URI = 'stagewright://manifest/profile'
 
+/** URI of the verify-desktop-change recipe, which carries the server's recipe-coverage note. */
+export const VERIFY_RECIPE_URI = 'stagewright://docs/verify-desktop-change'
+
 interface AgentResourceRegistration {
   /** The selected named core profile, or custom when callers supplied their own tool collection. */
   readonly activeProfile: ToolProfile | 'custom'
@@ -25,12 +28,15 @@ interface AgentResourceRegistration {
   readonly visibleCoreToolCount: number
   /** Registered visible tools including optional plugins and conditional server introspection. */
   readonly visibleToolCount: number
+  /** Names the verify-recipe tools this server lacks and the restart flags that add them. */
+  readonly recipeNote?: string
 }
 
-function decorateGuide(source: string, text: string): string {
+function decorateGuide(source: string, text: string, note?: string): string {
   return [
     `<!-- Electron Stagewright resource; server version ${VERSION}; canonical source: ${source} -->`,
     '',
+    ...(note !== undefined ? [`> ${note}`, ''] : []),
     text,
   ].join('\n')
 }
@@ -46,6 +52,7 @@ function profileResource(registration: AgentResourceRegistration): string {
     `- Additional visible tools: ${additionalTools}`,
     `- Visible MCP tools total: ${registration.visibleToolCount}`,
     '',
+    ...(registration.recipeNote !== undefined ? [registration.recipeNote, ''] : []),
     "This is an availability summary, not a second tool schema. Read `tools/list` for each visible tool's arguments and behavior. Plugins and their conditional server introspection are enabled independently of a core profile.",
   ].join('\n')
 }
@@ -73,7 +80,11 @@ export function registerAgentResources(
           {
             uri: uri.href,
             mimeType: 'text/markdown',
-            text: decorateGuide(document.source, document.text),
+            text: decorateGuide(
+              document.source,
+              document.text,
+              document.uri === VERIFY_RECIPE_URI ? registration.recipeNote : undefined,
+            ),
           },
         ],
       }),
