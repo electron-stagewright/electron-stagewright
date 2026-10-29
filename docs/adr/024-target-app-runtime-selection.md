@@ -95,3 +95,17 @@ executable when it is absent. Every property this record relies on is unchanged:
 metadata-only (the package entry is still never imported), the candidate must still resolve inside
 `dist/`, project resolution still confines it to the app root, and a package with neither a recorded
 nor a conventional binary still fails honestly.
+
+## Status Update — 2026-10-29: the project runtime is the default under `--app-root`
+
+Decision 1 made `runtime: "project"` an explicit opt-in. In practice, operators who set `--app-root`
+had already chosen the project, yet a `main` launch still ran on the server's Electron, which an
+`npx --package electron@X` install pins independently of the app. One consumer pinned Electron 42
+while its app used 44.9.1, so every agent session tested a runtime the app never ships.
+
+A `main` launch without `runtime` or `executablePath` now resolves the project runtime when
+`--app-root` is set, through the same metadata-only, root-confined resolver. A project without its
+own Electron keeps the server runtime and the response carries `runtime_fallback` with the
+resolver's reason, so the launch is never worse than before. `runtime: "server"` selects the server
+runtime explicitly, and `runtime: "project"` keeps its strict behavior. Without `--app-root` nothing
+changes: the root is still never derived from an agent-supplied path.

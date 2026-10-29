@@ -28,8 +28,8 @@ your Electron app, the host agent, and the workflow you need to make repeatable.
   stable refs; errors carry codes, recovery hints, and similar-ref candidates instead of leaving
   the host to parse prose. [Concepts](./concepts.md) explains that model.
 - **You need more than a fresh launch.** A session can launch, attach through CDP, or inject into a
-  compatible running process. Apps with a project-owned Electron runtime can opt into
-  `runtime: "project"` so native modules are tested against the runtime that will load them. See
+  compatible running process. With `--app-root`, apps run on their own project Electron
+  by default, so native modules are tested against the runtime that will load them. See
   [Launch, attach, or inject](./launch-or-attach.md).
 - **The workflow needs specialized, explicit capabilities.** First-party plugins add trace/replay,
   IPC observation, network capture and stubbing, virtual time, storage, native UI, production

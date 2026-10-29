@@ -101,20 +101,22 @@ describes the platform security difference and the Linux `basic_text` backend.
 ### Use the target project's Electron runtime
 
 An app that loads native addons can require the Electron ABI it was built against. Start the server
-with an operator-chosen app root, then ask the launch tool to use that project's Electron package:
+with an operator-chosen app root, and launches use that project's Electron package:
 
 ```sh
 electron-stagewright --app-root /absolute/path/to/your-app --tool-profile essential
 ```
 
 ```json
-electron_launch {
-  "main": "/absolute/path/to/your-app/dist/main.js",
-  "runtime": "project"
-}
+electron_launch { "main": "/absolute/path/to/your-app/dist/main.js" }
 ```
 
-`runtime: "project"` requires `main` and resolves Electron only below `--app-root`; it never accepts
+With `--app-root` set, a `main` launch uses the Electron installed in that project by default and
+reports `runtime_source: "project"`. When the project has no Electron of its own, the launch keeps
+the server's Electron and returns the reason in `runtime_fallback`. Pass `runtime: "server"` to use
+the server's Electron anyway, or `runtime: "project"` to fail instead of falling back.
+
+The project runtime requires `main` and resolves Electron only below `--app-root`; it never accepts
 a root from a tool call. The resolver reads Electron package metadata rather than evaluating the
 target app or Electron package entry point, and rejects a package or binary that resolves outside the
 configured root. An explicit `executablePath` is still authoritative, so do not set both unless you

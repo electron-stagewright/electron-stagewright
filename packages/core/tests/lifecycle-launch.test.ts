@@ -138,6 +138,80 @@ describe('electron_launch', () => {
     expect(transport.launchCount).toBe(0)
   })
 
+  describe('default runtime under --app-root', () => {
+    const root = path.resolve('sw-project-default-fixture')
+    const projectBinary = path.join(root, 'node_modules', 'electron', 'dist', 'electron')
+    const found = async (): Promise<ProjectElectronResolution> => ({
+      ok: true,
+      electron: {
+        executablePath: projectBinary,
+        packageJsonPath: path.join(root, 'node_modules', 'electron', 'package.json'),
+        version: '44.9.1',
+      },
+    })
+
+    it('uses the project Electron when runtime is omitted', async () => {
+      const transport = new CapturingTransport({
+        session: new FakeSession({ id: 'implicit-project', windows: [WIN] }),
+      })
+      const { dispatcher } = setup({ appRoot: root, transport, resolveProjectElectron: found })
+
+      const res = await dispatcher.dispatch('electron_launch', {
+        main: path.join(root, 'main.js'),
+      })
+
+      expect(res).toMatchObject({ ok: true, runtime_source: 'project' })
+      expect(res).not.toHaveProperty('runtime_fallback')
+      expect(transport.lastLaunchOptions).toMatchObject({ executablePath: projectBinary })
+    })
+
+    it('falls back to the server Electron and says why when the project has none', async () => {
+      const transport = new CapturingTransport({
+        session: new FakeSession({ id: 'implicit-fallback', windows: [WIN] }),
+      })
+      const missing = async (): Promise<ProjectElectronResolution> => ({
+        ok: false,
+        message: 'No electron package is installed under the app root.',
+      })
+      const { dispatcher } = setup({ appRoot: root, transport, resolveProjectElectron: missing })
+
+      const res = await dispatcher.dispatch('electron_launch', {
+        main: path.join(root, 'main.js'),
+      })
+
+      expect(res).toMatchObject({
+        ok: true,
+        runtime_source: 'default',
+        runtime_fallback: 'No electron package is installed under the app root.',
+      })
+      expect(transport.lastLaunchOptions?.executablePath).toBeUndefined()
+    })
+
+    it('keeps the server Electron for runtime "server"', async () => {
+      const transport = new CapturingTransport({
+        session: new FakeSession({ id: 'explicit-server', windows: [WIN] }),
+      })
+      let resolved = false
+      const { dispatcher } = setup({
+        appRoot: root,
+        transport,
+        resolveProjectElectron: async () => {
+          resolved = true
+          return found()
+        },
+      })
+
+      const res = await dispatcher.dispatch('electron_launch', {
+        main: path.join(root, 'main.js'),
+        runtime: 'server',
+      })
+
+      expect(res).toMatchObject({ ok: true, runtime_source: 'default' })
+      expect(resolved).toBe(false)
+      expect(transport.lastLaunchOptions?.executablePath).toBeUndefined()
+    })
+  })
+
   it('resolves and forwards the app-root Electron runtime', async () => {
     const root = path.resolve('sw-project-runtime-fixture')
     const transport = new CapturingTransport({

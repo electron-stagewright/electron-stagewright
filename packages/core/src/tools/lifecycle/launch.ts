@@ -81,10 +81,10 @@ const inputSchema = z.object({
     .optional()
     .describe('Absolute path to an Electron/app binary. Defaults to the bundled Electron.'),
   runtime: z
-    .enum(['project'])
+    .enum(['project', 'server'])
     .optional()
     .describe(
-      'Use Electron resolved from the operator-configured --app-root. Resolving that runtime requires main; an explicit executablePath takes precedence. Default: the launch transport runtime.',
+      '"project" uses Electron resolved from the operator-configured --app-root and requires main; "server" uses the server\'s own Electron. An explicit executablePath takes precedence. Default: "project" when --app-root is set and the project has Electron, otherwise "server".',
     ),
   args: z.array(z.string()).optional().describe('Extra CLI args appended after the entry.'),
   env: z
@@ -130,12 +130,14 @@ const inputSchema = z.object({
 
 const DESCRIPTION = [
   'Launch an Electron app and start a driving session. Provide main (absolute path to the',
-  'main-process entry) or executablePath. Set runtime:"project" to resolve Electron only from the',
-  'operator-configured --app-root (requires main when resolving that runtime); explicit executablePath',
-  'takes precedence. Executable-only launches are treated as packaged apps and use a transport-owned,',
+  'main-process entry) or executablePath. When the server has --app-root, a main launch uses the',
+  'Electron installed in that project (runtime_source "project"); if the project has none it uses the',
+  'server\'s Electron and says why in runtime_fallback. runtime:"server" always uses the server\'s,',
+  'runtime:"project" requires the project\'s; an explicit executablePath takes precedence.',
+  'Executable-only launches are treated as packaged apps and use a transport-owned,',
   'loopback CDP endpoint; main-based development launches use Playwright. A server',
   'started with --demo supplies its packaged demo entry when both are omitted. Returns: { ok, session_id,',
-  'transport, windows, renderer_ready, runtime_source, launch_mode, capabilities }.',
+  'transport, windows, renderer_ready, runtime_source, runtime_fallback?, launch_mode, capabilities }.',
   'credentialStore defaults to "testing": macOS receives --use-mock-keychain and Linux receives',
   '--password-store=basic so OS credential prompts cannot wedge automation. Use',
   'credentialStore:"system" when assertions must verify genuine safeStorage sealing.',
@@ -275,6 +277,26 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
         let resolvedProjectRoot: string | undefined
         let runtimeSource: 'default' | 'project' | 'explicit' =
           executablePath === undefined ? 'default' : 'explicit'
+        let runtimeFallback: string | undefined
+        // With --app-root the operator already chose the project, so its own Electron is the
+        // default: native addons match its ABI. A project without one keeps the server runtime.
+        if (
+          executablePath === undefined &&
+          args.runtime === undefined &&
+          args.main !== undefined &&
+          ctx.appRoot !== undefined
+        ) {
+          phase('Resolving project Electron runtime')
+          const resolution = await resolveFromProject(ctx.appRoot)
+          ctx.signal?.throwIfAborted()
+          if (resolution.ok) {
+            executablePath = resolution.electron.executablePath
+            resolvedProjectRoot = resolution.rootPath
+            runtimeSource = 'project'
+          } else {
+            runtimeFallback = resolution.message
+          }
+        }
         if (executablePath === undefined && args.runtime === 'project') {
           phase('Resolving project Electron runtime')
           if (ctx.appRoot === undefined) {
@@ -417,6 +439,7 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
             windows,
             renderer_ready,
             runtime_source: runtimeSource,
+            ...(runtimeFallback !== undefined ? { runtime_fallback: runtimeFallback } : {}),
             launch_mode: packagedLaunch ? 'packaged' : 'development',
             capabilities: transport.capabilities,
           },
