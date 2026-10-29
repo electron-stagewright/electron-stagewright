@@ -34,6 +34,12 @@ import { awaitRendererReady, DEFAULT_READY_TIMEOUT_MS, MAX_READY_TIMEOUT_MS } fr
 import { registerWithWindows } from './session-init.js'
 
 /**
+ * Upper bound on `timeoutMs`. With the 60s readyTimeoutMs cap it keeps a launch under the 120s
+ * dispatch backstop, so a blocked app surfaces as LAUNCH_TIMEOUT with its hint, not OPERATION_TIMEOUT.
+ */
+export const MAX_LAUNCH_TIMEOUT_MS = 50_000
+
+/**
  * Upper bound on concurrently-live sessions. Each launch spawns a real Electron process tree
  * (a parent plus heavyweight Chromium children), so without a cap a client looping
  * `electron_launch({ allowMultiple: true })` could exhaust host memory/PIDs. The limit is
@@ -86,12 +92,20 @@ const inputSchema = z.object({
     .optional()
     .describe('Environment variables for the spawned process.'),
   cwd: z.string().optional().describe('Working directory for the spawned process.'),
-  timeoutMs: z.number().int().positive().optional().describe('Max wait for the first window.'),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_LAUNCH_TIMEOUT_MS)
+    .optional()
+    .describe(
+      `Max wait (ms) for the app to start and show its first window. Capped at ${MAX_LAUNCH_TIMEOUT_MS} so it plus readyTimeoutMs stays under the dispatch timeout backstop.`,
+    ),
   credentialStore: z
     .enum(['testing', 'system'])
     .optional()
     .describe(
-      'Packaged executable only. Default "testing" avoids blocking credential prompts with --use-mock-keychain on macOS or --password-store=basic on Linux. Use "system" to verify genuine safeStorage behavior.',
+      'Default "testing" avoids blocking credential prompts with --use-mock-keychain on macOS or --password-store=basic on Linux. Use "system" to verify genuine safeStorage behavior.',
     ),
   readyTimeoutMs: z
     .number()
@@ -122,8 +136,8 @@ const DESCRIPTION = [
   'loopback CDP endpoint; main-based development launches use Playwright. A server',
   'started with --demo supplies its packaged demo entry when both are omitted. Returns: { ok, session_id,',
   'transport, windows, renderer_ready, runtime_source, launch_mode, capabilities }.',
-  'Packaged launches default credentialStore to "testing": macOS receives --use-mock-keychain and',
-  'Linux receives --password-store=basic so OS credential prompts cannot wedge automation. Use',
+  'credentialStore defaults to "testing": macOS receives --use-mock-keychain and Linux receives',
+  '--password-store=basic so OS credential prompts cannot wedge automation. Use',
   'credentialStore:"system" when assertions must verify genuine safeStorage sealing.',
   'Waits (up to readyTimeoutMs, default 5000) for the renderer DOM to finish its initial render, so a',
   'snapshot/find right after launch sees a populated app; renderer_ready:false means it was not confirmed',
@@ -143,7 +157,7 @@ const DESCRIPTION = [
   'server\'s npx --package list, pass executablePath, or use runtime:"project"),',
   'SINGLE_INSTANCE_LOCK (another app instance holds the lock; not retryable),',
   'LAUNCH_FAILED (the packaged app could not start or exited before a driveable renderer; not retryable),',
-  'LAUNCH_TIMEOUT (first window did not appear; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).',
+  'LAUNCH_TIMEOUT (first window did not appear, often a main process blocked on an OS prompt or dialog; retryable), TRANSPORT_UNSUPPORTED (no launch-capable transport).',
 ].join(' ')
 
 /** Dependency seams for {@link makeLaunchTool} — injected by tests. */
@@ -302,13 +316,6 @@ export function makeLaunchTool(deps: LaunchToolDeps = {}): AnyToolDefinition {
           })
         }
         const packagedLaunch = main === undefined && executablePath !== undefined
-        if (args.credentialStore !== undefined && !packagedLaunch) {
-          return makeError('BAD_ARGUMENT', {
-            ...meta,
-            message:
-              'credentialStore applies only to executable-only packaged launches; omit main or omit credentialStore.',
-          })
-        }
         if (args.env !== undefined) {
           const denied = Object.keys(args.env).filter(isDeniedEnvKey)
           if (denied.length > 0) {

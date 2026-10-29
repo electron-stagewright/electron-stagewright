@@ -657,3 +657,14 @@ the limits. Blink keeps reporting the requested outer size for a while after the
 the real one, while the inner size is real from the resize event on, so the page waits for that
 event and derives the outer size from the inner one and a frame measured before its first resize.
 `electron_set_window_size` builds on it.
+
+## Status Update — 2026-10-29: credential-store policy for development launches
+
+`LaunchOptions.credentialStore` now applies to `main`-based Playwright launches too, with the same
+`testing` default. A development launch used to reach the real macOS Keychain: after an Electron
+upgrade the new binary is not on the "Electron Safe Storage" item's access list, macOS shows an
+access prompt, and the main process blocks before its first window, so the launch ended in
+`LAUNCH_TIMEOUT` with nothing pointing at the cause. Both transports now share one helper that
+adds `--use-mock-keychain` on macOS or `--password-store=basic` on Linux unless the caller already
+passed that switch, and `credentialStore: "system"` still adds neither. The `LAUNCH_TIMEOUT` hint
+names a main process blocked on an OS prompt or startup dialog as the usual cause.

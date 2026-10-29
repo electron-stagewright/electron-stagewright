@@ -14,11 +14,12 @@ import { type ErrorResponse, type SuccessResponse } from '../src/errors/envelope
 import { StagewrightError } from '../src/errors/registry.js'
 import type { ProjectElectronResolution } from '../src/runtime/project-electron.js'
 import type { ElectronLaunchFuseInspection } from '../src/runtime/electron-fuses.js'
-import { Dispatcher } from '../src/server/dispatcher.js'
+import { DEFAULT_OPERATION_TIMEOUT_MS, Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
 import { TransportRegistry } from '../src/server/transport-registry.js'
 import { diagnoseLaunchError } from '../src/tools/lifecycle/diagnose.js'
-import { makeLaunchTool } from '../src/tools/lifecycle/launch.js'
+import { makeLaunchTool, MAX_LAUNCH_TIMEOUT_MS } from '../src/tools/lifecycle/launch.js'
+import { MAX_READY_TIMEOUT_MS } from '../src/tools/lifecycle/ready.js'
 import type { LaunchOptions, WindowDescriptor } from '../src/transports/index.js'
 import { FakeSession, FakeTransport } from './helpers/fake-transport.js'
 
@@ -242,7 +243,25 @@ describe('electron_launch', () => {
     expect(packagedTransport.launchCount).toBe(1)
   })
 
-  it('forwards the packaged credential-store policy to CDP and rejects it for development launch', async () => {
+  it('caps timeoutMs so a launch stays under the dispatch backstop', async () => {
+    const { dispatcher, transport } = setup()
+    const over = (await dispatcher.dispatch('electron_launch', {
+      main: '/abs/main.js',
+      timeoutMs: MAX_LAUNCH_TIMEOUT_MS + 1,
+    })) as ErrorResponse
+    expect(over).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+    expect(transport.launchCount).toBe(0)
+    expect(MAX_LAUNCH_TIMEOUT_MS + MAX_READY_TIMEOUT_MS).toBeLessThan(DEFAULT_OPERATION_TIMEOUT_MS)
+
+    await expect(
+      dispatcher.dispatch('electron_launch', {
+        main: '/abs/main.js',
+        timeoutMs: MAX_LAUNCH_TIMEOUT_MS,
+      }),
+    ).resolves.toMatchObject({ ok: true })
+  })
+
+  it('forwards the credential-store policy to packaged and development launches', async () => {
     const packagedTransport = new CapturingTransport({
       id: 'cdp',
       session: new FakeSession({ id: 'packaged-policy', transport: 'cdp', windows: [WIN] }),
@@ -261,12 +280,19 @@ describe('electron_launch', () => {
     })
     expect(transport.launchCount).toBe(0)
 
-    const development = (await setup().dispatcher.dispatch('electron_launch', {
-      main: '/abs/main.js',
-      credentialStore: 'testing',
-    })) as ErrorResponse
-    expect(development).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
-    expect(development.error).toContain('executable-only packaged launches')
+    const developmentTransport = new CapturingTransport({
+      session: new FakeSession({ id: 'development-policy', windows: [WIN] }),
+    })
+    await expect(
+      setup({ transport: developmentTransport }).dispatcher.dispatch('electron_launch', {
+        main: '/abs/main.js',
+        credentialStore: 'system',
+      }),
+    ).resolves.toMatchObject({ ok: true, launch_mode: 'development' })
+    expect(developmentTransport.lastLaunchOptions).toMatchObject({
+      appPath: '/abs/main.js',
+      credentialStore: 'system',
+    })
   })
 
   it('reports TRANSPORT_UNSUPPORTED when the packaged CDP launcher is unavailable', async () => {

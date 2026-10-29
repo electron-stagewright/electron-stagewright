@@ -66,6 +66,7 @@ import type {
   PWResponse,
   PWRoute,
 } from './playwright-electron-api.js'
+import { credentialStoreArgs } from './credential-store.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
 import {
   bodyCapturePlan,
@@ -400,6 +401,8 @@ export interface PlaywrightElectronTransportOptions {
    * test seam; defaults to 10s.
    */
   readonly windowRecoveryBudgetMs?: number
+  /** Platform override for the credential-store default. Defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform
 }
 
 export interface PlaywrightLaunchOptions {
@@ -490,19 +493,27 @@ function mergeEnv(
   return { ...base, ...env }
 }
 
-export function buildPlaywrightLaunchOptions(opts: LaunchOptions): PlaywrightLaunchOptions {
+export function buildPlaywrightLaunchOptions(
+  opts: LaunchOptions,
+  platform: NodeJS.Platform = process.platform,
+): PlaywrightLaunchOptions {
   if (opts.appPath === undefined && opts.executablePath === undefined) {
     throw new StagewrightError('BAD_ARGUMENT', 'launch requires appPath or executablePath.', {
       transport: TRANSPORT_ID,
     })
   }
 
-  const args = opts.appPath !== undefined ? [opts.appPath, ...(opts.args ?? [])] : opts.args
+  const callerArgs = opts.args ?? []
+  const switches = [
+    ...credentialStoreArgs(callerArgs, opts.credentialStore ?? 'testing', platform),
+    ...callerArgs,
+  ]
+  const args = opts.appPath !== undefined ? [opts.appPath, ...switches] : switches
   const env = mergeEnv(opts.env)
 
   return {
     ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
-    ...(args !== undefined ? { args } : {}),
+    ...(args.length > 0 ? { args } : {}),
     ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
     ...(env !== undefined ? { env } : {}),
     ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
@@ -2482,10 +2493,12 @@ export class PlaywrightElectronTransport implements ITransport {
   public readonly id: TransportId = TRANSPORT_ID
   private readonly loadElectron: () => Promise<PWElectron>
   private readonly windowRecoveryBudgetMs: number | undefined
+  private readonly platform: NodeJS.Platform
 
   constructor(opts: PlaywrightElectronTransportOptions = {}) {
     this.loadElectron = opts.loadElectron ?? loadPlaywrightElectron
     this.windowRecoveryBudgetMs = opts.windowRecoveryBudgetMs
+    this.platform = opts.platform ?? process.platform
   }
 
   public readonly capabilities: TransportCapabilities = {
@@ -2540,7 +2553,9 @@ export class PlaywrightElectronTransport implements ITransport {
         )
       }
     }
-    const launchOpts = buildPlaywrightLaunchOptions(effectiveOpts)
+    const launchOpts = buildPlaywrightLaunchOptions(effectiveOpts, this.platform)
+    // One budget covers both phases; Playwright would otherwise grant timeoutMs to each.
+    const deadline = opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : undefined
     let app: PWElectronApp
     try {
       app = await electron.launch(launchOpts)
@@ -2565,7 +2580,7 @@ export class PlaywrightElectronTransport implements ITransport {
     let initialPage: PWPage
     try {
       initialPage = await app.firstWindow(
-        opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : undefined,
+        deadline !== undefined ? { timeout: Math.max(1, deadline - Date.now()) } : undefined,
       )
     } catch (cause) {
       try {

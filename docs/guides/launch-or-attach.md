@@ -36,6 +36,10 @@ electron_launch { "main": "/abs/path/to/app/main.js" }
   and stays on Playwright. Both paths must be absolute.
 - `args`, `env`, and `cwd` shape the spawn. Environment variables that would alter the runtime
   (e.g. `NODE_OPTIONS`) are rejected with `BAD_ARGUMENT`.
+- On macOS and Linux a credential-store switch keeps `safeStorage` off the OS keychain, so a
+  Keychain prompt cannot block startup; see [the credential-store default](#credential-store-default).
+  It goes before your `args`, so an app reading a positional argument from `process.argv` should
+  skip switches.
 - The call resolves when the first window exists AND the renderer finished its initial render
   (bounded by `readyTimeoutMs`, default 5000 ms) — so a snapshot right after launch sees content.
 
@@ -48,9 +52,11 @@ electron_wait_for_selector { "selector": "#app", "state": "visible", "timeoutMs"
 
 Failure modes worth knowing: `SINGLE_INSTANCE_LOCK` (another copy of the app holds Electron's
 single-instance lock — close it first), `ALREADY_RUNNING` (one live session per server by default;
-pass `allowMultiple: true` to run several), `LAUNCH_TIMEOUT` (no window within `timeoutMs`;
-retryable), and `LAUNCH_FAILED` (the packaged app could not start or exited before a driveable
-renderer appeared).
+pass `allowMultiple: true` to run several), `LAUNCH_TIMEOUT` (no window within `timeoutMs`, at most
+50 000 ms so the launch ends before the dispatch backstop;
+retryable; usually a main process blocked before its first window, for example on an OS prompt
+under `"credentialStore": "system"` or on a startup dialog), and `LAUNCH_FAILED` (the packaged app
+could not start or exited before a driveable renderer appeared).
 `FUSES_BLOCK_LAUNCH` applies only to a `main`-based Playwright launch whose selected runtime disables
 Electron's Node CLI inspect fuse. For a shipped build, omit `main` and launch the executable over
 CDP instead. Unknown or unreadable fuse state does not block a Playwright launch.
@@ -74,10 +80,13 @@ failed handshake reaps the process before returning. Electron documents
 [`--remote-debugging-port`](https://www.electronjs.org/docs/latest/api/command-line-switches#--remote-debugging-portport)
 as the HTTP CDP endpoint switch.
 
-Packaged launches default to `"credentialStore": "testing"`:
+### Credential-store default
+
+Every launch, development or packaged, defaults to `"credentialStore": "testing"`:
 
 - macOS receives `--use-mock-keychain`, avoiding a Keychain prompt that can block startup;
-- Linux receives `--password-store=basic` unless `args` already selects another password store;
+- Linux receives `--password-store=basic` unless `args` already selects another password store
+  before any `--`;
 - Windows receives no credential-store switch.
 
 This default is for reliable automation, not security verification. A mock macOS keychain or

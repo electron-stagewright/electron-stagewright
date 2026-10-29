@@ -80,6 +80,7 @@ import {
   type CdpResponseReceived,
   type InflightRequest,
 } from './cdp-network.js'
+import { credentialStoreArgs, hasSwitch } from './credential-store.js'
 import { copyDialogPolicy, resolveDialogResponse } from './dialog-policy.js'
 import { assertLoopbackAttachTarget } from './loopback.js'
 import {
@@ -245,11 +246,6 @@ const defaultReserveLoopbackPort: ReserveLoopbackPort = async () => {
     )
   }
   return address.port
-}
-
-function hasSwitch(args: readonly string[], name: string): boolean {
-  const prefix = `--${name}`
-  return args.some((arg) => arg === prefix || arg.startsWith(`${prefix}=`))
 }
 
 function processHasExited(child: ChildProcess): boolean {
@@ -2543,7 +2539,7 @@ export class CDPTransport implements ITransport {
     const launchArgs = [
       `--remote-debugging-address=127.0.0.1`,
       `--remote-debugging-port=${port}`,
-      ...this.#credentialStoreArgs(callerArgs, opts.credentialStore ?? 'testing'),
+      ...credentialStoreArgs(callerArgs, opts.credentialStore ?? 'testing', this.#deps.platform),
       ...callerArgs,
     ]
     let child: ChildProcess
@@ -2696,20 +2692,6 @@ export class CDPTransport implements ITransport {
     }
 
     return session
-  }
-
-  #credentialStoreArgs(
-    callerArgs: readonly string[],
-    mode: NonNullable<LaunchOptions['credentialStore']>,
-  ): readonly string[] {
-    if (mode === 'system') return []
-    if (this.#deps.platform === 'darwin' && !hasSwitch(callerArgs, 'use-mock-keychain')) {
-      return ['--use-mock-keychain']
-    }
-    if (this.#deps.platform === 'linux' && !hasSwitch(callerArgs, 'password-store')) {
-      return ['--password-store=basic']
-    }
-    return []
   }
 
   async #waitForPackagedTarget(
