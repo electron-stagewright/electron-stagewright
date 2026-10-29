@@ -116,3 +116,8 @@ Both results must still sit inside the canonical root. An implicit project binar
 disable the inspect channel Playwright needs falls back to the server runtime with a
 `runtime_fallback` reason instead of failing; an explicit `runtime: "project"` still reports
 `FUSES_BLOCK_LAUNCH`.
+
+`doctor` follows the new default: when the project Electron resolves, a server without its own
+Electron package reports the `electron` check as `warn` instead of `fail`, because only
+`runtime: "server"` or a project without Electron would use it. Without `--app-root`, or when the
+project resolution fails, the check still fails.
