@@ -13,12 +13,12 @@ stream. `doctor --json` must report `"ok": true`. Keep `--prefix ~/`: without it
 listed package the current project already has, and the server cannot load it.
 
 ```bash
-npx -y --prefix ~/ --package @electron-stagewright/core@0.8.0 \
+npx -y --prefix ~/ --package @electron-stagewright/core@0.8.1 \
   --package playwright@1.63.0 --package electron@42.11.10 install-electron
-npx -y --prefix ~/ --package @electron-stagewright/core@0.8.0 \
+npx -y --prefix ~/ --package @electron-stagewright/core@0.8.1 \
   --package playwright@1.63.0 --package electron@42.11.10 electron-stagewright doctor --json
 claude mcp add electron-stagewright -- \
-  npx -y --prefix ~/ --package @electron-stagewright/core@0.8.0 \
+  npx -y --prefix ~/ --package @electron-stagewright/core@0.8.1 \
   --package playwright@1.63.0 --package electron@42.11.10 \
   electron-stagewright --tool-profile essential
 ```
