@@ -6,7 +6,7 @@
  */
 
 import { GENERATED_AGENT_RESOURCE_DOCUMENTS, VERIFY_RECIPE_URI } from '../resources/index.js'
-import { resolveCoreToolProfile, TOOL_PROFILES, type ToolProfile } from '../tools/profiles.js'
+import { coveringToolProfile, type ToolProfile } from '../tools/profiles.js'
 import type { AnyToolDefinition } from '../tools/types.js'
 
 /** `--plugin` short name for each first-party tool prefix the recipe uses. */
@@ -22,9 +22,12 @@ const RECIPE_TEXT =
 export function recipeToolNames(text: string = RECIPE_TEXT): readonly string[] {
   const names = text.match(/\b[a-z]+_[a-z_]*[a-z]\b/g) ?? []
   return [...new Set(names)].filter(
-    (name) =>
-      name.startsWith('electron_') || Object.hasOwn(RECIPE_PLUGIN_PREFIXES, toolPrefix(name)),
+    (name) => isCoreTool(name) || Object.hasOwn(RECIPE_PLUGIN_PREFIXES, toolPrefix(name)),
   )
+}
+
+function isCoreTool(name: string): boolean {
+  return name.startsWith('electron_')
 }
 
 function toolPrefix(name: string): string {
@@ -40,21 +43,18 @@ export function recipeCoverageNote(
   profile: ToolProfile | 'custom',
   coreDefinitions: readonly AnyToolDefinition[],
 ): string | undefined {
-  const missing = recipeToolNames().filter((name) => !has(name))
+  const recipeTools = recipeToolNames()
+  const missing = recipeTools.filter((name) => !has(name))
   if (missing.length === 0) return undefined
 
-  const missingCore = missing.filter((name) => name.startsWith('electron_'))
   const flags: string[] = []
-  if (missingCore.length > 0 && profile !== 'custom') {
-    const covering = TOOL_PROFILES.find((candidate) => {
-      const names = new Set(resolveCoreToolProfile(coreDefinitions, candidate).map((d) => d.name))
-      return missingCore.every((name) => names.has(name))
-    })
+  if (missing.some(isCoreTool) && profile !== 'custom') {
+    const covering = coveringToolProfile(coreDefinitions, profile, recipeTools.filter(isCoreTool))
     if (covering !== undefined) flags.push(`--tool-profile ${covering}`)
   }
   const plugins = new Set(
     missing
-      .filter((name) => !name.startsWith('electron_'))
+      .filter((name) => !isCoreTool(name))
       .map((name) => RECIPE_PLUGIN_PREFIXES[toolPrefix(name)]),
   )
   for (const plugin of plugins) flags.push(`--plugin ${plugin}`)

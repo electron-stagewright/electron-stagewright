@@ -189,7 +189,10 @@ steps use the native-ui and storage plugins and core tools outside `essential` a
 agent on a narrower surface had no sign of this, and fell back to scripts outside the MCP. The
 server now reads the tool names from the generated recipe, and when any is unregistered it appends
 one sentence to the instructions, the recipe resource and `stagewright://manifest/profile`. That
-sentence names the missing tools, the smallest profile that has the missing core tools, and the
-`--plugin` short names. A direct call to a tool of an unloaded first-party plugin now gets the same
-kind of restart hint as an excluded profile tool. Profile membership, plugin loading and
-`tools/list` are unchanged, so no manifest variant moves.
+sentence names the missing tools, a profile and the `--plugin` short names. Changing profiles
+replaces the core tool set, so the profile is the first, in `essential`, `testing`, `debug`, `full`
+order, that keeps every core tool of the current profile and adds every core tool in the recipe.
+The restart hint for a direct call to a tool the profile excludes follows the same rule.
+Caller-supplied tool sets receive no profile recommendation. A direct call to a tool of an unloaded
+first-party plugin now gets the same kind of restart hint as an excluded profile tool. Profile
+membership, plugin loading and `tools/list` are unchanged, so no manifest variant moves.
