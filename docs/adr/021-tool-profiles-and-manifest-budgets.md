@@ -181,3 +181,14 @@ the agent guessing how long to wait. `essential` is unchanged.
 `full` through the catalog. It replaces `BrowserWindow.setSize` through eval and reports the size
 the window really got, since an app minimum size clamps requests silently. `essential` is
 unchanged.
+
+## Status update (2026-10-29): recipe coverage in the instructions
+
+The server instructions point every agent at `stagewright://docs/verify-desktop-change`, whose
+steps use the native-ui and storage plugins and core tools outside `essential` and `testing`. An
+agent on a narrower surface had no sign of this, and fell back to scripts outside the MCP. The
+server now reads the tool names from the generated recipe, and when any is unregistered it appends
+one sentence to the instructions, the recipe resource and `stagewright://manifest/profile`. That
+sentence names the missing tools, the smallest profile that has the missing core tools, and the
+`--plugin` short names. It does not change profile membership or plugin loading, and `tools/list`
+is unchanged, so no manifest variant moves.

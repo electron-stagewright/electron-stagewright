@@ -12,6 +12,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 import { GENERATED_AGENT_RESOURCE_DOCUMENTS } from './generated-documents.js'
+import { VERIFY_RECIPE_URI } from '../server/recipe-coverage.js'
 import { VERSION } from '../version.js'
 import type { ToolProfile } from '../tools/profiles.js'
 
@@ -25,12 +26,15 @@ interface AgentResourceRegistration {
   readonly visibleCoreToolCount: number
   /** Registered visible tools including optional plugins and conditional server introspection. */
   readonly visibleToolCount: number
+  /** Names the verify-recipe tools this server lacks and the restart flags that add them. */
+  readonly recipeNote?: string
 }
 
-function decorateGuide(source: string, text: string): string {
+function decorateGuide(source: string, text: string, note?: string): string {
   return [
     `<!-- Electron Stagewright resource; server version ${VERSION}; canonical source: ${source} -->`,
     '',
+    ...(note !== undefined ? [`> ${note}`, ''] : []),
     text,
   ].join('\n')
 }
@@ -46,6 +50,7 @@ function profileResource(registration: AgentResourceRegistration): string {
     `- Additional visible tools: ${additionalTools}`,
     `- Visible MCP tools total: ${registration.visibleToolCount}`,
     '',
+    ...(registration.recipeNote !== undefined ? [registration.recipeNote, ''] : []),
     "This is an availability summary, not a second tool schema. Read `tools/list` for each visible tool's arguments and behavior. Plugins and their conditional server introspection are enabled independently of a core profile.",
   ].join('\n')
 }
@@ -73,7 +78,11 @@ export function registerAgentResources(
           {
             uri: uri.href,
             mimeType: 'text/markdown',
-            text: decorateGuide(document.source, document.text),
+            text: decorateGuide(
+              document.source,
+              document.text,
+              document.uri === VERIFY_RECIPE_URI ? registration.recipeNote : undefined,
+            ),
           },
         ],
       }),

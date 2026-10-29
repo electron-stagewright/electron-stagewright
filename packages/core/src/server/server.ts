@@ -32,6 +32,7 @@ import {
 import type { AnyToolDefinition } from '../tools/types.js'
 import { VERSION } from '../version.js'
 import { Dispatcher } from './dispatcher.js'
+import { recipeCoverageNote } from './recipe-coverage.js'
 import type { EvalPolicy } from './eval-policy.js'
 import { type Logger, type LogLevel, StderrLogger } from './logger.js'
 import { SessionManager } from './session-manager.js'
@@ -248,6 +249,11 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
   // agent-UX envelopes, not raw -32602), bypassing registerTool — which is what would
   // otherwise declare this capability. listChanged is false: the tool set is fixed once
   // plugins are loaded, before any transport connects.
+  const recipeNote = recipeCoverageNote(
+    (name) => dispatcher.has(name),
+    opts.tools === undefined ? toolProfile : 'custom',
+    DEFAULT_TOOLS,
+  )
   const mcp = new EvidenceMcpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
@@ -267,6 +273,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
         'Screenshots and trace exports may include an artifact and resource_link. Read that MCP',
         'resource before artifact.expires_at; the local path remains available after the link expires.',
         'To check a UI change end to end, follow the resource stagewright://docs/verify-desktop-change.',
+        ...(recipeNote !== undefined ? [recipeNote] : []),
       ].join(' '),
     },
   )
@@ -276,6 +283,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<Stag
     activeProfile: opts.tools === undefined ? toolProfile : 'custom',
     visibleCoreToolCount: coreTools.filter((tool) => dispatcher.has(tool.name)).length,
     visibleToolCount: dispatcher.list().length,
+    ...(recipeNote !== undefined ? { recipeNote } : {}),
   })
 
   let closing: Promise<void> | undefined

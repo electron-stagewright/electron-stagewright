@@ -17,6 +17,9 @@ settings, and trace (optional) records the run.
 electron-stagewright --plugin native-ui --plugin storage --plugin trace
 ```
 
+A server started without any of these tools, such as one on `--tool-profile essential`, names the
+missing tools and the flags that add them in its MCP instructions and at the top of this resource.
+
 Pick a new directory for each run's evidence, such as `/abs/evidence/run-42`, so screenshots and
 traces from different runs never mix. Every path the tools take is absolute.
 
