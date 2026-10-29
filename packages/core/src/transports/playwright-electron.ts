@@ -429,7 +429,7 @@ function electronRuntimeMissing(
       : `Add --package electron@<version> to the npx command that starts the server, then run install-electron with that list. ${NPX_PREFIX_REMEDY}`
   return new StagewrightError(
     'ELECTRON_RUNTIME_MISSING',
-    `${message} ${remedy} Alternatively pass executablePath, or runtime:"project" with --app-root.`,
+    `${message} ${remedy} Alternatively pass executablePath, or install Electron in the app and start the server with --app-root so launches use it.`,
     { transport: TRANSPORT_ID, reason, ...details },
   )
 }

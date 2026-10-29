@@ -64,6 +64,26 @@ describe('project Electron resolution', () => {
     await expect(readDeclaredElectronVersion(root)).resolves.toBe('42.3.0')
   })
 
+  it('prefers the Electron a workspace package installs for its own main', async () => {
+    const { root } = await temporaryProject()
+    const packageDir = path.join(root, 'packages', 'desktop')
+    const nestedElectron = path.join(packageDir, 'node_modules', 'electron')
+    await mkdir(path.join(nestedElectron, 'dist'), { recursive: true })
+    await Promise.all([
+      writeFile(path.join(nestedElectron, 'package.json'), JSON.stringify({ version: '44.9.1' })),
+      writeFile(path.join(nestedElectron, 'path.txt'), 'electron\n'),
+      writeFile(path.join(nestedElectron, 'dist', 'electron'), ''),
+    ])
+
+    await expect(
+      resolveProjectElectron(root, {}, path.join(packageDir, 'main.js')),
+    ).resolves.toMatchObject({ ok: true, electron: { version: '44.9.1' } })
+    await expect(resolveProjectElectron(root)).resolves.toMatchObject({
+      ok: true,
+      electron: { version: '42.3.0' },
+    })
+  })
+
   it('refuses an Electron package whose executable escapes the app root', async () => {
     const { root } = await temporaryProject()
     const executable = path.join(root, 'node_modules', 'electron', 'dist', 'electron')

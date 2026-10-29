@@ -64,9 +64,9 @@ Useful CLI flags:
   capture without requiring the broader diagnostic profile.
 - `--screenshot-dir <path>` changes where screenshots are written when a tool
   call does not pass an explicit path.
-- `--app-root <path>` confines launch/file paths and enables
-  `electron_launch({ main, runtime: "project" })` to use the Electron package
-  installed inside that project. The server, not the agent, chooses this root.
+- `--app-root <path>` confines launch/file paths and makes `electron_launch({ main })`
+  use the Electron package installed inside that project (`runtime: "server"`
+  opts out). The server, not the agent, chooses this root.
 - `doctor --json` runs a machine-readable preflight for Node, Playwright, Electron,
   display setup, configured paths, eval policy, target runtime alignment, and the exact serve
   configuration. Pass the same plugin/config/profile/timeout/demo flags you intend to serve with;

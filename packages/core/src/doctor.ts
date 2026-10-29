@@ -27,6 +27,9 @@ import {
 } from './runtime/project-electron.js'
 import { VERSION } from './version.js'
 
+const APP_LOCAL_RUNTIME_HINT =
+  'Under --app-root a main launch already uses the app-local Electron binary; do not pass runtime:"server" for this app.'
+
 export interface DoctorCheck {
   readonly id:
     | 'node'
@@ -397,7 +400,7 @@ function projectRuntimeCheck(
     warnings.push(
       'The default server Electron ABI could not be inspected while native addons are present.',
     )
-    hints.push('Launch with runtime:"project" to use the app-local Electron binary.')
+    hints.push(APP_LOCAL_RUNTIME_HINT)
   }
   if (
     targetModules !== undefined &&
@@ -408,7 +411,7 @@ function projectRuntimeCheck(
     warnings.push(
       'The default and target Electron runtimes use different NODE_MODULE_VERSION values while native addons are present.',
     )
-    hints.push('Launch with runtime:"project" so Playwright uses the app-local Electron binary.')
+    hints.push(APP_LOCAL_RUNTIME_HINT)
   }
   if (project?.nativeAddonInventoryError !== undefined) {
     warnings.push(`Native-addon inventory failed: ${project.nativeAddonInventoryError}`)

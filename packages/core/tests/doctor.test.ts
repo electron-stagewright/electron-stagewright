@@ -245,7 +245,7 @@ describe('runDoctorChecks', () => {
     expect(report.checks.find((check) => check.id === 'project_runtime')).toMatchObject({
       status: 'warn',
       message: expect.stringContaining('NODE_MODULE_VERSION'),
-      hint: expect.stringContaining('runtime:"project"'),
+      hint: expect.stringContaining('app-local Electron'),
     })
     expect(report.runtime.project).toMatchObject({
       declaredElectron: '42.3.0',

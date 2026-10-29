@@ -2,8 +2,8 @@
  * Real Electron coverage for the ABI risk `runtime: "project"` prevents.
  *
  * The fixture compiles a classic Node addon against Electron 41 (ABI 145), where the server's
- * default Electron is ABI 146. A default launch must fail while a root-confined project runtime
- * launches and snapshots the exact same app. CI provides the archive and headers (plus node.lib
+ * default Electron is ABI 146. A runtime:"server" launch must fail while the default launch, which
+ * resolves the root-confined project runtime, launches and snapshots the exact same app. CI provides the archive and headers (plus node.lib
  * and node-gyp on Windows) through the cached fixture-preparation script; ordinary local test
  * runs skip this network/toolchain fixture.
  */
@@ -184,7 +184,7 @@ async function prepareFixture(
 
 describe('native addon project-runtime recovery (real Electron)', () => {
   it.skipIf(!SHOULD_RUN)(
-    'warns before a default ABI-mismatched launch and recovers with the target runtime',
+    'warns about the server-runtime ABI mismatch and launches the project runtime by default',
     async () => {
       if (ELECTRON_ARCHIVE === undefined || HEADERS_DIRECTORY === undefined) {
         throw new Error(
@@ -216,18 +216,18 @@ describe('native addon project-runtime recovery (real Electron)', () => {
         message: expect.stringContaining('NODE_MODULE_VERSION'),
       })
 
-      const defaultLaunch = (await dispatcher.dispatch('electron_launch', {
+      const serverLaunch = (await dispatcher.dispatch('electron_launch', {
         main: fixture.main,
+        runtime: 'server',
       })) as ErrorResponse
-      expect(defaultLaunch, JSON.stringify(defaultLaunch)).toMatchObject({
+      expect(serverLaunch, JSON.stringify(serverLaunch)).toMatchObject({
         ok: false,
         code: 'INTERNAL_ERROR',
       })
-      expect(defaultLaunch.error).toMatch(/NODE_MODULE_VERSION|compiled against a different/i)
+      expect(serverLaunch.error).toMatch(/NODE_MODULE_VERSION|compiled against a different/i)
 
       const projectLaunch = (await dispatcher.dispatch('electron_launch', {
         main: fixture.main,
-        runtime: 'project',
       })) as
         | (SuccessResponse & { readonly runtime_source: string; readonly session_id: string })
         | ErrorResponse

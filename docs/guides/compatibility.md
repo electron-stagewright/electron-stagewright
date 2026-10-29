@@ -106,7 +106,7 @@ boolean cannot express.
 
 1. Run `electron-stagewright doctor --json` with the same package set and app root your MCP host uses.
 2. Run the packaged demo or your smallest real workflow: launch, snapshot, interact, assert, stop.
-3. If the app has native addons, launch with `runtime: "project"` and verify the reported Electron,
+3. If the app has native addons, set `--app-root` so launches use the project runtime, and verify the reported Electron,
    Node, V8, and `NODE_MODULE_VERSION` facts.
 4. Treat a combination outside the table as unverified until that workflow passes in your own CI.
 
