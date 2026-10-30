@@ -151,23 +151,17 @@ describe('electron_reload', () => {
     expect(shown.bodies).toContain('selector')
 
     const missing = renderer({ selector: { satisfied: false, state: 'visible' } })
-    await expect(
-      setup(missing.evaluate).dispatcher.dispatch('electron_reload', {
-        waitForSelector: '#app',
-        readyTimeoutMs: 100,
-      }),
-    ).resolves.toMatchObject({
+    const timedOut = await setup(missing.evaluate).dispatcher.dispatch('electron_reload', {
+      waitForSelector: '#app',
+      readyTimeoutMs: 100,
+    })
+    expect(timedOut).toMatchObject({
       ok: false,
       code: 'WAIT_TIMEOUT',
       details: { renderer_ready: true },
       next_actions: ['electron_snapshot()'],
     })
-    await expect(
-      setup(missing.evaluate).dispatcher.dispatch('electron_reload', {
-        waitForSelector: '#app',
-        readyTimeoutMs: 100,
-      }),
-    ).resolves.not.toHaveProperty('details.navigating')
+    expect(timedOut).not.toHaveProperty('details.navigating')
   })
 
   it('rejects an invalid waitForSelector with BAD_ARGUMENT', async () => {
@@ -226,6 +220,7 @@ describe('electron_reload', () => {
     ).resolves.toMatchObject({
       ok: false,
       code: 'WAIT_TIMEOUT',
+      error: expect.stringContaining('still navigating'),
       details: { renderer_ready: true, navigating: true },
       next_actions: ['electron_wait_for_selector({ selector: "#app" })', 'electron_snapshot()'],
     })
