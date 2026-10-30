@@ -16,7 +16,7 @@
 
 import { existsSync } from 'node:fs'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { StagewrightError } from '../src/errors/registry.js'
 import {
@@ -865,6 +865,26 @@ describe('PlaywrightElectronTransport', () => {
     await transport.launch({ appPath: '/abs/main.js' })
 
     expect(app.firstWindowCalls).toBe(1)
+  })
+
+  it('reaps a launch whose first window never arrives when close() hangs', async () => {
+    vi.useFakeTimers()
+    try {
+      const app = createFakeElectronApp([], undefined, { hangClose: true })
+      const transport = new PlaywrightElectronTransport({
+        loadElectron: async () => ({ launch: async () => app }),
+      })
+
+      const launching = transport.launch({ appPath: '/abs/main.js' })
+      const settled = expect(launching).rejects.toMatchObject({ code: 'INTERNAL_ERROR' })
+      await vi.advanceTimersByTimeAsync(15_000)
+      await settled
+
+      expect(app.closeCalls).toBe(1)
+      expect(app.killSignals).toEqual(['SIGKILL'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('executes main and renderer evaluate bodies with the supplied arg', async () => {
