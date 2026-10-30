@@ -166,13 +166,15 @@ describe('reload smoke (real Electron)', () => {
           main: FIXTURE_MAIN,
           args: [`--stagewright-fixture-profile=${profile}`],
         })) as SuccessResponse & { session_id: string }
+        expect(launched, JSON.stringify(launched)).toMatchObject({ ok: true })
         try {
           await checkReload(dispatcher, launched.session_id)
         } finally {
           await dispatcher.dispatch('electron_stop', { sessionId: launched.session_id })
         }
       } finally {
-        await rm(profile, { recursive: true, force: true, maxRetries: 3 })
+        // A profile still locked by an exiting Electron must not hide the test's own failure.
+        await rm(profile, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined)
       }
     },
     60_000,
@@ -227,7 +229,8 @@ describe('reload smoke (real Electron)', () => {
           child = undefined
         }
       } finally {
-        await rm(profile, { recursive: true, force: true, maxRetries: 3 })
+        // A profile still locked by an exiting Electron must not hide the test's own failure.
+        await rm(profile, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined)
       }
     },
     60_000,
