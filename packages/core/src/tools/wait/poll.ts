@@ -57,6 +57,8 @@ export interface WaitRaw {
   readonly missing_target?: boolean
   /** A ref poll stopped because a walk or retag rewrote the ref tags. */
   readonly generation_changed?: boolean
+  /** The budget ran out while the renderer was navigating. */
+  readonly navigating?: boolean
   readonly error?: string
   readonly [key: string]: unknown
 }
@@ -137,7 +139,7 @@ const NAVIGATION_RETRY_MS = 50
 
 /**
  * Run a selector poll, starting it again on the new page when the renderer navigates under it,
- * within the same overall budget. A budget spent mid-navigation reads as not satisfied.
+ * within the same overall budget. A budget spent mid-navigation reads as not satisfied, with `navigating`.
  */
 export async function pollAcrossNavigation(
   ctx: ToolContext,
@@ -157,7 +159,7 @@ export async function pollAcrossNavigation(
     } catch (err) {
       if (!isRendererNavigation(err)) throw err
     }
-    if (ctx.now() - startedAt >= timeoutMs) return { satisfied: false }
+    if (ctx.now() - startedAt >= timeoutMs) return { satisfied: false, navigating: true }
     await sleep(NAVIGATION_RETRY_MS, ctx.signal)
   }
 }
