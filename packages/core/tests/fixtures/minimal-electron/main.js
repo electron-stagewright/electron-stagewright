@@ -7,6 +7,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const fixtureDir = dirname(fileURLToPath(import.meta.url))
+const profile = app.commandLine.getSwitchValue('stagewright-fixture-profile')
+if (profile) app.setPath('userData', profile)
 
 app.whenReady().then(() => {
   const win = new BrowserWindow({

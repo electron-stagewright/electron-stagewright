@@ -5,7 +5,7 @@
  */
 
 import { JSDOM } from 'jsdom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { Dispatcher } from '../src/server/dispatcher.js'
 import { SessionManager } from '../src/server/session-manager.js'
@@ -86,12 +86,12 @@ function renderer(state: Renderer = {}): { evaluate: FakeEvaluate; bodies: strin
   return { evaluate, bodies }
 }
 
-function setup(evaluate: FakeEvaluate, capabilities?: TransportCapabilities) {
+function setup(evaluate: FakeEvaluate, capabilities?: TransportCapabilities, now?: () => number) {
   const sessions = new SessionManager()
   const snapshots = new SnapshotStore()
   const session = new FakeSession({ id: 'sess', evaluate, windows: [MAIN, SETTINGS] })
   sessions.register(new FakeTransport(capabilities !== undefined ? { capabilities } : {}), session)
-  const dispatcher = new Dispatcher({ sessions, snapshots })
+  const dispatcher = new Dispatcher({ sessions, snapshots, ...(now === undefined ? {} : { now }) })
   dispatcher.register(reloadTool)
   return { dispatcher, session, snapshots }
 }
@@ -168,6 +168,101 @@ describe('electron_reload', () => {
     await expect(
       setup(page.evaluate).dispatcher.dispatch('electron_reload', { waitForSelector: '[[' }),
     ).resolves.toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+  })
+
+  it('finishes the selector wait after a redirect without reloading again or resetting its budget', async () => {
+    let clock = 0
+    const page = renderer({ oldDocumentChecks: 0 })
+    const budgets: number[] = []
+    const { dispatcher, session } = setup(
+      async (target, body, arg) => {
+        if (body.includes('hasMeaningfulText')) clock += 100
+        if (body.includes('const selector = String(arg.selector)')) {
+          budgets.push((arg as { timeoutMs: number }).timeoutMs)
+          if (budgets.length === 1) {
+            clock += 400
+            throw new Error('CDP Runtime.evaluate failed: Inspected target navigated or closed')
+          }
+        }
+        return page.evaluate(target, body, arg)
+      },
+      undefined,
+      () => clock,
+    )
+
+    await expect(
+      dispatcher.dispatch('electron_reload', { waitForSelector: '#app', readyTimeoutMs: 2000 }),
+    ).resolves.toMatchObject({ ok: true, renderer_ready: true })
+    expect(session.reloadCalls).toHaveLength(1)
+    expect(budgets).toEqual([1900, 1500])
+  })
+
+  it('reports WAIT_TIMEOUT when redirects consume the selector budget', async () => {
+    let clock = 0
+    const page = renderer({ oldDocumentChecks: 0 })
+    const { dispatcher, session } = setup(
+      async (target, body, arg) => {
+        if (body.includes('const selector = String(arg.selector)')) {
+          clock += 1000
+          throw new Error(
+            'page.evaluate: Execution context was destroyed, most likely because of a navigation.',
+          )
+        }
+        return page.evaluate(target, body, arg)
+      },
+      undefined,
+      () => clock,
+    )
+
+    await expect(
+      dispatcher.dispatch('electron_reload', { waitForSelector: '#app', readyTimeoutMs: 2000 }),
+    ).resolves.toMatchObject({ ok: false, code: 'WAIT_TIMEOUT' })
+    expect(session.reloadCalls).toHaveLength(1)
+  })
+
+  it('does not retry a selector evaluation error that merely mentions navigation', async () => {
+    const page = renderer({ oldDocumentChecks: 0 })
+    let checks = 0
+    const { dispatcher } = setup(async (target, body, arg) => {
+      if (body.includes('const selector = String(arg.selector)')) {
+        checks += 1
+        throw new Error('page.evaluate: Error: Execution context was destroyed by application code')
+      }
+      return page.evaluate(target, body, arg)
+    })
+
+    await expect(
+      dispatcher.dispatch('electron_reload', { waitForSelector: '#app' }),
+    ).resolves.toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+    expect(checks).toBe(1)
+  })
+
+  it('cancels the selector navigation retry without leaving host timers', async () => {
+    vi.useFakeTimers()
+    try {
+      const controller = new AbortController()
+      const page = renderer({ oldDocumentChecks: 0 })
+      let checks = 0
+      const { dispatcher } = setup(async (target, body, arg) => {
+        if (body.includes('const selector = String(arg.selector)')) {
+          checks += 1
+          throw new Error('CDP Runtime.evaluate failed: Inspected target navigated or closed')
+        }
+        return page.evaluate(target, body, arg)
+      })
+      const pending = dispatcher.dispatch(
+        'electron_reload',
+        { waitForSelector: '#app', readyTimeoutMs: 2000 },
+        { signal: controller.signal },
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      controller.abort()
+      await expect(pending).resolves.toMatchObject({ code: 'OPERATION_CANCELLED' })
+      expect(checks).toBe(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('selects and reloads the given window', async () => {
