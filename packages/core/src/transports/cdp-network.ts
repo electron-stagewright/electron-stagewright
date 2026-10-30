@@ -67,6 +67,8 @@ export interface CdpLoadingFailed {
 /** The `Fetch.requestPaused` param slice we read (request stage). */
 export interface CdpRequestPaused {
   readonly requestId: string
+  /** The `Network` domain's request id for the same request. */
+  readonly networkId?: string
   readonly request: {
     readonly url: string
     readonly method: string
@@ -93,6 +95,8 @@ export interface InflightRequest {
   status?: number
   responseHeaders?: Record<string, string>
   responseContentType?: string
+  /** The body a stub fulfilled this request with, so capture does not depend on reading it back. */
+  fulfilledBody?: Buffer
 }
 
 /** Lower-case the CamelCase CDP resource type for parity with the Playwright transport's field. */

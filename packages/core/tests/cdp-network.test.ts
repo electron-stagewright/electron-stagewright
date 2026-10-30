@@ -496,6 +496,43 @@ describe('CdpSession network stubbing', () => {
     )
   })
 
+  it.each([
+    ['requestWillBeSent first', false],
+    ['requestPaused first', true],
+  ])(
+    'captures the fulfilled status and body without responseReceived (%s)',
+    async (_label, pausedFirst) => {
+      const { server, transport } = setup()
+      const session = await transport.attach({ port: 9222 })
+      await session.startNetworkCapture({ urls: ['/api/'], captureBodies: true })
+      await session.stubNetwork({
+        urls: ['/api/probe'],
+        fulfill: { status: 200, contentType: 'application/json', body: '{"cdp":true}' },
+      })
+      const request = { url: 'https://app.test/api/probe', method: 'GET' }
+      const events: [string, Json][] = [
+        ['Network.requestWillBeSent', { requestId: 'N1', request, type: 'Fetch' }],
+        ['Fetch.requestPaused', { requestId: 'F1', networkId: 'N1', request }],
+      ]
+      for (const [method, params] of pausedFirst ? events.reverse() : events) {
+        server.emit('page/T1', method, params)
+        await flush()
+      }
+      server.emit('page/T1', 'Network.loadingFinished', { requestId: 'N1' })
+      await flush()
+
+      expect((await session.networkEvents()).events).toEqual([
+        expect.objectContaining({
+          status: 200,
+          ok: true,
+          responseHeaders: { 'content-type': 'application/json' },
+          responseBody: '{"cdp":true}',
+        }),
+      ])
+      expect(server.sentTo('page/T1', 'Network.getResponseBody')).toHaveLength(0)
+    },
+  )
+
   it('aborts with the mapped CDP errorReason', async () => {
     const { server, transport } = setup()
     const session = await transport.attach({ port: 9222 })
