@@ -10,6 +10,9 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -132,20 +135,44 @@ async function checkReload(dispatcher: Dispatcher, sessionId: string): Promise<v
   await expect(
     dispatcher.dispatch('electron_reload', { sessionId, waitForSelector: '#ping' }),
   ).resolves.toMatchObject({ ok: true, renderer_ready: true })
+
+  // The reloaded page is ready before it redirects; only the destination has this selector.
+  await expect(
+    dispatcher.dispatch('electron_eval_renderer', {
+      sessionId,
+      code: "sessionStorage.setItem('stagewright-reload-redirect', '1'); return true",
+    }),
+  ).resolves.toMatchObject({ ok: true })
+  const redirected = await dispatcher.dispatch('electron_reload', {
+    sessionId,
+    waitForSelector: '#after-redirect',
+    readyTimeoutMs: 5000,
+  })
+  expect(redirected, JSON.stringify(redirected)).toMatchObject({
+    ok: true,
+    renderer_ready: true,
+    url: expect.stringContaining('reload-target=1'),
+  })
 }
 
 describe('reload smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
     'reloads the page and waits for the new one on the launch transport',
     async () => {
-      const dispatcher = newDispatcher(new PlaywrightElectronTransport())
-      const launched = (await dispatcher.dispatch('electron_launch', {
-        main: FIXTURE_MAIN,
-      })) as SuccessResponse & { session_id: string }
+      const profile = await mkdtemp(path.join(tmpdir(), 'stagewright-reload-launch-'))
       try {
-        await checkReload(dispatcher, launched.session_id)
+        const dispatcher = newDispatcher(new PlaywrightElectronTransport())
+        const launched = (await dispatcher.dispatch('electron_launch', {
+          main: FIXTURE_MAIN,
+          args: [`--stagewright-fixture-profile=${profile}`],
+        })) as SuccessResponse & { session_id: string }
+        try {
+          await checkReload(dispatcher, launched.session_id)
+        } finally {
+          await dispatcher.dispatch('electron_stop', { sessionId: launched.session_id })
+        }
       } finally {
-        await dispatcher.dispatch('electron_stop', { sessionId: launched.session_id })
+        await rm(profile, { recursive: true, force: true, maxRetries: 3 })
       }
     },
     60_000,
@@ -154,39 +181,53 @@ describe('reload smoke (real Electron)', () => {
   it.skipIf(!RUN_E2E)(
     'reloads the page and waits for the new one on the CDP transport',
     async () => {
-      const electronPath = (await import('electron')).default as unknown as string
-      const proc = spawn(electronPath, [FIXTURE_MAIN, '--remote-debugging-port=0'], {
-        stdio: ['ignore', 'ignore', 'pipe'],
-      })
-      child = proc
-      const cdpUrl = await new Promise<string>((resolve, reject) => {
-        let stderr = ''
-        const timer = setTimeout(
-          () => reject(new Error(`No DevTools endpoint:\n${stderr}`)),
-          20_000,
-        )
-        proc.stderr?.on('data', (chunk: Buffer) => {
-          stderr += chunk.toString()
-          const match = /DevTools listening on (ws:\/\/\S+)/.exec(stderr)
-          if (match?.[1] !== undefined) {
-            clearTimeout(timer)
-            resolve(match[1])
-          }
-        })
-      })
-      const dispatcher = newDispatcher(new CDPTransport())
+      const profile = await mkdtemp(path.join(tmpdir(), 'stagewright-reload-cdp-'))
       try {
-        const attached = (await dispatcher.dispatch('electron_attach', {
-          cdpUrl,
-        })) as SuccessResponse & { session_id: string }
-        await dispatcher.dispatch('electron_wait_for_selector', {
-          sessionId: attached.session_id,
-          selector: '#ping',
-        })
-        await checkReload(dispatcher, attached.session_id)
-        await dispatcher.dispatch('electron_detach', { sessionId: attached.session_id })
+        const electronPath = (await import('electron')).default as unknown as string
+        const proc = spawn(
+          electronPath,
+          [FIXTURE_MAIN, '--remote-debugging-port=0', `--stagewright-fixture-profile=${profile}`],
+          {
+            stdio: ['ignore', 'ignore', 'pipe'],
+          },
+        )
+        child = proc
+        try {
+          const cdpUrl = await new Promise<string>((resolve, reject) => {
+            let stderr = ''
+            const timer = setTimeout(
+              () => reject(new Error(`No DevTools endpoint:\n${stderr}`)),
+              20_000,
+            )
+            proc.stderr?.on('data', (chunk: Buffer) => {
+              stderr += chunk.toString()
+              const match = /DevTools listening on (ws:\/\/\S+)/.exec(stderr)
+              if (match?.[1] !== undefined) {
+                clearTimeout(timer)
+                resolve(match[1])
+              }
+            })
+          })
+          const dispatcher = newDispatcher(new CDPTransport())
+          const attached = (await dispatcher.dispatch('electron_attach', {
+            cdpUrl,
+          })) as SuccessResponse & { session_id: string }
+          await dispatcher.dispatch('electron_wait_for_selector', {
+            sessionId: attached.session_id,
+            selector: '#ping',
+          })
+          await checkReload(dispatcher, attached.session_id)
+          await dispatcher.dispatch('electron_detach', { sessionId: attached.session_id })
+        } finally {
+          if (proc.pid !== undefined && proc.exitCode === null && proc.signalCode === null) {
+            const exited = once(proc, 'exit')
+            proc.kill('SIGKILL')
+            await exited
+          }
+          child = undefined
+        }
       } finally {
-        if (proc.exitCode === null) proc.kill('SIGKILL')
+        await rm(profile, { recursive: true, force: true, maxRetries: 3 })
       }
     },
     60_000,

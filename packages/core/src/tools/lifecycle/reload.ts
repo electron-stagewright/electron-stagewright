@@ -15,7 +15,7 @@ import { isRendererNavigation } from '../../transports/navigation.js'
 import { sessionIdField } from '../schema.js'
 import { type AnyToolDefinition, defineTool } from '../types.js'
 import { buildWaitForSelectorBody } from '../wait/body.js'
-import { type WaitRaw } from '../wait/poll.js'
+import { pollAcrossNavigation } from '../wait/poll.js'
 import { sleep } from '../wait/sleep.js'
 import { awaitRendererReady, DEFAULT_READY_TIMEOUT_MS, MAX_READY_TIMEOUT_MS } from './ready.js'
 
@@ -104,11 +104,16 @@ export const reloadTool: AnyToolDefinition = defineTool({
     const rendererReady = reloaded && (await awaitRendererReady(session, remaining(), ctx.signal))
 
     if (args.waitForSelector !== undefined) {
-      const raw = await session.evaluate<WaitRaw>('renderer', buildWaitForSelectorBody(), {
-        selector: args.waitForSelector,
-        state: 'visible',
-        timeoutMs: remaining(),
-      })
+      const timeoutMs = remaining()
+      const raw = await pollAcrossNavigation(
+        ctx,
+        session,
+        {
+          body: buildWaitForSelectorBody(),
+          arg: { selector: args.waitForSelector, state: 'visible', timeoutMs },
+        },
+        timeoutMs,
+      )
       if (raw?.invalid_selector === true) {
         return makeError('BAD_ARGUMENT', {
           ...meta,

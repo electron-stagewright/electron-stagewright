@@ -139,7 +139,7 @@ const NAVIGATION_RETRY_MS = 50
  * Run a selector poll, starting it again on the new page when the renderer navigates under it,
  * within the same overall budget. A budget spent mid-navigation reads as not satisfied.
  */
-async function pollAcrossNavigation(
+export async function pollAcrossNavigation(
   ctx: ToolContext,
   session: TransportSession,
   call: RendererCall,

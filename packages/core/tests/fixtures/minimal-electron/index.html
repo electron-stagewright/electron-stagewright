@@ -44,5 +44,19 @@
          handling is covered by the unit tests via the transport fake. -->
     <button id="confirm" onclick="window.__confirmed = window.confirm('proceed?')">Confirm</button>
     <button id="alert" onclick="window.alert('heads up')">Alert</button>
+    <script>
+      // Opt-in redirect after reload; the reload smoke waits across this document swap.
+      if (new URL(location.href).searchParams.has('reload-target')) {
+        document.body.insertAdjacentHTML('beforeend', '<button id="after-redirect">Ready</button>')
+      }
+      if (sessionStorage.getItem('stagewright-reload-redirect') === '1') {
+        sessionStorage.removeItem('stagewright-reload-redirect')
+        setTimeout(() => {
+          const target = new URL(location.href)
+          target.searchParams.set('reload-target', '1')
+          location.replace(target.href)
+        }, 250)
+      }
+    </script>
   </body>
 </html>
