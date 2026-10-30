@@ -255,7 +255,7 @@ Press each key in `keys`, in order (e.g. ['Control+A', 'Delete', 'Enter']). Focu
 
 **Reload a window**
 
-Reload the active window (or windowId, which also selects it) and wait, within readyTimeoutMs (default 5000), for the new page to render, like electron_launch; then optionally for waitForSelector to be visible. Use it instead of location.reload() in eval. ignoreCache does a hard reload. Refs from before the reload are gone. Returns: { ok, session_id, renderer_ready, url }. Errors: WAIT_TIMEOUT (waitForSelector not visible in time; retryable), REF_NOT_FOUND (no such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (invalid selector).
+Reload the active window (or windowId, which also selects it) and wait, within readyTimeoutMs (default 5000), for the new page to render, like electron_launch; then optionally for waitForSelector to be visible, following redirects within the same budget. Use it instead of location.reload() in eval. ignoreCache does a hard reload. Refs from before the reload are gone. Returns: { ok, session_id, renderer_ready, url }. Errors: WAIT_TIMEOUT (waitForSelector not visible in time; details.navigating when a redirect was still loading; retryable), REF_NOT_FOUND (no such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (invalid selector).
 
 - Operation: `command`
 

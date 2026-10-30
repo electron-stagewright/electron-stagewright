@@ -79,7 +79,9 @@ Each step, with example calls and the traps the tools report, is under _Step by 
 
    The selector wait follows renderer redirects within the same `readyTimeoutMs` budget;
    redirects do not issue another reload or restart the timeout. If the selector never becomes
-   visible before that budget runs out, the call returns `WAIT_TIMEOUT`.
+   visible before that budget runs out, the call returns `WAIT_TIMEOUT`, with `details.navigating`
+   when a redirect was still loading; follow it with `electron_wait_for_selector` rather than another
+   reload.
 
 3. **Get past first-run screens.** Find the telemetry banner or the tour by role and name, not by
    selector. A find that matches nothing returns `hints` (close names, filtered matches, text that

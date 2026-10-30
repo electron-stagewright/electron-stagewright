@@ -33,10 +33,11 @@ export const reloadTool: AnyToolDefinition = defineTool({
   description: [
     'Reload the active window (or windowId, which also selects it) and wait, within readyTimeoutMs',
     '(default 5000), for the new page to render, like electron_launch; then optionally for',
-    'waitForSelector to be visible. Use it instead of location.reload() in eval. ignoreCache does a',
-    'hard reload. Refs from before the reload are gone. Returns: { ok, session_id, renderer_ready,',
-    'url }. Errors: WAIT_TIMEOUT (waitForSelector not visible in time; retryable), REF_NOT_FOUND (no',
-    'such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (invalid selector).',
+    'waitForSelector to be visible, following redirects within the same budget. Use it instead of',
+    'location.reload() in eval. ignoreCache does a hard reload. Refs from before the reload are gone.',
+    'Returns: { ok, session_id, renderer_ready, url }. Errors: WAIT_TIMEOUT (waitForSelector not',
+    'visible in time; details.navigating when a redirect was still loading; retryable), REF_NOT_FOUND',
+    '(no such window), TRANSPORT_UNSUPPORTED, NOT_RUNNING, BAD_ARGUMENT (invalid selector).',
   ].join(' '),
   inputSchema: z.object({
     ignoreCache: z.boolean().optional().describe('Bypass the HTTP cache (hard reload).'),
@@ -121,11 +122,22 @@ export const reloadTool: AnyToolDefinition = defineTool({
         })
       }
       if (raw?.satisfied !== true) {
+        const navigating = raw?.navigating === true
         return makeError('WAIT_TIMEOUT', {
           ...meta,
-          message: `The page reloaded but "${args.waitForSelector}" was not visible in time.`,
-          next_actions: ['electron_snapshot()'],
-          details: { renderer_ready: rendererReady },
+          message: navigating
+            ? `The page was still navigating when the wait for "${args.waitForSelector}" ran out.`
+            : `The page reloaded but "${args.waitForSelector}" was not visible in time.`,
+          // A selector wait follows the redirect on without another reload.
+          next_actions: [
+            ...(navigating
+              ? [
+                  `electron_wait_for_selector({ selector: ${JSON.stringify(args.waitForSelector)} })`,
+                ]
+              : []),
+            'electron_snapshot()',
+          ],
+          details: { renderer_ready: rendererReady, ...(navigating && { navigating }) },
         })
       }
     }
