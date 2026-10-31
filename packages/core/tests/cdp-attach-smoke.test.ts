@@ -445,7 +445,7 @@ describe('CDP attach smoke (real Electron)', () => {
         await new Promise((resolve) => setTimeout(resolve, 200))
       }
       expect(probe, 'a stubbed /api/probe request should have been captured').toBeDefined()
-      expect(probe?.status).toBe(200)
+      expect(probe?.status, JSON.stringify(probe)).toBe(200)
       expect(probe?.responseBody).toContain('"cdp":true')
 
       await session.clearNetworkStubs()

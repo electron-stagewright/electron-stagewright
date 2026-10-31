@@ -247,6 +247,24 @@ function timedOut(settled: Promise<unknown>, ms: number): Promise<boolean> {
   })
 }
 
+/**
+ * Close `app`, escalating to SIGKILL when close() has not settled within `budget`, so a hung app is
+ * always reaped. Resolves `true` when it escalated.
+ */
+async function closeWithinBudget(app: PWElectronApp, budget: number): Promise<boolean> {
+  // The guarded promise never rejects so the timeout race stays clean.
+  const closing = app.close().catch(() => {})
+  if (!(await timedOut(closing, budget))) return false
+  try {
+    app.process().kill('SIGKILL')
+  } catch {
+    // Process already gone — the close() above will settle on its own.
+  }
+  // Give Playwright a bounded window (never longer than the budget itself) to settle its handle.
+  await timedOut(closing, Math.min(POST_KILL_SETTLE_MS, budget))
+  return true
+}
+
 /** Remove the launch-shim temp dir (best-effort, idempotent — a no-op when not instrumented). */
 async function removeShimDir(shimDir: string | undefined): Promise<void> {
   if (shimDir === undefined) return
@@ -2462,22 +2480,7 @@ class PlaywrightSession implements TransportSession {
       return { escalated: true }
     }
 
-    const budget = opts.timeoutMs ?? STOP_GRACEFUL_BUDGET_MS
-    // Closing twice or against a dead process is benign during shutdown; the
-    // guarded promise never rejects so the timeout race below stays clean.
-    const closing = app.close().catch(() => {})
-    if (!(await timedOut(closing, budget))) return { escalated: false }
-
-    // Graceful close exceeded its budget — escalate so the process is always
-    // reaped, then give Playwright a bounded window (never longer than the
-    // graceful budget itself) to settle its handle.
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Process already gone — the close() above will settle on its own.
-    }
-    await timedOut(closing, Math.min(POST_KILL_SETTLE_MS, budget))
-    return { escalated: true }
+    return { escalated: await closeWithinBudget(app, opts.timeoutMs ?? STOP_GRACEFUL_BUDGET_MS) }
   }
 
   async forceKill(): Promise<void> {
@@ -2583,11 +2586,8 @@ export class PlaywrightElectronTransport implements ITransport {
         deadline !== undefined ? { timeout: Math.max(1, deadline - Date.now()) } : undefined,
       )
     } catch (cause) {
-      try {
-        await app.close()
-      } catch {
-        // A failed launch can leave the app half-open; closing is best-effort.
-      }
+      // A failed launch can leave the app half-open, and Playwright's close() can then hang.
+      await closeWithinBudget(app, STOP_GRACEFUL_BUDGET_MS)
       await removeShimDir(shimDir)
       const message = cause instanceof Error ? cause.message : String(cause)
       const isTimeout = /timeout/i.test(message)

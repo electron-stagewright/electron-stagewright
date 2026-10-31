@@ -76,6 +76,7 @@ import {
   type CdpLoadingFinished,
   type CdpRequestPaused,
   type CdpRequestWillBeSent,
+  type CdpResponse,
   type CdpResponseExtraInfo,
   type CdpResponseReceived,
   type InflightRequest,
@@ -362,6 +363,17 @@ interface ActiveStub {
   remaining: number
 }
 
+/** The response a stub fulfilled a request with, applied to its capture record. */
+interface FulfilledResponse {
+  readonly response: CdpResponse
+  readonly body?: Buffer
+}
+
+function applyFulfilled(inflight: InflightRequest, fulfilled: FulfilledResponse): void {
+  applyResponse(inflight, fulfilled.response)
+  if (fulfilled.body !== undefined) inflight.fulfilledBody = fulfilled.body
+}
+
 /** Translate a fulfill response into CDP `Fetch.fulfillRequest` header entries (name/value pairs). */
 function fetchHeaderEntries(
   fulfill: NetworkStubResponse,
@@ -587,6 +599,8 @@ class CdpSession implements TransportSession {
   readonly #networkBuffer: NetworkEvent[] = []
   #networkOverflow = 0
   readonly #inflight = new Map<string, InflightRequest>()
+  /** Stub responses for requests whose `requestWillBeSent` has not arrived yet, keyed like `#inflight`. */
+  readonly #fulfilledAhead = new Map<string, FulfilledResponse>()
   #networkStubs: ActiveStub[] = []
 
   constructor(
@@ -707,7 +721,7 @@ class CdpSession implements TransportSession {
     })
     // Fetch interception listener for stubbing — inert until a stub is registered.
     conn.on('Fetch.requestPaused', (p) => {
-      void this.#onFetchPaused(conn, p).catch(() => {})
+      void this.#onFetchPaused(conn, targetId, p).catch(() => {})
     })
     try {
       await conn.enable('Runtime')
@@ -762,11 +776,14 @@ class CdpSession implements TransportSession {
         this.#pushNetwork(buildRedirectEvent(prior, params.redirectResponse, Date.now()))
       }
     }
+    const fulfilled = this.#fulfilledAhead.get(key)
+    this.#fulfilledAhead.delete(key)
     const inflight = startInflight(targetId, params, filter)
     if (inflight === null) {
       this.#inflight.delete(key)
       return
     }
+    if (fulfilled !== undefined) applyFulfilled(inflight, fulfilled)
     this.#inflight.set(key, inflight)
     // Evict the oldest record(s) if completion events never arrived for prior requests, so a
     // long-armed capture over a streaming/long-poll app cannot grow the map without bound. Map
@@ -892,16 +909,20 @@ class CdpSession implements TransportSession {
   > {
     if (!bodyContentTypeAllowed(inflight.responseContentType, plan.contentTypes)) return undefined
     let buf: Buffer
-    try {
-      const res = await conn.send<{ body?: string; base64Encoded?: boolean }>(
-        'Network.getResponseBody',
-        { requestId },
-      )
-      if (res.body === undefined) return undefined
-      buf = Buffer.from(res.body, res.base64Encoded === true ? 'base64' : 'utf8')
-    } catch {
-      // The body may already be evicted — record the event WITHOUT a body rather than dropping it.
-      return undefined
+    if (inflight.fulfilledBody !== undefined) {
+      buf = inflight.fulfilledBody
+    } else {
+      try {
+        const res = await conn.send<{ body?: string; base64Encoded?: boolean }>(
+          'Network.getResponseBody',
+          { requestId },
+        )
+        if (res.body === undefined) return undefined
+        buf = Buffer.from(res.body, res.base64Encoded === true ? 'base64' : 'utf8')
+      } catch {
+        // The body may already be evicted — record the event WITHOUT a body rather than dropping it.
+        return undefined
+      }
     }
     const captured = captureBodyField(buf, plan.mode, plan.maxBytes)
     return {
@@ -911,7 +932,7 @@ class CdpSession implements TransportSession {
     }
   }
 
-  async #onFetchPaused(conn: CdpConnection, raw: unknown): Promise<void> {
+  async #onFetchPaused(conn: CdpConnection, targetId: string, raw: unknown): Promise<void> {
     const params = (raw ?? {}) as CdpRequestPaused
     const requestId = params.requestId
     let consumedFiniteStub = false
@@ -941,6 +962,7 @@ class CdpSession implements TransportSession {
       }
       const fulfill = active.stub.fulfill ?? {}
       const headers = fetchHeaderEntries(fulfill)
+      this.#recordFulfilled(targetId, params, fulfill, headers)
       await conn.send('Fetch.fulfillRequest', {
         requestId,
         responseCode: fulfill.status ?? 200,
@@ -963,6 +985,45 @@ class CdpSession implements TransportSession {
       if (consumedFiniteStub && this.#networkStubs.length === 0) {
         await this.#disableFetchOnAllPages()
       }
+    }
+  }
+
+  /**
+   * Record the response a stub is about to fulfil. Chromium can deliver `responseReceived` after
+   * `loadingFinished`, or not at all, for a fulfilled request; the status we send is authoritative.
+   */
+  #recordFulfilled(
+    targetId: string,
+    paused: CdpRequestPaused,
+    fulfill: NetworkStubResponse,
+    headers: readonly { name: string; value: string }[] | undefined,
+  ): void {
+    const filter = this.#networkFilter
+    const networkId = paused.networkId
+    if (filter === null || networkId === undefined) return
+    if (!matchesNetworkFilter({ url: paused.request.url, method: paused.request.method }, filter)) {
+      return
+    }
+    const fulfilled: FulfilledResponse = {
+      response: {
+        status: fulfill.status ?? 200,
+        ...(headers !== undefined
+          ? { headers: Object.fromEntries(headers.map(({ name, value }) => [name, value])) }
+          : {}),
+      },
+      ...(fulfill.body !== undefined ? { body: Buffer.from(fulfill.body, 'utf8') } : {}),
+    }
+    const key = inflightKey(targetId, networkId)
+    const inflight = this.#inflight.get(key)
+    if (inflight !== undefined) {
+      applyFulfilled(inflight, fulfilled)
+      return
+    }
+    this.#fulfilledAhead.set(key, fulfilled)
+    while (this.#fulfilledAhead.size > INFLIGHT_CAP) {
+      const oldest = this.#fulfilledAhead.keys().next().value
+      if (oldest === undefined) break
+      this.#fulfilledAhead.delete(oldest)
     }
   }
 
@@ -1756,6 +1817,7 @@ class CdpSession implements TransportSession {
     this.#networkBuffer.length = 0
     this.#networkOverflow = 0
     this.#inflight.clear()
+    this.#fulfilledAhead.clear()
     // Enable the Network domain on every pooled page connection (direct send, not the enable cache, so
     // a later re-arm after a disable re-enables). A future window is enabled in #attachCapture.
     for (const conn of this.#pool.values()) {
@@ -1786,6 +1848,7 @@ class CdpSession implements TransportSession {
     this.#networkBuffer.length = 0
     this.#networkOverflow = 0
     this.#inflight.clear()
+    this.#fulfilledAhead.clear()
     for (const conn of this.#pool.values()) {
       try {
         await conn.send('Network.disable')
