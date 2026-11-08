@@ -2472,7 +2472,12 @@ class PlaywrightSession implements TransportSession {
         // remaining Playwright-side resources.
       }
       try {
-        await app.close()
+        // A broken Playwright handle can leave close() pending even after SIGKILL.
+        // Reuse the bounded settle window of a graceful stop that escalated.
+        await timedOut(
+          app.close().catch(() => {}),
+          POST_KILL_SETTLE_MS,
+        )
       } catch {
         // A killed process can make Playwright close() reject. Force-kill stays
         // best-effort and idempotent.

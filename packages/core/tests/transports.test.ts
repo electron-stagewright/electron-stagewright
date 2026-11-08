@@ -3024,6 +3024,85 @@ describe('PlaywrightSession multi-window capture', () => {
 })
 
 describe('PlaywrightSession stop escalation', () => {
+  it.each([
+    ['forceKill', false],
+    ['force stop', false],
+    ['forceKill', true],
+    ['force stop', true],
+  ] as const)(
+    '%s bounds a hung Playwright close when SIGKILL throws: %s',
+    async (operation, killThrows) => {
+      vi.useFakeTimers()
+      try {
+        const app = createFakeElectronApp([createFakePage('A')], undefined, { hangClose: true })
+        const transport = new PlaywrightElectronTransport({
+          loadElectron: async () => ({ launch: async () => app }),
+        })
+        if (killThrows) {
+          app.process = () => ({
+            pid: 123,
+            kill: (signal: string) => {
+              app.killSignals.push(signal)
+              throw new Error('process already gone')
+            },
+          })
+        }
+        const session = await transport.launch({ appPath: '/abs/main.js' })
+        let settled = false
+        const stopping = (
+          operation === 'forceKill'
+            ? transport.forceKill(session)
+            : transport.stop(session, { force: true })
+        ).then(() => {
+          settled = true
+        })
+
+        await vi.advanceTimersByTimeAsync(4_999)
+        expect(app.killSignals).toEqual(['SIGKILL'])
+        expect(settled).toBe(false)
+        await vi.advanceTimersByTimeAsync(1)
+
+        expect(settled).toBe(true)
+        await stopping
+        expect(app.killSignals).toEqual(['SIGKILL'])
+        expect(app.closeCalls).toBe(1)
+        await expect(session.windowsList()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
+        await expect(transport.forceKill(session)).resolves.toBeUndefined()
+        expect(app.killSignals).toEqual(['SIGKILL'])
+        expect(app.closeCalls).toBe(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
+  it('handles a Playwright close rejection after the force-kill settle window', async () => {
+    vi.useFakeTimers()
+    try {
+      const app = createFakeElectronApp([createFakePage('A')])
+      let rejectClose!: (reason: Error) => void
+      app.close = () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectClose = reject
+        })
+      const transport = new PlaywrightElectronTransport({
+        loadElectron: async () => ({ launch: async () => app }),
+      })
+      const session = await transport.launch({ appPath: '/abs/main.js' })
+      const stopping = transport.forceKill(session)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await expect(stopping).resolves.toBeUndefined()
+      rejectClose(new Error('Playwright closed after SIGKILL'))
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(app.killSignals).toEqual(['SIGKILL'])
+      await expect(transport.stop(session)).resolves.toEqual({ escalated: false })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('escalates to SIGKILL when the graceful close exceeds its budget', async () => {
     const app = createFakeElectronApp([createFakePage('A')], { value: 1 }, { hangClose: true })
     const transport = new PlaywrightElectronTransport({
