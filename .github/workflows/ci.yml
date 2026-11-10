@@ -31,6 +31,9 @@ jobs:
       - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
+      # Reuse this Ubuntu/Node 24 build for the in-memory manifest budget gate.
+      # The final Build status still depends on this job and every test matrix cell.
+      - run: pnpm manifest:check
 
   test:
     name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
@@ -74,17 +77,14 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     needs: [lint-and-typecheck, test]
+    if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      # Manifest budget gate (ADR-021): measures the host-visible tools/list payload for every
-      # committed variant against packages/bench/fixtures/manifest-baseline.json and fails on
-      # unreviewed BPE growth over 3%. In-memory MCP only — no Electron binary, no display — so
-      # it belongs in this job rather than the e2e workflow.
-      - run: pnpm manifest:check
+      # Keep Build fail-closed when an upstream gate fails, skips or is cancelled.
+      # lint-and-typecheck has already built and checked the manifest; test owns all six cells.
+      - name: Require the build, manifest and test gates
+        env:
+          LINT_RESULT: ${{ needs.lint-and-typecheck.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          test "$LINT_RESULT" = success
+          test "$TEST_RESULT" = success
