@@ -255,14 +255,18 @@ async function closeWithinBudget(app: PWElectronApp, budget: number): Promise<bo
   // The guarded promise never rejects so the timeout race stays clean.
   const closing = app.close().catch(() => {})
   if (!(await timedOut(closing, budget))) return false
-  try {
-    app.process().kill('SIGKILL')
-  } catch {
-    // Process already gone — the close() above will settle on its own.
-  }
+  killProcess(app)
   // Give Playwright a bounded window (never longer than the budget itself) to settle its handle.
   await timedOut(closing, Math.min(POST_KILL_SETTLE_MS, budget))
   return true
+}
+
+function killProcess(app: PWElectronApp): void {
+  try {
+    app.process().kill('SIGKILL')
+  } catch {
+    // Process already gone; close() still releases Playwright-side resources.
+  }
 }
 
 /** Remove the launch-shim temp dir (best-effort, idempotent — a no-op when not instrumented). */
@@ -2465,18 +2469,12 @@ class PlaywrightSession implements TransportSession {
     if (app === null) return { escalated: false }
 
     if (opts.force === true) {
-      try {
-        app.process().kill('SIGKILL')
-      } catch {
-        // If the process is already gone, close() below still releases any
-        // remaining Playwright-side resources.
-      }
-      try {
-        await app.close()
-      } catch {
-        // A killed process can make Playwright close() reject. Force-kill stays
-        // best-effort and idempotent.
-      }
+      killProcess(app)
+      // A broken Playwright handle can leave close() pending even after SIGKILL.
+      await timedOut(
+        app.close().catch(() => {}),
+        POST_KILL_SETTLE_MS,
+      )
       return { escalated: true }
     }
 
