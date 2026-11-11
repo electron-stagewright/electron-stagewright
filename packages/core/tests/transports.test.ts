@@ -3030,7 +3030,7 @@ describe('PlaywrightSession stop escalation', () => {
     ['forceKill', true],
     ['force stop', true],
   ] as const)(
-    '%s bounds a hung Playwright close when SIGKILL throws: %s',
+    '%s bounds a hung Playwright close (SIGKILL throws: %s)',
     async (operation, killThrows) => {
       vi.useFakeTimers()
       try {
@@ -3051,9 +3051,9 @@ describe('PlaywrightSession stop escalation', () => {
         let settled = false
         const stopping = (
           operation === 'forceKill'
-            ? transport.forceKill(session)
+            ? transport.forceKill(session).then(() => ({ escalated: true }))
             : transport.stop(session, { force: true })
-        ).then(() => {
+        ).finally(() => {
           settled = true
         })
 
@@ -3063,7 +3063,7 @@ describe('PlaywrightSession stop escalation', () => {
         await vi.advanceTimersByTimeAsync(1)
 
         expect(settled).toBe(true)
-        await stopping
+        await expect(stopping).resolves.toEqual({ escalated: true })
         expect(app.killSignals).toEqual(['SIGKILL'])
         expect(app.closeCalls).toBe(1)
         await expect(session.windowsList()).rejects.toMatchObject({ code: 'NOT_RUNNING' })
@@ -3089,9 +3089,14 @@ describe('PlaywrightSession stop escalation', () => {
         loadElectron: async () => ({ launch: async () => app }),
       })
       const session = await transport.launch({ appPath: '/abs/main.js' })
-      const stopping = transport.forceKill(session)
+      let settled = false
+      const stopping = transport.forceKill(session).finally(() => {
+        settled = true
+      })
 
-      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
       await expect(stopping).resolves.toBeUndefined()
       rejectClose(new Error('Playwright closed after SIGKILL'))
       await vi.advanceTimersByTimeAsync(0)
