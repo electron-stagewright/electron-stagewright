@@ -879,15 +879,17 @@ describe('checkUpdaterFeed', () => {
     expect(result.evidence).toBe('provider=keygen')
   })
 
-  it('classifies a provider colliding with Object.prototype members instead of crashing', async () => {
-    // A bare lookup into the provider matrix would resolve __proto__/constructor/
-    // toString to inherited non-arrays and throw; the check must return a result.
-    for (const hostile of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+  // Each filesystem-backed case needs its own timeout budget and fixture cleanup.
+  it.each(['__proto__', 'constructor', 'toString', 'hasOwnProperty'])(
+    'classifies provider "%s" colliding with Object.prototype members instead of crashing',
+    async (hostile) => {
+      // A bare lookup into the provider matrix would resolve __proto__/constructor/
+      // toString to inherited non-arrays and throw; the check must return a result.
       const result = await checkUpdaterFeed(await makeAppWithFeed(`provider: ${hostile}\n`))
       expect(result.status).toBe('pass')
       expect(result.evidence).toBe(`provider=${hostile}`)
-    }
-  })
+    },
+  )
 
   it('clips oversized field values in the evidence, not only the url', async () => {
     const bigBucket = 'b'.repeat(500)
