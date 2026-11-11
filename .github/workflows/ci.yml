@@ -31,8 +31,8 @@ jobs:
       - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
-      # Reuse this Ubuntu/Node 24 build for the in-memory manifest budget gate.
-      # The final Build status still depends on this job and every test matrix cell.
+      # Manifest budget gate (ADR-021): in-memory tools/list payload vs the committed baseline.
+      # Reuses this build; the Build job below aggregates this job and every test cell.
       - run: pnpm manifest:check
 
   test:
