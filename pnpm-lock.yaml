@@ -262,6 +262,8 @@ importers:
         specifier: '>=12.2.0'
         version: 42.11.10
 
+  packages/host-supervisor: {}
+
   packages/origin-migration:
     devDependencies:
       '@electron-stagewright/core':
