@@ -38,8 +38,12 @@ export async function measureBundle(
     let files: string[]
     try {
       files = await listFiles(target)
-    } catch {
-      measured.push({ ...base, files: 0, bytes: 0, unavailable: `${target} does not exist` })
+    } catch (error) {
+      const unavailable =
+        (error as NodeJS.ErrnoException).code === 'ENOENT'
+          ? `${target} does not exist`
+          : `cannot read ${target}: ${error instanceof Error ? error.message : String(error)}`
+      measured.push({ ...base, files: 0, bytes: 0, unavailable })
       continue
     }
     const extensions = entry.extensions
@@ -52,8 +56,12 @@ export async function measureBundle(
       continue
     }
     let bytes = 0
-    for (const file of matching) {
-      bytes += gzip ? gzipSync(await readFile(file)).byteLength : (await stat(file)).size
+    if (gzip) {
+      // Sequential: holding every file buffer (and fd) at once does not scale to large trees.
+      for (const file of matching) bytes += gzipSync(await readFile(file)).byteLength
+    } else {
+      const sizes = await Promise.all(matching.map(async (file) => (await stat(file)).size))
+      bytes = sizes.reduce((sum, size) => sum + size, 0)
     }
     measured.push({ ...base, files: matching.length, bytes })
   }

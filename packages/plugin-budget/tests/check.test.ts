@@ -33,6 +33,14 @@ describe('parseBudget', () => {
     )
     expect(() => parseBudget({ memory: { darwin: { metric: 'rss' } } })).toThrow(/memory\.darwin/)
   })
+
+  it('rejects two bundle entries that share an id', () => {
+    const entries = [
+      { path: 'dist', extensions: ['.js'], maxKb: 500 },
+      { path: 'dist', extensions: ['.css'], maxKb: 10 },
+    ]
+    expect(() => parseBudget({ bundle: { entries } })).toThrow(/duplicate bundle entry "dist"/)
+  })
 })
 
 describe('summaries', () => {
@@ -59,6 +67,24 @@ describe('summaries', () => {
     expect(row('memory.renderer', 'warm')?.value).toBe(80)
     expect(row('memory.totalWithoutGpu', 'warm')?.value).toBe(170)
     expect(row('memory.total', 'warm')?.value).toBe(570)
+  })
+
+  it('never undercounts a type or a total when a pid was not readable', () => {
+    const partial = measurement(80, {
+      memory: {
+        metric: 'footprint',
+        processes: [
+          { pid: 1, type: 'main', workingSetMb: 500 },
+          { pid: 2, type: 'renderer', mb: 60, workingSetMb: 80 },
+          { pid: 3, type: 'gpu', mb: 50, workingSetMb: 50 },
+        ],
+      },
+    })
+    const ids = summarizeRun(run([['warm', partial]])).map((row) => row.id)
+    expect(ids).toContain('memory.renderer')
+    expect(ids).not.toContain('memory.main')
+    expect(ids).not.toContain('memory.totalWithoutGpu')
+    expect(ids).not.toContain('memory.total')
   })
 })
 

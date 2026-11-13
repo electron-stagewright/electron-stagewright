@@ -107,7 +107,10 @@ export async function loadRun(runPath: string): Promise<BudgetRun> {
   }
   const parsed = runSchema.safeParse(raw)
   if (!parsed.success) {
-    throw new RunFileError(`${runPath} is not a ${RUN_FORMAT} document`, runPath)
+    const issues = parsed.error.issues
+      .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .join('; ')
+    throw new RunFileError(`${runPath} is not a ${RUN_FORMAT} document: ${issues}`, runPath)
   }
   return parsed.data
 }
@@ -151,15 +154,35 @@ export function summarizeLatencies(samples: readonly number[]): LatencySummary {
   return { count: sorted.length, p50: at(50), p95: at(95), p99: at(99), max: at(100) }
 }
 
-/** Megabytes per process type for one memory sample, in the sample's metric. */
+/**
+ * Megabytes per process type for one memory sample, in the sample's metric. A type with a pid the
+ * OS reader could not see is left out rather than undercounted.
+ */
 export function memoryByType(memory: MemoryMeasurement): Partial<Record<ProcessType, number>> {
   const totals: Partial<Record<ProcessType, number>> = {}
+  const partial = new Set<ProcessType>()
   for (const entry of memory.processes) {
     const mb = memory.metric === 'workingSet' ? entry.workingSetMb : entry.mb
-    if (mb === undefined) continue
-    totals[entry.type] = (totals[entry.type] ?? 0) + mb
+    if (mb === undefined) partial.add(entry.type)
+    else totals[entry.type] = (totals[entry.type] ?? 0) + mb
   }
+  for (const type of partial) delete totals[type]
   return totals
+}
+
+/** Sum of every type the sample holds, or undefined when one of them is unmeasured or none exist. */
+function memoryTotal(memory: MemoryMeasurement, skipGpu: boolean): number | undefined {
+  const types = new Set(memory.processes.map((entry) => entry.type))
+  if (skipGpu) types.delete('gpu')
+  if (types.size === 0) return undefined
+  const totals = memoryByType(memory)
+  let sum = 0
+  for (const type of types) {
+    const mb = totals[type]
+    if (mb === undefined) return undefined
+    sum += mb
+  }
+  return sum
 }
 
 /** One summarised value: the median over the rounds of one phase. */
@@ -214,22 +237,16 @@ export function summarizeRun(run: BudgetRun): SummaryRow[] {
         metric,
       )
     }
-    const sum = (totals: Partial<Record<ProcessType, number>>, skipGpu: boolean): number =>
-      PROCESS_TYPES.reduce(
-        (acc, type) => acc + (skipGpu && type === 'gpu' ? 0 : (totals[type] ?? 0)),
-        0,
-      )
-    const measured = byType.filter((totals) => Object.keys(totals).length > 0)
     push(
       'memory.totalWithoutGpu',
       'MB',
-      measured.map((totals) => sum(totals, true)),
+      sameMetric.map((memory) => memoryTotal(memory, true)),
       metric,
     )
     push(
       'memory.total',
       'MB',
-      measured.map((totals) => sum(totals, false)),
+      sameMetric.map((memory) => memoryTotal(memory, false)),
       metric,
     )
 

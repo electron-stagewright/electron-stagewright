@@ -177,6 +177,14 @@ describe('electron-stagewright-budget', () => {
     const noBundle = await invoke(['bundle', '--budget', budgetPath])
     expect(noBundle.exitCode).toBe(2)
     expect(noBundle.stderr).toContain('no "bundle" section')
+    const bundleBudget = path.join(dir, 'bundle.json')
+    await writeFile(
+      bundleBudget,
+      JSON.stringify({ bundle: { entries: [{ path: 'dist', maxKb: 99 }] } }),
+    )
+    const crashed = await invoke(['bundle', '--budget', bundleBudget, '--out', dir])
+    expect(crashed.exitCode).toBe(2)
+    expect(crashed.stderr).toContain('fatal')
     expect((await invoke(['--help'])).stdout).toContain('Usage:')
   })
 })
