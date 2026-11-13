@@ -6,8 +6,26 @@ export interface CallContext {
   readonly signal: AbortSignal
 }
 
-/** Every member of a contract is an operation: it returns a promise or an async iterable. */
-export type Contract<Ops> = { [K in keyof Ops]: (...args: never[]) => unknown }
+type FixedArity<A extends readonly unknown[]> = number extends A['length']
+  ? false
+  : A extends Required<A>
+    ? true
+    : false
+
+/**
+ * Every member is an operation that returns a promise or an async iterable. Parameters are fixed:
+ * the handler's context follows the caller's arguments, so optional and rest parameters would
+ * shift it. Declare an optional value as `T | undefined` instead.
+ */
+export type Contract<Ops> = {
+  [K in keyof Ops]: Ops[K] extends (...args: infer A) => infer R
+    ? FixedArity<A> extends true
+      ? R extends Promise<unknown> | AsyncIterable<unknown>
+        ? Ops[K]
+        : (...args: never[]) => Promise<unknown> | AsyncIterable<unknown>
+      : (...args: never[]) => 'optional and rest parameters are not supported'
+    : never
+}
 
 export type ArgsOf<F> = F extends (...args: infer A) => unknown ? A : never
 

@@ -115,6 +115,8 @@ interface Life {
   readonly exitPromise: Promise<void>
   crashError: Error | null
   stoppedReceived: boolean
+  readonly stoppedPromise: Promise<void>
+  resolveStopped: () => void
   stopError: Error | null
   lastStats: HostStats | null
   onStartReply: ((error: Error | null) => void) | null
@@ -146,10 +148,6 @@ function unref(timer: ReturnType<typeof setTimeout>): ReturnType<typeof setTimeo
   return timer
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => unref(setTimeout(resolve, ms)))
-}
-
 function raceTimeout(promise: Promise<void>, ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
@@ -173,8 +171,15 @@ function normalizeDecision(decision: ExitDecision): {
   action: 'fatal' | 'on-demand' | 'restart'
   delayMs: number
 } {
-  if (typeof decision === 'string') return { action: decision, delayMs: 0 }
-  return { action: 'restart', delayMs: Math.max(0, decision.delayMs) }
+  if (decision === 'fatal' || decision === 'on-demand' || decision === 'restart') {
+    return { action: decision, delayMs: 0 }
+  }
+  if (typeof decision === 'object' && decision !== null && decision.action === 'restart') {
+    const delayMs = Number.isFinite(decision.delayMs) ? Math.max(0, decision.delayMs) : 0
+    return { action: 'restart', delayMs }
+  }
+  // Anything else is a policy bug; refusing to restart is the safe reading.
+  return { action: 'fatal', delayMs: 0 }
 }
 
 export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
@@ -195,6 +200,8 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
   let retiring: Promise<void> | null = null
   let stopping: Promise<void> | null = null
   let fatalCause: Error | null = null
+  let closeRequested = false
+  let wakeDelay: (() => void) | null = null
   let nextId = 1
   const pending = new Map<number, Entry>()
 
@@ -205,6 +212,19 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       })
     }
     return new HostError('HOST_STOPPED', 'The host is stopped')
+  }
+
+  /** A restart backoff that stop and kill can cut short. */
+  function restartDelay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        wakeDelay = null
+        resolve()
+      }
+      const timer = unref(setTimeout(done, ms))
+      wakeDelay = done
+    })
   }
 
   // ---- calls ----
@@ -227,7 +247,11 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     }
     const waiter = entry.waiter
     entry.waiter = null
-    if (!error) return
+    if (!error) {
+      // Only a stream reaches here with a waiter: closed early while a pull was pending.
+      waiter?.resolve({ done: true, value: undefined })
+      return
+    }
     if (waiter) waiter.reject(error)
     else entry.error = error
   }
@@ -433,6 +457,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       case 'stopped':
         life.stoppedReceived = true
         if (message.error) life.stopError = remoteError(message.error)
+        life.resolveStopped()
         return
       case 'result': {
         const entry = pending.get(message.id)
@@ -443,6 +468,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
         }
         if (entry.stream) return
         const waiter = entry.waiter
+        entry.waiter = null
         finish(entry, null, false)
         waiter?.resolve(message.value)
         return
@@ -500,7 +526,13 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       lastStats: life.lastStats,
     })
     starting = recovery
-    recovery.catch(() => undefined)
+    // Registered before any waiter, so a call sent back by RETRY never sees a stale promise.
+    recovery.then(
+      () => undefined,
+      () => {
+        if (starting === recovery) starting = null
+      },
+    )
   }
 
   async function launch(): Promise<Life> {
@@ -520,6 +552,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       throw new HostError('HOST_START_FAILED', 'The host could not be launched', { cause: error })
     }
     let resolveExit!: () => void
+    let resolveStopped!: () => void
     const life: Life = {
       channel,
       started: false,
@@ -529,6 +562,8 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       exitPromise: new Promise<void>((resolve) => (resolveExit = resolve)),
       crashError: null,
       stoppedReceived: false,
+      stoppedPromise: new Promise<void>((resolve) => (resolveStopped = resolve)),
+      resolveStopped: () => resolveStopped(),
       stopError: null,
       lastStats: null,
       onStartReply: null,
@@ -559,6 +594,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
               )
             }),
           ]))
+      if (life.exited) throw exitError(life)
     } catch (error) {
       await retire(life)
       throw new HostError('HOST_START_FAILED', 'The host failed to start', { cause: error })
@@ -591,19 +627,28 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     if (starting) return starting
     if (current && !current.exited) return Promise.resolve(current)
     state = 'starting'
-    const launching = launch().then(
-      (life) => {
-        current = life
-        if (starting === launching) starting = null
-        if (state === 'starting') state = 'running'
+    const launching = launch()
+      .then((life) => {
+        if (life.exited) {
+          throw new HostError('HOST_START_FAILED', 'The host exited right after starting', {
+            cause: exitError(life),
+          })
+        }
         return life
-      },
-      (error: unknown) => {
-        if (starting === launching) starting = null
-        if (state === 'starting') state = 'idle'
-        throw error
-      },
-    )
+      })
+      .then(
+        (life) => {
+          current = life
+          if (starting === launching) starting = null
+          if (state === 'starting') state = 'running'
+          return life
+        },
+        (error: unknown) => {
+          if (starting === launching) starting = null
+          if (state === 'starting') state = 'idle'
+          throw error
+        },
+      )
     starting = launching
     return launching
   }
@@ -627,11 +672,12 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       starting = null
       throw RETRY
     }
-    if (decision.delayMs > 0) await delay(decision.delayMs)
+    if (decision.delayMs > 0) await restartDelay(decision.delayMs)
     if (state !== 'restarting') throw unavailable()
     let life: Life
     try {
       life = await launch()
+      if (life.exited) throw new Error('The host exited right after starting')
     } catch (error) {
       if (state !== 'restarting') throw unavailable()
       const cause = (error as { cause?: unknown }).cause
@@ -651,16 +697,20 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     return life
   }
 
-  async function stopHost(final: boolean): Promise<void> {
+  async function stopHost(): Promise<void> {
     const before = state
     state = 'stopping'
+    wakeDelay?.()
     for (const entry of [...pending.values()]) {
       // Waiting for a start, or a stream between items: nothing in flight to drain.
       if (!entry.life || (entry.stream && !entry.waiter)) {
         finish(entry, new HostError('HOST_STOPPED', 'The host is stopping'), entry.life !== null)
       }
     }
-    if (starting) await starting.catch(() => undefined)
+    if (starting) {
+      await starting.catch(() => undefined)
+      starting = null
+    }
     const life = current
     let failure: Error | null = null
     if (life && !life.exited) {
@@ -669,38 +719,41 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       } catch {
         // Treated as a host that never confirmed its stop.
       }
-      if (!(await raceTimeout(life.exitPromise, graceMs))) {
+      const answered = Promise.race([life.exitPromise, life.stoppedPromise])
+      if (!(await raceTimeout(answered, graceMs))) {
         await retire(life)
         failure = new HostError(
           'HOST_STOP_TIMEOUT',
           `The host did not stop within ${graceMs} ms and was terminated`,
         )
-      } else if (!life.stoppedReceived) {
-        failure = new HostError('HOST_STOP_INCOMPLETE', 'The host exited before finishing its stop')
-      } else if (life.stopError) {
-        failure = new HostError('HOST_STOP_INCOMPLETE', 'The host failed while stopping', {
-          cause: life.stopError,
-        })
+      } else {
+        // A host that confirmed its stop but lingers (a handle left open) is retired quietly.
+        if (!(await raceTimeout(life.exitPromise, retireWaitMs))) await retire(life)
+        if (!life.stoppedReceived) {
+          failure = new HostError(
+            'HOST_STOP_INCOMPLETE',
+            'The host exited before finishing its stop',
+          )
+        } else if (life.stopError) {
+          failure = new HostError('HOST_STOP_INCOMPLETE', 'The host failed while stopping', {
+            cause: life.stopError,
+          })
+        }
       }
     }
     for (const entry of [...pending.values()]) {
       finish(entry, new HostError('HOST_STOPPED', 'The host stopped before answering'), false)
     }
     current = null
-    state = final ? 'closed' : before === 'fatal' ? 'fatal' : 'idle'
+    state = closeRequested ? 'closed' : before === 'fatal' ? 'fatal' : 'idle'
     if (failure) throw failure
   }
 
   function shared(final: boolean): Promise<void> {
+    if (final) closeRequested = true
     if (state === 'closed') return Promise.resolve()
-    if (stopping) {
-      if (!final) return stopping
-      // A close after a plain stop still has to refuse later calls.
-      return stopping.finally(() => {
-        state = 'closed'
-      })
-    }
-    const run = stopHost(final).finally(() => {
+    if (stopping) return stopping
+    const run = stopHost().finally(() => {
       stopping = null
     })
     stopping = run
@@ -708,7 +761,20 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
   }
 
   async function kill(): Promise<void> {
-    if (state === 'closed' || state === 'stopping') return
+    if (state === 'closed') return
+    wakeDelay?.()
+    if (state === 'restarting') {
+      // The pending restart sees the new state and gives up.
+      state = 'idle'
+      await starting?.catch(() => undefined)
+      return
+    }
+    if (state === 'stopping') {
+      // Cuts a stop's grace period short; the stop reports how it ended.
+      if (current) await retire(current)
+      await stopping?.catch(() => undefined)
+      return
+    }
     if (starting) await starting.catch(() => undefined)
     const life = current
     if (!life) return
