@@ -5,7 +5,6 @@
  */
 
 import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,10 +22,8 @@ interface Outcome {
   readonly causeCode?: string
 }
 
-function runApp(): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  const electron = createRequire(path.join(HERE, '..', '..', 'core', 'package.json'))(
-    'electron',
-  ) as string
+async function runApp(): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const electron = (await import('electron')).default as unknown as string
   return new Promise((resolve, reject) => {
     const child = spawn(electron, [MAIN], { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''

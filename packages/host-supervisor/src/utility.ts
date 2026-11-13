@@ -12,6 +12,7 @@ import { minimalEnvironment } from './env.js'
 export interface UtilityProcessLike {
   readonly pid?: number | undefined
   postMessage(message: unknown): void
+  on(event: 'spawn', listener: () => void): unknown
   on(event: 'message', listener: (message: unknown) => void): unknown
   on(event: 'exit', listener: (code: number) => void): unknown
   on(event: 'error', listener: (type: string, location: string, report: string) => void): unknown
@@ -66,8 +67,10 @@ export function utilityProcessTransport(options: UtilityProcessTransportOptions)
   const fork = options.fork ?? electronFork
   return {
     launch(): HostChannel {
+      const env = options.env ?? minimalEnvironment(process.env)
       const child = fork(options.entry, [...(options.args ?? [])], {
-        env: options.env ?? minimalEnvironment(process.env),
+        // Electron reads an empty env as unset and passes the whole parent environment.
+        env: Object.keys(env).length > 0 ? env : { HOST_SUPERVISOR_EMPTY_ENV: '1' },
         ...(options.execArgv ? { execArgv: [...options.execArgv] } : {}),
         ...(options.cwd ? { cwd: options.cwd } : {}),
         ...(options.stdio ? { stdio: options.stdio } : {}),
@@ -86,7 +89,10 @@ export function utilityProcessTransport(options: UtilityProcessTransportOptions)
             const exit: ChannelExit = error ? { code, error } : { code }
             listener(exit)
           }),
-        kill: () => void child.kill(),
+        kill: () => {
+          // Before 'spawn' Electron's kill() is a no-op that returns false.
+          if (!child.kill()) child.on('spawn', () => void child.kill())
+        },
       }
     },
   }

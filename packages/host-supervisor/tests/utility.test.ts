@@ -18,16 +18,19 @@ function fakeChild() {
     emit(event: string, ...args: unknown[]): void
     posted: unknown[]
     killed: boolean
+    spawned: boolean
   } = {
     pid: 42,
     posted: [],
     killed: false,
+    spawned: true,
     postMessage: (message) => void child.posted.push(message),
     on: (event: string, listener: (...args: never[]) => void) => {
       listeners.set(event, [...(listeners.get(event) ?? []), listener])
       return child
     },
     kill: () => {
+      if (!child.spawned) return false
       child.killed = true
       return true
     },
@@ -71,6 +74,30 @@ describe('utilityProcessTransport', () => {
     expect(child.killed).toBe(true)
   })
 
+  it('kills a child that has not spawned yet once it spawns', () => {
+    const child = fakeChild()
+    child.spawned = false
+    const channel = utilityProcessTransport({ entry: '/app/host.js', fork: () => child }).launch()
+    channel.kill()
+    expect(child.killed).toBe(false)
+    child.spawned = true
+    child.emit('spawn')
+    expect(child.killed).toBe(true)
+  })
+
+  it('never passes an empty env, which Electron reads as the whole parent environment', () => {
+    let env: Record<string, string> | undefined
+    utilityProcessTransport({
+      entry: '/app/host.js',
+      env: {},
+      fork: (_entry, _args, options) => {
+        env = options.env
+        return fakeChild()
+      },
+    }).launch()
+    expect(env).toEqual({ HOST_SUPERVISOR_EMPTY_ENV: '1' })
+  })
+
   it('turns a fatal error event into the exit cause', () => {
     const child = fakeChild()
     const channel = utilityProcessTransport({ entry: 'x', fork: () => child }).launch()
@@ -102,7 +129,10 @@ describe('minimalEnvironment', () => {
 describe('subpaths', () => {
   it('keeps Electron out of every module but the utility transport', async () => {
     const source = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src')
-    for (const file of await readdir(source)) {
+    const entries = await readdir(source, { recursive: true, withFileTypes: true })
+    for (const file of entries
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.relative(source, path.join(entry.parentPath, entry.name)))) {
       const text = await readFile(path.join(source, file), 'utf8')
       const mentions = /from 'electron'|require\(['"]electron['"]\)|\('electron'\)/.test(text)
       expect({ file, mentions }).toEqual({ file, mentions: file === 'utility.ts' })

@@ -54,7 +54,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "electron": ">=22.0.0"
+    "electron": ">=42.0.0"
   },
   "peerDependenciesMeta": {
     "electron": {
