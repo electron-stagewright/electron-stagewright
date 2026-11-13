@@ -19,30 +19,36 @@ protocol.registerSchemesAsPrivileged([
 
 globalThis.originSmoke = { status: 'pending' }
 
-app.whenReady().then(async () => {
-  protocol.handle('app', async (request) => {
-    if (request.url === BLANK_URL) return blankDocumentResponse()
-    if (new URL(request.url).pathname === '/index.html') {
-      const html = await readFile(join(fixtureDir, 'index.html'))
-      return new Response(html, { headers: { 'content-type': 'text/html' } })
-    }
-    return new Response(null, { status: 404 })
-  })
-  const win = new BrowserWindow({ width: 400, height: 300, show: false })
-  if (legacy) {
-    globalThis.originSmoke = { status: 'legacy' }
-    await win.loadFile(join(fixtureDir, 'index.html'))
-  } else {
-    globalThis.originSmoke = await migrateOrigin({
-      userDataDir: app.getPath('userData'),
-      BrowserWindow,
-      session: session.defaultSession,
-      targetUrl: BLANK_URL,
+app
+  .whenReady()
+  .then(async () => {
+    protocol.handle('app', async (request) => {
+      if (request.url === BLANK_URL) return blankDocumentResponse()
+      if (new URL(request.url).pathname === '/index.html') {
+        const html = await readFile(join(fixtureDir, 'index.html'))
+        return new Response(html, { headers: { 'content-type': 'text/html' } })
+      }
+      return new Response(null, { status: 404 })
     })
-    await win.loadURL('app://fixture/index.html')
-  }
-  win.show()
-})
+    const win = new BrowserWindow({ width: 400, height: 300, show: false })
+    if (legacy) {
+      globalThis.originSmoke = { status: 'legacy' }
+      await win.loadFile(join(fixtureDir, 'index.html'))
+    } else {
+      globalThis.originSmoke = await migrateOrigin({
+        userDataDir: app.getPath('userData'),
+        BrowserWindow,
+        session: session.defaultSession,
+        targetUrl: BLANK_URL,
+      })
+      await win.loadURL('app://fixture/index.html')
+    }
+    win.show()
+  })
+  .catch((error) => {
+    // The smoke waits on this status; without it a startup failure only shows up as a timeout.
+    globalThis.originSmoke = { status: 'error', error: String(error?.stack ?? error) }
+  })
 
 app.on('window-all-closed', () => {
   app.quit()

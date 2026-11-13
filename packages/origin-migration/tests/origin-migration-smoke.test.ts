@@ -79,7 +79,8 @@ describe('origin migration smoke (real Electron)', () => {
     'migrates a file:// profile once, never reverts it, and leaves the source intact',
     async () => {
       const profile = await mkdtemp(path.join(tmpdir(), 'sw-origin-smoke-'))
-      closers.push(() => rm(profile, { recursive: true, force: true }))
+      // An exiting Electron can still lock the profile on Windows.
+      closers.push(() => rm(profile, { recursive: true, force: true, maxRetries: 3 }))
       const server = await createServer({ allowEval: true })
       closers.push(() => server.close())
       const dispatch = async (name: string, args: Record<string, unknown>) => {
@@ -97,8 +98,7 @@ describe('origin migration smoke (real Electron)', () => {
           timeoutMs: 45_000,
           readyTimeoutMs: 10_000,
         })
-        const sessionId = (launched['session_id'] ??
-          (launched['_meta'] as { session_id?: string }).session_id) as string
+        const sessionId = launched['session_id'] as string
         const renderer = async <T>(code: string) =>
           (await dispatch('electron_eval_renderer', { sessionId, code }))['result'] as T
         const main = async <T>(code: string) =>
@@ -106,8 +106,11 @@ describe('origin migration smoke (real Electron)', () => {
         // Wait in main for the migration and the app window's load, then drive that window:
         // the hidden migration pages may have been the first surface the session saw.
         await main(`const { BrowserWindow } = arguments[0];
-          const ready = () => globalThis.originSmoke.status !== 'pending' &&
+          const ready = () => {
+            if (globalThis.originSmoke.status === 'error') throw new Error(globalThis.originSmoke.error);
+            return globalThis.originSmoke.status !== 'pending' &&
             BrowserWindow.getAllWindows().some((w) => w.getTitle() === ${JSON.stringify(TITLE)} && !w.webContents.isLoading());
+          };
           while (!ready()) await new Promise((resolve) => setTimeout(resolve, 50));`)
         await dispatch('electron_switch_window', { sessionId, windowTitle: TITLE })
         return {
