@@ -13,6 +13,7 @@ import {
   ORIGIN_MIGRATION_MAX_ATTEMPTS,
   ORIGIN_PAGE_STEP_TIMEOUT_MS,
   type OriginMigrationMarker,
+  runOriginMigration,
   type OriginStore,
 } from '../src/index.js'
 import { FakeOrigin, fakeWindowClass, type FakePagesOptions } from './fake-pages.js'
@@ -537,11 +538,20 @@ describe('origin migration', () => {
     expect(outcomes).toEqual([false, false, true, 'skipped'])
   })
 
-  it('treats an unreadable marker as no marker', async () => {
-    await writeFile(path.join(userDataDir, ORIGIN_MIGRATION_MARKER), '{not json')
+  it.each([
+    ['truncated', '{"version":1,"sta'],
+    ['foreign', '{"migrated":true}'],
+    ['newer', '{"version":2,"state":"done"}'],
+  ])('skips when the marker is %s, so stale data never replaces current data', async (_, text) => {
+    await writeFile(path.join(userDataDir, ORIGIN_MIGRATION_MARKER), text)
     legacy.localStorage.setItem('settings', 'legacy')
-    await expect(migrate().run).resolves.toMatchObject({ status: 'migrated' })
-    expect(await marker()).toMatchObject({ state: 'done', attempts: 1 })
+    legacy.opfs.put('app.db', bytes(64))
+    target.opfs.put('app.db', bytes(8, 3))
+    const { run, pages } = migrate()
+    await expect(run).resolves.toEqual({ status: 'skipped' })
+    expect(pages.created).toHaveLength(0)
+    expect(target.opfs.file('app.db')?.data.byteLength).toBe(8)
+    expect(await readFile(path.join(userDataDir, ORIGIN_MIGRATION_MARKER), 'utf8')).toBe(text)
   })
 
   it('fails the attempt when a copy is cancelled, without a partial file', async () => {
@@ -619,6 +629,43 @@ describe('origin migration', () => {
       expect(pages.created).toHaveLength(0)
     },
   )
+
+  it('refuses an empty marker name, which would point at userData itself', async () => {
+    await expect(
+      runOriginMigration({
+        userDataDir,
+        markerFile: '',
+        openLegacy: () => Promise.reject(new Error('opened')),
+        openTarget: () => Promise.reject(new Error('opened')),
+        flush: () => {},
+      }),
+    ).rejects.toThrow(TypeError)
+  })
+
+  it('keeps the unreadable-localStorage flag across a retry', async () => {
+    await writeFile(
+      path.join(userDataDir, ORIGIN_MIGRATION_MARKER),
+      JSON.stringify({
+        version: 1,
+        state: 'failed',
+        attempts: 1,
+        localStorageKeys: 2,
+        localStorageCopied: true,
+        localStorageUnreadable: true,
+        copiedFiles: [],
+      }),
+    )
+    await expect(migrate().run).resolves.toMatchObject({ status: 'empty' })
+    expect(await marker()).toMatchObject({ state: 'done', localStorageUnreadable: true })
+  })
+
+  it('removes a WAL set aside by an attempt that crashed before the database moved', async () => {
+    legacy.opfs.put('app.db', bytes(64))
+    target.opfs.put('app.db', bytes(4, 9))
+    target.opfs.put('app.db.wal.origin-migration-previous', bytes(6, 5))
+    await expect(migrate().run).resolves.toMatchObject({ status: 'migrated' })
+    expect([...target.opfs.children.keys()]).toEqual(['app.db'])
+  })
 
   it('refuses a file:// target, which would copy the origin onto itself', async () => {
     const pages = fakeWindowClass({ legacy, target })

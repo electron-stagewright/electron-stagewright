@@ -70,18 +70,24 @@ async function openStoragePage(
   options: OriginPageOptions,
 ): Promise<StoragePage> {
   const timeoutMs = options.stepTimeoutMs ?? ORIGIN_PAGE_STEP_TIMEOUT_MS
-  const window = new Window({
-    show: false,
-    webPreferences: {
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: true,
-      spellcheck: false,
-      backgroundThrottling: false,
-      ...(options.session ? { session: options.session } : {}),
-    },
-  })
+  let window: BrowserWindow
+  try {
+    window = new Window({
+      show: false,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: true,
+        spellcheck: false,
+        backgroundThrottling: false,
+        ...(options.session ? { session: options.session } : {}),
+      },
+    })
+  } catch (error) {
+    cleanup()
+    throw error
+  }
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.webContents.on('will-redirect', (event) => event.preventDefault())
@@ -172,7 +178,7 @@ export async function openTargetOriginPage(
         ),
       ),
     endFile: () => page.evaluate(END_FILE),
-    abortFile: () => page.evaluate(ABORT_FILE),
+    abortFile: () => page.evaluateToEnd(ABORT_FILE),
     commitFile: (filePath, name) => page.evaluateToEnd(call(COMMIT_FILE, filePath, name)),
     removeFile: (filePath) => page.evaluateToEnd(call(REMOVE_FILE, filePath)),
     close: page.close,

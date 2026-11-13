@@ -42,6 +42,11 @@
   "peerDependencies": {
     "electron": ">=42.0.0"
   },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@electron-stagewright/core": "workspace:*",
     "electron": "^42.11.10"

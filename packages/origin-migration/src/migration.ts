@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { open, readFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 
 import { STAGING_SUFFIX } from './scripts.js'
@@ -84,10 +84,21 @@ export interface OriginMigrationDeps {
   now?: () => number
 }
 
-async function readMarker(markerPath: string): Promise<OriginMigrationMarker | null> {
+/** Null only when no marker exists; any marker this version cannot read counts as final. */
+async function readMarker(
+  markerPath: string,
+): Promise<OriginMigrationMarker | 'unreadable' | null> {
+  let text: string
   try {
-    const parsed = JSON.parse(await readFile(markerPath, 'utf8')) as Partial<OriginMigrationMarker>
-    if (parsed?.version !== 1 || (parsed.state !== 'done' && parsed.state !== 'failed')) return null
+    text = await readFile(markerPath, 'utf8')
+  } catch (error) {
+    return (error as { code?: unknown }).code === 'ENOENT' ? null : 'unreadable'
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<OriginMigrationMarker>
+    if (parsed?.version !== 1 || (parsed.state !== 'done' && parsed.state !== 'failed')) {
+      return 'unreadable'
+    }
     return {
       ...(parsed as OriginMigrationMarker),
       attempts: Number.isInteger(parsed.attempts) ? (parsed.attempts as number) : 1,
@@ -97,13 +108,20 @@ async function readMarker(markerPath: string): Promise<OriginMigrationMarker | n
         : [],
     }
   } catch {
-    return null
+    return 'unreadable'
   }
 }
 
 async function writeMarker(markerPath: string, marker: OriginMigrationMarker): Promise<void> {
   const temporary = `${markerPath}.tmp`
-  await writeFile(temporary, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 })
+  const handle = await open(temporary, 'w', 0o600)
+  try {
+    await handle.writeFile(`${JSON.stringify(marker, null, 2)}\n`)
+    // Flushed before the rename, so a power loss cannot leave a truncated marker in place.
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
   await rename(temporary, markerPath)
 }
 
@@ -164,7 +182,8 @@ async function commitGroup(target: TargetOriginWriter, group: OriginFile[]): Pro
     }
     throw error
   }
-  if (hadWal) await target.removeFile(aside).catch(() => undefined)
+  // Unconditional: a crash after the set-aside but before this move leaves an aside behind.
+  await target.removeFile(aside).catch(() => undefined)
   if (wal) await target.commitFile(stagingPath(wal), nameOf(wal))
 }
 
@@ -204,7 +223,12 @@ export async function runOriginMigration(
   deps: OriginMigrationDeps,
 ): Promise<OriginMigrationResult> {
   const markerFile = deps.markerFile ?? ORIGIN_MIGRATION_MARKER
-  if (markerFile !== path.basename(markerFile) || markerFile === '.' || markerFile === '..') {
+  if (
+    !markerFile ||
+    markerFile !== path.basename(markerFile) ||
+    markerFile === '.' ||
+    markerFile === '..'
+  ) {
     throw new TypeError('markerFile must be a file name, not a path')
   }
   const stores = new Set(deps.stores ?? ORIGIN_STORES)
@@ -212,8 +236,8 @@ export async function runOriginMigration(
   const markerPath = path.join(deps.userDataDir, markerFile)
   const previous = await readMarker(markerPath)
   if (
-    previous &&
-    (previous.state === 'done' || previous.attempts >= ORIGIN_MIGRATION_MAX_ATTEMPTS)
+    previous === 'unreadable' ||
+    (previous && (previous.state === 'done' || previous.attempts >= ORIGIN_MIGRATION_MAX_ATTEMPTS))
   ) {
     return { status: 'skipped' }
   }
@@ -230,6 +254,7 @@ export async function runOriginMigration(
     fileBytes: previous?.fileBytes ?? 0,
     durationMs: 0,
     localStorageCopied: previous?.localStorageCopied ?? false,
+    ...(previous?.localStorageUnreadable ? { localStorageUnreadable: true } : {}),
     copiedFiles: [...(previous?.copiedFiles ?? [])],
   }
   // No disk probe: Chromium creates Local Storage before any page loads, so only the legacy
@@ -272,14 +297,14 @@ export async function runOriginMigration(
           staged.push(file)
           await stageFile(reader, writer, file, onChunk, deps.signal)
         }
+        // Past this point a started move runs to the end, so an abort cannot split a database from its WAL.
+        deps.signal?.throwIfAborted()
       } catch (error) {
         await Promise.all(
           staged.map((file) => writer.removeFile(stagingPath(file)).catch(() => undefined)),
         )
         throw error
       }
-      // Past this point the moves run to the end, so an abort cannot split a database from its WAL.
-      deps.signal?.throwIfAborted()
       let committed = 0
       try {
         for (const group of pendingGroups) {

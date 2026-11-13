@@ -15,9 +15,11 @@ not move it yet.
 - OPFS files are copied in 1 MiB chunks to staging files, and moved into place only after every
   file is staged. A copied file replaces a file of the same path on the new origin.
 - A database and its `.wal` move together, database first. A `.wal` without its database is
-  skipped.
+  skipped. Only `<name>.wal` sidecars are grouped (DuckDB); SQLite's `-wal`, `-journal` and
+  `-shm` files are not supported yet.
 - A marker in `userData` makes the copy run once. A failed attempt is retried on the next launch,
-  three attempts in all. A crash mid-copy counts as an attempt.
+  three attempts in all. A crash mid-copy counts as an attempt. A marker that exists but cannot be
+  read counts as done.
 - Data the user deletes on the new origin after it was copied is never restored by a retry.
 
 ## Use
@@ -60,8 +62,8 @@ app.whenReady().then(async () => {
 
 | `status`   | Meaning                                                                      |
 | ---------- | ---------------------------------------------------------------------------- |
-| `skipped`  | Already done, or out of attempts. Nothing was opened.                        |
-| `empty`    | The `file://` origin held nothing to copy.                                   |
+| `skipped`  | Already done, out of attempts, or the marker is unreadable. Nothing opened.  |
+| `empty`    | Nothing was left to copy on the `file://` origin.                            |
 | `migrated` | Data was copied. `marker` has key, file and byte counts.                     |
 | `failed`   | This attempt failed. `marker.error` names the error; `final` means no retry. |
 
