@@ -1,0 +1,54 @@
+{
+  "name": "@electron-stagewright/origin-migration",
+  "version": "0.1.0",
+  "description": "One-time copy of an Electron renderer's localStorage and origin private file system from the file:// origin to a custom-scheme origin, safe to interrupt and retry.",
+  "type": "module",
+  "license": "MIT",
+  "author": "johnny4young <johnny.iv.young@gmail.com>",
+  "homepage": "https://electron-stagewright.github.io/electron-stagewright/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electron-stagewright/electron-stagewright.git",
+    "directory": "packages/origin-migration"
+  },
+  "bugs": {
+    "url": "https://github.com/electron-stagewright/electron-stagewright/issues"
+  },
+  "keywords": [
+    "electron",
+    "custom-protocol",
+    "localstorage",
+    "opfs",
+    "migration",
+    "file-protocol"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "electron": ">=42.0.0"
+  },
+  "devDependencies": {
+    "electron": "^42.11.10"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
