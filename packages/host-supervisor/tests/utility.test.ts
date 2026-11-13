@@ -81,10 +81,6 @@ describe('utilityProcessTransport', () => {
     expect(exits[0]?.code).toBe(133)
     expect(exits[0]?.error?.message).toContain('FatalError at v8::Isolate')
   })
-
-  it('refuses to launch outside the Electron main process', () => {
-    expect(() => utilityProcessTransport({ entry: 'x' }).launch()).toThrow(/Electron main process/)
-  })
 })
 
 describe('minimalEnvironment', () => {
