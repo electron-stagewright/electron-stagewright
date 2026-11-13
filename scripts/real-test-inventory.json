@@ -88,6 +88,10 @@
     "tests": 3
   },
   {
+    "path": "packages/origin-migration/tests/origin-migration-smoke.test.ts",
+    "tests": 1
+  },
+  {
     "path": "packages/plugin-a11y/tests/a11y-smoke.test.ts",
     "tests": 1
   },

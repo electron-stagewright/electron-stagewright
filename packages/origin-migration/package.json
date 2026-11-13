@@ -43,6 +43,7 @@
     "electron": ">=42.0.0"
   },
   "devDependencies": {
+    "@electron-stagewright/core": "workspace:*",
     "electron": "^42.11.10"
   },
   "engines": {
