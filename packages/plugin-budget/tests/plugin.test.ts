@@ -3,7 +3,7 @@
  * the main-process sampler and the renderer probe. The real bodies run in the gated smoke.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -341,6 +341,18 @@ describe('budget plugin', () => {
     })
     // Inside the root, but its bundle entry climbs out of it.
     expect(await check(budgetPath)).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+  })
+
+  it('refuses a bundle entry that is a symlink out of the root', async () => {
+    const budgetPath = await budgetFile({ bundle: { entries: [{ path: 'link', maxKb: 1 }] } })
+    const outsideDir = await mkdtemp(path.join(tmpdir(), 'sw-budget-outside-'))
+    dirs.push(outsideDir)
+    await symlink(outsideDir, path.join(path.dirname(budgetPath), 'link'), 'junction')
+    const { dispatch } = await setup()
+    expect(await dispatch('budget_check', { budgetPath })).toMatchObject({
+      ok: false,
+      code: 'BAD_ARGUMENT',
+    })
   })
 
   it('does not echo file content from an unparseable budget', async () => {

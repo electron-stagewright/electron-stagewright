@@ -7,6 +7,7 @@
  * @module
  */
 
+import { realpath } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
@@ -102,8 +103,15 @@ export function createBudgetPlugin(): StagewrightPlugin {
     },
   )
 
-  function escapes(root: string, target: string, meta: Meta): ToolResult | undefined {
-    const relative = path.relative(root, path.resolve(target))
+  /** Symlinks are resolved first, so a link inside the root cannot point the read outside it. */
+  async function escapes(
+    root: string,
+    target: string,
+    meta: Meta,
+  ): Promise<ToolResult | undefined> {
+    const canonical = (file: string): Promise<string> =>
+      realpath(file).catch(() => path.resolve(file))
+    const relative = path.relative(await canonical(root), await canonical(target))
     if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
       return undefined
     }
@@ -115,7 +123,11 @@ export function createBudgetPlugin(): StagewrightPlugin {
   }
 
   /** With `--app-root` set, files the tools read must sit inside it. */
-  function outsideAppRoot(ctx: ToolContext, target: string, meta: Meta): ToolResult | undefined {
+  async function outsideAppRoot(
+    ctx: ToolContext,
+    target: string,
+    meta: Meta,
+  ): Promise<ToolResult | undefined> {
     return ctx.appRoot === undefined ? undefined : escapes(ctx.appRoot, target, meta)
   }
 
@@ -162,7 +174,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
         }),
       }
     }
-    const outside = outsideAppRoot(ctx, target, meta)
+    const outside = await outsideAppRoot(ctx, target, meta)
     if (outside !== undefined) return { error: outside }
     try {
       return { budget: await loadBudget(target), budgetPath: target }
@@ -403,7 +415,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
           // An agent can name the budget file, so its entries may not climb out of the root.
           const target = path.resolve(root, entry.path)
           const outside =
-            escapes(root, target, meta) ?? (ctx.appRoot && escapes(ctx.appRoot, target, meta))
+            (await escapes(root, target, meta)) ?? (await outsideAppRoot(ctx, target, meta))
           if (outside) return outside
         }
         run = { ...run, bundle: await measureBundle(root, budget.bundle.entries) }
