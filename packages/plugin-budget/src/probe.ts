@@ -12,6 +12,8 @@ export const MIN_STALL_MS = 10
 export const SAMPLE_INTERVAL_MS = 10
 export const DEFAULT_IPC_INTERVAL_MS = 25
 export const DEFAULT_WINDOW_MS = 2_000
+/** An unread window stops itself after this, so a detached or abandoned app keeps no timer. */
+export const MAX_WINDOW_MS = 600_000
 
 export interface MainFacts {
   readonly pid: number
@@ -28,11 +30,21 @@ export interface MainFacts {
   }[]
 }
 
-export type MainOp = 'facts' | 'start' | 'read'
+export type MainOp = 'facts' | 'start' | 'read' | 'startup'
+
+const FIRST_WINDOW_TIMING = `(() => {
+  const entry = performance.getEntriesByType('navigation')[0];
+  return {
+    timeOrigin: performance.timeOrigin,
+    loadEventEnd: entry ? entry.loadEventEnd : 0,
+    type: entry ? entry.type : null,
+  };
+})()`
 
 /**
  * Main-process body. `facts` reads process metrics. `start` arms a 10 ms timer whose lateness is
  * the blocked time (replacing any earlier window); `read` summarises it and, with `stop`, clears it.
+ * `startup` reads the navigation timing of the first window still open.
  */
 export const MAIN_BODY = `
 const KEY = '__swBudget';
@@ -58,6 +70,11 @@ if (arg.op === 'start') {
   const state = { startedAt: performance.now(), last: performance.now(), stalls: [], handle: null };
   state.handle = setInterval(() => {
     const at = performance.now();
+    if (at - state.startedAt > ${MAX_WINDOW_MS}) {
+      clearInterval(state.handle);
+      if (globalThis[KEY] === state) delete globalThis[KEY];
+      return;
+    }
     const stall = at - state.last - ${SAMPLE_INTERVAL_MS};
     if (stall >= ${MIN_STALL_MS}) state.stalls.push(stall);
     state.last = at;
@@ -88,28 +105,33 @@ if (arg.op === 'read') {
     stallsOver100Ms: stalls.filter((stall) => stall > 100).length,
   };
 }
+if (arg.op === 'startup') {
+  const windows = electronApp.BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed());
+  if (windows.length === 0) return { error: 'no window is open' };
+  const first = windows.reduce((a, b) => (b.id < a.id ? b : a));
+  const history = first.webContents.navigationHistory;
+  const timing = await first.webContents.executeJavaScript(${JSON.stringify(FIRST_WINDOW_TIMING)});
+  return {
+    ...timing,
+    historyLength: history && typeof history.length === 'function' ? history.length() : null,
+  };
+}
 throw new Error('unknown budget op');
 `
 
 export type MainReadResult = StallSummary | null
 
-export interface RendererStartup {
-  /** Epoch ms of the document's time origin. */
-  readonly timeOrigin: number
-  /** Ms from the time origin to the end of the load event; 0 while still loading. */
-  readonly loadEventEnd: number
-  readonly type: string | null
-}
-
-/** Renderer body: navigation timing of the active document. */
-export const STARTUP_BODY = `
-const entry = performance.getEntriesByType('navigation')[0];
-return {
-  timeOrigin: performance.timeOrigin,
-  loadEventEnd: entry ? entry.loadEventEnd : 0,
-  type: entry ? entry.type : null,
-};
-`
+export type FirstWindowStartup =
+  | {
+      /** Epoch ms of the document's time origin. */
+      readonly timeOrigin: number
+      /** Ms from the time origin to the end of the load event; 0 while still loading. */
+      readonly loadEventEnd: number
+      readonly type: string | null
+      /** Entries in the window's history, when this Electron exposes it. */
+      readonly historyLength: number | null
+    }
+  | { readonly error: string }
 
 const IPC_KEY = '__swBudgetIpc'
 const MAX_IPC_SAMPLES = 20_000
@@ -126,8 +148,13 @@ const state = { samples: [], errors: 0, lastError: null, stop: false };
 window['${IPC_KEY}'] = state;
 const once = async () => { await (${probe}); };
 const intervalMs = arg.intervalMs;
+const begin = performance.now();
 void (async () => {
-  while (!state.stop && state.samples.length < ${MAX_IPC_SAMPLES}) {
+  while (
+    !state.stop &&
+    state.samples.length < ${MAX_IPC_SAMPLES} &&
+    performance.now() - begin < ${MAX_WINDOW_MS}
+  ) {
     const startedAt = performance.now();
     try {
       await once();

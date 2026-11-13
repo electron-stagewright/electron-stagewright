@@ -24,6 +24,7 @@ import {
   parseFootprintJson,
   parseSmapsRollup,
 } from '../src/memory.js'
+import { measureSession, type EvaluatingSession } from '../src/session.js'
 
 const lifecycle = new TestLifecycle()
 const dirs: string[] = []
@@ -64,6 +65,9 @@ function fakeApp(): FakeApp {
             ],
           }
         }
+        if (op === 'startup') {
+          return { timeOrigin: 1_000_300, loadEventEnd: 450, type: 'navigate', historyLength: 1 }
+        }
         if (op === 'start') {
           windowOpen = true
           return { started: true }
@@ -78,10 +82,6 @@ function fakeApp(): FakeApp {
           stallsOver50Ms: 0,
           stallsOver100Ms: 0,
         }
-      }
-      if (body.includes('getEntriesByType')) {
-        app.calls.push('renderer:startup')
-        return { timeOrigin: 1_000_300, loadEventEnd: 450, type: 'navigate' }
       }
       if (body.includes('window.api.ping()')) {
         app.calls.push('renderer:ipc-start')
@@ -172,6 +172,60 @@ describe('memory collectors', () => {
   })
 })
 
+describe('measureSession', () => {
+  function linuxApp(startup: Record<string, unknown>): EvaluatingSession {
+    return {
+      evaluate: (async (_target: string, _body: string, arg?: { op?: string }) => {
+        if (arg?.op === 'facts') {
+          return {
+            pid: 10,
+            creationTime: 1_000_000,
+            electron: '42.0.0',
+            platform: 'linux',
+            processes: [{ pid: 10, type: 'Browser', name: null, workingSetKb: 1024 }],
+          }
+        }
+        if (arg?.op === 'startup') return startup
+        return arg?.op === 'read' ? null : { started: true }
+      }) as EvaluatingSession['evaluate'],
+    }
+  }
+  const options = {
+    allowRenderer: true,
+    windowMs: 1,
+    sleep: async () => undefined,
+    memoryReader: async () => new Map([[10, 50 * 1024 * 1024]]),
+  }
+  const startup = { timeOrigin: 1_000_100, loadEventEnd: 400, type: 'navigate', historyLength: 1 }
+
+  it('reads host memory only when the host pid started with the app', async () => {
+    const same = await measureSession(linuxApp(startup), {
+      ...options,
+      hostStartTime: async () => 1_000_900,
+    })
+    expect(same.measurement.memory?.processes[0]?.mb).toBe(50)
+    expect(same.measurement.startup).toEqual({ firstWindowMs: 500 })
+
+    for (const host of [1_060_000, 'missing'] as const) {
+      const other = await measureSession(linuxApp(startup), {
+        ...options,
+        hostStartTime: async () => host,
+      })
+      expect(other.measurement.memory?.processes[0]?.mb).toBeUndefined()
+      expect(other.measurement.unavailable?.['memory']).toMatch(/another pid namespace/)
+    }
+  })
+
+  it('leaves startup unmeasured once the first window navigated', async () => {
+    const navigated = await measureSession(linuxApp({ ...startup, historyLength: 2 }), {
+      ...options,
+      hostStartTime: async () => undefined,
+    })
+    expect(navigated.measurement.startup).toBeUndefined()
+    expect(navigated.measurement.unavailable?.['startup']).toMatch(/navigated since launch/)
+  })
+})
+
 describe('budget plugin', () => {
   it('advertises its version and hides the eval-gated tools without main eval', async () => {
     const withEval = await setup(true)
@@ -204,6 +258,15 @@ describe('budget plugin', () => {
     expect(find('ipc.p99Ms')).toBe(4)
     expect(app.calls.indexOf('main:start')).toBeGreaterThanOrEqual(0)
     expect(app.calls.indexOf('renderer:ipc-start')).toBeGreaterThan(app.calls.indexOf('main:start'))
+  })
+
+  it('runs concurrent budget calls on one session one at a time', async () => {
+    const { app, server, dispatch } = await setup()
+    await lifecycle.launch(server)
+    const results = await Promise.all([dispatch('budget_measure'), dispatch('budget_measure')])
+    expect(results.map((result) => result['unavailable'])).toEqual([undefined, undefined])
+    const windowOps = app.calls.filter((call) => call === 'main:start' || call === 'main:read')
+    expect(windowOps).toEqual(['main:start', 'main:read', 'main:start', 'main:read'])
   })
 
   it('budget_start opens the window that budget_check then closes', async () => {

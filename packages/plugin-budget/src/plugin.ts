@@ -95,6 +95,18 @@ const budgetPathField = {
 export function createBudgetPlugin(): StagewrightPlugin {
   const config = createPluginConfigState(DEFAULT_CONFIG)
   const windows = new Map<string, OpenWindow>()
+  // The in-app sampler is one per process, so one session runs one budget call at a time.
+  const queues = new Map<string, Promise<unknown>>()
+  function serial<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+    const next = (queues.get(sessionId) ?? Promise.resolve()).catch(() => undefined).then(work)
+    queues.set(sessionId, next)
+    void next
+      .finally(() => {
+        if (queues.get(sessionId) === next) queues.delete(sessionId)
+      })
+      .catch(() => undefined)
+    return next
+  }
   const sessionCleanup = createSessionCleanup(
     (sessionId) => windows.delete(sessionId),
     () => {
@@ -248,6 +260,15 @@ export function createBudgetPlugin(): StagewrightPlugin {
     target: RuntimeTarget,
     options: { windowMs?: number | undefined; ipc?: IpcProbe | undefined; budget?: Budget },
   ): Promise<{ run: BudgetRun; measurement: Measurement }> {
+    return serial(target.id, () => measureLiveNow(ctx, tool, target, options))
+  }
+
+  async function measureLiveNow(
+    ctx: ToolContext,
+    tool: string,
+    target: RuntimeTarget,
+    options: { windowMs?: number | undefined; ipc?: IpcProbe | undefined; budget?: Budget },
+  ): Promise<{ run: BudgetRun; measurement: Measurement }> {
     const open = windows.get(target.id)
     windows.delete(target.id)
     if (open === undefined) auditProbe(ctx, tool, target, options.ipc)
@@ -280,7 +301,8 @@ export function createBudgetPlugin(): StagewrightPlugin {
       'running app, then drive the app with other tools and call budget_measure or budget_check to',
       'close the window and read it. Without budget_start those tools measure an idle window.',
       'The IPC probe is the renderer expression in ipcProbe, else the budget file ipc.probe; it',
-      'needs renderer eval. Starting again replaces the open window.',
+      'needs renderer eval. Starting again replaces the open window; an unread window expires after',
+      '10 minutes. Budget calls on one session run one at a time.',
       'Returns: { ok, started, ipc_probe, ipc_unavailable? }. Errors: budget.EVAL_REQUIRED (main',
       'eval is off), budget.MAIN_EVAL_UNSUPPORTED (transport lacks it), NOT_RUNNING (no session), budget.BUDGET_NOT_FOUND,',
       'budget.BUDGET_INVALID, ABSOLUTE_PATH_REQUIRED.',
@@ -305,12 +327,15 @@ export function createBudgetPlugin(): StagewrightPlugin {
       const loaded = await resolveBudget(ctx, args.budgetPath, meta, false)
       if ('error' in loaded) return loaded.error
       const ipc = ipcProbe(args, loaded.budget)
-      auditProbe(ctx, 'budget_start', target, ipc)
-      const open = await startWindow(target.session, {
-        ...target.renderer,
-        ...(ipc === undefined ? {} : { ipc }),
+      const open = await serial(target.id, async () => {
+        auditProbe(ctx, 'budget_start', target, ipc)
+        const started = await startWindow(target.session, {
+          ...target.renderer,
+          ...(ipc === undefined ? {} : { ipc }),
+        })
+        windows.set(target.id, started)
+        return started
       })
-      windows.set(target.id, open)
       return makeSuccess(
         {
           started: true,

@@ -109,6 +109,19 @@ async function readPss(pids: readonly number[]): Promise<Map<number, number>> {
   return bytes
 }
 
+/** Epoch ms a host pid started, `missing` when no such pid exists, undefined when unknown. */
+export type HostStartTimeReader = (pid: number) => Promise<number | 'missing' | undefined>
+
+export const readHostStartTime: HostStartTimeReader = (pid) =>
+  new Promise((resolve) => {
+    execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { timeout: 5_000 }, (error, stdout) => {
+      // ps exits 1 for an unknown pid; any other failure leaves the check undecided.
+      if (error !== null) return resolve(error.code === 1 ? 'missing' : undefined)
+      const started = Date.parse(stdout.trim())
+      resolve(Number.isNaN(started) ? undefined : started)
+    })
+  })
+
 export function osMemoryReader(platform: string): OsMemoryReader | undefined {
   if (platform === 'darwin') return readFootprint
   if (platform === 'linux') return readPss

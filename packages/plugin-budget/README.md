@@ -48,15 +48,18 @@ and with `--app-root` set the budget file and its entries must sit inside it.
   without eval; then only the bundle is checked.
 - **`budget_start`** `{ budgetPath?, ipcProbe?, ipcIntervalMs?, sessionId? }` — open a measurement
   window, then drive the app with the other tools. The next `budget_measure` or `budget_check` closes
-  it, so blocking and IPC latency cover the interaction instead of an idle app.
+  it, so blocking and IPC latency cover the interaction instead of an idle app. A window nobody
+  reads stops itself after 10 minutes. Budget calls on one session run one at a time.
 - **`budget_measure`** `{ budgetPath?, ipcProbe?, windowMs?, sessionId? }` — the numbers without a
   verdict: `{ measured: [{ id, value, unit, metric? }], unavailable? }`.
 
 Main-thread blocking is the lateness of a 10 ms timer in the main process: `blockedPercent` is the
 share of the window it ran 10 ms or more late, `maxStallMs` the worst single stall. The IPC probe
 times one round trip of the budget's `ipc.probe` expression every `intervalMs` (default 25).
-Startup is process creation to the end of the first window's load event; it is `unmeasured` after
-a reload.
+Startup is process creation to the end of the load event of the first window still open, whichever
+window is selected; it is `unmeasured` once that window reloaded or navigated. Memory is read on
+this host only when the host's process with the app's main pid started with the app, so an app in
+another pid namespace reports memory `unmeasured` instead of a stranger's numbers.
 
 ## Budget file
 
@@ -106,11 +109,13 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
   repeat `--arg` and `--env K=V` to pass them through) on an empty throwaway profile. Each round is
   a `cold` launch and a `warm` relaunch on the same profile (`--phases` picks one). It waits for
   the window to load, settles (`--settle-ms`, default 3000), measures a window (`--window-ms`), and
-  writes the run. `--check` gates it in the same command. On Linux CI run it under `xvfb-run`.
+  writes the run. `--check` gates it in the same command; with one measured phase every budgeted
+  metric reads it, or `--phase` picks one. On Linux CI run it under `xvfb-run`.
 - `--workload <script.mjs>` replaces the idle window with your interaction. The module
   default-exports `async ({ dispatch, sessionId, phase }) => { ... }`, where `dispatch(tool, args)`
   calls any core Stagewright tool (plugin tools are not loaded) on the launched app. The workload
-  runs with your privileges and eval enabled, so pass only a script you trust:
+  runs with your privileges and eval enabled, so pass only a script you trust. One that has not
+  finished after `--workload-timeout-ms` (default 120000) fails the command:
 
   ```js
   export default async ({ dispatch, sessionId }) => {

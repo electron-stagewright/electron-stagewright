@@ -23,18 +23,23 @@ and a CLI for CI, both driving the same measurement code.
 - **Measure through the session, classify by Electron, read from the OS.** `app.getAppMetrics()`
   supplies each process's pid and type. The host then reads each pid in the platform's own metric:
   `footprint` on macOS (`/usr/bin/footprint`), `pss` on Linux (`/proc/<pid>/smaps_rollup`), and
-  `privateBytes` on Windows (already in the metrics). Working set is always recorded as well.
+  `privateBytes` on Windows (already in the metrics). Working set is always recorded as well. The
+  host reads a pid only when its process started when the app's main process did; otherwise the
+  app sits in another pid namespace and memory is `unmeasured`.
 - **Never compare across metrics.** A memory budget is a per-platform block that names its metric.
   A run measured in another metric is `unmeasured`, and every table prints the metric.
 - **Sum per process type; GPU gates only when named.** Types are `main`, `renderer`, `gpu`,
   `utility`, `other`. A type the budget does not list is reported and never gates.
 - **Main-thread blocking is the lateness of a 10 ms main-process timer.** Lateness of 10 ms or more
-  counts as blocked. The budget limits the blocked share of the window and the worst stall.
+  counts as blocked. The budget limits the blocked share of the window and the worst stall. The
+  timer is one per process, so budget calls on a session run one at a time, and a window nobody
+  reads stops itself after 10 minutes.
 - **IPC latency needs an app-specific probe.** The budget names a renderer expression that performs
   one round trip. Without it IPC is not measured: there is no generic channel every app exposes.
 - **Startup is process creation to the end of the first window's load event,** from
-  `process.getCreationTime()` and the renderer's navigation timing. After a reload it is
-  `unmeasured`.
+  `process.getCreationTime()` and the navigation timing of the first window still open, read from
+  the main process so the selected window does not matter. After a reload or a navigation of that
+  window it is `unmeasured`.
 - **Bundle size is bytes on disk** for the files or directories the budget lists, optionally
   gzipped. It needs no session.
 - **Empty never passes.** A check with no expectation, or with no measurement, fails. A bundle entry
@@ -49,6 +54,8 @@ and a CLI for CI, both driving the same measurement code.
   main eval target and re-assert the grant at the tool boundary (as ADR-010 requires).
 - `budget_check` stays visible without eval. It then checks bundle size only and reports every
   runtime metric as `unmeasured` with the reason, so an agent learns what to enable.
+- Startup timing is a fixed body the main process runs in the first window
+  (`webContents.executeJavaScript`). It reaches a renderer, so it still needs the renderer grant.
 - The IPC probe is the one caller-supplied expression. It needs the renderer grant, passes the eval
   blocklist, and is audit-logged by length and hash, like `electron_eval_renderer`.
 - The budget path is agent-supplied, so file reads are confined: bundle entries must resolve inside

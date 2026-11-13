@@ -73,6 +73,8 @@ export interface MeasureCliOptions {
   readonly settleMs?: number
   readonly windowMs?: number
   readonly workloadPath?: string
+  readonly workloadTimeoutMs?: number
+  readonly phase?: Phase
   readonly label?: string
   readonly outPath?: string
   readonly check: boolean
@@ -94,8 +96,9 @@ export function formatBudgetCliHelp(): string {
     '  electron-stagewright-budget measure (--main <main.js> | --executable <path>) [--arg <v>]...',
     '                              [--env K=V]... [--budget <file>] [--rounds 3]',
     '                              [--phases cold,warm] [--settle-ms 3000] [--window-ms 2000]',
-    '                              [--workload <script.mjs>] [--label <text>] [--out <run.json>]',
-    '                              [--check [--strict] [--require-measurement]] [--json]',
+    '                              [--workload <script.mjs> [--workload-timeout-ms 120000]]',
+    '                              [--label <text>] [--out <run.json>] [--json]',
+    '                              [--check [--strict] [--require-measurement] [--phase cold|warm]]',
     '  electron-stagewright-budget check <run.json> --budget <file> [--strict]',
     '                              [--require-measurement] [--phase cold|warm|live] [--json]',
     '  electron-stagewright-budget compare <before.json> <after.json> [--json]',
@@ -105,7 +108,8 @@ export function formatBudgetCliHelp(): string {
     'measure   Launch the app on a throwaway profile and measure cold and warm rounds.',
     '          --workload is an ES module whose default export, async ({ dispatch, sessionId,',
     '          phase }), drives the app inside the measurement window. Without --out or',
-    '          --check the run document goes to stdout.',
+    '          --check the run document goes to stdout. With one measured phase, --check',
+    '          reads every metric from it.',
     'check     Compare a measured run to a budget file.',
     'compare   Print a before/after table of two runs.',
     'bundle    Measure the bundle entries of a budget and gate them; needs no Electron.',
@@ -140,6 +144,8 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     '--settle-ms',
     '--window-ms',
     '--workload',
+    '--workload-timeout-ms',
+    '--phase',
     '--label',
     '--out',
   ]
@@ -184,11 +190,15 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
   if (phases.some((phase) => phase !== 'cold' && phase !== 'warm')) {
     throw new UsageError('--phases expects cold, warm, or cold,warm')
   }
+  const phase = single.get('--phase')
+  if (phase !== undefined && !phases.includes(phase)) {
+    throw new UsageError('--phase must name a measured phase: cold or warm')
+  }
   const check = flags.has('--check')
   const budgetPath = single.get('--budget')
   if (check && budgetPath === undefined) throw new UsageError('--check requires --budget <file>')
-  if (!check && (flags.has('--strict') || flags.has('--require-measurement'))) {
-    throw new UsageError('--strict and --require-measurement apply only with --check')
+  if (!check && (flags.has('--strict') || flags.has('--require-measurement') || phase)) {
+    throw new UsageError('--strict, --require-measurement, and --phase apply only with --check')
   }
   const optional = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } =>
     value === undefined ? {} : ({ [key]: value } as { [P in K]: V })
@@ -211,6 +221,12 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     ...optional('settleMs', number('--settle-ms', 0)),
     ...optional('windowMs', number('--window-ms', 250)),
     ...optional('workloadPath', single.get('--workload')),
+    ...optional('workloadTimeoutMs', number('--workload-timeout-ms', 1000)),
+    // With one measured phase, every budgeted metric reads it instead of going unmeasured.
+    ...optional(
+      'phase',
+      (phase ?? (phases.length === 1 ? phases[0] : undefined)) as Phase | undefined,
+    ),
     ...optional('label', single.get('--label')),
     ...optional('outPath', single.get('--out')),
     check,
@@ -356,6 +372,9 @@ async function runMeasure(
     ...(options.windowMs === undefined ? {} : { windowMs: options.windowMs }),
     ...(budget === undefined ? {} : { budget }),
     ...(workload === undefined ? {} : { workload }),
+    ...(options.workloadTimeoutMs === undefined
+      ? {}
+      : { workloadTimeoutMs: options.workloadTimeoutMs }),
     ...(options.label === undefined ? {} : { label: options.label }),
     onProgress: (message) => io.stderr(`${message}\n`),
   })
@@ -373,6 +392,7 @@ async function runMeasure(
     const report = checkRun(run, budget, {
       strict: options.strict,
       requireMeasurement: options.requireMeasurement,
+      ...(options.phase === undefined ? {} : { phase: options.phase }),
     })
     return emitReport(report, options.json, io)
   }
