@@ -51,8 +51,9 @@ export function defaultHostPort(): HostPort | null {
     return {
       post: (message) => electronPort.postMessage(message),
       onMessage: (listener) => void electronPort.on('message', (event) => listener(event.data)),
-      // A utility process stays alive while its parent port listens.
-      close: () => setImmediate(() => process.exit(0)),
+      // A utility process stays alive while its parent port listens. The delay lets the stop
+      // reply leave first; the supervisor terminates a host that lingers after it.
+      close: () => void setTimeout(() => process.exit(0), 50),
     }
   }
   const port = parentPort
@@ -219,7 +220,13 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
               streams.delete(id)
               post({ type: 'item', id, done: true })
             } else {
-              answer(id, { type: 'item', id, done: false, value: result.value })
+              try {
+                post({ type: 'item', id, done: false, value: result.value })
+              } catch (error) {
+                // An item that cannot be cloned ends the stream and frees its producer.
+                cancel(id)
+                post({ type: 'result', id, ok: false, error: serializeError(error) })
+              }
             }
           },
           (error: unknown) => {
