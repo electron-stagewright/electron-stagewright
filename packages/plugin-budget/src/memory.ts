@@ -109,6 +109,52 @@ async function readPss(pids: readonly number[]): Promise<Map<number, number>> {
   return bytes
 }
 
+/** Epoch ms a host pid started, `missing` when no such pid exists, undefined when unknown. */
+export type HostStartTimeReader = (pid: number) => Promise<number | 'missing' | undefined>
+
+/** Linux exposes start times in clock ticks; USER_HZ is 100 on every supported architecture. */
+const CLOCK_TICKS_PER_SECOND = 100
+
+/** Boot time plus the pid's start ticks: how Chromium computes `process.getCreationTime()`. */
+export async function readProcStartTime(
+  pid: number,
+  read: (file: string) => Promise<string> = (file) => readFile(file, 'utf8'),
+): Promise<number | 'missing' | undefined> {
+  const stat = await read(`/proc/${pid}/stat`).catch(() => undefined)
+  if (stat === undefined) return 'missing'
+  const procStat = await read('/proc/stat').catch(() => '')
+  // The command name may hold spaces and parentheses; fields resume after the last ')'.
+  const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19])
+  const bootSeconds = Number(/^btime (\d+)$/m.exec(procStat)?.[1])
+  if (!Number.isFinite(ticks) || !Number.isFinite(bootSeconds)) return undefined
+  return bootSeconds * 1000 + (ticks / CLOCK_TICKS_PER_SECOND) * 1000
+}
+
+function readPsStartTime(pid: number): Promise<number | 'missing' | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      'ps',
+      ['-o', 'lstart=', '-p', String(pid)],
+      // lstart follows the locale; only the C locale is one Date.parse reads.
+      { timeout: 5_000, env: { ...process.env, LC_ALL: 'C' } },
+      (error, stdout, stderr) => {
+        // ps exits 1 silently for an unknown pid; a ps that rejects the flags says why on stderr.
+        if (error !== null) {
+          return resolve(error.code === 1 && stderr.trim() === '' ? 'missing' : undefined)
+        }
+        const started = Date.parse(stdout.trim())
+        resolve(Number.isNaN(started) ? undefined : started)
+      },
+    )
+  })
+}
+
+export function hostStartTimeReader(platform: string): HostStartTimeReader | undefined {
+  if (platform === 'linux') return (pid) => readProcStartTime(pid)
+  if (platform === 'darwin') return readPsStartTime
+  return undefined
+}
+
 export function osMemoryReader(platform: string): OsMemoryReader | undefined {
   if (platform === 'darwin') return readFootprint
   if (platform === 'linux') return readPss

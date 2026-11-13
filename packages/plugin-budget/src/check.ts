@@ -185,8 +185,9 @@ function unmeasuredDetail(run: BudgetRun, expectation: Expectation): string {
 export function checkRun(run: BudgetRun, budget: Budget, options: CheckOptions = {}): CheckReport {
   const rows = summarizeRun(run)
   const results = expectations(budget, run.platform, options).map((expectation): CheckResult => {
-    const allowed =
-      Math.round(expectation.limit * (1 + expectation.thresholdPercent / 100) * 10) / 10
+    // Divide last: 200 * (1 + 15 / 100) is 229.99999999999997, which would fail a 230.
+    const exactAllowed = (expectation.limit * (100 + expectation.thresholdPercent)) / 100
+    const allowed = Math.round(exactAllowed * 10) / 10
     const base = {
       id: expectation.id,
       unit: expectation.unit,
@@ -202,7 +203,7 @@ export function checkRun(run: BudgetRun, budget: Budget, options: CheckOptions =
     return {
       ...base,
       ...(row.phase === undefined ? {} : { phase: row.phase }),
-      status: row.value <= allowed ? 'pass' : 'fail',
+      status: row.exact <= exactAllowed ? 'pass' : 'fail',
       actual: row.value,
     }
   })

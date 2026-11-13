@@ -6,17 +6,22 @@
 
 import { validateEvalContent } from '@electron-stagewright/core'
 
-import { measureMemory, type OsMemoryReader } from './memory.js'
+import {
+  measureMemory,
+  osMemoryReader,
+  hostStartTimeReader,
+  type HostStartTimeReader,
+  type OsMemoryReader,
+} from './memory.js'
 import {
   DEFAULT_IPC_INTERVAL_MS,
   IPC_READ_BODY,
   MAIN_BODY,
-  STARTUP_BODY,
   buildIpcStartBody,
+  type FirstWindowStartup,
   type IpcReadResult,
   type MainFacts,
   type MainReadResult,
-  type RendererStartup,
 } from './probe.js'
 import { summarizeLatencies, type Measurement } from './run.js'
 
@@ -80,7 +85,35 @@ export interface MeasureOptions {
   readonly ipc?: IpcProbe
   readonly sleep?: (ms: number) => Promise<void>
   readonly memoryReader?: OsMemoryReader
+  readonly hostStartTime?: HostStartTimeReader
+  /** The renderer grant alone; defaults to `allowRenderer`. */
+  readonly allowStartup?: boolean
 }
+
+/** `ps` start times have whole-second resolution. */
+const START_TIME_TOLERANCE_MS = 2_000
+
+/**
+ * Pids come from the app, but the OS reader runs on this host. Refuse to read them when the
+ * host's process with the main pid did not start when the app's main process did.
+ */
+async function hostMismatch(
+  facts: MainFacts,
+  reader: HostStartTimeReader | undefined,
+): Promise<string | undefined> {
+  if (!isPid(facts.pid)) return 'the app reported an invalid main pid'
+  if (facts.creationTime === null || reader === undefined) return undefined
+  const started = await reader(facts.pid)
+  if (started === undefined) return undefined
+  if (started !== 'missing' && Math.abs(started - facts.creationTime) <= START_TIME_TOLERANCE_MS) {
+    return undefined
+  }
+  return `pid ${facts.pid} on this host is not the app's main process (another pid namespace?)`
+}
+
+/** App-reported pids reach host commands and /proc paths, so only plain pids pass. */
+const isPid = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 
 export interface SessionMeasurement {
   readonly measurement: Measurement
@@ -111,8 +144,8 @@ export async function measureSession(
     op: 'read',
     stop: true,
   })
-  // The app restarted its main process mid-window, so the sampler is gone.
-  if (stall === null) unavailable['mainThread'] = 'the measurement window was lost'
+  // The app restarted its main process mid-window, or the window outlived MAX_WINDOW_MS.
+  if (stall === null) unavailable['mainThread'] = 'the measurement window was lost or expired'
 
   let ipc: Measurement['ipc']
   if (open.ipcUnavailable !== undefined) unavailable['ipc'] = open.ipcUnavailable
@@ -137,25 +170,46 @@ export async function measureSession(
   }
 
   const facts = await session.evaluate<MainFacts>('main', MAIN_BODY, { op: 'facts' })
+  let reader = options.memoryReader ?? osMemoryReader(facts.platform)
+  const mismatch =
+    reader === undefined
+      ? undefined
+      : await hostMismatch(facts, options.hostStartTime ?? hostStartTimeReader(facts.platform))
+  if (mismatch !== undefined) {
+    reader = () => Promise.reject(new Error(mismatch))
+  }
   const { memory, error: memoryError } = await measureMemory(
-    facts.processes,
+    facts.processes.filter((entry) => isPid(entry.pid)),
     facts.platform,
-    options.memoryReader,
+    reader,
   )
   if (memoryError !== undefined) unavailable['memory'] = memoryError
 
   let startup: Measurement['startup']
-  if (!options.allowRenderer) {
+  if (options.allowStartup === false) {
+    unavailable['startup'] = RENDERER_EVAL_OFF
+  } else if (options.allowStartup === undefined && !options.allowRenderer) {
     unavailable['startup'] = options.rendererOff ?? RENDERER_EVAL_OFF
   } else if (facts.creationTime === null) {
     unavailable['startup'] = 'this Electron does not report the process creation time'
   } else {
     try {
-      const timing = await session.evaluate<RendererStartup>('renderer', STARTUP_BODY)
+      // Read from main so the first window counts, not whichever renderer is selected.
+      const timing = await session.evaluate<FirstWindowStartup>('main', MAIN_BODY, {
+        op: 'startup',
+      })
+      if ('error' in timing) throw new Error(timing.error)
       const firstWindowMs = timing.timeOrigin + timing.loadEventEnd - facts.creationTime
-      if (timing.type !== 'navigate') {
-        unavailable['startup'] = 'the window was reloaded or navigated since launch'
-      } else if (timing.loadEventEnd <= 0 || firstWindowMs <= 0) {
+      // A later document means the first one was left; pushState keeps the document.
+      const navigated =
+        timing.firstUrl !== null ? timing.url !== timing.firstUrl : (timing.historyLength ?? 1) > 1
+      if (timing.type !== 'navigate' || navigated) {
+        unavailable['startup'] = 'the first window was reloaded or navigated since launch'
+      } else if (
+        !(timing.loadEventEnd > 0) ||
+        !(firstWindowMs > 0) ||
+        !Number.isFinite(firstWindowMs)
+      ) {
         unavailable['startup'] = 'the window has not finished loading'
       } else {
         startup = { firstWindowMs: Math.round(firstWindowMs) }

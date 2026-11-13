@@ -190,6 +190,8 @@ export interface SummaryRow {
   readonly id: string
   readonly phase?: Phase
   readonly value: number
+  /** The unrounded median, which a check compares; `value` is for display. */
+  readonly exact: number
   readonly unit: 'ms' | 'MB' | '%' | 'KB'
   /** The memory metric, so a table never shows megabytes without naming what they count. */
   readonly metric?: string
@@ -209,10 +211,12 @@ export function summarizeRun(run: BudgetRun): SummaryRow[] {
     ): void => {
       const present = values.filter((value): value is number => value !== undefined)
       if (present.length === 0) return
+      const exact = median(present)
       rows.push({
         id,
         phase,
-        value: round1(median(present)),
+        value: round1(exact),
+        exact,
         unit,
         ...(metric === undefined ? {} : { metric }),
         samples: present.length,
@@ -226,7 +230,15 @@ export function summarizeRun(run: BudgetRun): SummaryRow[] {
     )
 
     const memories = measurements.flatMap((m) => (m.memory === undefined ? [] : [m.memory]))
-    const primary = memories[0]?.metric
+    // Rounds whose OS reader failed fall back to another metric; the majority one is summarised.
+    const counts = new Map<string, number>()
+    for (const memory of memories) counts.set(memory.metric, (counts.get(memory.metric) ?? 0) + 1)
+    let primary: MemoryMeasurement['metric'] | undefined
+    for (const { metric } of memories) {
+      if (primary === undefined || (counts.get(metric) ?? 0) > (counts.get(primary) ?? 0)) {
+        primary = metric
+      }
+    }
     // Working set is always recorded, so a budget may name it on any platform.
     for (const metric of new Set([primary, 'workingSet'] as const)) {
       if (metric === undefined) continue
@@ -283,6 +295,7 @@ export function summarizeRun(run: BudgetRun): SummaryRow[] {
     rows.push({
       id: `bundle.${entry.id}`,
       value: round1(entry.bytes / 1024),
+      exact: entry.bytes / 1024,
       unit: 'KB',
       ...(entry.gzip ? { metric: 'gzip' } : {}),
       samples: 1,

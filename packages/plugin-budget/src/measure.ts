@@ -44,12 +44,15 @@ export interface MeasureAppOptions {
   readonly budget?: Budget
   /** Runs inside the measurement window instead of idling for `windowMs`. */
   readonly workload?: Workload
+  /** A workload still running after this fails the measurement. */
+  readonly workloadTimeoutMs?: number
   readonly label?: string
   readonly onProgress?: (message: string) => void
 }
 
 export const DEFAULT_ROUNDS = 3
 export const DEFAULT_SETTLE_MS = 3_000
+export const DEFAULT_WORKLOAD_TIMEOUT_MS = 120_000
 const LOAD_TIMEOUT_MS = 30_000
 
 // loadEventEnd is only set once the load event has finished.
@@ -118,7 +121,24 @@ async function launchOnce(
       })
       const windowMs = options.windowMs ?? options.budget?.mainThread?.windowMs ?? DEFAULT_WINDOW_MS
       if (options.workload === undefined) await sleep(windowMs)
-      else await options.workload({ sessionId: managed.id, phase, dispatch })
+      else {
+        // A timed-out workload keeps running; once the window closes its dispatch rejects, so a
+        // polling loop ends instead of keeping the process alive.
+        let ended = false
+        const workloadDispatch: WorkloadContext['dispatch'] = (tool, args) =>
+          ended
+            ? Promise.reject(new Error('the measurement window has closed'))
+            : dispatch(tool, args)
+        try {
+          await withTimeout(
+            options.workload({ sessionId: managed.id, phase, dispatch: workloadDispatch }),
+            options.workloadTimeoutMs ?? DEFAULT_WORKLOAD_TIMEOUT_MS,
+            'workload',
+          )
+        } finally {
+          ended = true
+        }
+      }
 
       const measured = await measureSession(session, { allowRenderer: true, open, windowMs })
       return {

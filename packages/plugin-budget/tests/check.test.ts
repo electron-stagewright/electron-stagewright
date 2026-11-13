@@ -92,6 +92,24 @@ describe('summaries', () => {
   })
 })
 
+describe('summarizeRun memory metric', () => {
+  it('summarises the metric most rounds of a phase measured', () => {
+    const fallback = measurement(90, {
+      memory: { metric: 'workingSet', processes: [{ pid: 1, type: 'main', workingSetMb: 400 }] },
+    })
+    const rows = summarizeRun(
+      run([
+        ['warm', fallback],
+        ['warm', measurement(90)],
+        ['warm', measurement(110)],
+      ]),
+    )
+    expect(
+      rows.find((row) => row.id === 'memory.main' && row.metric === 'footprint'),
+    ).toMatchObject({ value: 100, samples: 2 })
+  })
+})
+
 describe('checkRun', () => {
   const rounds = [
     ['cold', measurement(150)],
@@ -121,6 +139,21 @@ describe('checkRun', () => {
     const strict = checkRun(over, budget, { strict: true })
     expect(strict).toMatchObject({ passed: false, reason: 'OVER_BUDGET' })
     expect(strict.results.find((r) => r.id === 'memory.main')?.status).toBe('fail')
+  })
+
+  it('compares the unrounded value, not the displayed one', () => {
+    const justOver = run([['cold', measurement(90, { startup: { firstWindowMs: 1000.04 } })]])
+    const result = checkRun(justOver, budget, { strict: true }).results.find(
+      (r) => r.id === 'startup.firstWindowMs',
+    )
+    expect(result).toMatchObject({ actual: 1000, status: 'fail' })
+  })
+
+  it('passes a value exactly at the tolerance despite float rounding', () => {
+    const atLimit = run([['cold', measurement(90, { startup: { firstWindowMs: 230 } })]])
+    const tight = { ...budget, startup: { maxFirstWindowMs: 200, thresholdPercent: 15 } }
+    const result = checkRun(atLimit, tight).results.find((r) => r.id === 'startup.firstWindowMs')
+    expect(result).toMatchObject({ allowed: 230, status: 'pass' })
   })
 
   it('never compares megabytes of a different metric', () => {
