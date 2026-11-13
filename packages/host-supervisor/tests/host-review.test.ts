@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createHost, inProcessTransport, type Contract } from '../src/index.js'
+import { HostError, createHost, inProcessTransport, type Contract } from '../src/index.js'
 import { calls, fakeTransport, settle } from './fake-transport.js'
 
 interface Ops {
@@ -92,6 +92,58 @@ describe('createHost lifecycle edges', () => {
     expect(host.state).toBe('idle')
   })
 
+  it('leaves no host running when kill lands while a restart is launching', async () => {
+    const transport = fakeTransport({ autoStart: false })
+    const host = createHost<Ops>({ operations: OPERATIONS, transport, onExit: () => 'restart' })
+    const starting = host.start()
+    await settle()
+    transport.last.reply({ type: 'started' })
+    await starting
+    transport.last.exit()
+    await settle()
+    expect(transport.channels).toHaveLength(2)
+    const killing = host.kill()
+    transport.last.reply({ type: 'started' })
+    await killing
+    expect(transport.last.killed).toBe(true)
+    expect(host.state).toBe('idle')
+  })
+
+  it('bounds kill and stop by a start that never answers', async () => {
+    for (const end of ['kill', 'stop'] as const) {
+      const transport = fakeTransport({ autoStart: false })
+      const host = createHost<Ops>({ operations: OPERATIONS, transport, stop: { graceMs: 20 } })
+      const starting = rejection(host.start())
+      await settle()
+      const ended = await host[end]().then(
+        () => 'resolved',
+        (error: { code?: string }) => error.code,
+      )
+      expect(ended).toBe(end === 'kill' ? 'resolved' : 'HOST_STOP_TIMEOUT')
+      expect((await starting).code).toBe('HOST_START_FAILED')
+      expect(transport.last.killed).toBe(true)
+      expect(host.state).toBe('idle')
+    }
+  })
+
+  it('resolves start through an on-demand exit decision', async () => {
+    const transport = fakeTransport()
+    const host = createHost<Ops>({
+      operations: OPERATIONS,
+      transport,
+      onExit: async () => {
+        await settle(5)
+        return 'on-demand' as const
+      },
+    })
+    await host.start()
+    transport.last.exit()
+    await settle()
+    await expect(host.start()).resolves.toBeUndefined()
+    expect(transport.channels).toHaveLength(2)
+    expect(host.state).toBe('running')
+  })
+
   it('reads a malformed onExit decision as fatal', async () => {
     const transport = fakeTransport()
     const host = createHost<Ops>({
@@ -115,6 +167,32 @@ describe('createHost stream edges', () => {
     await settle()
     await iterator.return?.()
     await expect(pull).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it('times out the first item while the host is still starting', async () => {
+    const transport = fakeTransport({ autoStart: false })
+    const host = createHost<Ops>({ operations: [], streams: STREAMS, transport })
+    const iterator = host.stream('items', [], { timeoutMs: 20 })[Symbol.asyncIterator]()
+    expect((await rejection(iterator.next())).code).toBe('HOST_CALL_TIMEOUT')
+  })
+
+  it('never passes a handler error off as a HostError', async () => {
+    const host = createHost<Ops>({
+      operations: OPERATIONS,
+      transport: inProcessTransport<Ops>({
+        operations: OPERATIONS,
+        start: () => ({
+          echo: () => {
+            throw Object.assign(new Error('inner'), { name: 'HostError', code: 'HOST_EXITED' })
+          },
+          items: async function* () {},
+        }),
+      }),
+    })
+    const error = await rejection(host.ops.echo('x'))
+    expect(error).not.toBeInstanceOf(HostError)
+    expect(error).toMatchObject({ name: 'Error', code: 'HOST_EXITED' })
+    await host.close()
   })
 
   it('fails a stream whose item cannot be cloned and frees the producer', async () => {

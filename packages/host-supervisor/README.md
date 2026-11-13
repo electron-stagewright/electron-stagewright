@@ -36,11 +36,13 @@ The host entry:
 ```ts
 import { serveHost } from '@electron-stagewright/host-supervisor'
 
+let db: Db
+
 serveHost<DbOps, { key: string }>({
   operations: ['query'],
   streams: ['rows'],
   start: async ({ key }) => {
-    const db = await open(key)
+    db = await open(key)
     return {
       query: (sql, { signal }) => db.all(sql, { signal }),
       rows: (sql) => db.iterate(sql),
