@@ -42,6 +42,8 @@ export interface DbOps {
 In the main process:
 
 ```ts
+import { fileURLToPath } from 'node:url'
+
 import { createHost, restartPolicy } from '@electron-stagewright/host-supervisor'
 import { utilityProcessTransport } from '@electron-stagewright/host-supervisor/utility'
 
@@ -49,7 +51,7 @@ const host = createHost<DbOps, { key: string }>({
   operations: ['query'],
   streams: ['rows'],
   transport: utilityProcessTransport({
-    entry: path.join(__dirname, 'db-host.js'),
+    entry: fileURLToPath(new URL('./db-host.js', import.meta.url)),
     serviceName: 'Database',
   }),
   start: { payload: () => ({ key: readKey() }) },
@@ -110,9 +112,11 @@ serveHost<DbOps, { key: string }>({
   files can stop. `kill()` terminates without draining. `close()` stops and refuses every later
   call. After `stop()` or `kill()` the next call starts a new host, once the old one has exited or
   `retireWaitMs` has passed.
-- **Memory.** Worker `resourceLimits` end only the worker, reported as `out-of-memory`. Native
-  memory sits outside any heap cap: pass `statsIntervalMs` to `serveHost`, and
-  `memoryWatch({ rssMb, onAlert })` as `onStats`.
+- **Memory.** Worker `resourceLimits` usually end only the worker, reported as `out-of-memory`;
+  one allocation far past the cap can still abort the whole process, so use `utilityProcess` when
+  the app must survive its host. Native memory sits outside any heap cap: pass `statsIntervalMs`
+  to `serveHost`, and `memoryWatch({ rssMb, onAlert })` as `onStats`. A worker shares the process,
+  so its `rssMb` is the whole app's.
 
 Errors keep their message and a code matching `^[A-Z][A-Z0-9_]{1,80}$`; stacks and object graphs
 never cross. The supervisor's own failures are `HostError` with a code from `HOST_ERROR_CODES`.

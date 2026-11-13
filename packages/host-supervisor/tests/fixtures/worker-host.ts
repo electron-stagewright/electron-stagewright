@@ -2,6 +2,7 @@ import { serveHost } from '../../src/serve.js'
 import { TEST_OPERATIONS, TEST_STREAMS, type TestOps } from './test-ops.js'
 
 const retained: unknown[] = []
+let aborted = 0
 
 serveHost<TestOps, { greeting: string }>({
   operations: TEST_OPERATIONS,
@@ -12,8 +13,16 @@ serveHost<TestOps, { greeting: string }>({
     slow: (ms: number) => new Promise<string>((resolve) => setTimeout(() => resolve('done'), ms)),
     hang: ({ signal }) =>
       new Promise<string>((resolve) =>
-        signal.addEventListener('abort', () => resolve('aborted'), { once: true }),
+        signal.addEventListener(
+          'abort',
+          () => {
+            aborted += 1
+            resolve('aborted')
+          },
+          { once: true },
+        ),
       ),
+    aborted: () => aborted,
     crash: () =>
       new Promise<never>(() => {
         setImmediate(() => {

@@ -268,6 +268,15 @@ importers:
         specifier: ^42.11.10
         version: 42.11.10
 
+  packages/origin-migration:
+    devDependencies:
+      '@electron-stagewright/core':
+        specifier: workspace:*
+        version: link:../core
+      electron:
+        specifier: ^42.11.10
+        version: 42.11.10
+
   packages/plugin-a11y:
     dependencies:
       '@electron-stagewright/core':

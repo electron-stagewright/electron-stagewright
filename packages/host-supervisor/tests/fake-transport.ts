@@ -93,3 +93,13 @@ export function calls(channel: FakeChannel): Array<Extract<SupervisorMessage, { 
 export function settle(ms = 0): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+/** The error a promise rejects with; throws if it resolves. */
+export async function rejection(promise: Promise<unknown>): Promise<Error & { code?: string }> {
+  try {
+    await promise
+  } catch (error) {
+    return error as Error & { code?: string }
+  }
+  throw new Error('expected a rejection')
+}

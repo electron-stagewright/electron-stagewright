@@ -4,10 +4,17 @@
 
 import { fileURLToPath } from 'node:url'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { createHost, restartPolicy, type Host, type HostExit } from '../src/index.js'
-import { workerThreadTransport } from '../src/worker.js'
+import {
+  createHost,
+  restartPolicy,
+  type ChannelExit,
+  type Host,
+  type HostExit,
+} from '../src/index.js'
+import { workerThreadTransport, type WorkerLike } from '../src/worker.js'
+import { rejection } from './fake-transport.js'
 import { TEST_OPERATIONS, TEST_STREAMS, type TestOps } from './fixtures/test-ops.js'
 
 const ENTRY = fileURLToPath(new URL('./fixtures/worker-host.ts', import.meta.url))
@@ -40,15 +47,6 @@ function workerHost(
   })
   hosts.push(host)
   return host
-}
-
-async function rejection(promise: Promise<unknown>): Promise<Error & { code?: string }> {
-  try {
-    await promise
-  } catch (error) {
-    return error as Error & { code?: string }
-  }
-  throw new Error('expected a rejection')
 }
 
 describe('workerThreadTransport', { timeout: 30_000 }, () => {
@@ -108,17 +106,67 @@ describe('workerThreadTransport', { timeout: 30_000 }, () => {
   it('terminates a worker that is still busy past the grace period', async () => {
     const host = workerHost({ graceMs: 100 })
     await host.start()
-    const busy = host.ops.block(2_000)
+    const busy = rejection(host.ops.block(2_000))
     await new Promise((resolve) => setTimeout(resolve, 50))
     const error = await rejection(host.stop())
     expect(error.code).toBe('HOST_STOP_TIMEOUT')
-    expect((await rejection(busy)).code).toBe('HOST_STOPPED')
+    expect((await busy).code).toBe('HOST_STOPPED')
   })
 
   it('aborts a call inside the worker', async () => {
     const host = workerHost()
+    await host.start()
     const error = await rejection(host.call('hang', [], { timeoutMs: 100 }))
     expect(error.code).toBe('HOST_CALL_TIMEOUT')
+    await vi.waitFor(async () => expect(await host.ops.aborted()).toBe(1))
     await host.close()
+  })
+})
+
+describe('workerThreadTransport exits', () => {
+  function worker() {
+    const listeners: Record<string, (value: never) => void> = {}
+    const fake: WorkerLike = {
+      postMessage: () => undefined,
+      on: (event: string, listener: (value: never) => void) => (listeners[event] = listener),
+      terminate: () => Promise.resolve(1),
+    }
+    const channel = workerThreadTransport({ entry: 'host.js', createWorker: () => fake }).launch()
+    let exit: ChannelExit | null = null
+    channel.onExit((value) => (exit = value))
+    return {
+      error: (thrown: unknown) => listeners['error']?.(thrown as never),
+      exit: () => {
+        listeners['exit']?.(1 as never)
+        return exit as ChannelExit | null
+      },
+    }
+  }
+
+  function crashed(thrown: unknown) {
+    const fake = worker()
+    fake.error(thrown)
+    return fake.exit()
+  }
+
+  it('maps the heap-limit error to out-of-memory', () => {
+    const oom = Object.assign(new Error('heap'), { code: 'ERR_WORKER_OUT_OF_MEMORY' })
+    expect(crashed(oom)).toEqual({ code: 1, error: oom, outOfMemory: true })
+  })
+
+  it.each([['boom'], [null], [0], [{ code: 'ERR_WORKER_OUT_OF_MEMORY' }]])(
+    'turns a thrown %j into an Error',
+    (thrown) => {
+      const exit = crashed(thrown)
+      expect(exit?.error).toBeInstanceOf(Error)
+      expect(exit?.outOfMemory).toBe(false)
+    },
+  )
+
+  it('does not blame the host for an inner worker that ran out of memory', async () => {
+    const fake = worker()
+    fake.error(Object.assign(new Error('inner heap'), { code: 'ERR_WORKER_OUT_OF_MEMORY' }))
+    await Promise.resolve()
+    expect(fake.exit()?.outOfMemory).toBe(false)
   })
 })
