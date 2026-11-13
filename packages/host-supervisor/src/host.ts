@@ -197,6 +197,8 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
   let state: HostState = 'idle'
   let current: Life | null = null
   let starting: Promise<Life> | null = null
+  /** The host waiting for its `started` reply, so stop and kill can fail a start that hangs. */
+  let booting: Life | null = null
   let retiring: Promise<void> | null = null
   let stopping: Promise<void> | null = null
   let fatalCause: Error | null = null
@@ -257,7 +259,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
   }
 
   function armTimer(entry: Entry): void {
-    if (entry.timeoutMs === undefined) return
+    if (entry.timeoutMs === undefined || entry.timer) return
     entry.timer = unref(
       setTimeout(() => {
         finish(
@@ -342,7 +344,11 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     const life = entry.life
     if (!life || entry.done || !entry.waiter) return
     armTimer(entry)
-    life.channel.send({ type: 'next', id: entry.id })
+    try {
+      life.channel.send({ type: 'next', id: entry.id })
+    } catch (error) {
+      finish(entry, error as Error, false)
+    }
   }
 
   function call(op: string, args: readonly unknown[], callOptions?: CallOptions): Promise<unknown> {
@@ -412,6 +418,8 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
               return
             }
             entry.waiter = waiter
+            // The first item's timeout also bounds the wait for a host to start.
+            armTimer(entry)
             dispatch(entry, { op, args })
             return
           }
@@ -500,6 +508,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     life.exit = exit
     life.onStartReply?.(exitError(life))
     const stoppingNow = state === 'stopping' || state === 'closed'
+    const cause = exitError(life)
     let rejected = 0
     for (const entry of [...pending.values()]) {
       if (entry.life !== life) continue
@@ -508,9 +517,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
         entry,
         stoppingNow
           ? new HostError('HOST_STOPPED', 'The host stopped before answering')
-          : new HostError('HOST_EXITED', 'The host exited before answering', {
-              cause: exitError(life),
-            }),
+          : new HostError('HOST_EXITED', 'The host exited before answering', { cause }),
         false,
       )
     }
@@ -519,7 +526,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     state = 'restarting'
     const recovery = recover({
       kind: exit.outOfMemory ? 'out-of-memory' : 'crash',
-      error: exitError(life),
+      error: cause,
       code: exit.code,
       uptimeMs: Math.max(0, now() - life.startedAt),
       pendingCalls: rejected,
@@ -579,6 +586,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     })
     let timer: ReturnType<typeof setTimeout> | undefined
     const startTimeoutMs = options.start?.timeoutMs
+    booting = life
     try {
       channel.send({ type: 'start', version: PROTOCOL_VERSION, payload })
       await (startTimeoutMs === undefined
@@ -601,8 +609,13 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     } finally {
       clearTimeout(timer)
       life.onStartReply = null
+      if (booting === life) booting = null
     }
     return life
+  }
+
+  function abortStart(): void {
+    booting?.onStartReply?.(new HostError('HOST_STOPPED', 'The host was stopped while starting'))
   }
 
   /** Terminates a host and remembers its exit, so the next launch waits for it (bounded). */
@@ -690,8 +703,13 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
         lastStats: null,
       })
     }
+    if (state !== 'restarting') {
+      // A stop drains the host it finds; a kill expects none left running.
+      if (state === 'stopping') current = life
+      else await retire(life)
+      throw unavailable()
+    }
     current = life
-    if (state !== 'restarting') throw unavailable()
     state = 'running'
     starting = null
     return life
@@ -707,12 +725,23 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
         finish(entry, new HostError('HOST_STOPPED', 'The host is stopping'), entry.life !== null)
       }
     }
+    let failure: Error | null = null
     if (starting) {
-      await starting.catch(() => undefined)
+      const started = starting.then(
+        () => undefined,
+        () => undefined,
+      )
+      if (!(await raceTimeout(started, graceMs))) {
+        abortStart()
+        await started
+        failure = new HostError(
+          'HOST_STOP_TIMEOUT',
+          `The host did not start within ${graceMs} ms and was terminated`,
+        )
+      }
       starting = null
     }
     const life = current
-    let failure: Error | null = null
     if (life && !life.exited) {
       try {
         life.channel.send({ type: 'stop' })
@@ -763,6 +792,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
   async function kill(): Promise<void> {
     if (state === 'closed') return
     wakeDelay?.()
+    abortStart()
     if (state === 'restarting') {
       // The pending restart sees the new state and gives up.
       state = 'idle'
@@ -809,7 +839,15 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     stream: ((op: string, args: readonly unknown[], callOptions?: CallOptions) =>
       stream(op, args, callOptions)) as unknown as Host<Ops>['stream'],
     async start() {
-      await ensureStarted()
+      for (;;) {
+        try {
+          await ensureStarted()
+          return
+        } catch (error) {
+          // An `on-demand` exit decision hands the start back to us.
+          if (error !== RETRY) throw error
+        }
+      }
     },
     stop: () => shared(false),
     kill,

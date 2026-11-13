@@ -73,6 +73,12 @@ function rejected(message: string, code: string): SerializedError {
   return { name: 'HostError', message, code }
 }
 
+/** A handler's error never crosses as `HostError`, so it cannot pass for the supervisor's own. */
+function handlerError(error: unknown): SerializedError {
+  const serialized = serializeError(error)
+  return serialized.name === 'HostError' ? { ...serialized, name: 'Error' } : serialized
+}
+
 interface OpenStream {
   readonly iterator: AsyncIterator<unknown> | Iterator<unknown>
   readonly controller: AbortController
@@ -108,7 +114,7 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
     try {
       post(message)
     } catch (error) {
-      post({ type: 'result', id, ok: false, error: serializeError(error) })
+      post({ type: 'result', id, ok: false, error: handlerError(error) })
     }
   }
 
@@ -147,7 +153,7 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
         statsTimer.unref()
       }
     } catch (error) {
-      post({ type: 'start-failed', error: serializeError(error) })
+      post({ type: 'start-failed', error: handlerError(error) })
     }
   }
 
@@ -184,7 +190,7 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
             : (iterable as Iterable<unknown>)[Symbol.iterator]()
         streams.set(id, { iterator, controller })
       } catch (error) {
-        post({ type: 'result', id, ok: false, error: serializeError(error) })
+        post({ type: 'result', id, ok: false, error: handlerError(error) })
       }
       return
     }
@@ -194,7 +200,7 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
         .then(() => handler.apply(served, [...args, context]))
         .then(
           (value) => answer(id, { type: 'result', id, ok: true, value }),
-          (error: unknown) => post({ type: 'result', id, ok: false, error: serializeError(error) }),
+          (error: unknown) => post({ type: 'result', id, ok: false, error: handlerError(error) }),
         )
         .finally(() => controllers.delete(id)),
     )
@@ -225,13 +231,13 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
               } catch (error) {
                 // An item that cannot be cloned ends the stream and frees its producer.
                 cancel(id)
-                post({ type: 'result', id, ok: false, error: serializeError(error) })
+                post({ type: 'result', id, ok: false, error: handlerError(error) })
               }
             }
           },
           (error: unknown) => {
             streams.delete(id)
-            post({ type: 'result', id, ok: false, error: serializeError(error) })
+            post({ type: 'result', id, ok: false, error: handlerError(error) })
           },
         ),
     )
@@ -267,14 +273,14 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
     }
     handlers = null
     if (statsTimer) clearInterval(statsTimer)
-    post(failure ? { type: 'stopped', error: serializeError(failure) } : { type: 'stopped' })
+    post(failure ? { type: 'stopped', error: handlerError(failure) } : { type: 'stopped' })
     port.close()
   }
 
   if (options.reportCrashes !== false) {
     process.on('uncaughtExceptionMonitor', (error) => {
       try {
-        post({ type: 'crashed', error: serializeError(error) })
+        post({ type: 'crashed', error: handlerError(error) })
       } catch {
         // The host is ending either way.
       }
