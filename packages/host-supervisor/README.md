@@ -61,14 +61,15 @@ graphs never cross. The supervisor's own failures are `HostError` with one of `H
 import { workerThreadTransport } from '@electron-stagewright/host-supervisor/worker'
 
 const transport = workerThreadTransport({
-  entry: path.join(__dirname, 'db-host.js'),
+  entry: new URL('./db-host.js', import.meta.url),
   resourceLimits: { maxOldGenerationSizeMb: 384 },
 })
 ```
 
 Past `resourceLimits` Node ends only the worker; the supervisor reports the exit as
 `out-of-memory`. Native memory is outside that cap: pass `statsIntervalMs` to `serveHost` and
-`memoryWatch({ rssMb, onAlert })` as `onStats` to see it.
+`memoryWatch({ rssMb, onAlert })` as `onStats` to see it. A worker shares the process, so its
+`rssMb` is the whole app's.
 
 ## License
 

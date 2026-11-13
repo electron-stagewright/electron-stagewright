@@ -11,7 +11,7 @@ import type { ChannelExit, HostChannel, HostTransport } from './contract.js'
 export interface WorkerLike {
   postMessage(message: unknown): void
   on(event: 'message', listener: (message: unknown) => void): unknown
-  on(event: 'error', listener: (error: Error) => void): unknown
+  on(event: 'error', listener: (error: unknown) => void): unknown
   on(event: 'exit', listener: (code: number) => void): unknown
   terminate(): Promise<number>
 }
@@ -44,8 +44,12 @@ export function workerThreadTransport(options: WorkerThreadTransportOptions): Ho
         ...(options.name ? { name: options.name } : {}),
       })
       let error: Error | null = null
-      worker.on('error', (cause) => {
-        error = cause
+      // A worker can throw any value, falsy ones included.
+      worker.on('error', (cause: unknown) => {
+        error =
+          cause instanceof Error
+            ? cause
+            : new Error(`The host threw a non-error value: ${String(cause)}`)
       })
       return {
         send: (message) => worker.postMessage(message),

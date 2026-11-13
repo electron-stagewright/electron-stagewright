@@ -9,7 +9,7 @@ import {
   type CallContext,
   type HostExit,
 } from '../src/index.js'
-import { calls, fakeTransport, settle } from './fake-transport.js'
+import { calls, fakeTransport, rejection, settle } from './fake-transport.js'
 
 interface Ops {
   echo(value: string): Promise<string>
@@ -62,15 +62,6 @@ function inProcessHost(log: string[] = [], extra: { maxPending?: number } = {}) 
     start: { payload: () => ({ greeting: 'hello' }) },
     limits: { ...(extra.maxPending === undefined ? {} : { maxPending: extra.maxPending }) },
   })
-}
-
-async function rejection(promise: Promise<unknown>): Promise<Error & { code?: string }> {
-  try {
-    await promise
-  } catch (error) {
-    return error as Error & { code?: string }
-  }
-  throw new Error('expected a rejection')
 }
 
 describe('createHost calls', () => {

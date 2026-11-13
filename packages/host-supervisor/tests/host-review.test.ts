@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { HostError, createHost, inProcessTransport, type Contract } from '../src/index.js'
-import { calls, fakeTransport, settle } from './fake-transport.js'
+import { calls, fakeTransport, rejection, settle } from './fake-transport.js'
 
 interface Ops {
   echo(value: string): Promise<string>
@@ -10,15 +10,6 @@ interface Ops {
 
 const OPERATIONS = ['echo'] as const
 const STREAMS = ['items'] as const
-
-async function rejection(promise: Promise<unknown>): Promise<Error & { code?: string }> {
-  try {
-    await promise
-  } catch (error) {
-    return error as Error & { code?: string }
-  }
-  throw new Error('expected a rejection')
-}
 
 function answer(transport: ReturnType<typeof fakeTransport>, value: unknown): void {
   const call = calls(transport.last).at(-1)
