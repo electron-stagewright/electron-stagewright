@@ -135,7 +135,11 @@ function expectations(budget: Budget, platform: string, options: CheckOptions): 
 }
 
 function findRow(rows: readonly SummaryRow[], expectation: Expectation): SummaryRow | undefined {
-  const candidates = rows.filter((row) => row.id === expectation.id)
+  const candidates = rows.filter(
+    (row) =>
+      row.id === expectation.id &&
+      (expectation.metric === undefined || row.metric === expectation.metric),
+  )
   if (expectation.section === 'bundle') return candidates[0]
   if (expectation.phase !== undefined) {
     return candidates.find((row) => row.phase === expectation.phase)
@@ -160,6 +164,13 @@ function unmeasuredDetail(run: BudgetRun, expectation: Expectation): string {
     return expectation.phase === undefined
       ? 'the run has no rounds'
       : `the run has no ${expectation.phase} round`
+  }
+  if (expectation.section === 'memory') {
+    const measured = rounds.map((round) => round.measurement.memory?.metric).find(Boolean)
+    // Megabytes in another metric are a different quantity, never a comparable one.
+    if (measured !== undefined && measured !== expectation.metric) {
+      return `the run measured ${measured}, the budget names ${expectation.metric}`
+    }
   }
   if (expectation.section === 'ipc' && rounds.some((r) => r.measurement.ipc?.count === 0)) {
     return 'the IPC probe completed no round trip'
@@ -187,14 +198,6 @@ export function checkRun(run: BudgetRun, budget: Budget, options: CheckOptions =
     const row = findRow(rows, expectation)
     if (row === undefined) {
       return { ...base, status: 'unmeasured', detail: unmeasuredDetail(run, expectation) }
-    }
-    // Megabytes in another metric are a different quantity, never a comparable one.
-    if (expectation.metric !== undefined && row.metric !== expectation.metric) {
-      return {
-        ...base,
-        status: 'unmeasured',
-        detail: `the run measured ${row.metric ?? 'no metric'}, the budget names ${expectation.metric}`,
-      }
     }
     return {
       ...base,

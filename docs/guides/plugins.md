@@ -203,6 +203,7 @@ electron-stagewright --plugin @electron-stagewright/plugin-storage --allow-eval=
 | `@electron-stagewright/plugin-clock`      | `canControlClock`; no eval.                                                                                                                                                                                                                         |
 | `@electron-stagewright/plugin-storage`    | Cookies, snapshots and per-key Web Storage need `canAccessStorage`; IndexedDB additionally needs renderer eval and `supportsRendererEval`.                                                                                                          |
 | `@electron-stagewright/plugin-native-ui`  | `canAccessNativeUI`; no eval.                                                                                                                                                                                                                       |
+| `@electron-stagewright/plugin-budget`     | `--allow-eval=main` and `supportsMainEval` for memory and main-thread blocking; the IPC probe and startup timing also need renderer eval. `budget_check` gates bundle size with no session and no eval.                                             |
 
 Read the [security model](./security-model.md) before enabling eval or a plugin that reads sensitive
 app state. See [`TOOL-REFERENCE.md`](../../TOOL-REFERENCE.md) for full namespaced tool schemas.

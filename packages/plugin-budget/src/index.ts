@@ -4,6 +4,10 @@
  * @module
  */
 
+import { budgetPlugin } from './plugin.js'
+
+export default budgetPlugin
+export { budgetPlugin, createBudgetPlugin } from './plugin.js'
 export {
   BUDGET_PLATFORMS,
   BudgetFileError,
@@ -49,3 +53,7 @@ export type {
   StallSummary,
   SummaryRow,
 } from './run.js'
+export { classifyProcess, measureMemory, platformMetric } from './memory.js'
+export type { AppProcessMetric, OsMemoryReader } from './memory.js'
+export { measureSession, startWindow } from './session.js'
+export type { EvaluatingSession, IpcProbe, MeasureOptions, SessionMeasurement } from './session.js'

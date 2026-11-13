@@ -29,6 +29,7 @@ const dynamicImport: PluginModuleLoader = async (target) =>
  */
 export const FIRST_PARTY_PLUGIN_PACKAGES = {
   a11y: '@electron-stagewright/plugin-a11y',
+  budget: '@electron-stagewright/plugin-budget',
   clock: '@electron-stagewright/plugin-clock',
   ipc: '@electron-stagewright/plugin-ipc',
   native: '@electron-stagewright/plugin-native-ui',

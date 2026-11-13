@@ -80,11 +80,15 @@ describe('summaries', () => {
         ],
       },
     })
-    const ids = summarizeRun(run([['warm', partial]])).map((row) => row.id)
+    const rows = summarizeRun(run([['warm', partial]]))
+    const ids = rows.filter((row) => row.metric === 'footprint').map((row) => row.id)
     expect(ids).toContain('memory.renderer')
     expect(ids).not.toContain('memory.main')
     expect(ids).not.toContain('memory.totalWithoutGpu')
     expect(ids).not.toContain('memory.total')
+    // Every pid has a working set, so that metric still totals.
+    const workingSet = rows.filter((row) => row.metric === 'workingSet')
+    expect(workingSet.find((row) => row.id === 'memory.total')?.value).toBe(630)
   })
 })
 

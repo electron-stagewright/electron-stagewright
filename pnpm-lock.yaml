@@ -172,6 +172,9 @@ importers:
       '@electron-stagewright/plugin-a11y':
         specifier: workspace:*
         version: link:../plugin-a11y
+      '@electron-stagewright/plugin-budget':
+        specifier: workspace:*
+        version: link:../plugin-budget
       '@electron-stagewright/plugin-clock':
         specifier: workspace:*
         version: link:../plugin-clock
@@ -280,9 +283,16 @@ importers:
 
   packages/plugin-budget:
     dependencies:
+      '@electron-stagewright/core':
+        specifier: workspace:*
+        version: link:../core
       zod:
         specifier: ^4.4.3
         version: 4.6.5
+    devDependencies:
+      '@electron-stagewright/testkit':
+        specifier: workspace:*
+        version: link:../testkit
 
   packages/plugin-clock:
     dependencies:

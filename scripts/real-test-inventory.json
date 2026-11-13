@@ -92,6 +92,10 @@
     "tests": 1
   },
   {
+    "path": "packages/plugin-budget/tests/budget-smoke.test.ts",
+    "tests": 1
+  },
+  {
     "path": "packages/plugin-clock/tests/clock-smoke.test.ts",
     "tests": 1
   },

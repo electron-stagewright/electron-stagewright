@@ -226,29 +226,35 @@ export function summarizeRun(run: BudgetRun): SummaryRow[] {
     )
 
     const memories = measurements.flatMap((m) => (m.memory === undefined ? [] : [m.memory]))
-    const metric = memories[0]?.metric
-    const sameMetric = memories.filter((memory) => memory.metric === metric)
-    const byType = sameMetric.map(memoryByType)
-    for (const type of PROCESS_TYPES) {
+    const primary = memories[0]?.metric
+    // Working set is always recorded, so a budget may name it on any platform.
+    for (const metric of new Set([primary, 'workingSet'] as const)) {
+      if (metric === undefined) continue
+      const sameMetric = memories
+        .filter((memory) => memory.metric === primary)
+        .map((memory) => ({ ...memory, metric }))
+      const byType = sameMetric.map(memoryByType)
+      for (const type of PROCESS_TYPES) {
+        push(
+          `memory.${type}`,
+          'MB',
+          byType.map((totals) => totals[type]),
+          metric,
+        )
+      }
       push(
-        `memory.${type}`,
+        'memory.totalWithoutGpu',
         'MB',
-        byType.map((totals) => totals[type]),
+        sameMetric.map((memory) => memoryTotal(memory, true)),
+        metric,
+      )
+      push(
+        'memory.total',
+        'MB',
+        sameMetric.map((memory) => memoryTotal(memory, false)),
         metric,
       )
     }
-    push(
-      'memory.totalWithoutGpu',
-      'MB',
-      sameMetric.map((memory) => memoryTotal(memory, true)),
-      metric,
-    )
-    push(
-      'memory.total',
-      'MB',
-      sameMetric.map((memory) => memoryTotal(memory, false)),
-      metric,
-    )
 
     push(
       'mainThread.blockedPercent',

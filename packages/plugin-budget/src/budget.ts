@@ -142,10 +142,11 @@ export async function loadBudget(budgetPath: string): Promise<Budget> {
   let raw: unknown
   try {
     raw = JSON.parse(text)
-  } catch (error) {
+  } catch {
+    // The parser's message quotes the file, and this path can be agent-supplied.
     throw new BudgetFileError(
       'BUDGET_INVALID',
-      `Budget file ${budgetPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      `Budget file ${budgetPath} is not valid JSON`,
       budgetPath,
     )
   }
