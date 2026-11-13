@@ -125,9 +125,9 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
   not measure; without it that metric is listed as `unmeasured`.
 - `--json` prints the machine report instead of the table.
 
-Exit codes: `0` within budget, `1` over budget **or nothing measured**, `2` usage error or unreadable
-input. A bundle entry that matches no file is `unmeasured`, never zero bytes, and fails `bundle`.
-`measure` writes no run when no round produced a measurement.
+Exit codes: `0` within budget, `1` over budget **or nothing measured**, `2` usage error, unreadable
+input, or any other error. A bundle entry that matches no file is `unmeasured`, never zero bytes,
+and fails `bundle`. `measure` writes no run when no round produced a measurement.
 
 The inspector Stagewright attaches is part of what `measure` measures, so calibrate budgets with
 this tool. A packaged build whose fuses forbid inspection cannot be measured yet.

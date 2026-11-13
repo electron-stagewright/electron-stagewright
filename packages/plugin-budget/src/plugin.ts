@@ -109,8 +109,19 @@ export function createBudgetPlugin(): StagewrightPlugin {
     target: string,
     meta: Meta,
   ): Promise<ToolResult | undefined> {
-    const canonical = (file: string): Promise<string> =>
-      realpath(file).catch(() => path.resolve(file))
+    // A missing file keeps its nearest existing ancestor's canonical prefix, so it compares like
+    // its root does (macOS /var vs /private/var) instead of reading as outside it.
+    const canonical = async (file: string): Promise<string> => {
+      const resolved = path.resolve(file)
+      try {
+        return await realpath(resolved)
+      } catch {
+        const parent = path.dirname(resolved)
+        return parent === resolved
+          ? resolved
+          : path.join(await canonical(parent), path.basename(resolved))
+      }
+    }
     const relative = path.relative(await canonical(root), await canonical(target))
     if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
       return undefined
@@ -135,14 +146,14 @@ export function createBudgetPlugin(): StagewrightPlugin {
   function auditProbe(
     ctx: ToolContext,
     tool: string,
-    sessionId: string,
+    target: RuntimeTarget,
     ipc: IpcProbe | undefined,
   ) {
-    if (ipc === undefined || !ctx.allowEvalRenderer) return
+    if (ipc === undefined || !target.renderer.allowRenderer) return
     ctx.logger.info('eval invoked', {
       tool,
       target: 'renderer',
-      session_id: sessionId,
+      session_id: target.id,
       code_length: ipc.probe.length,
       code_hash: fnv1a32(ipc.probe),
     })
@@ -233,12 +244,13 @@ export function createBudgetPlugin(): StagewrightPlugin {
 
   async function measureLive(
     ctx: ToolContext,
+    tool: string,
     target: RuntimeTarget,
     options: { windowMs?: number | undefined; ipc?: IpcProbe | undefined; budget?: Budget },
   ): Promise<{ run: BudgetRun; measurement: Measurement }> {
     const open = windows.get(target.id)
     windows.delete(target.id)
-    if (open === undefined) auditProbe(ctx, 'budget_measure', target.id, options.ipc)
+    if (open === undefined) auditProbe(ctx, tool, target, options.ipc)
     const measured = await measureSession(target.session, {
       ...target.renderer,
       windowMs: options.windowMs ?? options.budget?.mainThread?.windowMs ?? config.current.windowMs,
@@ -293,7 +305,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
       const loaded = await resolveBudget(ctx, args.budgetPath, meta, false)
       if ('error' in loaded) return loaded.error
       const ipc = ipcProbe(args, loaded.budget)
-      auditProbe(ctx, 'budget_start', target.id, ipc)
+      auditProbe(ctx, 'budget_start', target, ipc)
       const open = await startWindow(target.session, {
         ...target.renderer,
         ...(ipc === undefined ? {} : { ipc }),
@@ -327,7 +339,13 @@ export function createBudgetPlugin(): StagewrightPlugin {
       ...sessionIdField,
       ...budgetPathField,
       windowMs: windowMsSchema.optional().describe('Idle window length in ms (default 2000).'),
-      ipcProbe: z.string().min(1).optional().describe('Renderer expression for the IPC probe.'),
+      ipcProbe: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Renderer expression for the IPC probe. Ignored when budget_start opened the window.',
+        ),
     }),
     operationType: 'query',
     requiresEvalFlag: true,
@@ -338,7 +356,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
       if ('unavailable' in target) return runtimeError(meta, target)
       const loaded = await resolveBudget(ctx, args.budgetPath, meta, false)
       if ('error' in loaded) return loaded.error
-      const { run, measurement } = await measureLive(ctx, target, {
+      const { run, measurement } = await measureLive(ctx, 'budget_measure', target, {
         windowMs: args.windowMs,
         ipc: ipcProbe(args, loaded.budget),
         ...(loaded.budget === undefined ? {} : { budget: loaded.budget }),
@@ -374,7 +392,8 @@ export function createBudgetPlugin(): StagewrightPlugin {
       'Returns: { ok, passed, reason?, budget_path, summary: { pass, fail, unmeasured },',
       'results: [{ id, status, actual?, limit, allowed, unit, metric?, detail? }] }.',
       'Errors: budget.NO_BUDGET, budget.BUDGET_NOT_FOUND, budget.BUDGET_INVALID,',
-      'ABSOLUTE_PATH_REQUIRED, BAD_ARGUMENT (unknown sessionId, or a path outside --app-root).',
+      'ABSOLUTE_PATH_REQUIRED, NOT_RUNNING (unknown sessionId), BAD_ARGUMENT (several sessions',
+      'and no sessionId, or a path outside --app-root).',
     ].join(' '),
     inputSchema: z.object({
       ...sessionIdField,
@@ -390,6 +409,15 @@ export function createBudgetPlugin(): StagewrightPlugin {
       if ('error' in loaded) return loaded.error
       const budget = loaded.budget as Budget
       const budgetPath = loaded.budgetPath as string
+      const root = config.current.root ?? path.dirname(budgetPath)
+      // Before measuring, so a refused entry neither waits out a window nor consumes budget_start's.
+      for (const entry of budget.bundle?.entries ?? []) {
+        // An agent can name the budget file, so its entries may not climb out of the root.
+        const entryPath = path.resolve(root, entry.path)
+        const outside =
+          (await escapes(root, entryPath, meta)) ?? (await outsideAppRoot(ctx, entryPath, meta))
+        if (outside) return outside
+      }
 
       const noSession = args.sessionId === undefined && ctx.sessions.size === 0
       const target = noSession
@@ -402,7 +430,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
         run = createRun({ rounds: [{ round: 1, phase: 'live', measurement: { unavailable } }] })
       } else {
         run = (
-          await measureLive(ctx, target, {
+          await measureLive(ctx, 'budget_check', target, {
             windowMs: args.windowMs,
             ipc: ipcProbe({}, budget),
             budget,
@@ -410,14 +438,6 @@ export function createBudgetPlugin(): StagewrightPlugin {
         ).run
       }
       if (budget.bundle !== undefined) {
-        const root = config.current.root ?? path.dirname(budgetPath)
-        for (const entry of budget.bundle.entries) {
-          // An agent can name the budget file, so its entries may not climb out of the root.
-          const target = path.resolve(root, entry.path)
-          const outside =
-            (await escapes(root, target, meta)) ?? (await outsideAppRoot(ctx, target, meta))
-          if (outside) return outside
-        }
         run = { ...run, bundle: await measureBundle(root, budget.bundle.entries) }
       }
       const report = checkRun(run, budget, {
