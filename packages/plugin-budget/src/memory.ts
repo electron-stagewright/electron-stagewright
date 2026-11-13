@@ -99,11 +99,13 @@ async function readFootprint(pids: readonly number[]): Promise<Map<number, numbe
 
 async function readPss(pids: readonly number[]): Promise<Map<number, number>> {
   const bytes = new Map<number, number>()
-  for (const pid of pids) {
-    const text = await readFile(`/proc/${pid}/smaps_rollup`, 'utf8').catch(() => undefined)
-    const pss = text === undefined ? undefined : parseSmapsRollup(text)
-    if (pss !== undefined) bytes.set(pid, pss)
-  }
+  await Promise.all(
+    pids.map(async (pid) => {
+      const text = await readFile(`/proc/${pid}/smaps_rollup`, 'utf8').catch(() => undefined)
+      const pss = text === undefined ? undefined : parseSmapsRollup(text)
+      if (pss !== undefined) bytes.set(pid, pss)
+    }),
+  )
   return bytes
 }
 

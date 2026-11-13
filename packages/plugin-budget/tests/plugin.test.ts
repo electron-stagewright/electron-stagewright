@@ -355,6 +355,31 @@ describe('budget plugin', () => {
     })
   })
 
+  it('reports a missing bundle entry under a symlinked root as unmeasured', async () => {
+    const budgetPath = await budgetFile({ bundle: { entries: [{ path: 'gone.js', maxKb: 1 }] } })
+    const linkDir = path.join(await mkdtemp(path.join(tmpdir(), 'sw-budget-link-')), 'root')
+    dirs.push(path.dirname(linkDir))
+    await symlink(path.dirname(budgetPath), linkDir, 'junction')
+    const { dispatch } = await setup()
+    const result = await dispatch('budget_check', {
+      budgetPath: path.join(linkDir, path.basename(budgetPath)),
+    })
+    expect(result).toMatchObject({ ok: true, passed: false })
+    expect((result['results'] as { status: string }[])[0]).toMatchObject({ status: 'unmeasured' })
+  })
+
+  it('refuses a bundle entry before measuring, leaving the open window intact', async () => {
+    const budgetPath = await budgetFile({ bundle: { entries: [{ path: '../..', maxKb: 1 }] } })
+    const { app, server, dispatch } = await setup()
+    await lifecycle.launch(server)
+    await dispatch('budget_start')
+    expect(await dispatch('budget_check', { budgetPath })).toMatchObject({
+      ok: false,
+      code: 'BAD_ARGUMENT',
+    })
+    expect(app.calls).not.toContain('main:read')
+  })
+
   it('does not echo file content from an unparseable budget', async () => {
     const { dispatch } = await setup()
     const result = await dispatch('budget_check', { budgetPath: await budgetFile('secret-token') })
