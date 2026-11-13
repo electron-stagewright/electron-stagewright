@@ -229,7 +229,7 @@ describe('measure', () => {
     ])
     expect(parsed).toMatchObject({
       command: 'measure',
-      main: '/app/main.js',
+      main: path.resolve('/app/main.js'),
       args: ['--lang=es'],
       env: { MODE: 'test=1' },
       rounds: 5,
