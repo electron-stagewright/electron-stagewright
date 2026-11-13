@@ -5,8 +5,8 @@ a closed list of operations, and supervises its life: lazy start, drain on stop,
 and `AbortSignal`, a limit on pending calls, waiting for a killed host to exit before the next one
 starts, and a choice between fatal and bounded restart when it dies.
 
-This first release ships the supervisor, the host side and an in-process transport for tests. The
-`worker_threads` and `utilityProcess` transports follow.
+Transports: `worker_threads` from `@electron-stagewright/host-supervisor/worker`, and an
+in-process one for tests. The `utilityProcess` transport follows.
 
 ```ts
 import { createHost, restartPolicy } from '@electron-stagewright/host-supervisor'
@@ -54,6 +54,23 @@ serveHost<DbOps, { key: string }>({
 
 Errors keep their message and a code that matches `^[A-Z][A-Z0-9_]{1,80}$`; stacks and object
 graphs never cross. The supervisor's own failures are `HostError` with one of `HOST_ERROR_CODES`.
+
+## Worker threads
+
+```ts
+import { workerThreadTransport } from '@electron-stagewright/host-supervisor/worker'
+
+const transport = workerThreadTransport({
+  entry: new URL('./db-host.js', import.meta.url),
+  resourceLimits: { maxOldGenerationSizeMb: 384 },
+})
+```
+
+Past `resourceLimits` Node usually ends only the worker, and the supervisor reports the exit as
+`out-of-memory`. One allocation far past the cap can still abort the whole process; use
+`utilityProcess` when the app must survive its host. Native memory is outside that cap: pass `statsIntervalMs` to `serveHost` and
+`memoryWatch({ rssMb, onAlert })` as `onStats` to see it. A worker shares the process, so its
+`rssMb` is the whole app's.
 
 ## License
 
