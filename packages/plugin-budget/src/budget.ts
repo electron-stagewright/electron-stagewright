@@ -83,6 +83,21 @@ export const budgetSchema = z.strictObject({
     .optional(),
   bundle: z
     .strictObject({ ...comment, thresholdPercent, entries: z.array(bundleEntrySchema).min(1) })
+    .superRefine((bundle, ctx) => {
+      // Entries are matched to their measurement by `name ?? path`, so that id must be unique.
+      const seen = new Set<string>()
+      bundle.entries.forEach((entry, index) => {
+        const id = entry.name ?? entry.path
+        if (seen.has(id)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['entries', index],
+            message: `duplicate bundle entry "${id}"; give each entry a unique name`,
+          })
+        }
+        seen.add(id)
+      })
+    })
     .optional(),
 })
 

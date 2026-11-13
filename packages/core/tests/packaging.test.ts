@@ -294,16 +294,17 @@ describe('publish-readiness — publishable package manifests', () => {
     })
   })
 
-  it('publishes the production library plus its standalone CLI entrypoint', async () => {
-    const production = (await loadManifests('packages')).find(
-      (manifest) => manifest.relDir === 'packages/plugin-production',
+  it.each([
+    ['plugin-production', 'electron-stagewright-production'],
+    ['plugin-budget', 'electron-stagewright-budget'],
+  ])('publishes the %s library plus its standalone CLI entrypoint', async (dir, binName) => {
+    const plugin = (await loadManifests('packages')).find(
+      (manifest) => manifest.relDir === `packages/${dir}`,
     )
-    const exportsObject = production?.pkg['exports'] as
+    const exportsObject = plugin?.pkg['exports'] as
       Record<string, { readonly types?: unknown; readonly import?: unknown }> | undefined
 
-    expect(production?.pkg['bin']).toEqual({
-      'electron-stagewright-production': './dist/cli.js',
-    })
+    expect(plugin?.pkg['bin']).toEqual({ [binName]: './dist/cli.js' })
     expect(exportsObject?.['./cli']).toEqual({
       types: './dist/cli.d.ts',
       import: './dist/cli.js',

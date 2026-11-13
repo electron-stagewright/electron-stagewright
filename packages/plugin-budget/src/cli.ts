@@ -3,7 +3,8 @@
 /**
  * `electron-stagewright-budget`: the CI face of the budget plugin.
  *
- * Exit codes: 0 within budget, 1 over budget or nothing measured, 2 usage or unreadable input.
+ * Exit codes: 0 within budget, 1 over budget or nothing measured, 2 usage, unreadable input, or any
+ * other error.
  *
  * @module
  */
@@ -76,7 +77,8 @@ export function formatBudgetCliHelp(): string {
     '--strict               Ignore thresholdPercent; the limit itself gates.',
     '--require-measurement  Fail when a budgeted metric was not measured.',
     '',
-    'Exit codes: 0 within budget, 1 over budget or nothing measured, 2 usage or unreadable input.',
+    'Exit codes: 0 within budget, 1 over budget or nothing measured,',
+    '            2 usage, unreadable input, or any other error.',
   ].join('\n')
 }
 
@@ -234,7 +236,8 @@ export async function runBudgetCliCommand(
     const message = error instanceof Error ? error.message : String(error)
     io.stderr(`${known ? 'usage' : 'fatal'}: ${message}\n`)
     if (error instanceof UsageError) io.stderr(`\n${formatBudgetCliHelp()}\n`)
-    return known ? BUDGET_EXIT_CODES.USAGE : BUDGET_EXIT_CODES.OVER_BUDGET
+    // Exit 1 means over budget; a crash must never read as a measured verdict.
+    return BUDGET_EXIT_CODES.USAGE
   }
 }
 
