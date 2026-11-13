@@ -262,6 +262,12 @@ importers:
         specifier: '>=12.2.0'
         version: 42.11.10
 
+  packages/origin-migration:
+    devDependencies:
+      electron:
+        specifier: ^42.11.10
+        version: 42.11.10
+
   packages/plugin-a11y:
     dependencies:
       '@electron-stagewright/core':
