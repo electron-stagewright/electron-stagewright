@@ -61,7 +61,7 @@ app.whenReady().then(async () => {
 | `status`   | Meaning                                                                      |
 | ---------- | ---------------------------------------------------------------------------- |
 | `skipped`  | Already done, or out of attempts. Nothing was opened.                        |
-| `empty`    | The `file://` origin held nothing to copy.                                   |
+| `empty`    | Nothing was left to copy on the `file://` origin.                            |
 | `migrated` | Data was copied. `marker` has key, file and byte counts.                     |
 | `failed`   | This attempt failed. `marker.error` names the error; `final` means no retry. |
 
