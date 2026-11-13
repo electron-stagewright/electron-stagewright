@@ -35,10 +35,13 @@ It is not a Stagewright plugin and registers no MCP tool.
 - **Files are staged, then moved.** Each OPFS file is copied in 1 MiB chunks into a staging file,
   and only when every file is staged do the moves begin. A database and its `.wal` move as a
   group, database first; the target's own WAL is set aside and restored if the database move
-  fails. A WAL without its database is never copied.
+  fails. A WAL without its database is never copied. Only `<name>.wal` sidecars (DuckDB) are
+  grouped; SQLite's `-wal`, `-journal` and `-shm` are out of scope for now.
 - **A marker in `userData` owns retries.** It is written before any page opens, so a crash spends
   an attempt. It records each completed group, so a retry never restores a group the user deleted
-  after it landed. Three attempts in all; then the app stops trying. The marker name is an option,
+  after it landed. Three attempts in all; then the app stops trying. Only a missing marker starts
+  a copy: one that exists but cannot be read counts as done, since a fresh copy would replace
+  current data with stale data. The marker name is an option,
   so an app that already shipped its own marker keeps it.
 - **Errors are recorded by name or code only.** Messages can carry paths.
 - **v0 scope is `localStorage` and OPFS.** IndexedDB and cookies are not copied until each has its
