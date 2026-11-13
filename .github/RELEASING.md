@@ -13,6 +13,7 @@ The publishable packages are every `packages/*` that is **not** `private: true`:
 
 - `@electron-stagewright/core` (ships the `electron-stagewright` CLI)
 - `@electron-stagewright/demo` (local-only Electron connection-verification app)
+- `@electron-stagewright/host-supervisor` (one stateful host off the Electron main thread, over `worker_threads` or `utilityProcess`)
 - `@electron-stagewright/plugin-a11y` (surface-scoped automated accessibility audits)
 - `@electron-stagewright/plugin-budget` (performance budgets and the `electron-stagewright-budget` CLI)
 - `@electron-stagewright/plugin-clock` (virtual-time control)
