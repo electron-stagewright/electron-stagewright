@@ -37,6 +37,10 @@
     "./worker": {
       "types": "./dist/worker.d.ts",
       "import": "./dist/worker.js"
+    },
+    "./utility": {
+      "types": "./dist/utility.d.ts",
+      "import": "./dist/utility.js"
     }
   },
   "scripts": {
@@ -48,5 +52,16 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "electron": ">=22.0.0"
+  },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^42.11.10"
   }
 }

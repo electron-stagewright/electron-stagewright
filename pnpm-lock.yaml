@@ -262,7 +262,11 @@ importers:
         specifier: '>=12.2.0'
         version: 42.11.10
 
-  packages/host-supervisor: {}
+  packages/host-supervisor:
+    devDependencies:
+      electron:
+        specifier: ^42.11.10
+        version: 42.11.10
 
   packages/plugin-a11y:
     dependencies:
