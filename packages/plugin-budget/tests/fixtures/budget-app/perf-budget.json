@@ -9,6 +9,6 @@
   "mainThread": { "windowMs": 1500, "maxBlockedPercent": 100, "maxStallMs": 5000 },
   "ipc": { "probe": "window.api.getVersion()", "maxP99Ms": 5000 },
   "bundle": {
-    "entries": [{ "name": "renderer", "path": "dist", "extensions": [".js"], "maxKb": 50 }]
+    "entries": [{ "name": "renderer", "path": "renderer", "extensions": [".js"], "maxKb": 50 }]
   }
 }

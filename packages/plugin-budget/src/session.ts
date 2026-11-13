@@ -4,6 +4,8 @@
  * @module
  */
 
+import { validateEvalContent } from '@electron-stagewright/core'
+
 import { measureMemory, type OsMemoryReader } from './memory.js'
 import {
   DEFAULT_IPC_INTERVAL_MS,
@@ -41,11 +43,24 @@ const message = (error: unknown): string => (error instanceof Error ? error.mess
  */
 export async function startWindow(
   session: EvaluatingSession,
-  options: { readonly ipc?: IpcProbe; readonly allowRenderer: boolean },
+  options: {
+    readonly ipc?: IpcProbe
+    readonly allowRenderer: boolean
+    /** Why the renderer is off, when it is not the eval grant. */
+    readonly rendererOff?: string
+  },
 ): Promise<{ ipc: boolean; ipcUnavailable?: string }> {
   await session.evaluate('main', MAIN_BODY, { op: 'start' })
   if (options.ipc === undefined) return { ipc: false }
-  if (!options.allowRenderer) return { ipc: false, ipcUnavailable: RENDERER_EVAL_OFF }
+  if (!options.allowRenderer) {
+    return { ipc: false, ipcUnavailable: options.rendererOff ?? RENDERER_EVAL_OFF }
+  }
+  try {
+    // The probe is caller-supplied JavaScript: hold it to the same blocklist as the eval tools.
+    validateEvalContent(options.ipc.probe, { target: 'renderer' })
+  } catch (error) {
+    return { ipc: false, ipcUnavailable: `the IPC probe was refused: ${message(error)}` }
+  }
   try {
     await session.evaluate('renderer', buildIpcStartBody(options.ipc.probe), {
       intervalMs: options.ipc.intervalMs ?? DEFAULT_IPC_INTERVAL_MS,
@@ -58,6 +73,7 @@ export async function startWindow(
 
 export interface MeasureOptions {
   readonly allowRenderer: boolean
+  readonly rendererOff?: string
   /** Set when {@link startWindow} already opened a window; otherwise one is run for `windowMs`. */
   readonly open?: { readonly ipc: boolean; readonly ipcUnavailable?: string }
   readonly windowMs: number
@@ -85,6 +101,7 @@ export async function measureSession(
   if (open === undefined) {
     open = await startWindow(session, {
       allowRenderer: options.allowRenderer,
+      ...(options.rendererOff === undefined ? {} : { rendererOff: options.rendererOff }),
       ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
     })
     await sleep(options.windowMs)
@@ -129,7 +146,7 @@ export async function measureSession(
 
   let startup: Measurement['startup']
   if (!options.allowRenderer) {
-    unavailable['startup'] = RENDERER_EVAL_OFF
+    unavailable['startup'] = options.rendererOff ?? RENDERER_EVAL_OFF
   } else if (facts.creationTime === null) {
     unavailable['startup'] = 'this Electron does not report the process creation time'
   } else {

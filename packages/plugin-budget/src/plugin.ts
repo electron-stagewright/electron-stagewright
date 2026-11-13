@@ -11,6 +11,7 @@ import path from 'node:path'
 
 import {
   defineTool,
+  fnv1a32,
   makeError,
   makePluginError,
   makeSuccess,
@@ -33,14 +34,20 @@ import { measureBundle } from './bundle.js'
 import { checkRun } from './check.js'
 import { DEFAULT_WINDOW_MS } from './probe.js'
 import { createRun, summarizeRun, type BudgetRun, type Measurement } from './run.js'
-import { MAIN_EVAL_OFF, measureSession, startWindow, type IpcProbe } from './session.js'
+import {
+  MAIN_EVAL_OFF,
+  RENDERER_EVAL_OFF,
+  measureSession,
+  startWindow,
+  type IpcProbe,
+} from './session.js'
 
 const BUDGET_NAMESPACE = 'budget'
 const BUDGET_PLUGIN_VERSION = readPackageVersion(import.meta.url)
 const BUDGET_INTROSPECTION = {
   requirements: {
     evalTargets: ['main', 'renderer'],
-    transportCapabilities: ['supportsMainEval'],
+    transportCapabilities: ['supportsMainEval', 'supportsRendererEval'],
   },
   config: { safeFields: ['budgetFile', 'root', 'windowMs'] },
 } as const
@@ -68,6 +75,12 @@ interface Meta {
   readonly now: () => number
 }
 
+interface RuntimeTarget {
+  readonly session: TransportSession
+  readonly id: string
+  readonly renderer: { readonly allowRenderer: boolean; readonly rendererOff?: string }
+}
+
 type OpenWindow = { readonly ipc: boolean; readonly ipcUnavailable?: string }
 
 const budgetPathField = {
@@ -89,8 +102,43 @@ export function createBudgetPlugin(): StagewrightPlugin {
     },
   )
 
+  function escapes(root: string, target: string, meta: Meta): ToolResult | undefined {
+    const relative = path.relative(root, path.resolve(target))
+    if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+      return undefined
+    }
+    return makeError('BAD_ARGUMENT', {
+      ...meta,
+      message: `Path must resolve within ${root}; "${target}" is outside it.`,
+      details: { root, path: target },
+    })
+  }
+
+  /** With `--app-root` set, files the tools read must sit inside it. */
+  function outsideAppRoot(ctx: ToolContext, target: string, meta: Meta): ToolResult | undefined {
+    return ctx.appRoot === undefined ? undefined : escapes(ctx.appRoot, target, meta)
+  }
+
+  /** The IPC probe is caller-supplied renderer code: leave the same audit trail as an eval tool. */
+  function auditProbe(
+    ctx: ToolContext,
+    tool: string,
+    sessionId: string,
+    ipc: IpcProbe | undefined,
+  ) {
+    if (ipc === undefined || !ctx.allowEvalRenderer) return
+    ctx.logger.info('eval invoked', {
+      tool,
+      target: 'renderer',
+      session_id: sessionId,
+      code_length: ipc.probe.length,
+      code_hash: fnv1a32(ipc.probe),
+    })
+  }
+
   /** Load the named or configured budget, or return the error envelope. */
   async function resolveBudget(
+    ctx: ToolContext,
     budgetPath: string | undefined,
     meta: Meta,
     required: boolean,
@@ -114,6 +162,8 @@ export function createBudgetPlugin(): StagewrightPlugin {
         }),
       }
     }
+    const outside = outsideAppRoot(ctx, target, meta)
+    if (outside !== undefined) return { error: outside }
     try {
       return { budget: await loadBudget(target), budgetPath: target }
     } catch (error) {
@@ -132,13 +182,31 @@ export function createBudgetPlugin(): StagewrightPlugin {
   function runtimeSession(
     ctx: ToolContext,
     sessionId: string | undefined,
-  ): { session: TransportSession; id: string } | { unavailable: string } {
-    if (!ctx.allowEval) return { unavailable: MAIN_EVAL_OFF }
+  ):
+    | RuntimeTarget
+    | { unavailable: string; code: 'budget.EVAL_REQUIRED' | 'budget.MAIN_EVAL_UNSUPPORTED' } {
+    if (!ctx.allowEval) return { unavailable: MAIN_EVAL_OFF, code: 'budget.EVAL_REQUIRED' }
     const managed = ctx.sessions.resolve(sessionId)
-    if (!managed.transport.capabilities.supportsMainEval) {
-      return { unavailable: 'this session’s transport cannot evaluate in the main process' }
+    const capabilities = managed.transport.capabilities
+    if (!capabilities.supportsMainEval) {
+      return {
+        unavailable: 'this session’s transport cannot evaluate in the main process',
+        code: 'budget.MAIN_EVAL_UNSUPPORTED',
+      }
     }
-    return { session: managed.session, id: managed.id }
+    const rendererOff = !ctx.allowEvalRenderer
+      ? RENDERER_EVAL_OFF
+      : capabilities.supportsRendererEval
+        ? undefined
+        : 'this session’s transport cannot evaluate in the renderer'
+    return {
+      session: managed.session,
+      id: managed.id,
+      renderer: {
+        allowRenderer: rendererOff === undefined,
+        ...(rendererOff === undefined ? {} : { rendererOff }),
+      },
+    }
   }
 
   function ipcProbe(
@@ -153,13 +221,14 @@ export function createBudgetPlugin(): StagewrightPlugin {
 
   async function measureLive(
     ctx: ToolContext,
-    target: { session: TransportSession; id: string },
+    target: RuntimeTarget,
     options: { windowMs?: number | undefined; ipc?: IpcProbe | undefined; budget?: Budget },
   ): Promise<{ run: BudgetRun; measurement: Measurement }> {
     const open = windows.get(target.id)
     windows.delete(target.id)
+    if (open === undefined) auditProbe(ctx, 'budget_measure', target.id, options.ipc)
     const measured = await measureSession(target.session, {
-      allowRenderer: ctx.allowEvalRenderer,
+      ...target.renderer,
       windowMs: options.windowMs ?? options.budget?.mainThread?.windowMs ?? config.current.windowMs,
       ...(open === undefined ? {} : { open }),
       ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
@@ -174,8 +243,10 @@ export function createBudgetPlugin(): StagewrightPlugin {
     return { run: { ...run, platform: measured.platform }, measurement: measured.measurement }
   }
 
-  const evalRequired = (meta: Meta, unavailable: string): ToolResult =>
-    makePluginError('budget.EVAL_REQUIRED', { ...meta, message: unavailable })
+  const runtimeError = (
+    meta: Meta,
+    target: { unavailable: string; code: 'budget.EVAL_REQUIRED' | 'budget.MAIN_EVAL_UNSUPPORTED' },
+  ): ToolResult => makePluginError(target.code, { ...meta, message: target.unavailable })
 
   const startTool: AnyToolDefinition = defineTool({
     name: 'start',
@@ -187,7 +258,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
       'The IPC probe is the renderer expression in ipcProbe, else the budget file ipc.probe; it',
       'needs renderer eval. Starting again replaces the open window.',
       'Returns: { ok, started, ipc_probe, ipc_unavailable? }. Errors: budget.EVAL_REQUIRED (main',
-      'eval is off or the transport lacks it), NOT_RUNNING (no session), budget.BUDGET_NOT_FOUND,',
+      'eval is off), budget.MAIN_EVAL_UNSUPPORTED (transport lacks it), NOT_RUNNING (no session), budget.BUDGET_NOT_FOUND,',
       'budget.BUDGET_INVALID, ABSOLUTE_PATH_REQUIRED.',
     ].join(' '),
     inputSchema: z.object({
@@ -206,12 +277,13 @@ export function createBudgetPlugin(): StagewrightPlugin {
     handler: async (args, ctx) => {
       const meta = { startedAt: ctx.startedAt, now: ctx.now }
       const target = runtimeSession(ctx, args.sessionId)
-      if ('unavailable' in target) return evalRequired(meta, target.unavailable)
-      const loaded = await resolveBudget(args.budgetPath, meta, false)
+      if ('unavailable' in target) return runtimeError(meta, target)
+      const loaded = await resolveBudget(ctx, args.budgetPath, meta, false)
       if ('error' in loaded) return loaded.error
       const ipc = ipcProbe(args, loaded.budget)
+      auditProbe(ctx, 'budget_start', target.id, ipc)
       const open = await startWindow(target.session, {
-        allowRenderer: ctx.allowEvalRenderer,
+        ...target.renderer,
         ...(ipc === undefined ? {} : { ipc }),
       })
       windows.set(target.id, open)
@@ -235,7 +307,8 @@ export function createBudgetPlugin(): StagewrightPlugin {
       'Windows) plus workingSet, main-thread blocking, and IPC latency when a probe is known.',
       'Closes the window budget_start opened, or measures an idle window of windowMs.',
       'Returns: { ok, electron_version?, platform, measured: [{ id, value, unit, metric? }],',
-      'unavailable?: { <metric>: reason } }. Errors: budget.EVAL_REQUIRED, NOT_RUNNING,',
+      'unavailable?: { <metric>: reason } }. Errors: budget.EVAL_REQUIRED,',
+      'budget.MAIN_EVAL_UNSUPPORTED, NOT_RUNNING,',
       'budget.BUDGET_NOT_FOUND, budget.BUDGET_INVALID, ABSOLUTE_PATH_REQUIRED.',
     ].join(' '),
     inputSchema: z.object({
@@ -250,8 +323,8 @@ export function createBudgetPlugin(): StagewrightPlugin {
     handler: async (args, ctx) => {
       const meta = { startedAt: ctx.startedAt, now: ctx.now }
       const target = runtimeSession(ctx, args.sessionId)
-      if ('unavailable' in target) return evalRequired(meta, target.unavailable)
-      const loaded = await resolveBudget(args.budgetPath, meta, false)
+      if ('unavailable' in target) return runtimeError(meta, target)
+      const loaded = await resolveBudget(ctx, args.budgetPath, meta, false)
       if ('error' in loaded) return loaded.error
       const { run, measurement } = await measureLive(ctx, target, {
         windowMs: args.windowMs,
@@ -289,7 +362,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
       'Returns: { ok, passed, reason?, budget_path, summary: { pass, fail, unmeasured },',
       'results: [{ id, status, actual?, limit, allowed, unit, metric?, detail? }] }.',
       'Errors: budget.NO_BUDGET, budget.BUDGET_NOT_FOUND, budget.BUDGET_INVALID,',
-      'ABSOLUTE_PATH_REQUIRED, BAD_ARGUMENT (unknown sessionId).',
+      'ABSOLUTE_PATH_REQUIRED, BAD_ARGUMENT (unknown sessionId, or a path outside --app-root).',
     ].join(' '),
     inputSchema: z.object({
       ...sessionIdField,
@@ -301,14 +374,14 @@ export function createBudgetPlugin(): StagewrightPlugin {
     operationType: 'query',
     handler: async (args, ctx) => {
       const meta = { startedAt: ctx.startedAt, now: ctx.now }
-      const loaded = await resolveBudget(args.budgetPath, meta, true)
+      const loaded = await resolveBudget(ctx, args.budgetPath, meta, true)
       if ('error' in loaded) return loaded.error
       const budget = loaded.budget as Budget
       const budgetPath = loaded.budgetPath as string
 
       const noSession = args.sessionId === undefined && ctx.sessions.size === 0
       const target = noSession
-        ? { unavailable: 'no app session is running; launch or attach first' }
+        ? { unavailable: 'no app session is running; launch or attach first' as string }
         : runtimeSession(ctx, args.sessionId)
       let run: BudgetRun
       if ('unavailable' in target) {
@@ -326,6 +399,13 @@ export function createBudgetPlugin(): StagewrightPlugin {
       }
       if (budget.bundle !== undefined) {
         const root = config.current.root ?? path.dirname(budgetPath)
+        for (const entry of budget.bundle.entries) {
+          // An agent can name the budget file, so its entries may not climb out of the root.
+          const target = path.resolve(root, entry.path)
+          const outside =
+            escapes(root, target, meta) ?? (ctx.appRoot && escapes(ctx.appRoot, target, meta))
+          if (outside) return outside
+        }
         run = { ...run, bundle: await measureBundle(root, budget.bundle.entries) }
       }
       const report = checkRun(run, budget, {
@@ -357,6 +437,11 @@ export function createBudgetPlugin(): StagewrightPlugin {
         http: 403,
         retryable: false,
         hint: 'Runtime budget metrics run in the main process; start the server with --allow-eval=main (or bare --allow-eval to include the IPC probe and startup timing).',
+      },
+      MAIN_EVAL_UNSUPPORTED: {
+        http: 409,
+        retryable: false,
+        hint: 'This transport has no main-process eval (CDP attach, or a packaged launch); launch with a main entry or inject to measure runtime metrics.',
       },
       NO_BUDGET: {
         http: 400,

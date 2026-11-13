@@ -8,7 +8,12 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import type { EvalPolicy } from '@electron-stagewright/core'
-import { FakeSession, TestLifecycle, type FakeEvaluate } from '@electron-stagewright/testkit'
+import {
+  FakeSession,
+  TestLifecycle,
+  fullCapabilities,
+  type FakeEvaluate,
+} from '@electron-stagewright/testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import packageJson from '../package.json' with { type: 'json' }
@@ -277,6 +282,72 @@ describe('budget plugin', () => {
     app.probeFails = true
     const result = await dispatch('budget_measure', { ipcProbe: 'window.api.ping()' })
     expect((result['unavailable'] as Record<string, string>)['ipc']).toMatch(/did not start/)
+  })
+
+  it('names the missing capability on a transport without main or renderer eval', async () => {
+    const noMain = await lifecycle.createPluginTestServer(budgetPlugin, {
+      allowEval: true,
+      capabilities: { ...fullCapabilities(), supportsMainEval: false },
+    })
+    await lifecycle.launch(noMain.server)
+    const budgetPath = await budgetFile(BUDGET)
+    expect(await noMain.server.dispatcher.dispatch('budget_measure', {})).toMatchObject({
+      ok: false,
+      code: 'budget.MAIN_EVAL_UNSUPPORTED',
+    })
+    const checked = (await noMain.server.dispatcher.dispatch('budget_check', {
+      budgetPath,
+    })) as unknown as { results: { id: string; status: string; detail?: string }[] }
+    expect(checked.results.find((r) => r.id === 'mainThread.maxStallMs')).toMatchObject({
+      status: 'unmeasured',
+      detail: expect.stringMatching(/cannot evaluate in the main process/),
+    })
+
+    const app = fakeApp()
+    const noRenderer = await lifecycle.createPluginTestServer(budgetPlugin, {
+      allowEval: true,
+      session: new FakeSession({ evaluate: app.evaluate }),
+      capabilities: { ...fullCapabilities(), supportsRendererEval: false },
+      pluginConfigs: { budget: { windowMs: 250 } },
+    })
+    await lifecycle.launch(noRenderer.server)
+    const measured = (await noRenderer.server.dispatcher.dispatch('budget_measure', {
+      ipcProbe: 'window.api.ping()',
+    })) as unknown as { unavailable: Record<string, string> }
+    expect(measured.unavailable['ipc']).toMatch(/cannot evaluate in the renderer/)
+    expect(measured.unavailable['startup']).toMatch(/cannot evaluate in the renderer/)
+    expect(app.calls).not.toContain('renderer:ipc-start')
+  })
+
+  it('holds the IPC probe to the eval blocklist', async () => {
+    const { app, server, dispatch } = await setup()
+    await lifecycle.launch(server)
+    const result = await dispatch('budget_measure', { ipcProbe: "require('node:fs')" })
+    expect((result['unavailable'] as Record<string, string>)['ipc']).toMatch(/refused/)
+    expect(app.calls).not.toContain('renderer:ipc-start')
+  })
+
+  it('confines the budget file and bundle paths to --app-root', async () => {
+    const budgetPath = await budgetFile({ bundle: { entries: [{ path: '../..', maxKb: 1 }] } })
+    const appRoot = path.dirname(budgetPath)
+    const { server } = await lifecycle.createPluginTestServer(budgetPlugin, { appRoot })
+    const check = (file: string) =>
+      server.dispatcher.dispatch('budget_check', { budgetPath: file }) as Promise<
+        Record<string, unknown>
+      >
+    expect(await check(path.join(tmpdir(), 'elsewhere.json'))).toMatchObject({
+      ok: false,
+      code: 'BAD_ARGUMENT',
+    })
+    // Inside the root, but its bundle entry climbs out of it.
+    expect(await check(budgetPath)).toMatchObject({ ok: false, code: 'BAD_ARGUMENT' })
+  })
+
+  it('does not echo file content from an unparseable budget', async () => {
+    const { dispatch } = await setup()
+    const result = await dispatch('budget_check', { budgetPath: await budgetFile('secret-token') })
+    expect(result).toMatchObject({ ok: false, code: 'budget.BUDGET_INVALID' })
+    expect(JSON.stringify(result)).not.toContain('secret-token')
   })
 
   it('maps budget file problems to registered errors', async () => {

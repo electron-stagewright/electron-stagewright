@@ -34,7 +34,10 @@ bundle paths resolve; defaults to the budget file's directory), `windowMs` (idle
 | IPC latency, startup         | The above plus renderer eval (bare `--allow-eval`) |
 | Bundle size                  | Nothing: no session, no eval                       |
 
-The bodies evaluated in the app are fixed. The one operator-supplied expression is the IPC probe.
+The bodies evaluated in the app are fixed. The one caller-supplied expression is the IPC probe (from
+`ipcProbe` or the budget file): it needs the renderer grant, passes the same blocklist as
+`electron_eval_renderer`, and leaves the same audit line. Bundle entries must resolve inside `root`,
+and with `--app-root` set the budget file and its entries must sit inside it.
 
 ## Tools
 
