@@ -244,6 +244,12 @@ describe('measure', () => {
     expect(bad(['--main', 'm.js', '--check'])).toThrow(/--budget/)
     expect(bad(['--main', 'm.js', '--strict'])).toThrow(/only with --check/)
     expect(bad(['--main', 'm.js', '--env', 'NOVALUE'])).toThrow(/KEY=VALUE/)
+    expect(bad(['--main', 'm.js', '--out', ''])).toThrow(/--out expects a value/)
+    expect(parseBudgetCliArgs(['measure', '--main', 'm.js', '--arg', '--help'])).toMatchObject({
+      command: 'measure',
+      args: ['--help'],
+    })
+    expect(parseBudgetCliArgs(['measure', '--help'])).toEqual({ command: 'help' })
   })
 
   it('writes the run, adds the bundle, and gates with --check', async () => {

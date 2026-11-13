@@ -54,6 +54,9 @@ and a CLI for CI, both driving the same measurement code.
 - The budget path is agent-supplied, so file reads are confined: bundle entries must resolve inside
   the bundle root, the budget file and its entries inside `--app-root` when one is set, and
   symlinks are resolved first. An unparseable budget does not echo the parser message.
+- The `measure` CLI is operator-run, not agent-reachable. It grants itself eval for the same fixed
+  bodies, and the `--main`, `--executable` and `--workload` it runs are operator code with the
+  operator's privileges, on a throwaway profile it removes afterwards.
 
 ## Alternatives considered
 

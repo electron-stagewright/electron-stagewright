@@ -126,7 +126,7 @@ function positiveInt(flag: string, value: string, min = 1): number {
   return parsed
 }
 
-function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions {
+function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { command: 'help' } {
   const single = new Map<string, string>()
   const args: string[] = []
   const env: Record<string, string> = {}
@@ -146,6 +146,8 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions {
   const booleanFlags = ['--check', '--strict', '--require-measurement', '--json']
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index] as string
+    // Scanned here, not over all of argv, so `--arg --help` is forwarded to the app.
+    if (token === '--help' || token === '-h') return { command: 'help' }
     if (booleanFlags.includes(token)) {
       flags.add(token)
       continue
@@ -154,8 +156,11 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions {
       throw new UsageError(`Unknown option for measure: ${token}`)
     }
     const value = rest[index + 1]
-    // --arg forwards anything, including values that start with dashes.
-    if (value === undefined || (token !== '--arg' && value.startsWith('--'))) {
+    // --arg forwards anything, including empty values and values that start with dashes.
+    if (
+      value === undefined ||
+      (token !== '--arg' && (value.length === 0 || value.startsWith('--')))
+    ) {
       throw new UsageError(`${token} expects a value`)
     }
     index += 1
@@ -176,7 +181,7 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions {
     throw new UsageError('measure requires --main <main.js> or --executable <path>')
   }
   const phases = (single.get('--phases') ?? 'cold,warm').split(',').map((phase) => phase.trim())
-  if (phases.length === 0 || phases.some((phase) => phase !== 'cold' && phase !== 'warm')) {
+  if (phases.some((phase) => phase !== 'cold' && phase !== 'warm')) {
     throw new UsageError('--phases expects cold, warm, or cold,warm')
   }
   const check = flags.has('--check')
@@ -223,11 +228,11 @@ export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
       throw new UsageError('Expected a subcommand: measure, check, compare, bundle')
     return { command: 'help' }
   }
-  if (rest.includes('--help') || rest.includes('-h')) return { command: 'help' }
   if (command === 'measure') return parseMeasureArgs(rest)
   if (command !== 'check' && command !== 'compare' && command !== 'bundle') {
     throw new UsageError(`Unknown subcommand: ${command}`)
   }
+  if (rest.includes('--help') || rest.includes('-h')) return { command: 'help' }
 
   const valueFlags: Record<typeof command, readonly string[]> = {
     check: ['--budget', '--phase'],
@@ -310,7 +315,6 @@ function emitReport(report: CheckReport, json: boolean, io: BudgetCliIo): Budget
   return report.passed ? BUDGET_EXIT_CODES.SUCCESS : BUDGET_EXIT_CODES.OVER_BUDGET
 }
 
-/** Execute already-parsed options. Throws the typed file errors; the caller maps them to exit 2. */
 async function writeRun(outPath: string, run: BudgetRun): Promise<void> {
   await mkdir(path.dirname(path.resolve(outPath)), { recursive: true })
   await writeFile(outPath, `${JSON.stringify(run, null, 2)}\n`)
@@ -355,14 +359,14 @@ async function runMeasure(
     ...(options.label === undefined ? {} : { label: options.label }),
     onProgress: (message) => io.stderr(`${message}\n`),
   })
-  if (budget?.bundle !== undefined && options.budgetPath !== undefined) {
-    const root = path.dirname(path.resolve(options.budgetPath))
-    run = { ...run, bundle: await measureBundle(root, budget.bundle.entries) }
-  }
   // A run with no round would later read as "nothing over budget"; never write one.
   if (run.rounds.length === 0) {
     io.stderr('No round produced a measurement; no run was written.\n')
     return BUDGET_EXIT_CODES.OVER_BUDGET
+  }
+  if (budget?.bundle !== undefined && options.budgetPath !== undefined) {
+    const root = path.dirname(path.resolve(options.budgetPath))
+    run = { ...run, bundle: await measureBundle(root, budget.bundle.entries) }
   }
   if (options.outPath !== undefined) await writeRun(options.outPath, run)
   if (options.check && budget !== undefined) {
@@ -377,6 +381,7 @@ async function runMeasure(
   return BUDGET_EXIT_CODES.SUCCESS
 }
 
+/** Execute already-parsed options. Throws the typed file errors; the caller maps them to exit 2. */
 export async function runBudgetCli(
   options: BudgetCliOptions,
   io: BudgetCliIo = PROCESS_IO,

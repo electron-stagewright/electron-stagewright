@@ -109,7 +109,8 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
   writes the run. `--check` gates it in the same command. On Linux CI run it under `xvfb-run`.
 - `--workload <script.mjs>` replaces the idle window with your interaction. The module
   default-exports `async ({ dispatch, sessionId, phase }) => { ... }`, where `dispatch(tool, args)`
-  calls any Stagewright tool on the launched app:
+  calls any core Stagewright tool (plugin tools are not loaded) on the launched app. The workload
+  runs with your privileges and eval enabled, so pass only a script you trust:
 
   ```js
   export default async ({ dispatch, sessionId }) => {

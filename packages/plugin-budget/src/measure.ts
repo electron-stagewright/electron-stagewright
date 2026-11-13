@@ -98,10 +98,11 @@ async function launchOnce(
     }
     const managed = server.sessions.resolve()
     try {
-      if (!measure) return {}
       const session = managed.session
       await withTimeout(session.evaluate('renderer', LOADED_BODY), LOAD_TIMEOUT_MS, 'window load')
       await sleep(options.settleMs ?? DEFAULT_SETTLE_MS)
+      // A priming launch still loads and settles, so it leaves the profile a measured cold one would.
+      if (!measure) return {}
 
       const probe = options.budget?.ipc
       const ipc: IpcProbe | undefined =
@@ -156,7 +157,13 @@ export async function measureApp(options: MeasureAppOptions): Promise<BudgetRun>
         }
       }
     } finally {
-      await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+      // A process that outlives the app can hold the profile; that must not discard the rounds.
+      await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(
+        (error: unknown) =>
+          options.onProgress?.(
+            `could not remove ${profile}: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+      )
     }
   }
   return createRun({
