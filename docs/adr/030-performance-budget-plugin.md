@@ -24,8 +24,10 @@ and a CLI for CI, both driving the same measurement code.
   supplies each process's pid and type. The host then reads each pid in the platform's own metric:
   `footprint` on macOS (`/usr/bin/footprint`), `pss` on Linux (`/proc/<pid>/smaps_rollup`), and
   `privateBytes` on Windows (already in the metrics). Working set is always recorded as well. The
-  host reads a pid only when its process started when the app's main process did; otherwise the
-  app sits in another pid namespace and memory is `unmeasured`.
+  host reads a pid only when its process started when the app's main process did (`/proc` on
+  Linux, `ps` on macOS); otherwise the app sits in another pid namespace and memory is
+  `unmeasured`. When the host cannot tell, the read proceeds. Only plain integer pids reach the
+  host.
 - **Never compare across metrics.** A memory budget is a per-platform block that names its metric.
   A run measured in another metric is `unmeasured`, and every table prints the metric.
 - **Sum per process type; GPU gates only when named.** Types are `main`, `renderer`, `gpu`,

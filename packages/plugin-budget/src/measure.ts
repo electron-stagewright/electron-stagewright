@@ -122,11 +122,22 @@ async function launchOnce(
       const windowMs = options.windowMs ?? options.budget?.mainThread?.windowMs ?? DEFAULT_WINDOW_MS
       if (options.workload === undefined) await sleep(windowMs)
       else {
-        await withTimeout(
-          options.workload({ sessionId: managed.id, phase, dispatch }),
-          options.workloadTimeoutMs ?? DEFAULT_WORKLOAD_TIMEOUT_MS,
-          'workload',
-        )
+        // A timed-out workload keeps running; once the window closes its dispatch rejects, so a
+        // polling loop ends instead of keeping the process alive.
+        let ended = false
+        const workloadDispatch: WorkloadContext['dispatch'] = (tool, args) =>
+          ended
+            ? Promise.reject(new Error('the measurement window has closed'))
+            : dispatch(tool, args)
+        try {
+          await withTimeout(
+            options.workload({ sessionId: managed.id, phase, dispatch: workloadDispatch }),
+            options.workloadTimeoutMs ?? DEFAULT_WORKLOAD_TIMEOUT_MS,
+            'workload',
+          )
+        } finally {
+          ended = true
+        }
       }
 
       const measured = await measureSession(session, { allowRenderer: true, open, windowMs })

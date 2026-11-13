@@ -66,7 +66,8 @@ function fakeApp(): FakeApp {
           }
         }
         if (op === 'startup') {
-          return { timeOrigin: 1_000_300, loadEventEnd: 450, type: 'navigate', historyLength: 1 }
+          const url = 'app://index.html'
+          return { timeOrigin: 1_000_300, loadEventEnd: 450, type: 'navigate', url, firstUrl: url }
         }
         if (op === 'start') {
           windowOpen = true
@@ -196,7 +197,14 @@ describe('measureSession', () => {
     sleep: async () => undefined,
     memoryReader: async () => new Map([[10, 50 * 1024 * 1024]]),
   }
-  const startup = { timeOrigin: 1_000_100, loadEventEnd: 400, type: 'navigate', historyLength: 1 }
+  const startup = {
+    timeOrigin: 1_000_100,
+    loadEventEnd: 400,
+    type: 'navigate',
+    url: 'app://index.html#/home',
+    firstUrl: 'app://index.html#/home',
+    historyLength: null,
+  }
 
   it('reads host memory only when the host pid started with the app', async () => {
     const same = await measureSession(linuxApp(startup), {
@@ -216,13 +224,59 @@ describe('measureSession', () => {
     }
   })
 
-  it('leaves startup unmeasured once the first window navigated', async () => {
-    const navigated = await measureSession(linuxApp({ ...startup, historyLength: 2 }), {
+  it('refuses an app-reported pid that is not a plain pid', async () => {
+    const hostile: EvaluatingSession = {
+      evaluate: (async (target: string, body: string, arg?: { op?: string }) => {
+        const result = await linuxApp(startup).evaluate(target as 'main', body, arg)
+        return arg?.op === 'facts' ? { ...(result as object), pid: '-j' } : result
+      }) as EvaluatingSession['evaluate'],
+    }
+    const seen: number[][] = []
+    const measured = await measureSession(hostile, {
       ...options,
-      hostStartTime: async () => undefined,
+      memoryReader: async (pids) => {
+        seen.push([...pids])
+        return new Map()
+      },
+      hostStartTime: async () => 1_000_000,
     })
+    expect(measured.measurement.unavailable?.['memory']).toMatch(/invalid main pid/)
+    expect(seen).toEqual([])
+  })
+
+  it('leaves startup unmeasured once the first window loaded another document', async () => {
+    const measure = (timing: Record<string, unknown>) =>
+      measureSession(linuxApp({ ...startup, ...timing }), {
+        ...options,
+        hostStartTime: async () => undefined,
+      })
+    const navigated = await measure({ url: 'app://settings.html' })
     expect(navigated.measurement.startup).toBeUndefined()
     expect(navigated.measurement.unavailable?.['startup']).toMatch(/navigated since launch/)
+    // Older Electron: no first entry, so the history length decides.
+    expect(
+      (await measure({ firstUrl: null, historyLength: 2 })).measurement.startup,
+    ).toBeUndefined()
+    expect((await measure({ firstUrl: null, historyLength: 1 })).measurement.startup).toEqual({
+      firstWindowMs: 500,
+    })
+  })
+
+  it('needs only the renderer grant for startup', async () => {
+    const offTransport = await measureSession(linuxApp(startup), {
+      ...options,
+      allowRenderer: false,
+      rendererOff: 'this session’s transport cannot evaluate in the renderer',
+      allowStartup: true,
+      hostStartTime: async () => undefined,
+    })
+    expect(offTransport.measurement.startup).toEqual({ firstWindowMs: 500 })
+    const noGrant = await measureSession(linuxApp(startup), {
+      ...options,
+      allowStartup: false,
+      hostStartTime: async () => undefined,
+    })
+    expect(noGrant.measurement.unavailable?.['startup']).toMatch(/renderer eval is off/)
   })
 })
 
@@ -378,7 +432,8 @@ describe('budget plugin', () => {
       ipcProbe: 'window.api.ping()',
     })) as unknown as { unavailable: Record<string, string> }
     expect(measured.unavailable['ipc']).toMatch(/cannot evaluate in the renderer/)
-    expect(measured.unavailable['startup']).toMatch(/cannot evaluate in the renderer/)
+    // Startup is read through main, so only the renderer grant gates it.
+    expect(measured.unavailable['startup']).toBeUndefined()
     expect(app.calls).not.toContain('renderer:ipc-start')
   })
 

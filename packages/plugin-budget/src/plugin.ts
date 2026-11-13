@@ -79,7 +79,12 @@ interface Meta {
 interface RuntimeTarget {
   readonly session: TransportSession
   readonly id: string
-  readonly renderer: { readonly allowRenderer: boolean; readonly rendererOff?: string }
+  readonly renderer: {
+    readonly allowRenderer: boolean
+    readonly rendererOff?: string
+    /** Startup is read through main, so it needs only the renderer grant, not renderer eval. */
+    readonly allowStartup: boolean
+  }
 }
 
 type OpenWindow = { readonly ipc: boolean; readonly ipcUnavailable?: string }
@@ -239,6 +244,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
       id: managed.id,
       renderer: {
         allowRenderer: rendererOff === undefined,
+        allowStartup: ctx.allowEvalRenderer,
         ...(rendererOff === undefined ? {} : { rendererOff }),
       },
     }
@@ -260,7 +266,11 @@ export function createBudgetPlugin(): StagewrightPlugin {
     target: RuntimeTarget,
     options: { windowMs?: number | undefined; ipc?: IpcProbe | undefined; budget?: Budget },
   ): Promise<{ run: BudgetRun; measurement: Measurement }> {
-    return serial(target.id, () => measureLiveNow(ctx, tool, target, options))
+    return serial(target.id, () => {
+      // A call that timed out or was cancelled while queued must not run later.
+      ctx.signal?.throwIfAborted()
+      return measureLiveNow(ctx, tool, target, options)
+    })
   }
 
   async function measureLiveNow(
@@ -328,12 +338,13 @@ export function createBudgetPlugin(): StagewrightPlugin {
       if ('error' in loaded) return loaded.error
       const ipc = ipcProbe(args, loaded.budget)
       const open = await serial(target.id, async () => {
+        ctx.signal?.throwIfAborted()
         auditProbe(ctx, 'budget_start', target, ipc)
         const started = await startWindow(target.session, {
           ...target.renderer,
           ...(ipc === undefined ? {} : { ipc }),
         })
-        windows.set(target.id, started)
+        if (ctx.sessions.has(target.id)) windows.set(target.id, started)
         return started
       })
       return makeSuccess(

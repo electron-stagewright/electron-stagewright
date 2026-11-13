@@ -109,8 +109,9 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
   repeat `--arg` and `--env K=V` to pass them through) on an empty throwaway profile. Each round is
   a `cold` launch and a `warm` relaunch on the same profile (`--phases` picks one). It waits for
   the window to load, settles (`--settle-ms`, default 3000), measures a window (`--window-ms`), and
-  writes the run. `--check` gates it in the same command; with one measured phase every budgeted
-  metric reads it, or `--phase` picks one. On Linux CI run it under `xvfb-run`.
+  writes the run. `--check` gates it in the same command; `--phase` reads every metric from one
+  measured phase, and a metric whose phase was not measured is `unmeasured`. On Linux CI run it
+  under `xvfb-run`.
 - `--workload <script.mjs>` replaces the idle window with your interaction. The module
   default-exports `async ({ dispatch, sessionId, phase }) => { ... }`, where `dispatch(tool, args)`
   calls any core Stagewright tool (plugin tools are not loaded) on the launched app. The workload

@@ -149,6 +149,13 @@ describe('checkRun', () => {
     expect(result).toMatchObject({ actual: 1000, status: 'fail' })
   })
 
+  it('passes a value exactly at the tolerance despite float rounding', () => {
+    const atLimit = run([['cold', measurement(90, { startup: { firstWindowMs: 230 } })]])
+    const tight = { ...budget, startup: { maxFirstWindowMs: 200, thresholdPercent: 15 } }
+    const result = checkRun(atLimit, tight).results.find((r) => r.id === 'startup.firstWindowMs')
+    expect(result).toMatchObject({ allowed: 230, status: 'pass' })
+  })
+
   it('never compares megabytes of a different metric', () => {
     const workingSet = measurement(90)
     const other = run([

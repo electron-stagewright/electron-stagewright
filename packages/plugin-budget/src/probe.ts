@@ -14,6 +14,7 @@ export const DEFAULT_IPC_INTERVAL_MS = 25
 export const DEFAULT_WINDOW_MS = 2_000
 /** An unread window stops itself after this, so a detached or abandoned app keeps no timer. */
 export const MAX_WINDOW_MS = 600_000
+const STARTUP_READ_TIMEOUT_MS = 10_000
 
 export interface MainFacts {
   readonly pid: number
@@ -38,6 +39,7 @@ const FIRST_WINDOW_TIMING = `(() => {
     timeOrigin: performance.timeOrigin,
     loadEventEnd: entry ? entry.loadEventEnd : 0,
     type: entry ? entry.type : null,
+    url: entry ? entry.name : location.href,
   };
 })()`
 
@@ -109,12 +111,26 @@ if (arg.op === 'startup') {
   const windows = electronApp.BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed());
   if (windows.length === 0) return { error: 'no window is open' };
   const first = windows.reduce((a, b) => (b.id < a.id ? b : a));
-  const history = first.webContents.navigationHistory;
-  const timing = await first.webContents.executeJavaScript(${JSON.stringify(FIRST_WINDOW_TIMING)});
-  return {
-    ...timing,
-    historyLength: history && typeof history.length === 'function' ? history.length() : null,
-  };
+  const contents = first.webContents;
+  // executeJavaScript waits, unbounded, for a window that never loaded or is still loading.
+  if (!contents.getURL() || contents.isLoadingMainFrame()) {
+    return { error: 'the first window has not finished loading' };
+  }
+  const history = contents.navigationHistory;
+  let timer;
+  // A hung renderer must not hold the session's budget queue forever.
+  const timing = await Promise.race([
+    contents.executeJavaScript(${JSON.stringify(FIRST_WINDOW_TIMING)}),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('the first window did not answer')), ${STARTUP_READ_TIMEOUT_MS});
+    }),
+  ]).finally(() => clearTimeout(timer));
+  const firstEntry =
+    history && typeof history.getEntryAtIndex === 'function' ? history.getEntryAtIndex(0) : null;
+  // Electron before 32 has no navigationHistory, only webContents.length() (deprecated after).
+  const historyLength =
+    !history && typeof contents.length === 'function' ? contents.length() : null;
+  return { ...timing, firstUrl: firstEntry ? firstEntry.url : null, historyLength };
 }
 throw new Error('unknown budget op');
 `
@@ -128,7 +144,11 @@ export type FirstWindowStartup =
       /** Ms from the time origin to the end of the load event; 0 while still loading. */
       readonly loadEventEnd: number
       readonly type: string | null
-      /** Entries in the window's history, when this Electron exposes it. */
+      /** The loaded document's URL; in-page pushState and hash changes do not move it. */
+      readonly url: string
+      /** The window's first history entry, from Electron 32's navigationHistory. */
+      readonly firstUrl: string | null
+      /** History length on older Electron, which has no navigationHistory. */
       readonly historyLength: number | null
     }
   | { readonly error: string }

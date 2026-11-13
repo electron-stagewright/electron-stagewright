@@ -9,7 +9,7 @@ import { validateEvalContent } from '@electron-stagewright/core'
 import {
   measureMemory,
   osMemoryReader,
-  readHostStartTime,
+  hostStartTimeReader,
   type HostStartTimeReader,
   type OsMemoryReader,
 } from './memory.js'
@@ -86,6 +86,8 @@ export interface MeasureOptions {
   readonly sleep?: (ms: number) => Promise<void>
   readonly memoryReader?: OsMemoryReader
   readonly hostStartTime?: HostStartTimeReader
+  /** The renderer grant alone; defaults to `allowRenderer`. */
+  readonly allowStartup?: boolean
 }
 
 /** `ps` start times have whole-second resolution. */
@@ -97,9 +99,10 @@ const START_TIME_TOLERANCE_MS = 2_000
  */
 async function hostMismatch(
   facts: MainFacts,
-  reader: HostStartTimeReader,
+  reader: HostStartTimeReader | undefined,
 ): Promise<string | undefined> {
-  if (facts.creationTime === null) return undefined
+  if (!isPid(facts.pid)) return 'the app reported an invalid main pid'
+  if (facts.creationTime === null || reader === undefined) return undefined
   const started = await reader(facts.pid)
   if (started === undefined) return undefined
   if (started !== 'missing' && Math.abs(started - facts.creationTime) <= START_TIME_TOLERANCE_MS) {
@@ -107,6 +110,10 @@ async function hostMismatch(
   }
   return `pid ${facts.pid} on this host is not the app's main process (another pid namespace?)`
 }
+
+/** App-reported pids reach host commands and /proc paths, so only plain pids pass. */
+const isPid = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 
 export interface SessionMeasurement {
   readonly measurement: Measurement
@@ -167,19 +174,21 @@ export async function measureSession(
   const mismatch =
     reader === undefined
       ? undefined
-      : await hostMismatch(facts, options.hostStartTime ?? readHostStartTime)
+      : await hostMismatch(facts, options.hostStartTime ?? hostStartTimeReader(facts.platform))
   if (mismatch !== undefined) {
     reader = () => Promise.reject(new Error(mismatch))
   }
   const { memory, error: memoryError } = await measureMemory(
-    facts.processes,
+    facts.processes.filter((entry) => isPid(entry.pid)),
     facts.platform,
     reader,
   )
   if (memoryError !== undefined) unavailable['memory'] = memoryError
 
   let startup: Measurement['startup']
-  if (!options.allowRenderer) {
+  if (options.allowStartup === false) {
+    unavailable['startup'] = RENDERER_EVAL_OFF
+  } else if (options.allowStartup === undefined && !options.allowRenderer) {
     unavailable['startup'] = options.rendererOff ?? RENDERER_EVAL_OFF
   } else if (facts.creationTime === null) {
     unavailable['startup'] = 'this Electron does not report the process creation time'
@@ -191,9 +200,16 @@ export async function measureSession(
       })
       if ('error' in timing) throw new Error(timing.error)
       const firstWindowMs = timing.timeOrigin + timing.loadEventEnd - facts.creationTime
-      if (timing.type !== 'navigate' || (timing.historyLength ?? 1) > 1) {
+      // A later document means the first one was left; pushState keeps the document.
+      const navigated =
+        timing.firstUrl !== null ? timing.url !== timing.firstUrl : (timing.historyLength ?? 1) > 1
+      if (timing.type !== 'navigate' || navigated) {
         unavailable['startup'] = 'the first window was reloaded or navigated since launch'
-      } else if (timing.loadEventEnd <= 0 || firstWindowMs <= 0) {
+      } else if (
+        !(timing.loadEventEnd > 0) ||
+        !(firstWindowMs > 0) ||
+        !Number.isFinite(firstWindowMs)
+      ) {
         unavailable['startup'] = 'the window has not finished loading'
       } else {
         startup = { firstWindowMs: Math.round(firstWindowMs) }

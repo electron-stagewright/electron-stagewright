@@ -276,7 +276,7 @@ describe('measure', () => {
     expect((await invoke(argv, deps)).exitCode).toBe(BUDGET_EXIT_CODES.SUCCESS)
   })
 
-  it('gates a single measured phase with every metric, and passes the workload timeout', async () => {
+  it('gates the phase --phase names, and passes the workload timeout', async () => {
     const dir = await workspace()
     const budgetPath = path.join(dir, 'perf-budget.json')
     await writeFile(
@@ -284,10 +284,17 @@ describe('measure', () => {
       JSON.stringify({ memory: { darwin: { metric: 'footprint', perTypeMb: { main: 100 } } } }),
     )
     const { deps, seen } = fakeMeasure(run([['cold', measurement(140)]]))
-    const argv = ['measure', '--main', 'm.js', '--budget', budgetPath, '--phases', 'cold']
-    const result = await invoke([...argv, '--check', '--workload-timeout-ms', '5000'], deps)
+    const argv = ['measure', '--main', 'm.js', '--budget', budgetPath, '--phases', 'cold,cold']
+    // Memory budgets read warm by default, so a cold-only run leaves them unmeasured...
+    const unmeasured = await invoke([...argv, '--check', '--json'], deps)
+    expect(JSON.parse(unmeasured.stdout)).toMatchObject({ reason: 'NO_MEASUREMENTS' })
+    // ...until --phase names the measured one.
+    const result = await invoke(
+      [...argv, '--check', '--phase', 'cold', '--workload-timeout-ms', '5000'],
+      deps,
+    )
     expect(result.exitCode).toBe(BUDGET_EXIT_CODES.OVER_BUDGET)
-    expect(seen[0]).toMatchObject({ phases: ['cold'], workloadTimeoutMs: 5000 })
+    expect(seen[1]).toMatchObject({ phases: ['cold'], workloadTimeoutMs: 5000 })
 
     const bad = (extra: string[]) => () => parseBudgetCliArgs([...argv, ...extra])
     expect(bad(['--check', '--phase', 'warm'])).toThrow(/measured phase/)

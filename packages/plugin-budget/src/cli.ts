@@ -108,8 +108,8 @@ export function formatBudgetCliHelp(): string {
     'measure   Launch the app on a throwaway profile and measure cold and warm rounds.',
     '          --workload is an ES module whose default export, async ({ dispatch, sessionId,',
     '          phase }), drives the app inside the measurement window. Without --out or',
-    '          --check the run document goes to stdout. With one measured phase, --check',
-    '          reads every metric from it.',
+    '          --check the run document goes to stdout. --phase reads every metric from',
+    '          that phase; a metric whose phase was not measured is unmeasured.',
     'check     Compare a measured run to a budget file.',
     'compare   Print a before/after table of two runs.',
     'bundle    Measure the bundle entries of a budget and gate them; needs no Electron.',
@@ -186,7 +186,9 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
   if (main === undefined && executablePath === undefined) {
     throw new UsageError('measure requires --main <main.js> or --executable <path>')
   }
-  const phases = (single.get('--phases') ?? 'cold,warm').split(',').map((phase) => phase.trim())
+  const phases = [
+    ...new Set((single.get('--phases') ?? 'cold,warm').split(',').map((phase) => phase.trim())),
+  ]
   if (phases.some((phase) => phase !== 'cold' && phase !== 'warm')) {
     throw new UsageError('--phases expects cold, warm, or cold,warm')
   }
@@ -217,16 +219,12 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     env,
     ...optional('budgetPath', budgetPath),
     rounds: number('--rounds', 1) ?? DEFAULT_ROUNDS,
-    phases: [...new Set(phases)] as LaunchPhase[],
+    phases: phases as LaunchPhase[],
     ...optional('settleMs', number('--settle-ms', 0)),
     ...optional('windowMs', number('--window-ms', 250)),
     ...optional('workloadPath', single.get('--workload')),
     ...optional('workloadTimeoutMs', number('--workload-timeout-ms', 1000)),
-    // With one measured phase, every budgeted metric reads it instead of going unmeasured.
-    ...optional(
-      'phase',
-      (phase ?? (phases.length === 1 ? phases[0] : undefined)) as Phase | undefined,
-    ),
+    ...optional('phase', phase as Phase | undefined),
     ...optional('label', single.get('--label')),
     ...optional('outPath', single.get('--out')),
     check,
