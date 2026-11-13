@@ -1,0 +1,59 @@
+{
+  "name": "@electron-stagewright/plugin-budget",
+  "version": "0.1.0",
+  "description": "Performance budget plugin for Electron Stagewright: measure startup, per-process memory, main-thread blocking, IPC latency, and bundle size, and gate them against a budget file from an agent or CI.",
+  "type": "module",
+  "license": "MIT",
+  "author": "johnny4young <johnny.iv.young@gmail.com>",
+  "homepage": "https://electron-stagewright.github.io/electron-stagewright/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electron-stagewright/electron-stagewright.git",
+    "directory": "packages/plugin-budget"
+  },
+  "bugs": {
+    "url": "https://github.com/electron-stagewright/electron-stagewright/issues"
+  },
+  "keywords": [
+    "electron",
+    "mcp",
+    "stagewright",
+    "performance",
+    "performance-budget",
+    "memory",
+    "ai-agent"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "electron-stagewright-budget": "./dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
