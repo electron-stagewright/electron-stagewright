@@ -8,7 +8,14 @@ import { gzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { measureBundle } from '../src/bundle.js'
-import { BUDGET_EXIT_CODES, parseBudgetCliArgs, runBudgetCliCommand } from '../src/cli.js'
+import {
+  BUDGET_EXIT_CODES,
+  parseBudgetCliArgs,
+  runBudgetCliCommand,
+  type BudgetCliDependencies,
+} from '../src/cli.js'
+import type { MeasureAppOptions } from '../src/measure.js'
+import type { BudgetRun } from '../src/run.js'
 
 import { measurement, run } from './helpers.js'
 
@@ -27,13 +34,14 @@ async function workspace(): Promise<string> {
   return dir
 }
 
-async function invoke(argv: readonly string[]) {
+async function invoke(argv: readonly string[], deps?: BudgetCliDependencies) {
   const stdout: string[] = []
   const stderr: string[] = []
-  const exitCode = await runBudgetCliCommand(argv, {
-    stdout: (text) => stdout.push(text),
-    stderr: (text) => stderr.push(text),
-  })
+  const exitCode = await runBudgetCliCommand(
+    argv,
+    { stdout: (text) => stdout.push(text), stderr: (text) => stderr.push(text) },
+    deps,
+  )
   return { exitCode, stdout: stdout.join(''), stderr: stderr.join('') }
 }
 
@@ -186,5 +194,105 @@ describe('electron-stagewright-budget', () => {
     expect(crashed.exitCode).toBe(2)
     expect(crashed.stderr).toContain('fatal')
     expect((await invoke(['--help'])).stdout).toContain('Usage:')
+  })
+})
+
+describe('measure', () => {
+  function fakeMeasure(result: BudgetRun) {
+    const seen: MeasureAppOptions[] = []
+    const deps: BudgetCliDependencies = {
+      measureApp: async (options) => {
+        seen.push(options)
+        return result
+      },
+    }
+    return { deps, seen }
+  }
+
+  it('parses launch, rounds, phases, and repeatable flags', () => {
+    const parsed = parseBudgetCliArgs([
+      'measure',
+      '--main',
+      '/app/main.js',
+      '--arg',
+      '--lang=es',
+      '--env',
+      'MODE=test=1',
+      '--rounds',
+      '5',
+      '--phases',
+      'warm',
+      '--budget',
+      'b.json',
+      '--check',
+      '--strict',
+    ])
+    expect(parsed).toMatchObject({
+      command: 'measure',
+      main: path.resolve('/app/main.js'),
+      args: ['--lang=es'],
+      env: { MODE: 'test=1' },
+      rounds: 5,
+      phases: ['warm'],
+      check: true,
+      strict: true,
+    })
+    const bad = (argv: string[]) => () => parseBudgetCliArgs(['measure', ...argv])
+    expect(bad([])).toThrow(/--main/)
+    expect(bad(['--main', 'm.js', '--rounds', '0'])).toThrow(/--rounds/)
+    expect(bad(['--main', 'm.js', '--phases', 'hot'])).toThrow(/--phases/)
+    expect(bad(['--main', 'm.js', '--check'])).toThrow(/--budget/)
+    expect(bad(['--main', 'm.js', '--strict'])).toThrow(/only with --check/)
+    expect(bad(['--main', 'm.js', '--env', 'NOVALUE'])).toThrow(/KEY=VALUE/)
+    expect(bad(['--main', 'm.js', '--out', ''])).toThrow(/--out expects a value/)
+    expect(parseBudgetCliArgs(['measure', '--main', 'm.js', '--arg', '--help'])).toMatchObject({
+      command: 'measure',
+      args: ['--help'],
+    })
+    expect(parseBudgetCliArgs(['measure', '--help'])).toEqual({ command: 'help' })
+  })
+
+  it('writes the run, adds the bundle, and gates with --check', async () => {
+    const dir = await workspace()
+    const budgetPath = path.join(dir, 'perf-budget.json')
+    await writeFile(
+      budgetPath,
+      JSON.stringify({
+        memory: { darwin: { metric: 'footprint', perTypeMb: { main: 100 } } },
+        bundle: { entries: [{ path: 'dist', extensions: ['.js'], maxKb: 4 }] },
+      }),
+    )
+    const outPath = path.join(dir, 'run.json')
+    const { deps, seen } = fakeMeasure(run([['warm', measurement(140)]]))
+    const argv = ['measure', '--main', 'm.js', '--budget', budgetPath, '--out', outPath]
+
+    const result = await invoke([...argv, '--check'], deps)
+    expect(result.exitCode).toBe(BUDGET_EXIT_CODES.OVER_BUDGET)
+    expect(result.stdout).toContain('| bundle.dist | 3 KB | 4 KB | 4 KB | pass |')
+    expect(seen[0]).toMatchObject({ rounds: 3, phases: ['cold', 'warm'] })
+    expect(JSON.parse(await readFile(outPath, 'utf8')).bundle.entries[0].bytes).toBe(3072)
+
+    // Without --check it only records.
+    expect((await invoke(argv, deps)).exitCode).toBe(BUDGET_EXIT_CODES.SUCCESS)
+  })
+
+  it('fails and writes nothing when no round was measured', async () => {
+    const dir = await workspace()
+    const outPath = path.join(dir, 'run.json')
+    const { deps } = fakeMeasure(run([]))
+    const result = await invoke(['measure', '--main', 'm.js', '--out', outPath], deps)
+    expect(result.exitCode).toBe(BUDGET_EXIT_CODES.OVER_BUDGET)
+    await expect(readFile(outPath, 'utf8')).rejects.toThrow()
+  })
+
+  it('rejects a workload that is not a function', async () => {
+    const dir = await workspace()
+    const workload = path.join(dir, 'workload.mjs')
+    await writeFile(workload, 'export default 1\n')
+    const result = await invoke(
+      ['measure', '--main', 'm.js', '--workload', workload],
+      fakeMeasure(run([])).deps,
+    )
+    expect(result.exitCode).toBe(BUDGET_EXIT_CODES.USAGE)
   })
 })

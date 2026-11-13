@@ -95,15 +95,32 @@ a reload.
 ## CLI
 
 ```sh
-electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--out run.json]
+electron-stagewright-budget measure --main dist/main.js --budget perf-budget.json \
+  --rounds 5 --out run.json --check
 electron-stagewright-budget check run.json --budget perf-budget.json [--strict] [--require-measurement]
 electron-stagewright-budget compare before.json after.json
+electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--out run.json]
 ```
+
+- `measure` launches the app (`--main <main.js>`, or `--executable <path>` for a packaged build;
+  repeat `--arg` and `--env K=V` to pass them through) on an empty throwaway profile. Each round is
+  a `cold` launch and a `warm` relaunch on the same profile (`--phases` picks one). It waits for
+  the window to load, settles (`--settle-ms`, default 3000), measures a window (`--window-ms`), and
+  writes the run. `--check` gates it in the same command. On Linux CI run it under `xvfb-run`.
+- `--workload <script.mjs>` replaces the idle window with your interaction. The module
+  default-exports `async ({ dispatch, sessionId, phase }) => { ... }`, where `dispatch(tool, args)`
+  calls any core Stagewright tool (plugin tools are not loaded) on the launched app. The workload
+  runs with your privileges and eval enabled, so pass only a script you trust:
+
+  ```js
+  export default async ({ dispatch, sessionId }) => {
+    await dispatch('electron_click', { sessionId, selector: '#new-sale' })
+  }
+  ```
 
 - `bundle` measures the `bundle` entries (paths resolve from `--root`, default the budget file's
   directory) and gates them. It needs no Electron and no display.
 - `check` compares a run file to the budget. Values are the median over the rounds of a phase.
-  A run is the JSON document `createRun` builds from `measureSession` output.
 - `compare` prints a before/after table of two runs.
 - `--strict` ignores `thresholdPercent`. `--require-measurement` fails a budgeted metric the run did
   not measure; without it that metric is listed as `unmeasured`.
@@ -111,7 +128,10 @@ electron-stagewright-budget compare before.json after.json
 
 Exit codes: `0` within budget, `1` over budget **or nothing measured**, `2` usage error, unreadable
 input, or any other error. A bundle entry that matches no file is `unmeasured`, never zero bytes,
-and fails `bundle`.
+and fails `bundle`. `measure` writes no run when no round produced a measurement.
+
+The inspector Stagewright attaches is part of what `measure` measures, so calibrate budgets with
+this tool. A packaged build whose fuses forbid inspection cannot be measured yet.
 
 ## Library
 

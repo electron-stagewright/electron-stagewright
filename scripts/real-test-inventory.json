@@ -92,6 +92,10 @@
     "tests": 1
   },
   {
+    "path": "packages/plugin-budget/tests/budget-cli-smoke.test.ts",
+    "tests": 1
+  },
+  {
     "path": "packages/plugin-budget/tests/budget-smoke.test.ts",
     "tests": 1
   },

@@ -42,7 +42,8 @@ which keeps that boundary local by construction.
   **length**, and a `code_hash` — never the payload).
 - Eval results are size-capped before they reach the agent.
 - A plugin that reaches `transport.evaluate('main')` directly (e.g. the IPC plugin)
-  must re-assert the main eval opt-in at its own tool boundary (ADR-010).
+  must re-assert the main eval opt-in at its own tool boundary (ADR-010; the budget plugin's
+  runtime tools do the same, ADR-030).
 
 ### 3. The supporting controls
 

@@ -17,8 +17,9 @@ import { pathToFileURL } from 'node:url'
 import { BudgetFileError, PHASES, loadBudget, type Phase } from './budget.js'
 import { measureBundle } from './bundle.js'
 import { checkRun, type CheckReport } from './check.js'
+import { DEFAULT_ROUNDS, measureApp, type LaunchPhase, type Workload } from './measure.js'
 import { compareRuns, renderCheckReport, renderComparison } from './render.js'
-import { RunFileError, createRun, loadRun } from './run.js'
+import { RunFileError, createRun, loadRun, type BudgetRun } from './run.js'
 
 export const BUDGET_EXIT_CODES = { SUCCESS: 0, OVER_BUDGET: 1, USAGE: 2 } as const
 export type BudgetExitCode = (typeof BUDGET_EXIT_CODES)[keyof typeof BUDGET_EXIT_CODES]
@@ -58,18 +59,53 @@ export type BudgetCliOptions =
       readonly strict: boolean
       readonly json: boolean
     }
+  | MeasureCliOptions
+
+export interface MeasureCliOptions {
+  readonly command: 'measure'
+  readonly main?: string
+  readonly executablePath?: string
+  readonly args: readonly string[]
+  readonly env: Readonly<Record<string, string>>
+  readonly budgetPath?: string
+  readonly rounds: number
+  readonly phases: readonly LaunchPhase[]
+  readonly settleMs?: number
+  readonly windowMs?: number
+  readonly workloadPath?: string
+  readonly label?: string
+  readonly outPath?: string
+  readonly check: boolean
+  readonly strict: boolean
+  readonly requireMeasurement: boolean
+  readonly json: boolean
+}
+
+/** Seam for tests: the launch-and-measure step. */
+export interface BudgetCliDependencies {
+  readonly measureApp: typeof measureApp
+}
 
 class UsageError extends Error {}
 
 export function formatBudgetCliHelp(): string {
   return [
     'Usage:',
+    '  electron-stagewright-budget measure (--main <main.js> | --executable <path>) [--arg <v>]...',
+    '                              [--env K=V]... [--budget <file>] [--rounds 3]',
+    '                              [--phases cold,warm] [--settle-ms 3000] [--window-ms 2000]',
+    '                              [--workload <script.mjs>] [--label <text>] [--out <run.json>]',
+    '                              [--check [--strict] [--require-measurement]] [--json]',
     '  electron-stagewright-budget check <run.json> --budget <file> [--strict]',
     '                              [--require-measurement] [--phase cold|warm|live] [--json]',
     '  electron-stagewright-budget compare <before.json> <after.json> [--json]',
     '  electron-stagewright-budget bundle --budget <file> [--root <dir>] [--out <run.json>]',
     '                              [--strict] [--json]',
     '',
+    'measure   Launch the app on a throwaway profile and measure cold and warm rounds.',
+    '          --workload is an ES module whose default export, async ({ dispatch, sessionId,',
+    '          phase }), drives the app inside the measurement window. Without --out or',
+    '          --check the run document goes to stdout.',
     'check     Compare a measured run to a budget file.',
     'compare   Print a before/after table of two runs.',
     'bundle    Measure the bundle entries of a budget and gate them; needs no Electron.',
@@ -82,13 +118,117 @@ export function formatBudgetCliHelp(): string {
   ].join('\n')
 }
 
+function positiveInt(flag: string, value: string, min = 1): number {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < min) {
+    throw new UsageError(`${flag} expects an integer of at least ${min}`)
+  }
+  return parsed
+}
+
+function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { command: 'help' } {
+  const single = new Map<string, string>()
+  const args: string[] = []
+  const env: Record<string, string> = {}
+  const flags = new Set<string>()
+  const valueFlags = [
+    '--main',
+    '--executable',
+    '--budget',
+    '--rounds',
+    '--phases',
+    '--settle-ms',
+    '--window-ms',
+    '--workload',
+    '--label',
+    '--out',
+  ]
+  const booleanFlags = ['--check', '--strict', '--require-measurement', '--json']
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index] as string
+    // Scanned here, not over all of argv, so `--arg --help` is forwarded to the app.
+    if (token === '--help' || token === '-h') return { command: 'help' }
+    if (booleanFlags.includes(token)) {
+      flags.add(token)
+      continue
+    }
+    if (token !== '--arg' && token !== '--env' && !valueFlags.includes(token)) {
+      throw new UsageError(`Unknown option for measure: ${token}`)
+    }
+    const value = rest[index + 1]
+    // --arg forwards anything, including empty values and values that start with dashes.
+    if (
+      value === undefined ||
+      (token !== '--arg' && (value.length === 0 || value.startsWith('--')))
+    ) {
+      throw new UsageError(`${token} expects a value`)
+    }
+    index += 1
+    if (token === '--arg') {
+      args.push(value)
+    } else if (token === '--env') {
+      const separator = value.indexOf('=')
+      if (separator <= 0) throw new UsageError('--env expects KEY=VALUE')
+      env[value.slice(0, separator)] = value.slice(separator + 1)
+    } else {
+      if (single.has(token)) throw new UsageError(`${token} may be given only once`)
+      single.set(token, value)
+    }
+  }
+  const main = single.get('--main')
+  const executablePath = single.get('--executable')
+  if (main === undefined && executablePath === undefined) {
+    throw new UsageError('measure requires --main <main.js> or --executable <path>')
+  }
+  const phases = (single.get('--phases') ?? 'cold,warm').split(',').map((phase) => phase.trim())
+  if (phases.some((phase) => phase !== 'cold' && phase !== 'warm')) {
+    throw new UsageError('--phases expects cold, warm, or cold,warm')
+  }
+  const check = flags.has('--check')
+  const budgetPath = single.get('--budget')
+  if (check && budgetPath === undefined) throw new UsageError('--check requires --budget <file>')
+  if (!check && (flags.has('--strict') || flags.has('--require-measurement'))) {
+    throw new UsageError('--strict and --require-measurement apply only with --check')
+  }
+  const optional = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } =>
+    value === undefined ? {} : ({ [key]: value } as { [P in K]: V })
+  const number = (flag: string, min: number): number | undefined => {
+    const value = single.get(flag)
+    return value === undefined ? undefined : positiveInt(flag, value, min)
+  }
+  return {
+    command: 'measure',
+    ...optional('main', main === undefined ? undefined : path.resolve(main)),
+    ...optional(
+      'executablePath',
+      executablePath === undefined ? undefined : path.resolve(executablePath),
+    ),
+    args,
+    env,
+    ...optional('budgetPath', budgetPath),
+    rounds: number('--rounds', 1) ?? DEFAULT_ROUNDS,
+    phases: [...new Set(phases)] as LaunchPhase[],
+    ...optional('settleMs', number('--settle-ms', 0)),
+    ...optional('windowMs', number('--window-ms', 250)),
+    ...optional('workloadPath', single.get('--workload')),
+    ...optional('label', single.get('--label')),
+    ...optional('outPath', single.get('--out')),
+    check,
+    strict: flags.has('--strict'),
+    requireMeasurement: flags.has('--require-measurement'),
+    json: flags.has('--json'),
+  }
+}
+
 /** Strict parser: an unknown flag or a missing value is a usage error. */
 export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
   const [command, ...rest] = argv
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
-    if (command === undefined) throw new UsageError('Expected a subcommand: check, compare, bundle')
+    if (command === undefined)
+      throw new UsageError('Expected a subcommand: measure, check, compare, bundle')
     return { command: 'help' }
   }
+  if (command === 'measure') return parseMeasureArgs(rest)
   if (command !== 'check' && command !== 'compare' && command !== 'bundle') {
     throw new UsageError(`Unknown subcommand: ${command}`)
   }
@@ -175,15 +315,83 @@ function emitReport(report: CheckReport, json: boolean, io: BudgetCliIo): Budget
   return report.passed ? BUDGET_EXIT_CODES.SUCCESS : BUDGET_EXIT_CODES.OVER_BUDGET
 }
 
+async function writeRun(outPath: string, run: BudgetRun): Promise<void> {
+  await mkdir(path.dirname(path.resolve(outPath)), { recursive: true })
+  await writeFile(outPath, `${JSON.stringify(run, null, 2)}\n`)
+}
+
+async function loadWorkload(workloadPath: string): Promise<Workload> {
+  let module: { default?: unknown }
+  try {
+    module = (await import(pathToFileURL(path.resolve(workloadPath)).href)) as { default?: unknown }
+  } catch (error) {
+    throw new UsageError(
+      `Cannot load workload ${workloadPath}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  if (typeof module.default !== 'function') {
+    throw new UsageError(`Workload ${workloadPath} must default-export an async function`)
+  }
+  return module.default as Workload
+}
+
+async function runMeasure(
+  options: MeasureCliOptions,
+  io: BudgetCliIo,
+  deps: BudgetCliDependencies,
+): Promise<BudgetExitCode> {
+  const budget = options.budgetPath === undefined ? undefined : await loadBudget(options.budgetPath)
+  const workload =
+    options.workloadPath === undefined ? undefined : await loadWorkload(options.workloadPath)
+  let run = await deps.measureApp({
+    launch: {
+      ...(options.main === undefined ? {} : { main: options.main }),
+      ...(options.executablePath === undefined ? {} : { executablePath: options.executablePath }),
+      args: options.args,
+      env: options.env,
+    },
+    rounds: options.rounds,
+    phases: options.phases,
+    ...(options.settleMs === undefined ? {} : { settleMs: options.settleMs }),
+    ...(options.windowMs === undefined ? {} : { windowMs: options.windowMs }),
+    ...(budget === undefined ? {} : { budget }),
+    ...(workload === undefined ? {} : { workload }),
+    ...(options.label === undefined ? {} : { label: options.label }),
+    onProgress: (message) => io.stderr(`${message}\n`),
+  })
+  // A run with no round would later read as "nothing over budget"; never write one.
+  if (run.rounds.length === 0) {
+    io.stderr('No round produced a measurement; no run was written.\n')
+    return BUDGET_EXIT_CODES.OVER_BUDGET
+  }
+  if (budget?.bundle !== undefined && options.budgetPath !== undefined) {
+    const root = path.dirname(path.resolve(options.budgetPath))
+    run = { ...run, bundle: await measureBundle(root, budget.bundle.entries) }
+  }
+  if (options.outPath !== undefined) await writeRun(options.outPath, run)
+  if (options.check && budget !== undefined) {
+    const report = checkRun(run, budget, {
+      strict: options.strict,
+      requireMeasurement: options.requireMeasurement,
+    })
+    return emitReport(report, options.json, io)
+  }
+  if (options.outPath === undefined) io.stdout(`${JSON.stringify(run, null, 2)}\n`)
+  else io.stderr(`Wrote ${options.outPath}\n`)
+  return BUDGET_EXIT_CODES.SUCCESS
+}
+
 /** Execute already-parsed options. Throws the typed file errors; the caller maps them to exit 2. */
 export async function runBudgetCli(
   options: BudgetCliOptions,
   io: BudgetCliIo = PROCESS_IO,
+  deps: BudgetCliDependencies = { measureApp },
 ): Promise<BudgetExitCode> {
   if (options.command === 'help') {
     io.stdout(`${formatBudgetCliHelp()}\n`)
     return BUDGET_EXIT_CODES.SUCCESS
   }
+  if (options.command === 'measure') return runMeasure(options, io, deps)
   if (options.command === 'compare') {
     const rows = compareRuns(await loadRun(options.beforePath), await loadRun(options.afterPath))
     if (rows.length === 0) {
@@ -208,10 +416,7 @@ export async function runBudgetCli(
   }
   const root = path.resolve(options.root ?? path.dirname(options.budgetPath))
   const run = createRun({ rounds: [], bundle: await measureBundle(root, budget.bundle.entries) })
-  if (options.outPath !== undefined) {
-    await mkdir(path.dirname(path.resolve(options.outPath)), { recursive: true })
-    await writeFile(options.outPath, `${JSON.stringify(run, null, 2)}\n`)
-  }
+  if (options.outPath !== undefined) await writeRun(options.outPath, run)
   const bundleOnly = {
     ...(budget.thresholdPercent === undefined ? {} : { thresholdPercent: budget.thresholdPercent }),
     bundle: budget.bundle,
@@ -225,9 +430,10 @@ export async function runBudgetCli(
 export async function runBudgetCliCommand(
   argv: readonly string[],
   io: BudgetCliIo = PROCESS_IO,
+  deps: BudgetCliDependencies = { measureApp },
 ): Promise<BudgetExitCode> {
   try {
-    return await runBudgetCli(parseBudgetCliArgs(argv), io)
+    return await runBudgetCli(parseBudgetCliArgs(argv), io, deps)
   } catch (error) {
     const known =
       error instanceof UsageError ||
