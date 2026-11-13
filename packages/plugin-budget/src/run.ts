@@ -203,35 +203,40 @@ export function summarizeRun(run: BudgetRun): SummaryRow[] {
     )
 
     const memories = measurements.flatMap((m) => (m.memory === undefined ? [] : [m.memory]))
-    const metric = memories[0]?.metric
-    const sameMetric = memories.filter((memory) => memory.metric === metric)
-    const byType = sameMetric.map(memoryByType)
-    for (const type of PROCESS_TYPES) {
+    const primary = memories[0]?.metric
+    // Working set is always recorded, so a budget may name it on any platform.
+    for (const metric of new Set([primary, 'workingSet'] as const)) {
+      if (metric === undefined) continue
+      const byType = memories
+        .filter((memory) => memory.metric === primary)
+        .map((memory) => memoryByType({ ...memory, metric }))
+        .filter((totals) => Object.keys(totals).length > 0)
+      for (const type of PROCESS_TYPES) {
+        push(
+          `memory.${type}`,
+          'MB',
+          byType.map((totals) => totals[type]),
+          metric,
+        )
+      }
+      const sum = (totals: Partial<Record<ProcessType, number>>, skipGpu: boolean): number =>
+        PROCESS_TYPES.reduce(
+          (acc, type) => acc + (skipGpu && type === 'gpu' ? 0 : (totals[type] ?? 0)),
+          0,
+        )
       push(
-        `memory.${type}`,
+        'memory.totalWithoutGpu',
         'MB',
-        byType.map((totals) => totals[type]),
+        byType.map((totals) => sum(totals, true)),
+        metric,
+      )
+      push(
+        'memory.total',
+        'MB',
+        byType.map((totals) => sum(totals, false)),
         metric,
       )
     }
-    const sum = (totals: Partial<Record<ProcessType, number>>, skipGpu: boolean): number =>
-      PROCESS_TYPES.reduce(
-        (acc, type) => acc + (skipGpu && type === 'gpu' ? 0 : (totals[type] ?? 0)),
-        0,
-      )
-    const measured = byType.filter((totals) => Object.keys(totals).length > 0)
-    push(
-      'memory.totalWithoutGpu',
-      'MB',
-      measured.map((totals) => sum(totals, true)),
-      metric,
-    )
-    push(
-      'memory.total',
-      'MB',
-      measured.map((totals) => sum(totals, false)),
-      metric,
-    )
 
     push(
       'mainThread.blockedPercent',

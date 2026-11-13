@@ -1,9 +1,59 @@
 # @electron-stagewright/plugin-budget
 
 Performance budgets for Electron apps: write the limits in one JSON file, measure a build, and fail
-the pull request that goes over. This release ships the budget format, the pure comparison, the
-bundle-size measurement, and the `electron-stagewright-budget` CLI. Live measurement of a running app
-(startup, per-process memory, main-thread blocking, IPC latency) builds on the same run format.
+the change that goes over. An agent asks `budget_check` whether its change broke a budget; CI runs the
+`electron-stagewright-budget` CLI. Both read the same budget file and the same run format.
+
+It measures startup to first window, memory per process type in the platform's own metric,
+main-thread blocking, IPC round-trip latency, and bundle size. The app needs no code change: the
+plugin samples through the session Stagewright already holds.
+
+## Load it
+
+```sh
+electron-stagewright --plugin budget --allow-eval
+```
+
+```js
+import { createServer } from '@electron-stagewright/core'
+import budgetPlugin from '@electron-stagewright/plugin-budget'
+
+const server = await createServer({
+  plugins: [budgetPlugin],
+  allowEval: true,
+  pluginConfigs: { budget: { budgetFile: '/abs/path/perf-budget.json' } },
+})
+```
+
+Config (`pluginConfigs.budget`): `budgetFile` (default budget for `budget_check`), `root` (where
+bundle paths resolve; defaults to the budget file's directory), `windowMs` (idle window, default 2000).
+
+| Metric                       | Needs                                              |
+| ---------------------------- | -------------------------------------------------- |
+| Memory, main-thread blocking | A session and main eval (`--allow-eval=main`)      |
+| IPC latency, startup         | The above plus renderer eval (bare `--allow-eval`) |
+| Bundle size                  | Nothing: no session, no eval                       |
+
+The bodies evaluated in the app are fixed. The one operator-supplied expression is the IPC probe.
+
+## Tools
+
+- **`budget_check`** `{ budgetPath?, sessionId?, windowMs?, strict?, requireMeasurement? }` — measure
+  the running app and the bundle entries and compare them to the budget. Returns
+  `{ passed, reason?, summary, results }`; each result is `pass`, `fail`, or `unmeasured` with the
+  reason. `passed` is false when a limit is exceeded and when nothing could be measured. Visible
+  without eval; then only the bundle is checked.
+- **`budget_start`** `{ budgetPath?, ipcProbe?, ipcIntervalMs?, sessionId? }` — open a measurement
+  window, then drive the app with the other tools. The next `budget_measure` or `budget_check` closes
+  it, so blocking and IPC latency cover the interaction instead of an idle app.
+- **`budget_measure`** `{ budgetPath?, ipcProbe?, windowMs?, sessionId? }` — the numbers without a
+  verdict: `{ measured: [{ id, value, unit, metric? }], unavailable? }`.
+
+Main-thread blocking is the lateness of a 10 ms timer in the main process: `blockedPercent` is the
+share of the window it ran 10 ms or more late, `maxStallMs` the worst single stall. The IPC probe
+times one round trip of the budget's `ipc.probe` expression every `intervalMs` (default 25).
+Startup is process creation to the end of the first window's load event; it is `unmeasured` after
+a reload.
 
 ## Budget file
 
@@ -50,6 +100,7 @@ electron-stagewright-budget compare before.json after.json
 - `bundle` measures the `bundle` entries (paths resolve from `--root`, default the budget file's
   directory) and gates them. It needs no Electron and no display.
 - `check` compares a run file to the budget. Values are the median over the rounds of a phase.
+  A run is the JSON document `createRun` builds from `measureSession` output.
 - `compare` prints a before/after table of two runs.
 - `--strict` ignores `thresholdPercent`. `--require-measurement` fails a budgeted metric the run did
   not measure; without it that metric is listed as `unmeasured`.

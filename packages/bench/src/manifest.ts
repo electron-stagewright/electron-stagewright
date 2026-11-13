@@ -12,6 +12,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { createServer, type StagewrightPlugin, type ToolProfile } from '@electron-stagewright/core'
 import a11yPlugin from '@electron-stagewright/plugin-a11y'
+import budgetPlugin from '@electron-stagewright/plugin-budget'
 import clockPlugin from '@electron-stagewright/plugin-clock'
 import ipcPlugin from '@electron-stagewright/plugin-ipc'
 import nativeUiPlugin from '@electron-stagewright/plugin-native-ui'
@@ -26,6 +27,7 @@ import { countRealTokens } from './tokenizer.js'
 /** The first-party plugins, ordered by their public package name. */
 export const FIRST_PARTY_PLUGINS: readonly StagewrightPlugin[] = [
   a11yPlugin,
+  budgetPlugin,
   clockPlugin,
   ipcPlugin,
   nativeUiPlugin,

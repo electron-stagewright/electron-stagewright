@@ -28,6 +28,7 @@ import { DEFAULT_TOOLS } from '../src/tools/index.js'
 import type { AnyToolDefinition } from '../src/tools/types.js'
 import { NOOP_LOGGER } from '../src/server/logger.js'
 import a11yPlugin from '../../plugin-a11y/src/index.js'
+import budgetPlugin from '../../plugin-budget/src/index.js'
 import clockPlugin from '../../plugin-clock/src/index.js'
 import ipcPlugin from '../../plugin-ipc/src/index.js'
 import nativeUiPlugin from '../../plugin-native-ui/src/index.js'
@@ -52,6 +53,7 @@ const FIRST_PARTY_PLUGINS = [
   storagePlugin,
   nativeUiPlugin,
   visualPlugin,
+  budgetPlugin,
 ] as const
 
 /** One markdown document loaded for scanning. */
@@ -110,7 +112,7 @@ async function loadLinkCheckedDocs(): Promise<MarkdownDoc[]> {
  * `electron_expect_*`) survives the match and is validated as a prefix.
  */
 const TOOL_MENTION =
-  /\b(?:electron|a11y|visual|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
+  /\b(?:electron|a11y|budget|visual|trace|ipc|network|production|clock|storage|native)_[a-z][a-z0-9_]*/g
 
 /** The full set of real tool names: the live core manifest plus every first-party plugin. */
 async function collectKnownToolNames(): Promise<ReadonlySet<string>> {

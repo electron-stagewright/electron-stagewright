@@ -1,0 +1,14 @@
+{
+  "$comment": "Loose limits: the smoke proves each metric is measured and gated, not that the fixture is fast.",
+  "startup": { "maxFirstWindowMs": 60000 },
+  "memory": {
+    "darwin": { "metric": "footprint", "perTypeMb": { "main": 2000, "renderer": 2000 } },
+    "linux": { "metric": "pss", "perTypeMb": { "main": 2000, "renderer": 2000 } },
+    "win32": { "metric": "privateBytes", "perTypeMb": { "main": 2000, "renderer": 2000 } }
+  },
+  "mainThread": { "windowMs": 1500, "maxBlockedPercent": 100, "maxStallMs": 5000 },
+  "ipc": { "probe": "window.api.getVersion()", "maxP99Ms": 5000 },
+  "bundle": {
+    "entries": [{ "name": "renderer", "path": "dist", "extensions": [".js"], "maxKb": 50 }]
+  }
+}
