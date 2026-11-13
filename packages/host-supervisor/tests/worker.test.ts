@@ -4,7 +4,7 @@
 
 import { fileURLToPath } from 'node:url'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createHost,
@@ -115,26 +115,38 @@ describe('workerThreadTransport', { timeout: 30_000 }, () => {
 
   it('aborts a call inside the worker', async () => {
     const host = workerHost()
+    await host.start()
     const error = await rejection(host.call('hang', [], { timeoutMs: 100 }))
     expect(error.code).toBe('HOST_CALL_TIMEOUT')
+    await vi.waitFor(async () => expect(await host.ops.aborted()).toBe(1))
     await host.close()
   })
 })
 
 describe('workerThreadTransport exits', () => {
-  function crashed(thrown: unknown) {
+  function worker() {
     const listeners: Record<string, (value: never) => void> = {}
-    const worker: WorkerLike = {
+    const fake: WorkerLike = {
       postMessage: () => undefined,
       on: (event: string, listener: (value: never) => void) => (listeners[event] = listener),
       terminate: () => Promise.resolve(1),
     }
-    const channel = workerThreadTransport({ entry: 'host.js', createWorker: () => worker }).launch()
+    const channel = workerThreadTransport({ entry: 'host.js', createWorker: () => fake }).launch()
     let exit: ChannelExit | null = null
     channel.onExit((value) => (exit = value))
-    listeners['error']?.(thrown as never)
-    listeners['exit']?.(1 as never)
-    return exit as ChannelExit | null
+    return {
+      error: (thrown: unknown) => listeners['error']?.(thrown as never),
+      exit: () => {
+        listeners['exit']?.(1 as never)
+        return exit as ChannelExit | null
+      },
+    }
+  }
+
+  function crashed(thrown: unknown) {
+    const fake = worker()
+    fake.error(thrown)
+    return fake.exit()
   }
 
   it('maps the heap-limit error to out-of-memory', () => {
@@ -150,4 +162,11 @@ describe('workerThreadTransport exits', () => {
       expect(exit?.outOfMemory).toBe(false)
     },
   )
+
+  it('does not blame the host for an inner worker that ran out of memory', async () => {
+    const fake = worker()
+    fake.error(Object.assign(new Error('inner heap'), { code: 'ERR_WORKER_OUT_OF_MEMORY' }))
+    await Promise.resolve()
+    expect(fake.exit()?.outOfMemory).toBe(false)
+  })
 })

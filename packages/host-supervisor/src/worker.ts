@@ -19,7 +19,10 @@ export interface WorkerLike {
 export interface WorkerThreadTransportOptions {
   /** The host entry: a file that calls `serveHost`. */
   readonly entry: string | URL
-  /** V8 heap caps; past them Node ends only the worker, reported as `out-of-memory`. */
+  /**
+   * V8 heap caps; past them Node usually ends only the worker, reported as `out-of-memory`. One
+   * allocation far past the cap can still abort the whole process.
+   */
   readonly resourceLimits?: ResourceLimits
   readonly env?: WorkerOptions['env']
   readonly execArgv?: readonly string[]
@@ -44,12 +47,17 @@ export function workerThreadTransport(options: WorkerThreadTransportOptions): Ho
         ...(options.name ? { name: options.name } : {}),
       })
       let error: Error | null = null
+      // Node emits its own heap-limit error in the same tick as 'exit'; an uncaught error that
+      // merely carries that code (from an inner worker, say) arrives earlier.
+      let errorThisTick = false
       // A worker can throw any value, falsy ones included.
       worker.on('error', (cause: unknown) => {
         error =
           cause instanceof Error
             ? cause
             : new Error(`The host threw a non-error value: ${String(cause)}`)
+        errorThisTick = true
+        queueMicrotask(() => (errorThisTick = false))
       })
       return {
         send: (message) => worker.postMessage(message),
@@ -60,7 +68,9 @@ export function workerThreadTransport(options: WorkerThreadTransportOptions): Ho
               ? {
                   code,
                   error,
-                  outOfMemory: (error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY',
+                  outOfMemory:
+                    errorThisTick &&
+                    (error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY',
                 }
               : { code }
             listener(exit)

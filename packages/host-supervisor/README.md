@@ -66,8 +66,9 @@ const transport = workerThreadTransport({
 })
 ```
 
-Past `resourceLimits` Node ends only the worker; the supervisor reports the exit as
-`out-of-memory`. Native memory is outside that cap: pass `statsIntervalMs` to `serveHost` and
+Past `resourceLimits` Node usually ends only the worker, and the supervisor reports the exit as
+`out-of-memory`. One allocation far past the cap can still abort the whole process; use
+`utilityProcess` when the app must survive its host. Native memory is outside that cap: pass `statsIntervalMs` to `serveHost` and
 `memoryWatch({ rssMb, onAlert })` as `onStats` to see it. A worker shares the process, so its
 `rssMb` is the whole app's.
 
