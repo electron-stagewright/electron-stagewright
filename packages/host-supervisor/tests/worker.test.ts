@@ -50,6 +50,38 @@ function workerHost(
 }
 
 describe('workerThreadTransport', { timeout: 30_000 }, () => {
+  it('reads start info, settles an abort with the host answer, and holds launches while paused', async () => {
+    const started: number[] = []
+    const host = createHost<TestOps, { greeting: string }, { threadId: number }>({
+      operations: TEST_OPERATIONS,
+      streams: TEST_STREAMS,
+      transport: workerThreadTransport({ entry: ENTRY, execArgv: ['--import', 'tsx'] }),
+      start: { payload: () => ({ greeting: 'hello' }), timeoutMs: 20_000 },
+      limits: { abortGraceMs: 5_000 },
+      onStarted: (event) => void started.push(event.launches),
+    })
+    const info = await host.start()
+    expect(info?.threadId).toBeGreaterThan(0)
+    expect(host.info).toEqual(info)
+
+    const controller = new AbortController()
+    const hung = host.call('hang', [], { signal: controller.signal })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    controller.abort()
+    await expect(hung).resolves.toBe('aborted')
+
+    await host.pause()
+    const waiting = host.ops.echo('later')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(host.state).toBe('paused')
+    expect(started).toEqual([1])
+    host.resume()
+    await expect(waiting).resolves.toBe('hello later')
+    expect(host.info?.threadId).not.toBe(info?.threadId)
+    expect(started).toEqual([1, 2])
+    await host.close()
+  })
+
   it('answers calls and streams from a real worker', async () => {
     const host = workerHost()
     await expect(host.ops.echo('worker')).resolves.toBe('hello worker')

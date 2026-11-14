@@ -28,7 +28,9 @@ export {
   type HostExit,
   type HostExitReason,
   type HostOptions,
+  type HostStartedEvent,
   type HostState,
+  type PauseOptions,
 } from './host.js'
 export { inProcessTransport } from './in-process.js'
 export {

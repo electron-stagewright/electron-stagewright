@@ -25,7 +25,7 @@ export const DEFAULT_STOP_GRACE_MS = 10_000
 export const DEFAULT_RETIRE_WAIT_MS = 5_000
 
 export type HostState =
-  'idle' | 'starting' | 'running' | 'restarting' | 'stopping' | 'fatal' | 'closed'
+  'idle' | 'starting' | 'running' | 'restarting' | 'stopping' | 'paused' | 'fatal' | 'closed'
 
 /**
  * Why a host ended:
@@ -65,9 +65,30 @@ export interface CallOptions {
   readonly signal?: AbortSignal
   /** Overrides `limits.callTimeoutMs`; for a stream it bounds each item. */
   readonly timeoutMs?: number
+  /** Overrides `limits.abortGraceMs`. */
+  readonly abortGraceMs?: number
 }
 
-export interface HostOptions<Ops extends Contract<Ops>, Payload = undefined> {
+export interface PauseOptions {
+  /** What a call does while paused: wait for `resume()` (default) or fail with `HOST_PAUSED`. */
+  readonly calls?: 'wait' | 'reject'
+}
+
+/** A host answered `start`. */
+export interface HostStartedEvent<Info = undefined> {
+  readonly info: Info | undefined
+  /** Hosts started so far by this supervisor, this one included. */
+  readonly launches: number
+  /** Set when this host replaces one that exited on its own. */
+  readonly restart: {
+    /** The exit that started the recovery. */
+    readonly exit: HostExit
+    /** 1 for the first try after that exit, 2 after one failed restart, and so on. */
+    readonly attempt: number
+  } | null
+}
+
+export interface HostOptions<Ops extends Contract<Ops>, Payload = undefined, Info = undefined> {
   /** The closed list of operations that answer once. */
   readonly operations: readonly CallOperation<Ops>[]
   /** The closed list of operations that answer with a stream. */
@@ -88,10 +109,17 @@ export interface HostOptions<Ops extends Contract<Ops>, Payload = undefined> {
     /** Calls and open streams allowed at once; one more fails with `HOST_QUEUE_FULL`. */
     readonly maxPending?: number
     readonly callTimeoutMs?: number
+    /**
+     * After an abort, wait this long for the host to settle the call: it settles with the host's
+     * own answer, or fails with `HOST_ABORT_UNSETTLED`. Unset, an abort fails the call at once.
+     */
+    readonly abortGraceMs?: number
   }
   /** Decides what follows an exit nobody asked for. Defaults to `fatal`. */
   readonly onExit?: (exit: HostExit) => ExitDecision | Promise<ExitDecision>
   readonly onStats?: (stats: HostStats) => void
+  /** Every successful start, restarts included. A throw or rejection becomes a process warning. */
+  readonly onStarted?: (event: HostStartedEvent<Info>) => void | Promise<void>
   readonly errors?: {
     /** Rebuilds an application error, such as the app's own class; `undefined` keeps the default. */
     readonly revive?: (serialized: SerializedError) => Error | undefined
@@ -120,6 +148,13 @@ export interface Host<Ops extends Contract<Ops>, Info = undefined> {
   kill(): Promise<void>
   /** Stops the host and refuses every later call. */
   close(): Promise<void>
+  /**
+   * Stops the host like `stop()` and starts none until `resume()`, so its files can be swapped.
+   * Rejects as `stop()` does, but stays paused either way.
+   */
+  pause(options?: PauseOptions): Promise<void>
+  /** Lets hosts start again; calls that waited start one. */
+  resume(): void
   readonly state: HostState
   /** What the running host passed to `setInfo`; `undefined` while no host is running. */
   readonly info: Info | undefined
@@ -151,6 +186,7 @@ interface Entry {
   readonly id: number
   readonly stream: boolean
   readonly timeoutMs: number | undefined
+  readonly graceMs: number | undefined
   life: Life | null
   done: boolean
   /** Kept for a stream that failed between items, so the next pull reports it. */
@@ -187,6 +223,18 @@ function supervisorError(serialized: SerializedError): HostError | null {
   return null
 }
 
+function warn(error: unknown): void {
+  process.emitWarning(error instanceof Error ? error : new Error(String(error)))
+}
+
+/** Runs a listener outside the transport's callback, so a throw cannot escape as uncaught. */
+function notify<T>(listener: ((value: T) => unknown) | undefined, value: T): void {
+  if (!listener) return
+  Promise.resolve()
+    .then(() => listener(value))
+    .catch(warn)
+}
+
 function normalizeDecision(decision: ExitDecision): {
   action: 'fatal' | 'on-demand' | 'restart'
   delayMs: number
@@ -202,8 +250,17 @@ function normalizeDecision(decision: ExitDecision): {
   return { action: 'fatal', delayMs: 0 }
 }
 
+const MAX_TIMER_MS = 2_147_483_647
+
+function checkGraceMs(value: number | undefined): number | undefined {
+  if (value === undefined || (Number.isFinite(value) && value >= 0 && value <= MAX_TIMER_MS)) {
+    return value
+  }
+  throw new RangeError(`abortGraceMs must be between 0 and ${MAX_TIMER_MS} ms, not ${value}`)
+}
+
 export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info = undefined>(
-  options: HostOptions<Ops, Payload>,
+  options: HostOptions<Ops, Payload, Info>,
 ): Host<Ops, Info> {
   const callOps: ReadonlySet<string> = new Set(options.operations)
   const streamOps: ReadonlySet<string> = new Set(options.streams ?? [])
@@ -211,6 +268,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
   const retireWaitMs = options.stop?.retireWaitMs ?? DEFAULT_RETIRE_WAIT_MS
   const maxPending = options.limits?.maxPending ?? Number.POSITIVE_INFINITY
   const defaultTimeoutMs = options.limits?.callTimeoutMs
+  const defaultGraceMs = checkGraceMs(options.limits?.abortGraceMs)
   const onExit = options.onExit ?? (() => 'fatal' as const)
   const now = options.now ?? Date.now
 
@@ -225,7 +283,26 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
   let closeRequested = false
   let wakeDelay: (() => void) | null = null
   let nextId = 1
+  let launches = 0
+  /** The exit an `on-demand` decision left unanswered, reported with the next start. */
+  let pendingRestart: HostStartedEvent['restart'] = null
+  /** A restart a pause interrupted, launched again by `resume()`. */
+  let restartHeld = false
+  let paused: Required<PauseOptions> | null = null
+  let resumeGate: { promise: Promise<void>; resolve: () => void } | null = null
   const pending = new Map<number, Entry>()
+
+  /** Calls wait for `resume()` from a pause until the hosts it held may start again. */
+  const holding = () => !closeRequested && resumeGate !== null && paused?.calls !== 'reject'
+
+  function pausedError(): HostError {
+    return new HostError('HOST_PAUSED', 'The host is paused')
+  }
+
+  function started(life: Life, restart: HostStartedEvent['restart']): void {
+    launches++
+    notify(options.onStarted, { info: life.info as Info | undefined, launches, restart })
+  }
 
   function remoteError(serialized: SerializedError): Error {
     const own = supervisorError(serialized)
@@ -290,6 +367,31 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     else entry.error = error
   }
 
+  /** Forwards the abort and keeps the call open for the host's own answer, within the grace. */
+  function settleAfterAbort(entry: Entry, life: Life, graceMs: number, reason: unknown): void {
+    entry.detachAbort?.()
+    entry.detachAbort = null
+    if (entry.timer) clearTimeout(entry.timer)
+    try {
+      life.channel.send({ type: 'cancel', id: entry.id })
+    } catch {
+      // The host is going away; its exit settles the call.
+    }
+    entry.timer = unref(
+      setTimeout(() => {
+        finish(
+          entry,
+          new HostError(
+            'HOST_ABORT_UNSETTLED',
+            `The host did not settle the aborted call within ${graceMs} ms`,
+            { cause: reason },
+          ),
+          false,
+        )
+      }, graceMs),
+    )
+  }
+
   function armTimer(entry: Entry): void {
     if (entry.timeoutMs === undefined || entry.timer) return
     entry.timer = unref(
@@ -304,7 +406,9 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
   }
 
   function admit(stream: boolean, callOptions: CallOptions | undefined): Entry {
-    if (state === 'fatal' || state === 'closed' || state === 'stopping') throw unavailable()
+    if (state === 'fatal' || state === 'closed') throw unavailable()
+    if (paused?.calls === 'reject') throw pausedError()
+    if (state === 'stopping' && !holding()) throw unavailable()
     if (pending.size >= maxPending) {
       throw new HostError('HOST_QUEUE_FULL', `More than ${maxPending} calls are pending`)
     }
@@ -316,6 +420,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
       id: nextId++,
       stream,
       timeoutMs: callOptions?.timeoutMs ?? defaultTimeoutMs,
+      graceMs: checkGraceMs(callOptions?.abortGraceMs ?? defaultGraceMs),
       life: null,
       done: false,
       error: null,
@@ -324,12 +429,18 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
       detachAbort: null,
     }
     if (signal) {
-      const onAbort = () =>
-        finish(
-          entry,
-          new HostError('HOST_CALL_ABORTED', 'The call was aborted', { cause: signal.reason }),
-          true,
-        )
+      const onAbort = () => {
+        const life = entry.life
+        if (entry.stream || entry.graceMs === undefined || !life || life.exited) {
+          finish(
+            entry,
+            new HostError('HOST_CALL_ABORTED', 'The call was aborted', { cause: signal.reason }),
+            true,
+          )
+          return
+        }
+        settleAfterAbort(entry, life, entry.graceMs, signal.reason)
+      }
       signal.addEventListener('abort', onAbort, { once: true })
       entry.detachAbort = () => signal.removeEventListener('abort', onAbort)
     }
@@ -349,7 +460,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     ready.then(
       (life) => {
         if (entry.done) return
-        if (life.exited || life !== current) return dispatch(entry, message)
+        if (life.exited || life !== current || resumeGate) return dispatch(entry, message)
         entry.life = life
         try {
           life.channel.send({
@@ -366,7 +477,8 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
       },
       (error: unknown) => {
         if (entry.done) return
-        if (error === RETRY) return dispatch(entry, message)
+        // While paused a call waits for `resume()`, whatever ended the start it was waiting on.
+        if (error === RETRY || holding()) return dispatch(entry, message)
         finish(entry, error as Error, false)
       },
     )
@@ -495,12 +607,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
         return
       case 'stats':
         life.lastStats = message.stats
-        // Inside the transport's listener a throw or rejection would escape as uncaught.
-        Promise.resolve()
-          .then(() => options.onStats?.(message.stats))
-          .catch((error: unknown) =>
-            process.emitWarning(error instanceof Error ? error : new Error(String(error))),
-          )
+        notify(options.onStats, message.stats)
         return
       case 'stopped':
         life.stoppedReceived = true
@@ -686,7 +793,14 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
   }
 
   function ensureStarted(): Promise<Life> {
-    if (state === 'fatal' || state === 'closed' || state === 'stopping') throw unavailable()
+    if (state === 'fatal' || state === 'closed') throw unavailable()
+    if (paused?.calls === 'reject') throw pausedError()
+    if (resumeGate) {
+      return resumeGate.promise.then(() => {
+        throw RETRY
+      })
+    }
+    if (state === 'stopping') throw unavailable()
     if (starting) return starting
     if (current && !current.exited) return Promise.resolve(current)
     state = 'starting'
@@ -704,11 +818,17 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
           current = life
           if (starting === launching) starting = null
           if (state === 'starting') state = 'running'
+          const restart = pendingRestart
+          pendingRestart = null
+          started(life, restart)
           return life
         },
         (error: unknown) => {
           if (starting === launching) starting = null
           if (state === 'starting') state = 'idle'
+          if (pendingRestart) {
+            pendingRestart = { exit: pendingRestart.exit, attempt: pendingRestart.attempt + 1 }
+          }
           throw error
         },
       )
@@ -716,14 +836,17 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     return launching
   }
 
-  async function recover(exit: HostExit): Promise<Life> {
+  async function recover(exit: HostExit, origin: HostExit = exit, attempt = 1): Promise<Life> {
     let decision: ReturnType<typeof normalizeDecision>
     try {
       decision = normalizeDecision(await onExit(exit))
     } catch {
       decision = { action: 'fatal', delayMs: 0 }
     }
-    if (state !== 'restarting') throw unavailable()
+    if (state !== 'restarting') {
+      if (decision.action === 'fatal') throw unavailable()
+      throw interrupted(origin, attempt, decision.action === 'restart')
+    }
     if (decision.action === 'fatal') {
       state = 'fatal'
       fatalCause = exit.error
@@ -733,28 +856,34 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     if (decision.action === 'on-demand') {
       state = 'idle'
       starting = null
+      pendingRestart = { exit: origin, attempt }
       throw RETRY
     }
     if (decision.delayMs > 0) await restartDelay(decision.delayMs)
-    if (state !== 'restarting') throw unavailable()
+    if (state !== 'restarting') throw interrupted(origin, attempt, true)
     let life: Life
     try {
       life = await launch()
       if (life.exited) throw new Error('The host exited right after starting')
     } catch (error) {
-      if (state !== 'restarting') throw unavailable()
+      if (state !== 'restarting') throw interrupted(origin, attempt + 1, true)
       const cause = (error as { cause?: unknown }).cause
-      return recover({
-        kind: 'start-failed',
-        reason: 'start-failed',
-        error: cause instanceof Error ? cause : (error as Error),
-        code: null,
-        uptimeMs: null,
-        pendingCalls: 0,
-        lastStats: null,
-      })
+      return recover(
+        {
+          kind: 'start-failed',
+          reason: 'start-failed',
+          error: cause instanceof Error ? cause : (error as Error),
+          code: null,
+          uptimeMs: null,
+          pendingCalls: 0,
+          lastStats: null,
+        },
+        origin,
+        attempt + 1,
+      )
     }
     if (state !== 'restarting') {
+      launches++
       // A stop drains the host it finds; a kill expects none left running.
       if (state === 'stopping') current = life
       else await retire(life)
@@ -763,7 +892,17 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     current = life
     state = 'running'
     starting = null
+    started(life, { exit: origin, attempt })
     return life
+  }
+
+  /** A pause keeps the recovery it interrupted for `resume()`; a stop or kill drops it. */
+  function interrupted(origin: HostExit, attempt: number, relaunch: boolean): HostError {
+    if (paused) {
+      pendingRestart = { exit: origin, attempt }
+      restartHeld ||= relaunch
+    }
+    return unavailable()
   }
 
   async function stopHost(): Promise<void> {
@@ -771,6 +910,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     state = 'stopping'
     wakeDelay?.()
     for (const entry of [...pending.values()]) {
+      if (!entry.life && holding()) continue
       // Waiting for a start, or a stream between items: nothing in flight to drain.
       if (!entry.life || (entry.stream && !entry.waiter)) {
         finish(entry, new HostError('HOST_STOPPED', 'The host is stopping'), entry.life !== null)
@@ -822,26 +962,91 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
       }
     }
     for (const entry of [...pending.values()]) {
+      if (!entry.life && holding()) continue
       finish(entry, new HostError('HOST_STOPPED', 'The host stopped before answering'), false)
     }
     current = null
-    state = closeRequested ? 'closed' : before === 'fatal' ? 'fatal' : 'idle'
+    state = closeRequested ? 'closed' : before === 'fatal' ? 'fatal' : paused ? 'paused' : 'idle'
     if (failure) throw failure
   }
 
   function shared(final: boolean): Promise<void> {
     if (final) closeRequested = true
+    if (!paused || final) forgetRestart()
     if (state === 'closed') return Promise.resolve()
-    if (stopping) return stopping
+    if (stopping) {
+      // A close joining a pause's stop still fails the calls waiting for `resume()`.
+      if (final) failWaiting()
+      return stopping
+    }
     const run = stopHost().finally(() => {
       stopping = null
     })
     stopping = run
+    if (final) failWaiting()
     return run
+  }
+
+  function failWaiting(): void {
+    paused = null
+    for (const entry of [...pending.values()]) {
+      if (!entry.life) finish(entry, unavailable(), false)
+    }
+    releaseGate()
+  }
+
+  function forgetRestart(): void {
+    pendingRestart = null
+    restartHeld = false
+  }
+
+  function releaseGate(): void {
+    const gate = resumeGate
+    resumeGate = null
+    gate?.resolve()
+  }
+
+  function pause(pauseOptions: PauseOptions = {}): Promise<void> {
+    if (state === 'closed' || closeRequested) return stopping ?? Promise.resolve()
+    paused = { calls: pauseOptions.calls ?? 'wait' }
+    if (paused.calls === 'reject') {
+      for (const entry of [...pending.values()]) {
+        if (!entry.life) finish(entry, pausedError(), false)
+      }
+      // A start() waiting on the gate retries and meets HOST_PAUSED.
+      releaseGate()
+    }
+    if (!resumeGate) {
+      let resolve!: () => void
+      const promise = new Promise<void>((done) => (resolve = done))
+      resumeGate = { promise, resolve }
+    }
+    return shared(false)
+  }
+
+  function resume(): void {
+    if (!paused) return
+    paused = null
+    // Calls waiting for a pause's stop start a host once that stop has finished.
+    const ready = stopping ?? Promise.resolve()
+    void ready.then(release, release)
+    function release(): void {
+      if (paused) return
+      if (state === 'paused') state = 'idle'
+      releaseGate()
+      if (restartHeld) {
+        restartHeld = false
+        // A failed launch leaves the restart to the next call.
+        Promise.resolve()
+          .then(ensureStarted)
+          .catch(() => undefined)
+      }
+    }
   }
 
   async function kill(): Promise<void> {
     if (state === 'closed') return
+    forgetRestart()
     wakeDelay?.()
     abortStart()
     if (state === 'restarting') {
@@ -902,6 +1107,8 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     stop: () => shared(false),
     kill,
     close: () => shared(true),
+    pause,
+    resume,
     get state() {
       return state
     },
