@@ -16,6 +16,7 @@ export type {
   HostTransport,
   StreamOperation,
 } from './contract.js'
+export { minimalEnvironment } from './env.js'
 export { HOST_ERROR_CODES, HostError, isHostError, type HostErrorCode } from './errors.js'
 export {
   DEFAULT_RETIRE_WAIT_MS,

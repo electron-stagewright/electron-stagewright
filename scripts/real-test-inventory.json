@@ -88,6 +88,10 @@
     "tests": 3
   },
   {
+    "path": "packages/host-supervisor/tests/utility-smoke.test.ts",
+    "tests": 1
+  },
+  {
     "path": "packages/origin-migration/tests/origin-migration-smoke.test.ts",
     "tests": 1
   },
