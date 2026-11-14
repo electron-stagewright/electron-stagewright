@@ -41,13 +41,17 @@ It is not a Stagewright plugin and registers no MCP tool.
   an attempt. It records each completed group, so a retry never restores a group the user deleted
   after it landed. Three attempts in all; then the app stops trying. Only a missing marker starts
   a copy: one that exists but cannot be read counts as done, since a fresh copy would replace
-  current data with stale data. The marker name is an option,
-  so an app that already shipped its own marker keeps it.
+  current data with stale data. Code that apps extracted earlier retried on an unreadable marker;
+  this package does not, on purpose, and its README says so. The marker name is an option, so an
+  app that already shipped its own marker keeps it.
 - **Errors are recorded by name or code only.** Messages can carry paths.
 - **v0 scope is `localStorage` and OPFS.** IndexedDB and cookies are not copied until each has its
   own real-Electron test.
-- **Electron is a peer dependency, used for types only.** The app passes its `BrowserWindow` and
-  `session`, so the package never imports Electron at run time and its tests run in Node.
+- **No Electron dependency, not even a peer.** The app passes its `BrowserWindow` and `session`,
+  so the package never imports Electron at run time and its tests run in Node. Their types are
+  declared structurally in the package (`StorageWindow`, `SessionLike`). An optional peer made
+  pnpm resolve it to the app's Electron and record that edge under a production dependency, which
+  pulled Electron's tree into production license reports.
 
 ## Alternatives considered
 

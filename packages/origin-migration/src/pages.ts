@@ -2,9 +2,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import type { BrowserWindow, BrowserWindowConstructorOptions, Session } from 'electron'
-
 import { BLANK_DOCUMENT_HTML } from './blank.js'
+import type { SessionLike, StorageWindow, StorageWindowOptions } from './electron-types.js'
 import type { LegacyOriginReader, TargetOriginWriter } from './migration.js'
 import {
   ABORT_FILE,
@@ -24,11 +23,14 @@ import {
 /** Bounds each page load and script; a stalled step fails the attempt instead of the launch. */
 export const ORIGIN_PAGE_STEP_TIMEOUT_MS = 30_000
 
-export type WindowFactory = new (options: BrowserWindowConstructorOptions) => BrowserWindow
+/** Electron's `BrowserWindow` class. Its options are typed `never` so Electron's own class fits. */
+export type WindowFactory = new (options: never) => StorageWindow
+
+type OpenWindow = new (options: StorageWindowOptions) => StorageWindow
 
 export interface OriginPageOptions {
   /** The session whose storage moves. Default: Electron's default session. */
-  session?: Session
+  session?: SessionLike
   signal?: AbortSignal
   stepTimeoutMs?: number
 }
@@ -65,14 +67,14 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSi
 
 async function openStoragePage(
   Window: WindowFactory,
-  load: (window: BrowserWindow) => Promise<void>,
+  load: (window: StorageWindow) => Promise<void>,
   cleanup: () => void,
   options: OriginPageOptions,
 ): Promise<StoragePage> {
   const timeoutMs = options.stepTimeoutMs ?? ORIGIN_PAGE_STEP_TIMEOUT_MS
-  let window: BrowserWindow
+  let window: StorageWindow
   try {
-    window = new Window({
+    window = new (Window as unknown as OpenWindow)({
       show: false,
       webPreferences: {
         sandbox: true,
@@ -111,7 +113,7 @@ async function openStoragePage(
 type SettledStep<T> = { value: T } | { name: string }
 
 async function runSettled<T>(
-  window: BrowserWindow,
+  window: StorageWindow,
   script: string,
   timeoutMs: number,
   signal?: AbortSignal,
