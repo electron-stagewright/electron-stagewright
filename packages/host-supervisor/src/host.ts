@@ -478,6 +478,8 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
   function onHostMessage(life: Life, raw: unknown): void {
     const message = parseHostMessage(raw)
     if (!message) return
+    // A host that keeps talking survived the exception it reported.
+    if (message.type !== 'crashed') life.crashError = null
     switch (message.type) {
       case 'started':
         life.info = message.info

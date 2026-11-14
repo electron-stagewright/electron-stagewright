@@ -124,7 +124,7 @@ serveHost<DbOps, { key: string }>({
 ## Errors
 
 An error crosses as its name, its message and a code matching `^[A-Z][A-Z0-9_]{1,80}$`; stacks and
-object graphs never cross. The supervisor's own failures are `HostError` with a code from
+object graphs cross only as the detail a host picks with `errors.data`. The supervisor's own failures are `HostError` with a code from
 `HOST_ERROR_CODES`, and a host can never make an application error pass for one.
 
 When failures carry structured detail, say so on both sides instead of wrapping every answer:
@@ -134,7 +134,7 @@ When failures carry structured detail, say so on both sides instead of wrapping 
 serveHost<DbOps>({
   // ...
   errors: {
-    codePattern: /^[a-z][a-z-]{1,40}$/, // the app's own codes, such as `engine-gone`
+    codePattern: /^[a-z][a-z-]{1,40}$/, // also the app's own codes, such as `engine-gone`
     data: (error) =>
       error instanceof EditError ? { step: error.step, fix: error.fix } : undefined,
   },
@@ -170,6 +170,8 @@ const host = createHost<ServerOps, Config, { url: string }>({/* ... */})
 const { url } = (await host.start())!
 host.info // the running host's info, or undefined while none runs
 ```
+
+Call `setInfo` before `start` resolves; later calls throw. Info that cannot be cloned fails the start.
 
 ## Exits
 

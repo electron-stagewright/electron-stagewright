@@ -27,7 +27,10 @@ export interface HostPort {
 
 /** What `start` receives after the payload. */
 export interface StartContext<Info> {
-  /** Sent with `started`; the supervisor exposes it as `host.info`. Must survive structured clone. */
+  /**
+   * Sent with `started`; the supervisor exposes it as `host.info`. Must survive structured clone
+   * and be called before `start` resolves.
+   */
   setInfo(info: Info): void
 }
 
@@ -174,8 +177,10 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined, Info =
       }
       let info: Info | undefined
       let hasInfo = false
+      let settled = false
       const context: StartContext<Info> = {
         setInfo: (value) => {
+          if (settled) throw new Error('setInfo must be called before start resolves')
           info = value
           hasInfo = true
         },
@@ -187,8 +192,13 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined, Info =
       for (const op of [...callOps, ...streamOps]) {
         if (typeof served[op] !== 'function') throw new Error(`No handler for ${op}`)
       }
+      settled = true
+      try {
+        post(hasInfo ? { type: 'started', info } : { type: 'started' })
+      } catch (error) {
+        throw new Error('setInfo received a value that cannot be cloned', { cause: error })
+      }
       handlers = served as Record<string, (...args: unknown[]) => unknown>
-      post(hasInfo ? { type: 'started', info } : { type: 'started' })
       if (options.statsIntervalMs !== undefined) {
         postStats()
         statsTimer = setInterval(postStats, options.statsIntervalMs)
