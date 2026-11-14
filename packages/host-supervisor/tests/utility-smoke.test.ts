@@ -72,8 +72,8 @@ describe('utilityProcess host smoke (real Electron)', () => {
       expect(result['afterCrash']).toBe('hello third')
 
       expect(result['exits']).toEqual([
-        { kind: 'crash', pendingCalls: 1 },
-        { kind: 'crash', pendingCalls: 1 },
+        { kind: 'crash', reason: 'exit', pendingCalls: 1 },
+        { kind: 'crash', reason: 'uncaught', pendingCalls: 1 },
       ])
       expect(result['stop']).toEqual({ ok: true })
       expect(result['drained']).toEqual({ ok: true, value: 'done' })

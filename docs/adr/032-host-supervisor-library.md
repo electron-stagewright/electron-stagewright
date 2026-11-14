@@ -28,7 +28,16 @@ Ship `@electron-stagewright/host-supervisor`: a supervisor (`createHost`), a hos
   operations that stream are listed apart.
 - **Errors cross as data.** The message and a code matching `^[A-Z][A-Z0-9_]{1,80}$` cross; stacks
   and object graphs do not. The supervisor's own failures are `HostError` with a closed code. A
-  host cannot make an application error look like one.
+  host cannot make an application error look like one. A host may widen the code pattern
+  (`errors.codePattern`) and attach structured, clone-safe detail (`errors.data`); the supervisor
+  may rebuild the app's own classes (`errors.revive`). Detail is opt-in on the host, so nothing
+  crosses that the host did not pick.
+- **Start info.** The host's `start` may call `setInfo`; the value rides on `started` and is
+  readable as `host.info` and from `host.start()`. It replaces operations that only exist to
+  report what the host learned while starting.
+- **Exit reason.** `HostExit.reason` separates an uncaught exception the host reported, a heap
+  limit, a fatal runtime error and a bare exit, so a policy can classify without parsing
+  messages.
 - **Lazy start, secrets by message.** A host starts on the first call or on `start()`. The start
   payload travels in the first message, never in env or argv. The `utilityProcess` transport passes
   a minimal environment by default.

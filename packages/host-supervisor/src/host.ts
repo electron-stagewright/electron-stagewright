@@ -27,10 +27,23 @@ export const DEFAULT_RETIRE_WAIT_MS = 5_000
 export type HostState =
   'idle' | 'starting' | 'running' | 'restarting' | 'stopping' | 'fatal' | 'closed'
 
+/**
+ * Why a host ended:
+ * - `out-of-memory`: the runtime ended it at its heap limit (worker threads only).
+ * - `uncaught`: the host reported an uncaught exception, which is `error`.
+ * - `runtime-fatal`: the runtime hit an error it cannot continue from (utility process).
+ * - `exit`: it ended without reporting a cause: `process.exit`, a native crash, a signal.
+ * - `start-failed`: a restart whose start failed.
+ */
+export type HostExitReason =
+  'out-of-memory' | 'uncaught' | 'runtime-fatal' | 'exit' | 'start-failed'
+
 /** What the supervisor knows about a host that exited without being asked to. */
 export interface HostExit {
   /** `start-failed` is a restart whose start failed; the first start rejects its callers instead. */
   readonly kind: 'crash' | 'out-of-memory' | 'start-failed'
+  readonly reason: HostExitReason
+  /** Always an `Error`: the host's own when it reported one, else one describing the exit. */
   readonly error: Error
   readonly code: number | null
   /** Milliseconds between `started` and the exit; null when the host never started. */
@@ -79,10 +92,14 @@ export interface HostOptions<Ops extends Contract<Ops>, Payload = undefined> {
   /** Decides what follows an exit nobody asked for. Defaults to `fatal`. */
   readonly onExit?: (exit: HostExit) => ExitDecision | Promise<ExitDecision>
   readonly onStats?: (stats: HostStats) => void
+  readonly errors?: {
+    /** Rebuilds an application error, such as the app's own class; `undefined` keeps the default. */
+    readonly revive?: (serialized: SerializedError) => Error | undefined
+  }
   readonly now?: () => number
 }
 
-export interface Host<Ops extends Contract<Ops>> {
+export interface Host<Ops extends Contract<Ops>, Info = undefined> {
   /** One method per operation, with the contract's own signature. */
   readonly ops: Ops
   call<K extends CallOperation<Ops>>(
@@ -95,8 +112,8 @@ export interface Host<Ops extends Contract<Ops>> {
     args: ArgsOf<Ops[K]>,
     options?: CallOptions,
   ): ReturnType<Ops[K]>
-  /** Starts the host now instead of on the first call. */
-  start(): Promise<void>
+  /** Starts the host now instead of on the first call, and resolves with its `info`. */
+  start(): Promise<Info | undefined>
   /** Drains and stops the host. The next call starts a new one. */
   stop(): Promise<void>
   /** Terminates the host without draining, and waits (bounded) for it to exit. Never throws. */
@@ -104,6 +121,8 @@ export interface Host<Ops extends Contract<Ops>> {
   /** Stops the host and refuses every later call. */
   close(): Promise<void>
   readonly state: HostState
+  /** What the running host passed to `setInfo`; `undefined` while no host is running. */
+  readonly info: Info | undefined
 }
 
 interface Life {
@@ -119,6 +138,7 @@ interface Life {
   resolveStopped: () => void
   stopError: Error | null
   lastStats: HostStats | null
+  info: unknown
   onStartReply: ((error: Error | null) => void) | null
 }
 
@@ -160,11 +180,11 @@ function raceTimeout(promise: Promise<void>, ms: number): Promise<boolean> {
 
 const HOST_CODES: ReadonlySet<string> = new Set(HOST_ERROR_CODES)
 
-function remoteError(serialized: SerializedError): Error {
+function supervisorError(serialized: SerializedError): HostError | null {
   if (serialized.name === 'HostError' && serialized.code && HOST_CODES.has(serialized.code)) {
     return new HostError(serialized.code as HostErrorCode, serialized.message)
   }
-  return deserializeError(serialized)
+  return null
 }
 
 function normalizeDecision(decision: ExitDecision): {
@@ -182,9 +202,9 @@ function normalizeDecision(decision: ExitDecision): {
   return { action: 'fatal', delayMs: 0 }
 }
 
-export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
+export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info = undefined>(
   options: HostOptions<Ops, Payload>,
-): Host<Ops> {
+): Host<Ops, Info> {
   const callOps: ReadonlySet<string> = new Set(options.operations)
   const streamOps: ReadonlySet<string> = new Set(options.streams ?? [])
   const graceMs = options.stop?.graceMs ?? DEFAULT_STOP_GRACE_MS
@@ -206,6 +226,18 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
   let wakeDelay: (() => void) | null = null
   let nextId = 1
   const pending = new Map<number, Entry>()
+
+  function remoteError(serialized: SerializedError): Error {
+    const own = supervisorError(serialized)
+    if (own) return own
+    let revived: Error | undefined
+    try {
+      revived = options.errors?.revive?.(serialized)
+    } catch {
+      // A reviver that throws falls back to the plain rebuild.
+    }
+    return revived instanceof Error ? revived : deserializeError(serialized)
+  }
 
   function unavailable(): HostError {
     if (state === 'fatal') {
@@ -446,8 +478,11 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
   function onHostMessage(life: Life, raw: unknown): void {
     const message = parseHostMessage(raw)
     if (!message) return
+    // A host that keeps talking survived the exception it reported.
+    if (message.type !== 'crashed') life.crashError = null
     switch (message.type) {
       case 'started':
+        life.info = message.info
         life.started = true
         life.startedAt = now()
         life.onStartReply?.(null)
@@ -531,6 +566,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     state = 'restarting'
     const recovery = recover({
       kind: exit.outOfMemory ? 'out-of-memory' : 'crash',
+      reason: exitReason(life, exit),
       error: cause,
       code: exit.code,
       uptimeMs: Math.max(0, now() - life.startedAt),
@@ -545,6 +581,14 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
         if (starting === recovery) starting = null
       },
     )
+  }
+
+  function exitReason(life: Life, exit: ChannelExit): HostExitReason {
+    if (exit.outOfMemory) return 'out-of-memory'
+    if (life.crashError) return 'uncaught'
+    if (exit.runtimeFatal) return 'runtime-fatal'
+    // The worker transport passes the thread's uncaught error as `exit.error`.
+    return exit.error ? 'uncaught' : 'exit'
   }
 
   async function launch(): Promise<Life> {
@@ -578,6 +622,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       resolveStopped: () => resolveStopped(),
       stopError: null,
       lastStats: null,
+      info: undefined,
       onStartReply: null,
     }
     channel.onMessage((message) => onHostMessage(life, message))
@@ -701,6 +746,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
       const cause = (error as { cause?: unknown }).cause
       return recover({
         kind: 'start-failed',
+        reason: 'start-failed',
         error: cause instanceof Error ? cause : (error as Error),
         code: null,
         uptimeMs: null,
@@ -840,14 +886,13 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
   return {
     ops,
     call: ((op: string, args: readonly unknown[], callOptions?: CallOptions) =>
-      call(op, args, callOptions)) as unknown as Host<Ops>['call'],
+      call(op, args, callOptions)) as unknown as Host<Ops, Info>['call'],
     stream: ((op: string, args: readonly unknown[], callOptions?: CallOptions) =>
-      stream(op, args, callOptions)) as unknown as Host<Ops>['stream'],
+      stream(op, args, callOptions)) as unknown as Host<Ops, Info>['stream'],
     async start() {
       for (;;) {
         try {
-          await ensureStarted()
-          return
+          return (await ensureStarted()).info as Info | undefined
         } catch (error) {
           // An `on-demand` exit decision hands the start back to us.
           if (error !== RETRY) throw error
@@ -859,6 +904,9 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
     close: () => shared(true),
     get state() {
       return state
+    },
+    get info() {
+      return current && !current.exited ? (current.info as Info | undefined) : undefined
     },
   }
 }

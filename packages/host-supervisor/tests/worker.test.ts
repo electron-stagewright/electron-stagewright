@@ -74,7 +74,9 @@ describe('workerThreadTransport', { timeout: 30_000 }, () => {
     expect(error.code).toBe('HOST_EXITED')
     expect(error.cause).toMatchObject({ message: 'native state lost', code: 'TEST_CRASH' })
     await expect(host.ops.echo('again')).resolves.toBe('hello again')
-    expect(exits).toEqual([expect.objectContaining({ kind: 'crash', pendingCalls: 1 })])
+    expect(exits).toEqual([
+      expect.objectContaining({ kind: 'crash', reason: 'uncaught', pendingCalls: 1 }),
+    ])
     await host.close()
   })
 
@@ -90,6 +92,7 @@ describe('workerThreadTransport', { timeout: 30_000 }, () => {
     const error = await rejection(host.ops.exhaustHeap())
     expect(error.code).toBe('HOST_EXITED')
     expect(exits[0]?.kind).toBe('out-of-memory')
+    expect(exits[0]?.reason).toBe('out-of-memory')
     await expect(host.ops.echo('after')).resolves.toBe('hello after')
   })
 

@@ -6,9 +6,11 @@ import { serveHost, type ServeOptions } from './serve.js'
  * Runs the host in the caller's thread. Messages are cloned and delivered asynchronously, as they
  * would be across a real boundary. Meant for tests: a crash here is the caller's crash.
  */
-export function inProcessTransport<Ops extends Contract<Ops>, Payload = undefined>(
-  serve: Omit<ServeOptions<Ops, Payload>, 'port' | 'reportCrashes'>,
-): HostTransport {
+export function inProcessTransport<
+  Ops extends Contract<Ops>,
+  Payload = undefined,
+  Info = undefined,
+>(serve: Omit<ServeOptions<Ops, Payload, Info>, 'port' | 'reportCrashes'>): HostTransport {
   return {
     launch(): HostChannel {
       let alive = true
@@ -26,7 +28,7 @@ export function inProcessTransport<Ops extends Contract<Ops>, Payload = undefine
           if (alive) listener?.(copy)
         })
       }
-      serveHost<Ops, Payload>({
+      serveHost<Ops, Payload, Info>({
         ...serve,
         reportCrashes: false,
         port: {
