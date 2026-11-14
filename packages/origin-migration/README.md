@@ -18,8 +18,11 @@ not move it yet.
   skipped. Only `<name>.wal` sidecars are grouped (DuckDB); SQLite's `-wal`, `-journal` and
   `-shm` files are not supported yet.
 - A marker in `userData` makes the copy run once. A failed attempt is retried on the next launch,
-  three attempts in all. A crash mid-copy counts as an attempt. A marker that exists but cannot be
-  read counts as done.
+  three attempts in all. A crash mid-copy counts as an attempt.
+- A marker that exists but cannot be read (corrupt JSON, no permission) counts as done, and the
+  copy is skipped for good. A fresh copy could replace data the user changed on the new origin
+  with stale data. Code that apps extracted earlier retried in that case; delete the marker by
+  hand to force a new copy.
 - Data the user deletes on the new origin after it was copied is never restored by a retry.
 
 ## Use
@@ -80,7 +83,9 @@ Options:
 
 ## Requirements
 
-- Electron 42 or later.
+- Electron 42 or later. The package does not depend on Electron, not even as a peer; the app
+  passes its own `BrowserWindow` class and a `Session` (such as `session.defaultSession`), which
+  satisfy the exported `WindowFactory` and `SessionLike` types.
 - The release that migrates must keep the `GrantFileProtocolExtraPrivileges` fuse on. Without it a
   `file://` page cannot read `localStorage`; the marker then records `localStorageUnreadable` and
   only OPFS files move.

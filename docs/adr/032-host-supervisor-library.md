@@ -69,8 +69,10 @@ Ship `@electron-stagewright/host-supervisor`: a supervisor (`createHost`), a hos
   signal inside the host. Streams are pulled one item per request and closing one early runs the
   producer's `finally`. `maxPending` bounds calls and open streams together.
 - **No dependencies, own protocol.** About a hundred lines of messages, versioned, validated on
-  both sides. `electron` is an optional peer, loaded only when the `utilityProcess` transport
-  launches; the root and `./worker` never load it.
+  both sides. Electron is not a dependency, not even a peer, so it never enters a consumer's
+  production dependency graph. The `utilityProcess` transport loads it only when it launches, or
+  takes `utilityProcess.fork` from the app (`fork`), which a main process bundled as CommonJS
+  needs. The root and `./worker` never load it.
 
 ## Alternatives considered
 

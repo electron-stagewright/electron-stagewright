@@ -1,4 +1,4 @@
-import type { Session } from 'electron'
+import type { SessionLike } from './electron-types.js'
 
 import { runOriginMigration, type OriginMigrationResult, type OriginStore } from './migration.js'
 import { openLegacyOriginPage, openTargetOriginPage, type WindowFactory } from './pages.js'
@@ -9,7 +9,7 @@ export interface MigrateOriginOptions {
   /** Electron's `BrowserWindow`, used for two hidden, sandboxed pages. */
   BrowserWindow: WindowFactory
   /** The session whose storage moves, usually `session.defaultSession`. */
-  session: Session
+  session: SessionLike
   /** An empty document on the new origin, served by the app's protocol handler. */
   targetUrl: string
   /** Default both. */

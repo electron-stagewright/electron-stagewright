@@ -88,6 +88,18 @@ serveHost<DbOps, { key: string }>({
 })
 ```
 
+In a main process bundled as CommonJS (Vite, webpack, esbuild), hand the transport Electron's
+`fork` instead of letting it load Electron itself:
+
+```ts
+import { utilityProcess } from 'electron'
+
+utilityProcessTransport({ entry, serviceName: 'Database', fork: utilityProcess.fork })
+```
+
+The package has no dependency on Electron, not even a peer, so it adds nothing Electron-related to
+a production dependency or license report.
+
 `serveHost` finds its port: Electron's `process.parentPort` in a utility process, the
 `worker_threads` parent port in a worker. The entry never imports Electron.
 
@@ -222,6 +234,8 @@ cause: `process.exit`, a native crash, or a kill from outside.
 
 ## Platform notes
 
+- The utility process transport needs Electron 42 or later. The package declares no Electron
+  dependency; it uses the app's own.
 - `terminate()` cannot interrupt a synchronous native call: the grace period is honoured between
   calls, not inside one.
 - Large results should stream. `postMessage` copies by structured clone, and Electron's V8 memory
