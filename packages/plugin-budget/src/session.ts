@@ -166,11 +166,22 @@ export async function sampleMemory(
 }
 
 /** Memory outside the GPU in the sample's metric, else in working set. */
-export function memoryWeight(memory: MemoryMeasurement): number {
+function memoryWeight(memory: MemoryMeasurement): number {
   const total = memoryTotal(memory, true)
   if (total !== undefined) return total
   const byType = memoryByType({ ...memory, metric: 'workingSet' })
   return Object.entries(byType).reduce((sum, [type, mb]) => (type === 'gpu' ? sum : sum + mb), 0)
+}
+
+/**
+ * Whether `a` is a heavier sample than `b`. A sample with every process in its own metric beats
+ * one that fell back to working set, which counts in a different unit.
+ */
+export function heavierMemory(a: MemoryMeasurement, b: MemoryMeasurement): boolean {
+  const aComplete = memoryTotal(a, true) !== undefined
+  const bComplete = memoryTotal(b, true) !== undefined
+  if (aComplete !== bComplete) return aComplete
+  return memoryWeight(a) > memoryWeight(b)
 }
 
 async function measureWithoutMain(

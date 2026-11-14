@@ -191,7 +191,10 @@ function unmeasuredDetail(run: BudgetRun, expectation: Expectation): string {
     rounds.every((round) => round.measurement.memoryPeak === undefined) &&
     rounds.some((round) => round.measurement.memory !== undefined)
   ) {
-    return 'the run has no peak sample; measure with --memory-sample-ms'
+    const failed = rounds
+      .map((round) => round.measurement.unavailable?.['memoryPeak'])
+      .find((value) => value !== undefined)
+    return failed ?? 'the run has no peak sample; measure with --memory-sample-ms'
   }
   if (expectation.section === 'memory') {
     const measured = rounds.map((round) => round.measurement.memory?.metric).find(Boolean)

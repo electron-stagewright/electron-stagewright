@@ -198,7 +198,8 @@ end: `measure` samples memory every second (`--memory-sample-ms` to change it, o
 without the budget asking) and keeps the sample with the most memory outside the GPU as
 `memoryPeak`. Check rows are then `memoryPeak.main`, `memoryPeak.totalWithoutGpu`, and so on, and
 the median is taken over the rounds' peaks. Sampling through main adds a little main-thread work
-of its own, so calibrate blocking budgets with the same setting.
+of its own, and a `memoryProbe` adds IPC round trips, so calibrate blocking and IPC budgets with
+the same setting. A round where no sample succeeded leaves `memoryPeak` unmeasured.
 
 ## Library
 

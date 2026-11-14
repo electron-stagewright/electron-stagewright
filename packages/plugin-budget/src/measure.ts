@@ -15,7 +15,7 @@ import { DEFAULT_WINDOW_MS } from './probe.js'
 import { createRun, type BudgetRun, type MemoryMeasurement } from './run.js'
 import {
   measureSession,
-  memoryWeight,
+  heavierMemory,
   sampleMemory,
   startWindow,
   type IpcProbe,
@@ -124,7 +124,7 @@ async function mainEvalUnavailable(session: {
     return undefined
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    return `main eval is unavailable (${reason}); memory needs the budget's memoryProbe`
+    return `main eval is unavailable (${reason})`
   }
 }
 
@@ -136,8 +136,14 @@ function memorySampleMs(options: MeasureAppOptions): number | undefined {
     : undefined
 }
 
-/** Samples memory until stopped; `peak` keeps the heaviest sample outside the GPU. */
-function startSampler(
+/** Bounds the wait for a sample still running when the window closes. */
+const SAMPLER_STOP_MS = 5_000
+
+/**
+ * Samples memory until stopped; `peak` keeps the heaviest sample outside the GPU, or returns
+ * undefined when no sample during the window succeeded.
+ */
+export function startSampler(
   session: Parameters<typeof sampleMemory>[0],
   source: MemorySource,
   intervalMs: number | undefined,
@@ -149,24 +155,35 @@ function startSampler(
     return { stop: () => Promise.resolve(), peak: () => undefined }
   }
   let best: MemoryMeasurement | undefined
+  let sampled = false
   let running = true
+  let wake = (): void => undefined
   const keep = (sample: MemoryMeasurement | undefined): void => {
-    if (sample !== undefined && (best === undefined || memoryWeight(sample) > memoryWeight(best))) {
-      best = sample
-    }
+    if (sample !== undefined && (best === undefined || heavierMemory(sample, best))) best = sample
   }
   const loop = (async () => {
     while (running) {
-      keep(await sampleMemory(session, source))
-      if (running) await sleep(intervalMs)
+      const sample = await sampleMemory(session, source)
+      if (!running) break
+      sampled ||= sample !== undefined
+      keep(sample)
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, intervalMs)
+        wake = () => {
+          clearTimeout(timer)
+          resolve()
+        }
+      })
     }
   })()
   return {
     stop: async () => {
       running = false
-      await loop
+      wake()
+      await withTimeout(loop, SAMPLER_STOP_MS, 'memory sampler').catch(() => undefined)
     },
     peak: (end) => {
+      if (!sampled) return undefined
       keep(end)
       return best
     },
@@ -272,10 +289,21 @@ async function launchOnce(
         ...(mainUnavailable === undefined ? {} : { mainUnavailable }),
         ...(memoryProbe === undefined ? {} : { memoryProbe }),
       })
+      const sampleMs = memorySampleMs(options)
       const peak = sampler.peak(measured.measurement.memory)
+      const unavailable =
+        sampleMs !== undefined && peak === undefined
+          ? {
+              unavailable: {
+                ...measured.measurement.unavailable,
+                memoryPeak: 'no memory sample succeeded during the window',
+              },
+            }
+          : {}
       return {
         measurement: {
           ...measured.measurement,
+          ...unavailable,
           ...(peak === undefined ? {} : { memoryPeak: peak }),
         },
         ...(measured.electronVersion === undefined
