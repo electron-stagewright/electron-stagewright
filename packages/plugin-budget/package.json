@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/plugin-budget",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Performance budget plugin for Electron Stagewright: measure startup, per-process memory, main-thread blocking, IPC latency, and bundle size, and gate them against a budget file from an agent or CI.",
   "type": "module",
   "license": "MIT",
