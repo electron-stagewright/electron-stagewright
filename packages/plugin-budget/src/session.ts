@@ -18,12 +18,20 @@ import {
   IPC_READ_BODY,
   MAIN_BODY,
   buildIpcStartBody,
+  buildMemoryProbeBody,
   type FirstWindowStartup,
   type IpcReadResult,
   type MainFacts,
   type MainReadResult,
+  type RendererMetrics,
 } from './probe.js'
-import { summarizeLatencies, type Measurement } from './run.js'
+import {
+  memoryByType,
+  memoryTotal,
+  summarizeLatencies,
+  type Measurement,
+  type MemoryMeasurement,
+} from './run.js'
 
 /** The slice of a transport session the budget needs. */
 export interface EvaluatingSession {
@@ -53,9 +61,13 @@ export async function startWindow(
     readonly allowRenderer: boolean
     /** Why the renderer is off, when it is not the eval grant. */
     readonly rendererOff?: string
+    /** Set when main eval is unavailable: only the IPC probe starts. */
+    readonly mainUnavailable?: string
   },
 ): Promise<{ ipc: boolean; ipcUnavailable?: string }> {
-  await session.evaluate('main', MAIN_BODY, { op: 'start' })
+  if (options.mainUnavailable === undefined) {
+    await session.evaluate('main', MAIN_BODY, { op: 'start' })
+  }
   if (options.ipc === undefined) return { ipc: false }
   if (!options.allowRenderer) {
     return { ipc: false, ipcUnavailable: options.rendererOff ?? RENDERER_EVAL_OFF }
@@ -88,6 +100,140 @@ export interface MeasureOptions {
   readonly hostStartTime?: HostStartTimeReader
   /** The renderer grant alone; defaults to `allowRenderer`. */
   readonly allowStartup?: boolean
+  /**
+   * Why main eval is unavailable (a build with the EnableNodeCliInspectArguments fuse off). Memory
+   * then comes from `memoryProbe` through the renderer; blocking and startup are unmeasured.
+   */
+  readonly mainUnavailable?: string
+  readonly memoryProbe?: string
+}
+
+/** How a sampler reads memory: from main, or through the app's renderer memory probe. */
+export interface MemorySource {
+  readonly mainUnavailable?: string
+  readonly memoryProbe?: string
+  readonly allowRenderer: boolean
+  readonly memoryReader?: OsMemoryReader
+}
+
+/** Read the renderer memory probe; throws with the reason it cannot. */
+async function probeMetrics(
+  session: EvaluatingSession,
+  source: MemorySource,
+): Promise<RendererMetrics> {
+  const reason = source.mainUnavailable ?? 'main eval is unavailable'
+  if (source.memoryProbe === undefined) {
+    throw new Error(`${reason}; name a memoryProbe in the budget to measure memory`)
+  }
+  if (!source.allowRenderer) throw new Error(`${reason}, and ${RENDERER_EVAL_OFF}`)
+  try {
+    validateEvalContent(source.memoryProbe, { target: 'renderer' })
+  } catch (error) {
+    throw new Error(`the memory probe was refused: ${message(error)}`)
+  }
+  try {
+    return await session.evaluate<RendererMetrics>(
+      'renderer',
+      buildMemoryProbeBody(source.memoryProbe),
+    )
+  } catch (error) {
+    throw new Error(`the memory probe failed: ${message(error)}`)
+  }
+}
+
+/**
+ * One memory sample of the app, for a sampler that runs during the window. Only used on an app
+ * this host launched, so the pid-namespace check of {@link measureSession} is skipped.
+ */
+export async function sampleMemory(
+  session: EvaluatingSession,
+  source: MemorySource,
+): Promise<MemoryMeasurement | undefined> {
+  try {
+    const processes =
+      source.mainUnavailable === undefined
+        ? (await session.evaluate<MainFacts>('main', MAIN_BODY, { op: 'facts' })).processes
+        : (await probeMetrics(session, source)).processes
+    const { memory } = await measureMemory(
+      processes.filter((entry) => isPid(entry.pid)),
+      process.platform,
+      source.memoryReader ?? osMemoryReader(process.platform),
+    )
+    return memory
+  } catch {
+    return undefined
+  }
+}
+
+/** Memory outside the GPU in the sample's metric, else in working set. */
+export function memoryWeight(memory: MemoryMeasurement): number {
+  const total = memoryTotal(memory, true)
+  if (total !== undefined) return total
+  const byType = memoryByType({ ...memory, metric: 'workingSet' })
+  return Object.entries(byType).reduce((sum, [type, mb]) => (type === 'gpu' ? sum : sum + mb), 0)
+}
+
+async function measureWithoutMain(
+  session: EvaluatingSession,
+  options: MeasureOptions & { readonly mainUnavailable: string },
+  open: { readonly ipc: boolean; readonly ipcUnavailable?: string },
+): Promise<SessionMeasurement> {
+  const unavailable: Record<string, string> = {
+    mainThread: options.mainUnavailable,
+    startup: options.mainUnavailable,
+  }
+  const ipc = await readIpc(session, open, unavailable)
+  let memory: MemoryMeasurement | undefined
+  let electronVersion: string | undefined
+  try {
+    const metrics = await probeMetrics(session, options)
+    electronVersion = /Electron\/(\S+)/.exec(metrics.userAgent)?.[1]
+    const measured = await measureMemory(
+      metrics.processes.filter((entry) => isPid(entry.pid)),
+      process.platform,
+      options.memoryReader ?? osMemoryReader(process.platform),
+    )
+    memory = measured.memory
+    if (measured.error !== undefined) unavailable['memory'] = measured.error
+  } catch (error) {
+    unavailable['memory'] = message(error)
+  }
+  return {
+    measurement: {
+      ...(memory === undefined ? {} : { memory }),
+      ...(ipc === undefined ? {} : { ipc }),
+      unavailable,
+    },
+    ...(electronVersion === undefined ? {} : { electronVersion }),
+    platform: process.platform,
+  }
+}
+
+async function readIpc(
+  session: EvaluatingSession,
+  open: { readonly ipc: boolean; readonly ipcUnavailable?: string },
+  unavailable: Record<string, string>,
+): Promise<Measurement['ipc']> {
+  if (open.ipcUnavailable !== undefined) unavailable['ipc'] = open.ipcUnavailable
+  if (!open.ipc) return undefined
+  try {
+    const read = await session.evaluate<IpcReadResult | null>('renderer', IPC_READ_BODY, {
+      stop: true,
+    })
+    if (read === null) {
+      unavailable['ipc'] = 'the IPC probe was lost; the window navigated during the measurement'
+    } else if (read.samples.length === 0) {
+      unavailable['ipc'] =
+        read.lastError === null
+          ? 'the IPC probe completed no round trip'
+          : `the IPC probe failed: ${read.lastError}`
+    } else {
+      return summarizeLatencies(read.samples)
+    }
+  } catch (error) {
+    unavailable['ipc'] = `could not read the IPC probe: ${message(error)}`
+  }
+  return undefined
 }
 
 /** `ps` start times have whole-second resolution. */
@@ -136,8 +282,18 @@ export async function measureSession(
       allowRenderer: options.allowRenderer,
       ...(options.rendererOff === undefined ? {} : { rendererOff: options.rendererOff }),
       ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
+      ...(options.mainUnavailable === undefined
+        ? {}
+        : { mainUnavailable: options.mainUnavailable }),
     })
     await sleep(options.windowMs)
+  }
+  if (options.mainUnavailable !== undefined) {
+    return measureWithoutMain(
+      session,
+      { ...options, mainUnavailable: options.mainUnavailable },
+      open,
+    )
   }
 
   const stall = await session.evaluate<MainReadResult>('main', MAIN_BODY, {
@@ -147,27 +303,7 @@ export async function measureSession(
   // The app restarted its main process mid-window, or the window outlived MAX_WINDOW_MS.
   if (stall === null) unavailable['mainThread'] = 'the measurement window was lost or expired'
 
-  let ipc: Measurement['ipc']
-  if (open.ipcUnavailable !== undefined) unavailable['ipc'] = open.ipcUnavailable
-  if (open.ipc) {
-    try {
-      const read = await session.evaluate<IpcReadResult | null>('renderer', IPC_READ_BODY, {
-        stop: true,
-      })
-      if (read === null) {
-        unavailable['ipc'] = 'the IPC probe was lost; the window navigated during the measurement'
-      } else if (read.samples.length === 0) {
-        unavailable['ipc'] =
-          read.lastError === null
-            ? 'the IPC probe completed no round trip'
-            : `the IPC probe failed: ${read.lastError}`
-      } else {
-        ipc = summarizeLatencies(read.samples)
-      }
-    } catch (error) {
-      unavailable['ipc'] = `could not read the IPC probe: ${message(error)}`
-    }
-  }
+  const ipc = await readIpc(session, open, unavailable)
 
   const facts = await session.evaluate<MainFacts>('main', MAIN_BODY, { op: 'facts' })
   let reader = options.memoryReader ?? osMemoryReader(facts.platform)

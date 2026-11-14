@@ -92,6 +92,9 @@ another pid namespace reports memory `unmeasured` instead of a stranger's number
   budget does not name is reported and never gates; GPU memory swings widely between machines, so
   leave it out unless you mean to gate it.
 - **`thresholdPercent`** is the tolerance over each limit; a section may override it.
+- **`aggregate`** in a memory block is `end` (default) or `peak`; see Peak memory below.
+- **`memoryProbe`** (top level) is a renderer expression that resolves to `app.getAppMetrics()`,
+  for builds whose main process cannot be inspected.
 - **Phase.** `startup` reads `cold` unless it names a phase. A `memory` block that names none reads
   the run's `warm` rounds, else `live`, else `cold`: a run of fresh-profile launches
   (`--phases cold`) is gated on its cold rounds.
@@ -171,7 +174,29 @@ input, or any other error. A bundle entry that matches no file is `unmeasured`, 
 and fails `bundle`. `measure` writes no run when no round produced a measurement.
 
 The inspector Stagewright attaches is part of what `measure` measures, so calibrate budgets with
-this tool. A packaged build whose fuses forbid inspection cannot be measured yet.
+this tool.
+
+### Packaged builds with the inspect fuse off
+
+A release build with the `EnableNodeCliInspectArguments` fuse off has no main-process inspector.
+`measure --executable` still launches it (over CDP, through the renderer), and then:
+
+- **Memory** comes from the app itself. Expose `app.getAppMetrics()` to the renderer (for example
+  `ipcMain.handle('app-metrics', () => app.getAppMetrics())` plus a preload bridge), and name the
+  expression in the budget as `"memoryProbe": "window.api.appMetrics()"`. The host still reads
+  each pid in the platform metric. Keep the bridge out of builds users get if you do not want it
+  there.
+- **IPC latency** works as usual.
+- **Main-thread blocking and startup** are `unmeasured`, with the reason.
+
+### Peak memory
+
+`"aggregate": "peak"` in a memory block gates the heaviest moment of the window instead of its
+end: `measure` samples memory every second (`--memory-sample-ms` to change it, or to sample
+without the budget asking) and keeps the sample with the most memory outside the GPU as
+`memoryPeak`. Check rows are then `memoryPeak.main`, `memoryPeak.totalWithoutGpu`, and so on, and
+the median is taken over the rounds' peaks. Sampling through main adds a little main-thread work
+of its own, so calibrate blocking budgets with the same setting.
 
 ## Library
 

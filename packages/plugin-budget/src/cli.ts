@@ -84,6 +84,7 @@ export interface MeasureCliOptions {
   readonly workloadPath?: string
   readonly workloadTimeoutMs?: number
   readonly beforeRoundPath?: string
+  readonly memorySampleMs?: number
   readonly skipFailedRounds: boolean
   readonly minSamples?: number
   readonly phase?: Phase
@@ -111,6 +112,7 @@ export function formatBudgetCliHelp(): string {
     '                              [--phases cold,warm] [--settle-ms 3000] [--window-ms 2000]',
     '                              [--workload <script.mjs> [--workload-timeout-ms 120000]]',
     '                              [--before-round <script.mjs>] [--skip-failed-rounds]',
+    '                              [--memory-sample-ms 1000]',
     '                              [--label <text>] [--out <run.json>] [--json]',
     '                              [--check [--no-tolerance] [--require-measurement]',
     '                              [--phase cold|warm] [--min-samples N]]',
@@ -128,6 +130,8 @@ export function formatBudgetCliHelp(): string {
     '          that phase; a metric whose phase was not measured is unmeasured.',
     '          --before-round is an ES module whose default export, async ({ round, profile }),',
     '          prepares each round and may return { env, args } for its launches.',
+    '          --memory-sample-ms samples memory during the window for a peak; a budget whose',
+    '          memory aggregate is peak turns it on.',
     'check     Compare measured runs to a budget file; several runs are merged first.',
     'compare   Print a before/after table of two runs.',
     'bundle    Measure the bundle entries of a budget and gate them; needs no Electron.',
@@ -166,6 +170,7 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     '--workload',
     '--workload-timeout-ms',
     '--before-round',
+    '--memory-sample-ms',
     '--min-samples',
     '--phase',
     '--label',
@@ -260,6 +265,7 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     ...optional('workloadPath', single.get('--workload')),
     ...optional('workloadTimeoutMs', number('--workload-timeout-ms', 1000)),
     ...optional('beforeRoundPath', single.get('--before-round')),
+    ...optional('memorySampleMs', number('--memory-sample-ms', 100)),
     skipFailedRounds: flags.has('--skip-failed-rounds'),
     ...optional('minSamples', number('--min-samples', 1)),
     ...optional('phase', phase as Phase | undefined),
@@ -423,6 +429,7 @@ async function runMeasure(
       : { workloadTimeoutMs: options.workloadTimeoutMs }),
     ...(options.label === undefined ? {} : { label: options.label }),
     ...(beforeRound === undefined ? {} : { beforeRound }),
+    ...(options.memorySampleMs === undefined ? {} : { memorySampleMs: options.memorySampleMs }),
     ...(options.skipFailedRounds ? { failedRounds: 'skip' as const } : {}),
     onProgress: (message) => io.stderr(`${message}\n`),
   })

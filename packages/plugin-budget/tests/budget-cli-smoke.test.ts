@@ -4,6 +4,8 @@
  * Opt-in via `STAGEWRIGHT_E2E=1`.
  */
 
+import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -16,6 +18,17 @@ import { measureApp } from '../src/measure.js'
 import { summarizeRun } from '../src/run.js'
 
 const RUN_E2E = process.env['STAGEWRIGHT_E2E'] === '1'
+
+/** Core's Electron binary, read from `path.txt` so nothing triggers a download. */
+async function electronBinary(): Promise<string> {
+  const requireCore = createRequire(
+    fileURLToPath(new URL('../../core/package.json', import.meta.url)),
+  )
+  const directory = path.dirname(requireCore.resolve('electron/package.json'))
+  const override = process.env['ELECTRON_OVERRIDE_DIST_PATH']
+  const relative = (await readFile(path.join(directory, 'path.txt'), 'utf8').catch(() => '')).trim()
+  return path.join(override || path.join(directory, 'dist'), relative || 'electron')
+}
 const FIXTURE_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   'fixtures',
@@ -93,6 +106,41 @@ describe('budget measure smoke (real Electron)', () => {
       expect(profiles).toHaveLength(2)
       expect(new Set(profiles).size).toBe(2)
       expect(run.rounds.map((round) => [round.round, round.phase])).toEqual([[2, 'cold']])
+    },
+    120_000,
+  )
+
+  it.skipIf(!RUN_E2E)(
+    'measures memory and its peak without main eval, through the memory probe',
+    async () => {
+      const electron = await electronBinary()
+      const run = await measureApp({
+        // An executable launch goes over CDP only, as a build with the inspect fuse off must.
+        launch: { executablePath: electron, args: [path.join(FIXTURE_DIR, 'main.js')] },
+        rounds: 1,
+        phases: ['cold'],
+        settleMs: 300,
+        windowMs: 1_500,
+        memorySampleMs: 250,
+        budget: {
+          memoryProbe: 'window.api.metrics()',
+          memory: {
+            [process.platform]: {
+              metric: 'workingSet',
+              aggregate: 'peak',
+              perTypeMb: { main: 4096 },
+            },
+          },
+        },
+      })
+      const [round] = run.rounds
+      expect(round?.measurement.unavailable?.['mainThread']).toMatch(/main eval is unavailable/)
+      expect(round?.measurement.unavailable?.['memory']).toBeUndefined()
+      expect(round?.measurement.memory?.processes.some((entry) => entry.type === 'main')).toBe(true)
+      expect(round?.measurement.memoryPeak).toBeDefined()
+      expect(run.electron_version).toMatch(/^\d+\./)
+      const rows = summarizeRun(run)
+      expect(rows.find((row) => row.id === 'memoryPeak.main')?.value).toBeGreaterThan(5)
     },
     120_000,
   )

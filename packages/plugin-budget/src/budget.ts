@@ -31,6 +31,8 @@ const memoryPlatformSchema = z.strictObject({
   ...comment,
   metric: z.enum(MEMORY_METRICS),
   phase: z.enum(PHASES).optional(),
+  // `end`: the sample taken when the window closes. `peak`: the window's highest sample outside GPU.
+  aggregate: z.enum(['end', 'peak']).optional(),
   thresholdPercent,
   // Summed per type. A type that is not named (GPU, typically) is reported but never gates.
   perTypeMb: z.partialRecord(z.enum(PROCESS_TYPES), limit).optional(),
@@ -52,6 +54,9 @@ export const budgetSchema = z.strictObject({
   ...comment,
   $schema: z.string().optional(),
   thresholdPercent,
+  // Renderer expression resolving to `app.getAppMetrics()`, for a build whose main process cannot
+  // be inspected (the EnableNodeCliInspectArguments fuse off).
+  memoryProbe: z.string().min(1).optional(),
   startup: z
     .strictObject({
       ...comment,

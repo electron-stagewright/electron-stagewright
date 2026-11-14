@@ -86,6 +86,7 @@ function expectations(budget: Budget, run: BudgetRun, options: CheckOptions): Ex
       options.phase ??
       memory.phase ??
       ANY_PHASE_ORDER.find((phase) => run.rounds.some((round) => round.phase === phase))
+    const prefix = memory.aggregate === 'peak' ? 'memoryPeak' : 'memory'
     const base = {
       section: 'memory',
       unit: 'MB',
@@ -95,13 +96,13 @@ function expectations(budget: Budget, run: BudgetRun, options: CheckOptions): Ex
     } as const
     for (const type of PROCESS_TYPES) {
       const max = memory.perTypeMb?.[type]
-      if (max !== undefined) list.push({ ...base, id: `memory.${type}`, limit: max })
+      if (max !== undefined) list.push({ ...base, id: `${prefix}.${type}`, limit: max })
     }
     if (memory.totalWithoutGpuMb !== undefined) {
-      list.push({ ...base, id: 'memory.totalWithoutGpu', limit: memory.totalWithoutGpuMb })
+      list.push({ ...base, id: `${prefix}.totalWithoutGpu`, limit: memory.totalWithoutGpuMb })
     }
     if (memory.totalMb !== undefined) {
-      list.push({ ...base, id: 'memory.total', limit: memory.totalMb })
+      list.push({ ...base, id: `${prefix}.total`, limit: memory.totalMb })
     }
   }
 
@@ -179,6 +180,14 @@ function unmeasuredDetail(run: BudgetRun, expectation: Expectation): string {
     return expectation.phase === undefined
       ? 'the run has no rounds'
       : `the run has no ${expectation.phase} round`
+  }
+  if (
+    expectation.section === 'memory' &&
+    expectation.id.startsWith('memoryPeak.') &&
+    rounds.every((round) => round.measurement.memoryPeak === undefined) &&
+    rounds.some((round) => round.measurement.memory !== undefined)
+  ) {
+    return 'the run has no peak sample; measure with --memory-sample-ms'
   }
   if (expectation.section === 'memory') {
     const measured = rounds.map((round) => round.measurement.memory?.metric).find(Boolean)
