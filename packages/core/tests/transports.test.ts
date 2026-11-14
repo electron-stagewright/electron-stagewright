@@ -919,6 +919,67 @@ describe('PlaywrightElectronTransport', () => {
     await expect(transport.stop(session)).resolves.toEqual({ escalated: false })
   })
 
+  it('kills the whole process tree on a forced stop, and SIGKILLs the pid when that fails', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const trees: number[] = []
+    let treeKilled = true
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+      killProcessTree: async (pid) => {
+        trees.push(pid)
+        return treeKilled
+      },
+    })
+    await transport.forceKill(await transport.launch({ appPath: '/abs/main.js' }))
+    expect(trees).toEqual([123])
+    expect(app.killSignals).toEqual([])
+
+    treeKilled = false
+    await transport.forceKill(await transport.launch({ appPath: '/abs/main.js' }))
+    expect(trees).toEqual([123, 123])
+    expect(app.killSignals).toEqual(['SIGKILL'])
+  })
+
+  it('tells the tree killer when the app has already exited, and skips the pid fallback', async () => {
+    const app = createFakeElectronApp([createFakePage('A')])
+    const process = app.process
+    app.process = () => ({ ...process(), exitCode: 0, signalCode: null })
+    const seen: Array<{ readonly exited?: boolean } | undefined> = []
+    const transport = new PlaywrightElectronTransport({
+      loadElectron: async () => ({ launch: async () => app }),
+      killProcessTree: async (_pid, opts) => {
+        seen.push(opts)
+        return false
+      },
+    })
+    await transport.forceKill(await transport.launch({ appPath: '/abs/main.js' }))
+    expect(seen).toEqual([{ exited: true }])
+    expect(app.killSignals).toEqual([])
+  })
+
+  it('kills the whole process tree when a hung close escalates', async () => {
+    vi.useFakeTimers()
+    try {
+      const app = createFakeElectronApp([createFakePage('A')], undefined, { hangClose: true })
+      const trees: number[] = []
+      const transport = new PlaywrightElectronTransport({
+        loadElectron: async () => ({ launch: async () => app }),
+        killProcessTree: async (pid) => {
+          trees.push(pid)
+          return true
+        },
+      })
+      const session = await transport.launch({ appPath: '/abs/main.js' })
+      const stopping = transport.stop(session, { timeoutMs: 1_000 })
+      await vi.advanceTimersByTimeAsync(7_000)
+      await expect(stopping).resolves.toEqual({ escalated: true })
+      expect(trees).toEqual([123])
+      expect(app.killSignals).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('forceKill() sends SIGKILL for Playwright-owned sessions and marks them stopped', async () => {
     const app = createFakeElectronApp([createFakePage('A')])
     const transport = new PlaywrightElectronTransport({

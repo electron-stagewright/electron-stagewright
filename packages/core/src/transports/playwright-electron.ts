@@ -85,6 +85,7 @@ import {
 } from './playwright-electron-bodies.js'
 import { originRelation } from './surface-origin.js'
 import { runDomStorage } from './dom-storage.js'
+import { killProcessTree, noProcessTree, type KillProcessTree } from './process-tree.js'
 import { RESIZE_BY_TARGET_BODY } from './window-size.js'
 import type {
   AttachOptions,
@@ -251,21 +252,37 @@ function timedOut(settled: Promise<unknown>, ms: number): Promise<boolean> {
  * Close `app`, escalating to SIGKILL when close() has not settled within `budget`, so a hung app is
  * always reaped. Resolves `true` when it escalated.
  */
-async function closeWithinBudget(app: PWElectronApp, budget: number): Promise<boolean> {
+async function closeWithinBudget(
+  app: PWElectronApp,
+  budget: number,
+  killTree: KillProcessTree = killProcessTree,
+): Promise<boolean> {
   // The guarded promise never rejects so the timeout race stays clean.
   const closing = app.close().catch(() => {})
   if (!(await timedOut(closing, budget))) return false
-  killProcess(app)
+  await killProcess(app, killTree)
   // Give Playwright a bounded window (never longer than the budget itself) to settle its handle.
   await timedOut(closing, Math.min(POST_KILL_SETTLE_MS, budget))
   return true
 }
 
-function killProcess(app: PWElectronApp): void {
+/** Kills the app's whole tree while its main process is still there to walk it from. */
+async function killProcess(app: PWElectronApp, killTree: KillProcessTree): Promise<void> {
+  let pid: number | undefined
+  let exited = false
+  try {
+    const proc = app.process()
+    pid = proc.pid
+    exited = (proc.exitCode ?? null) !== null || (proc.signalCode ?? null) !== null
+  } catch {
+    // No handle left; close() still releases Playwright-side resources.
+  }
+  if (pid !== undefined && (await killTree(pid, { exited }).catch(() => false))) return
+  if (exited) return
   try {
     app.process().kill('SIGKILL')
   } catch {
-    // Process already gone; close() still releases Playwright-side resources.
+    // Process already gone.
   }
 }
 
@@ -425,6 +442,8 @@ export interface PlaywrightElectronTransportOptions {
   readonly windowRecoveryBudgetMs?: number
   /** Platform override for the credential-store default. Defaults to `process.platform`. */
   readonly platform?: NodeJS.Platform
+  /** Kills the app's process tree on a forced or escalated stop. Test seam. */
+  readonly killProcessTree?: KillProcessTree
 }
 
 export interface PlaywrightLaunchOptions {
@@ -622,6 +641,7 @@ class PlaywrightSession implements TransportSession {
     initialPage?: PWPage,
     windowRecoveryBudgetMs?: number,
     instrumentation?: { readonly instrumented: boolean; readonly shimDir?: string },
+    private readonly killTree: KillProcessTree = killProcessTree,
   ) {
     this.id = `pw-${randomUUID()}`
     this.app = app
@@ -2469,7 +2489,7 @@ class PlaywrightSession implements TransportSession {
     if (app === null) return { escalated: false }
 
     if (opts.force === true) {
-      killProcess(app)
+      await killProcess(app, this.killTree)
       // A broken Playwright handle can leave close() pending even after SIGKILL.
       await timedOut(
         app.close().catch(() => {}),
@@ -2478,7 +2498,13 @@ class PlaywrightSession implements TransportSession {
       return { escalated: true }
     }
 
-    return { escalated: await closeWithinBudget(app, opts.timeoutMs ?? STOP_GRACEFUL_BUDGET_MS) }
+    return {
+      escalated: await closeWithinBudget(
+        app,
+        opts.timeoutMs ?? STOP_GRACEFUL_BUDGET_MS,
+        this.killTree,
+      ),
+    }
   }
 
   async forceKill(): Promise<void> {
@@ -2495,11 +2521,15 @@ export class PlaywrightElectronTransport implements ITransport {
   private readonly loadElectron: () => Promise<PWElectron>
   private readonly windowRecoveryBudgetMs: number | undefined
   private readonly platform: NodeJS.Platform
+  private readonly killTree: KillProcessTree
 
   constructor(opts: PlaywrightElectronTransportOptions = {}) {
     this.loadElectron = opts.loadElectron ?? loadPlaywrightElectron
     this.windowRecoveryBudgetMs = opts.windowRecoveryBudgetMs
     this.platform = opts.platform ?? process.platform
+    // An injected loader yields a fake app whose pid must never reach a real kill.
+    this.killTree =
+      opts.killProcessTree ?? (opts.loadElectron === undefined ? killProcessTree : noProcessTree)
   }
 
   public readonly capabilities: TransportCapabilities = {
@@ -2585,7 +2615,7 @@ export class PlaywrightElectronTransport implements ITransport {
       )
     } catch (cause) {
       // A failed launch can leave the app half-open, and Playwright's close() can then hang.
-      await closeWithinBudget(app, STOP_GRACEFUL_BUDGET_MS)
+      await closeWithinBudget(app, STOP_GRACEFUL_BUDGET_MS, this.killTree)
       await removeShimDir(shimDir)
       const message = cause instanceof Error ? cause.message : String(cause)
       const isTimeout = /timeout/i.test(message)
@@ -2597,10 +2627,13 @@ export class PlaywrightElectronTransport implements ITransport {
     }
     // Reuse the window we already awaited for console capture, so launch makes a
     // single firstWindow() call rather than one here and one in the session.
-    return new PlaywrightSession(app, initialPage, this.windowRecoveryBudgetMs, {
-      instrumented: shimDir !== undefined,
-      ...(shimDir !== undefined ? { shimDir } : {}),
-    })
+    return new PlaywrightSession(
+      app,
+      initialPage,
+      this.windowRecoveryBudgetMs,
+      { instrumented: shimDir !== undefined, ...(shimDir !== undefined ? { shimDir } : {}) },
+      this.killTree,
+    )
   }
 
   attach(_opts: AttachOptions): Promise<TransportSession> {
