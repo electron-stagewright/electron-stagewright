@@ -92,6 +92,13 @@ another pid namespace reports memory `unmeasured` instead of a stranger's number
   budget does not name is reported and never gates; GPU memory swings widely between machines, so
   leave it out unless you mean to gate it.
 - **`thresholdPercent`** is the tolerance over each limit; a section may override it.
+- **Phase.** `startup` reads `cold` unless it names a phase. A `memory` block that names none reads
+  the run's `warm` rounds, else `live`, else `cold`: a run of fresh-profile launches
+  (`--phases cold`) is gated on its cold rounds.
+- **Startup is not launch-to-ready.** `maxFirstWindowMs` is process creation to the end of the
+  first window's load event. Work the app does after that (opening a database, fetching data,
+  starting a server) is not in it, so a wall-clock launch budget converted to it gets looser
+  without saying so. Time that work in a workload, or keep it in its own gate.
 - **`$comment`** is allowed in every object. Unknown keys are rejected, so a typo cannot silently
   disable a limit.
 
@@ -128,9 +135,19 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
   directory) and gates them. It needs no Electron and no display.
 - `check` compares a run file to the budget. Values are the median over the rounds of a phase.
 - `compare` prints a before/after table of two runs.
-- `--strict` ignores `thresholdPercent`. `--require-measurement` fails a budgeted metric the run did
-  not measure; without it that metric is listed as `unmeasured`.
+- `--no-tolerance` ignores `thresholdPercent`, so the limit itself gates. It does not turn warnings
+  into failures: every verdict already fails the command. `--strict` is a deprecated alias that
+  prints a warning. `--require-measurement` fails a budgeted metric the run did not measure;
+  without it that metric is listed as `unmeasured`.
 - `--json` prints the machine report instead of the table.
+
+To run the CLI from a script, resolve it instead of guessing a path inside `dist/`:
+
+```js
+const cli = fileURLToPath(import.meta.resolve('@electron-stagewright/plugin-budget/cli'))
+// or, from CommonJS: require.resolve('@electron-stagewright/plugin-budget/cli')
+spawn(process.execPath, [cli, 'measure', '--main', 'dist/main.js', '--out', 'run.json'])
+```
 
 Exit codes: `0` within budget, `1` over budget **or nothing measured**, `2` usage error, unreadable
 input, or any other error. A bundle entry that matches no file is `unmeasured`, never zero bytes,
@@ -141,8 +158,12 @@ this tool. A packaged build whose fuses forbid inspection cannot be measured yet
 
 ## Library
 
+`@electron-stagewright/plugin-budget/check` holds the budget and run formats, `checkRun`, and the
+report renderers. It loads neither core nor the plugin, so a gate that only checks runs without the
+MCP SDK. The root export adds `measureApp`, `measureSession` and the plugin.
+
 ```ts
-import { checkRun, loadBudget, loadRun } from '@electron-stagewright/plugin-budget'
+import { checkRun, loadBudget, loadRun } from '@electron-stagewright/plugin-budget/check'
 
 const report = checkRun(await loadRun('run.json'), await loadBudget('perf-budget.json'))
 if (!report.passed) console.error(report.results.filter((r) => r.status === 'fail'))

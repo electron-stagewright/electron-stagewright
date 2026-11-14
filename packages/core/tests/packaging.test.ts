@@ -305,7 +305,8 @@ describe('publish-readiness — publishable package manifests', () => {
       Record<string, { readonly types?: unknown; readonly import?: unknown }> | undefined
 
     expect(plugin?.pkg['bin']).toEqual({ [binName]: './dist/cli.js' })
-    expect(exportsObject?.['./cli']).toEqual({
+    // A `default` condition may follow, so CommonJS scripts can resolve the CLI too.
+    expect(exportsObject?.['./cli']).toMatchObject({
       types: './dist/cli.d.ts',
       import: './dist/cli.js',
     })

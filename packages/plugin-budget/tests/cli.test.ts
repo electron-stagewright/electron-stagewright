@@ -53,7 +53,7 @@ describe('parseBudgetCliArgs', () => {
         'run.json',
         '--budget',
         'b.json',
-        '--strict',
+        '--no-tolerance',
         '--phase',
         'live',
       ]),
@@ -61,11 +61,14 @@ describe('parseBudgetCliArgs', () => {
       command: 'check',
       runPath: 'run.json',
       budgetPath: 'b.json',
-      strict: true,
+      noTolerance: true,
       requireMeasurement: false,
       phase: 'live',
       json: false,
     })
+    expect(
+      parseBudgetCliArgs(['check', 'run.json', '--budget', 'b.json', '--strict']),
+    ).toMatchObject({ noTolerance: true, deprecatedStrict: true })
     expect(parseBudgetCliArgs(['compare', 'a.json', 'b.json', '--json'])).toMatchObject({
       command: 'compare',
       json: true,
@@ -225,7 +228,7 @@ describe('measure', () => {
       '--budget',
       'b.json',
       '--check',
-      '--strict',
+      '--no-tolerance',
     ])
     expect(parsed).toMatchObject({
       command: 'measure',
@@ -235,13 +238,14 @@ describe('measure', () => {
       rounds: 5,
       phases: ['warm'],
       check: true,
-      strict: true,
+      noTolerance: true,
     })
     const bad = (argv: string[]) => () => parseBudgetCliArgs(['measure', ...argv])
     expect(bad([])).toThrow(/--main/)
     expect(bad(['--main', 'm.js', '--rounds', '0'])).toThrow(/--rounds/)
     expect(bad(['--main', 'm.js', '--phases', 'hot'])).toThrow(/--phases/)
     expect(bad(['--main', 'm.js', '--check'])).toThrow(/--budget/)
+    expect(bad(['--main', 'm.js', '--no-tolerance'])).toThrow(/only with --check/)
     expect(bad(['--main', 'm.js', '--strict'])).toThrow(/only with --check/)
     expect(bad(['--main', 'm.js', '--env', 'NOVALUE'])).toThrow(/KEY=VALUE/)
     expect(bad(['--main', 'm.js', '--out', ''])).toThrow(/--out expects a value/)
@@ -285,16 +289,20 @@ describe('measure', () => {
     )
     const { deps, seen } = fakeMeasure(run([['cold', measurement(140)]]))
     const argv = ['measure', '--main', 'm.js', '--budget', budgetPath, '--phases', 'cold,cold']
-    // Memory budgets read warm by default, so a cold-only run leaves them unmeasured...
-    const unmeasured = await invoke([...argv, '--check', '--json'], deps)
-    expect(JSON.parse(unmeasured.stdout)).toMatchObject({ reason: 'NO_MEASUREMENTS' })
-    // ...until --phase names the measured one.
+    // A memory budget without a phase reads warm, and a cold-only run's cold rounds otherwise.
+    const coldOnly = await invoke([...argv, '--check', '--json'], deps)
+    expect(JSON.parse(coldOnly.stdout)).toMatchObject({
+      reason: 'OVER_BUDGET',
+      results: [{ id: 'memory.main', phase: 'cold', status: 'fail' }],
+    })
     const result = await invoke(
       [...argv, '--check', '--phase', 'cold', '--workload-timeout-ms', '5000'],
       deps,
     )
     expect(result.exitCode).toBe(BUDGET_EXIT_CODES.OVER_BUDGET)
     expect(seen[1]).toMatchObject({ phases: ['cold'], workloadTimeoutMs: 5000 })
+    const deprecated = await invoke([...argv, '--check', '--strict'], deps)
+    expect(deprecated.stderr).toContain('--strict is deprecated')
 
     const bad = (extra: string[]) => () => parseBudgetCliArgs([...argv, ...extra])
     expect(bad(['--check', '--phase', 'warm'])).toThrow(/measured phase/)

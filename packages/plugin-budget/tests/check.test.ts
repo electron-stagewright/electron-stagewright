@@ -136,14 +136,14 @@ describe('checkRun', () => {
       ['warm', measurement(105)],
     ])
     expect(checkRun(over, budget).passed).toBe(true)
-    const strict = checkRun(over, budget, { strict: true })
+    const strict = checkRun(over, budget, { ignoreThreshold: true })
     expect(strict).toMatchObject({ passed: false, reason: 'OVER_BUDGET' })
     expect(strict.results.find((r) => r.id === 'memory.main')?.status).toBe('fail')
   })
 
   it('compares the unrounded value, not the displayed one', () => {
     const justOver = run([['cold', measurement(90, { startup: { firstWindowMs: 1000.04 } })]])
-    const result = checkRun(justOver, budget, { strict: true }).results.find(
+    const result = checkRun(justOver, budget, { ignoreThreshold: true }).results.find(
       (r) => r.id === 'startup.firstWindowMs',
     )
     expect(result).toMatchObject({ actual: 1000, status: 'fail' })
@@ -199,7 +199,7 @@ describe('checkRun', () => {
   })
 
   it('renders the report and a comparison with the metric named', () => {
-    const text = renderCheckReport(checkRun(run(rounds), budget, { strict: true }))
+    const text = renderCheckReport(checkRun(run(rounds), budget, { ignoreThreshold: true }))
     expect(text).toContain('Budget check: PASS')
     expect(text).toContain('| memory.main (warm) [footprint] | 90 MB | 100 MB | 100 MB | pass |')
 
@@ -212,5 +212,23 @@ describe('checkRun', () => {
     expect(renderComparison(rows)).toContain(
       '| memory.main (warm) [footprint] | 100 MB | 80 MB | -20% |',
     )
+  })
+
+  it('reads memory from cold rounds when the run has no warm ones', () => {
+    const coldOnly = run([
+      ['cold', measurement(80)],
+      ['cold', measurement(90)],
+      ['cold', measurement(300)],
+    ])
+    const result = checkRun(coldOnly, budget).results.find((r) => r.id === 'memory.main')
+    expect(result).toMatchObject({ phase: 'cold', actual: 90, status: 'pass' })
+  })
+
+  it('treats ignoreThreshold and the deprecated strict alike', () => {
+    const over = run([['warm', measurement(105)]])
+    const tolerant = { ...budget, thresholdPercent: 10 }
+    expect(checkRun(over, tolerant).passed).toBe(true)
+    expect(checkRun(over, tolerant, { ignoreThreshold: true }).passed).toBe(false)
+    expect(checkRun(over, tolerant, { strict: true }).passed).toBe(false)
   })
 })

@@ -40,10 +40,11 @@ export type BudgetCliOptions =
       readonly command: 'check'
       readonly runPath: string
       readonly budgetPath: string
-      readonly strict: boolean
+      readonly noTolerance: boolean
       readonly requireMeasurement: boolean
       readonly phase?: Phase
       readonly json: boolean
+      readonly deprecatedStrict?: true
     }
   | {
       readonly command: 'compare'
@@ -56,8 +57,9 @@ export type BudgetCliOptions =
       readonly budgetPath: string
       readonly root?: string
       readonly outPath?: string
-      readonly strict: boolean
+      readonly noTolerance: boolean
       readonly json: boolean
+      readonly deprecatedStrict?: true
     }
   | MeasureCliOptions
 
@@ -78,9 +80,10 @@ export interface MeasureCliOptions {
   readonly label?: string
   readonly outPath?: string
   readonly check: boolean
-  readonly strict: boolean
+  readonly noTolerance: boolean
   readonly requireMeasurement: boolean
   readonly json: boolean
+  readonly deprecatedStrict?: true
 }
 
 /** Seam for tests: the launch-and-measure step. */
@@ -98,12 +101,13 @@ export function formatBudgetCliHelp(): string {
     '                              [--phases cold,warm] [--settle-ms 3000] [--window-ms 2000]',
     '                              [--workload <script.mjs> [--workload-timeout-ms 120000]]',
     '                              [--label <text>] [--out <run.json>] [--json]',
-    '                              [--check [--strict] [--require-measurement] [--phase cold|warm]]',
-    '  electron-stagewright-budget check <run.json> --budget <file> [--strict]',
+    '                              [--check [--no-tolerance] [--require-measurement]',
+    '                              [--phase cold|warm]]',
+    '  electron-stagewright-budget check <run.json> --budget <file> [--no-tolerance]',
     '                              [--require-measurement] [--phase cold|warm|live] [--json]',
     '  electron-stagewright-budget compare <before.json> <after.json> [--json]',
     '  electron-stagewright-budget bundle --budget <file> [--root <dir>] [--out <run.json>]',
-    '                              [--strict] [--json]',
+    '                              [--no-tolerance] [--json]',
     '',
     'measure   Launch the app on a throwaway profile and measure cold and warm rounds.',
     '          --workload is an ES module whose default export, async ({ dispatch, sessionId,',
@@ -114,7 +118,8 @@ export function formatBudgetCliHelp(): string {
     'compare   Print a before/after table of two runs.',
     'bundle    Measure the bundle entries of a budget and gate them; needs no Electron.',
     '',
-    '--strict               Ignore thresholdPercent; the limit itself gates.',
+    '--no-tolerance         Ignore thresholdPercent; the limit itself gates.',
+    '                       (--strict is a deprecated alias.)',
     '--require-measurement  Fail when a budgeted metric was not measured.',
     '',
     'Exit codes: 0 within budget, 1 over budget or nothing measured,',
@@ -149,7 +154,7 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     '--label',
     '--out',
   ]
-  const booleanFlags = ['--check', '--strict', '--require-measurement', '--json']
+  const booleanFlags = ['--check', '--no-tolerance', '--strict', '--require-measurement', '--json']
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index] as string
     // Scanned here, not over all of argv, so `--arg --help` is forwarded to the app.
@@ -199,8 +204,11 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
   const check = flags.has('--check')
   const budgetPath = single.get('--budget')
   if (check && budgetPath === undefined) throw new UsageError('--check requires --budget <file>')
-  if (!check && (flags.has('--strict') || flags.has('--require-measurement') || phase)) {
-    throw new UsageError('--strict, --require-measurement, and --phase apply only with --check')
+  const noTolerance = flags.has('--no-tolerance') || flags.has('--strict')
+  if (!check && (noTolerance || flags.has('--require-measurement') || phase)) {
+    throw new UsageError(
+      '--no-tolerance, --require-measurement, and --phase apply only with --check',
+    )
   }
   const optional = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } =>
     value === undefined ? {} : ({ [key]: value } as { [P in K]: V })
@@ -228,9 +236,10 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     ...optional('label', single.get('--label')),
     ...optional('outPath', single.get('--out')),
     check,
-    strict: flags.has('--strict'),
+    noTolerance,
     requireMeasurement: flags.has('--require-measurement'),
     json: flags.has('--json'),
+    ...(flags.has('--strict') ? { deprecatedStrict: true as const } : {}),
   }
 }
 
@@ -254,9 +263,9 @@ export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
     bundle: ['--budget', '--root', '--out'],
   }
   const booleanFlags: Record<typeof command, readonly string[]> = {
-    check: ['--strict', '--require-measurement', '--json'],
+    check: ['--no-tolerance', '--strict', '--require-measurement', '--json'],
     compare: ['--json'],
-    bundle: ['--strict', '--json'],
+    bundle: ['--no-tolerance', '--strict', '--json'],
   }
   const values = new Map<string, string>()
   const flags = new Set<string>()
@@ -284,6 +293,8 @@ export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
     return budgetPath
   }
   const json = flags.has('--json')
+  const noTolerance = flags.has('--no-tolerance') || flags.has('--strict')
+  const deprecatedStrict = flags.has('--strict') ? { deprecatedStrict: true as const } : {}
 
   if (command === 'compare') {
     const [beforePath, afterPath, extra] = positional
@@ -301,8 +312,9 @@ export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
       budgetPath: requireBudget(),
       ...(root === undefined ? {} : { root }),
       ...(outPath === undefined ? {} : { outPath }),
-      strict: flags.has('--strict'),
+      noTolerance,
       json,
+      ...deprecatedStrict,
     }
   }
   const [runPath, extra] = positional
@@ -317,10 +329,11 @@ export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
     command,
     runPath,
     budgetPath: requireBudget(),
-    strict: flags.has('--strict'),
+    noTolerance,
     requireMeasurement: flags.has('--require-measurement'),
     ...(phase === undefined ? {} : { phase: phase as Phase }),
     json,
+    ...deprecatedStrict,
   }
 }
 
@@ -388,7 +401,7 @@ async function runMeasure(
   if (options.outPath !== undefined) await writeRun(options.outPath, run)
   if (options.check && budget !== undefined) {
     const report = checkRun(run, budget, {
-      strict: options.strict,
+      ignoreThreshold: options.noTolerance,
       requireMeasurement: options.requireMeasurement,
       ...(options.phase === undefined ? {} : { phase: options.phase }),
     })
@@ -409,6 +422,11 @@ export async function runBudgetCli(
     io.stdout(`${formatBudgetCliHelp()}\n`)
     return BUDGET_EXIT_CODES.SUCCESS
   }
+  if ('deprecatedStrict' in options && options.deprecatedStrict) {
+    io.stderr(
+      '--strict is deprecated: it drops thresholdPercent and never meant "fail instead of warn". Use --no-tolerance.\n',
+    )
+  }
   if (options.command === 'measure') return runMeasure(options, io, deps)
   if (options.command === 'compare') {
     const rows = compareRuns(await loadRun(options.beforePath), await loadRun(options.afterPath))
@@ -422,7 +440,7 @@ export async function runBudgetCli(
   const budget = await loadBudget(options.budgetPath)
   if (options.command === 'check') {
     const report = checkRun(await loadRun(options.runPath), budget, {
-      strict: options.strict,
+      ignoreThreshold: options.noTolerance,
       requireMeasurement: options.requireMeasurement,
       ...(options.phase === undefined ? {} : { phase: options.phase }),
     })
@@ -440,7 +458,10 @@ export async function runBudgetCli(
     bundle: budget.bundle,
   }
   // Every entry was asked for by name here, so one that matched nothing fails the command.
-  const report = checkRun(run, bundleOnly, { strict: options.strict, requireMeasurement: true })
+  const report = checkRun(run, bundleOnly, {
+    ignoreThreshold: options.noTolerance,
+    requireMeasurement: true,
+  })
   return emitReport(report, options.json, io)
 }
 
