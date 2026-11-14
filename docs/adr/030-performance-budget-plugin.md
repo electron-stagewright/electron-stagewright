@@ -54,6 +54,14 @@ and a CLI for CI, both driving the same measurement code.
 - **Startup is not a wall clock.** `maxFirstWindowMs` ends at the first window's load event. A
   launch-to-ready budget that includes work the app does after load is a different metric; the
   README says so instead of letting such a budget pass loosely.
+- **Fused builds measure memory through the app.** When main eval is unavailable (a build with the
+  `EnableNodeCliInspectArguments` fuse off, launched over CDP), `measure` reads
+  `app.getAppMetrics()` through a renderer expression the budget names (`memoryProbe`). The host
+  still reads each pid in the platform metric. Blocking and startup need main and are `unmeasured`
+  with the reason. The probe passes the eval blocklist, as the IPC probe does.
+- **Peak over the workload.** A memory block may read `aggregate: "peak"`: `measure` samples during
+  the window and keeps the heaviest sample outside the GPU as `memoryPeak`, gated as
+  `memoryPeak.*` rows. The median is taken over the rounds' peaks.
 - **Rounds can be prepared and merged.** `beforeRound` runs before each round's first launch and
   may add env and args to it, so every round can start from fresh state. `failedRounds: 'skip'`
   goes on past a failed round, `mergeRuns` and a multi-file `check` combine runs, and `minSamples`
@@ -88,8 +96,9 @@ and a CLI for CI, both driving the same measurement code.
 - **Measure from outside, with no session** (spawn the binary, walk the process tree, classify by
   `--type=`). It works on builds whose fuses forbid inspection, and it does not perturb the main
   process. It cannot see main-thread blocking or IPC latency, needs a process-tree reader per
-  platform, and would be a second measurement path beside the one agents use. Deferred; the run
-  format does not preclude it.
+  platform, and would be a second measurement path beside the one agents use. Fused builds are
+  covered for now by the `memoryProbe` path, which needs one IPC handler in the app; the
+  process-tree reader stays deferred, and the run format does not preclude it.
 - **A probe module the app imports.** Rejected: it puts measurement code in the product and makes
   the budget unusable on an app that has not adopted it.
 - **Extend `packages/bench`.** Rejected: bench quantifies Stagewright's own token economy against a

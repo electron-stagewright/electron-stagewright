@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const fixtureDir = dirname(fileURLToPath(import.meta.url))
 
 ipcMain.handle('version', () => app.getVersion())
+ipcMain.handle('metrics', () => app.getAppMetrics())
 ipcMain.handle('block', (_event, ms) => {
   const until = Date.now() + Number(ms)
   while (Date.now() < until);

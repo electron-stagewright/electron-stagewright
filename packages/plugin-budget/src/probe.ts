@@ -33,6 +33,33 @@ export interface MainFacts {
 
 export type MainOp = 'facts' | 'start' | 'read' | 'startup'
 
+/** What the renderer memory probe body returns. */
+export interface RendererMetrics {
+  readonly userAgent: string
+  readonly processes: MainFacts['processes']
+}
+
+/**
+ * Renderer body for a build whose main process cannot be inspected: `probe` is the app's own
+ * expression that resolves to `app.getAppMetrics()`, typically through IPC.
+ */
+export function buildMemoryProbeBody(probe: string): string {
+  return `
+const metrics = await (${probe});
+if (!Array.isArray(metrics)) throw new Error('the memory probe did not resolve to an array');
+return {
+  userAgent: navigator.userAgent,
+  processes: metrics.map((entry) => ({
+    pid: entry.pid,
+    type: entry.type,
+    name: entry.name || entry.serviceName || null,
+    workingSetKb: entry.memory.workingSetSize,
+    privateKb: typeof entry.memory.privateBytes === 'number' ? entry.memory.privateBytes : null,
+  })),
+};
+`
+}
+
 const FIRST_WINDOW_TIMING = `(() => {
   const entry = performance.getEntriesByType('navigation')[0];
   return {

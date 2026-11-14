@@ -47,6 +47,8 @@ const memorySchema = z.object({
 const measurementSchema = z.object({
   startup: z.object({ firstWindowMs: z.number() }).optional(),
   memory: memorySchema.optional(),
+  // The sample with the most memory outside the GPU during the window, when it was sampled.
+  memoryPeak: memorySchema.optional(),
   mainThread: stallSchema.optional(),
   ipc: latencySchema.optional(),
   // Why a requested metric is missing, keyed by `startup` / `memory` / `mainThread` / `ipc`.
@@ -207,7 +209,7 @@ export function memoryByType(memory: MemoryMeasurement): Partial<Record<ProcessT
 }
 
 /** Sum of every type the sample holds, or undefined when one of them is unmeasured or none exist. */
-function memoryTotal(memory: MemoryMeasurement, skipGpu: boolean): number | undefined {
+export function memoryTotal(memory: MemoryMeasurement, skipGpu: boolean): number | undefined {
   const types = new Set(memory.processes.map((entry) => entry.type))
   if (skipGpu) types.delete('gpu')
   if (types.size === 0) return undefined
@@ -232,6 +234,57 @@ export interface SummaryRow {
   /** The memory metric, so a table never shows megabytes without naming what they count. */
   readonly metric?: string
   readonly samples: number
+}
+
+type PushRow = (
+  id: string,
+  unit: SummaryRow['unit'],
+  values: readonly (number | undefined)[],
+  metric?: string,
+) => void
+
+function pushMemory(
+  prefix: 'memory' | 'memoryPeak',
+  memories: readonly MemoryMeasurement[],
+  push: PushRow,
+): void {
+  // Rounds whose OS reader failed fall back to another metric; the majority one is summarised.
+  const counts = new Map<string, number>()
+  for (const memory of memories) counts.set(memory.metric, (counts.get(memory.metric) ?? 0) + 1)
+  let primary: MemoryMeasurement['metric'] | undefined
+  for (const { metric } of memories) {
+    if (primary === undefined || (counts.get(metric) ?? 0) > (counts.get(primary) ?? 0)) {
+      primary = metric
+    }
+  }
+  // Working set is always recorded, so a budget may name it on any platform.
+  for (const metric of new Set([primary, 'workingSet'] as const)) {
+    if (metric === undefined) continue
+    const sameMetric = memories
+      .filter((memory) => memory.metric === primary)
+      .map((memory) => ({ ...memory, metric }))
+    const byType = sameMetric.map(memoryByType)
+    for (const type of PROCESS_TYPES) {
+      push(
+        `${prefix}.${type}`,
+        'MB',
+        byType.map((totals) => totals[type]),
+        metric,
+      )
+    }
+    push(
+      `${prefix}.totalWithoutGpu`,
+      'MB',
+      sameMetric.map((memory) => memoryTotal(memory, true)),
+      metric,
+    )
+    push(
+      `${prefix}.total`,
+      'MB',
+      sameMetric.map((memory) => memoryTotal(memory, false)),
+      metric,
+    )
+  }
 }
 
 /** Flatten a run into comparable rows (`memory.main`, `ipc.p99Ms`, `bundle.<id>`, ...). */
@@ -265,45 +318,16 @@ export function summarizeRun(run: BudgetRun): SummaryRow[] {
       measurements.map((m) => m.startup?.firstWindowMs),
     )
 
-    const memories = measurements.flatMap((m) => (m.memory === undefined ? [] : [m.memory]))
-    // Rounds whose OS reader failed fall back to another metric; the majority one is summarised.
-    const counts = new Map<string, number>()
-    for (const memory of memories) counts.set(memory.metric, (counts.get(memory.metric) ?? 0) + 1)
-    let primary: MemoryMeasurement['metric'] | undefined
-    for (const { metric } of memories) {
-      if (primary === undefined || (counts.get(metric) ?? 0) > (counts.get(primary) ?? 0)) {
-        primary = metric
-      }
-    }
-    // Working set is always recorded, so a budget may name it on any platform.
-    for (const metric of new Set([primary, 'workingSet'] as const)) {
-      if (metric === undefined) continue
-      const sameMetric = memories
-        .filter((memory) => memory.metric === primary)
-        .map((memory) => ({ ...memory, metric }))
-      const byType = sameMetric.map(memoryByType)
-      for (const type of PROCESS_TYPES) {
-        push(
-          `memory.${type}`,
-          'MB',
-          byType.map((totals) => totals[type]),
-          metric,
-        )
-      }
-      push(
-        'memory.totalWithoutGpu',
-        'MB',
-        sameMetric.map((memory) => memoryTotal(memory, true)),
-        metric,
-      )
-      push(
-        'memory.total',
-        'MB',
-        sameMetric.map((memory) => memoryTotal(memory, false)),
-        metric,
-      )
-    }
-
+    pushMemory(
+      'memory',
+      measurements.flatMap((m) => (m.memory === undefined ? [] : [m.memory])),
+      push,
+    )
+    pushMemory(
+      'memoryPeak',
+      measurements.flatMap((m) => (m.memoryPeak === undefined ? [] : [m.memoryPeak])),
+      push,
+    )
     push(
       'mainThread.blockedPercent',
       '%',
