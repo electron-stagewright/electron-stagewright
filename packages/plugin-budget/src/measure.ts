@@ -102,6 +102,21 @@ async function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promi
   }
 }
 
+function checkSetup(setup: RoundSetup | void): RoundSetup {
+  if (setup === undefined) return {}
+  const strings = (value: unknown): boolean =>
+    Array.isArray(value) && value.every((item) => typeof item === 'string')
+  const env = (setup as { env?: unknown }).env
+  if (
+    typeof setup !== 'object' ||
+    (setup.args !== undefined && !strings(setup.args)) ||
+    (env !== undefined && (typeof env !== 'object' || env === null || !strings(Object.values(env))))
+  ) {
+    throw new TypeError('beforeRound must return { env?: Record<string, string>, args?: string[] }')
+  }
+  return setup
+}
+
 /** Launch once on `profile` and, when `measure` is set, take one measurement. */
 async function launchOnce(
   options: MeasureAppOptions,
@@ -188,10 +203,11 @@ export async function measureApp(options: MeasureAppOptions): Promise<BudgetRun>
   const phases = options.phases ?? ['cold', 'warm']
   const rounds: BudgetRun['rounds'][number][] = []
   let electronVersion: string | undefined
+  let firstFailure: unknown
   for (let round = 1; round <= (options.rounds ?? DEFAULT_ROUNDS); round += 1) {
     const profile = await mkdtemp(path.join(tmpdir(), 'sw-budget-profile-'))
     try {
-      const setup = (await options.beforeRound?.({ round, profile })) ?? {}
+      const setup = checkSetup(await options.beforeRound?.({ round, profile }))
       for (const phase of ['cold', 'warm'] as const) {
         const measure = phases.includes(phase)
         if (!measure && !(phase === 'cold' && phases.includes('warm'))) continue
@@ -204,6 +220,7 @@ export async function measureApp(options: MeasureAppOptions): Promise<BudgetRun>
       }
     } catch (error) {
       if (options.failedRounds !== 'skip') throw error
+      firstFailure ??= error
       // A warm launch shares the cold one's state, so the rest of the round is dropped too.
       options.onProgress?.(
         `round ${round} failed and was skipped: ${error instanceof Error ? error.message : String(error)}`,
@@ -218,6 +235,8 @@ export async function measureApp(options: MeasureAppOptions): Promise<BudgetRun>
       )
     }
   }
+  // Every round failing is a setup problem (a wrong path, a broken script), not a budget verdict.
+  if (rounds.length === 0 && firstFailure !== undefined) throw firstFailure
   return createRun({
     rounds,
     ...(electronVersion === undefined ? {} : { electronVersion }),
