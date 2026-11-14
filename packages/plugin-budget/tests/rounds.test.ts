@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Budget } from '../src/budget.js'
 import { checkRun } from '../src/check.js'
 import { runBudgetCliCommand, type BudgetCliDependencies } from '../src/cli.js'
-import type { MeasureAppOptions } from '../src/measure.js'
+import { measureApp, type MeasureAppOptions } from '../src/measure.js'
 import { mergeRuns } from '../src/run.js'
 import { measurement, run } from './helpers.js'
 
@@ -87,6 +87,34 @@ async function invoke(argv: readonly string[], deps?: BudgetCliDependencies) {
   return { exitCode, stdout: stdout.join(''), stderr: stderr.join('') }
 }
 
+describe('measureApp rounds', () => {
+  it('fails with the first error when every round failed, even when skipping', async () => {
+    const progress: string[] = []
+    await expect(
+      measureApp({
+        launch: { main: 'missing.js' },
+        rounds: 2,
+        failedRounds: 'skip',
+        beforeRound: ({ round }) => {
+          throw new Error(`fixture ${round} broken`)
+        },
+        onProgress: (message) => void progress.push(message),
+      }),
+    ).rejects.toThrow('fixture 1 broken')
+    expect(progress.filter((line) => line.includes('was skipped'))).toHaveLength(2)
+  })
+
+  it('refuses a beforeRound result that is not strings', async () => {
+    await expect(
+      measureApp({
+        launch: { main: 'missing.js' },
+        rounds: 1,
+        beforeRound: () => ({ args: '--enable-logging' }) as unknown as { args: string[] },
+      }),
+    ).rejects.toThrow(TypeError)
+  })
+})
+
 describe('CLI rounds', () => {
   it('merges several run files before checking, with --min-samples', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sw-budget-rounds-'))
@@ -139,6 +167,28 @@ describe('CLI rounds', () => {
     expect(await seen[0]?.beforeRound?.({ round: 2, profile: '/tmp/p' })).toEqual({
       env: { ROUND: '2' },
     })
+    expect(
+      (
+        await invoke(
+          [
+            'measure',
+            '--main',
+            'm.js',
+            '--rounds',
+            '1',
+            '--budget',
+            'b.json',
+            '--check',
+            '--min-samples',
+            '2',
+          ],
+          deps,
+        )
+      ).stderr,
+    ).toContain('can never be met')
+    expect(
+      (await invoke(['check', 'r.json', 'r.json', '--budget', 'b.json'], deps)).stderr,
+    ).toContain('same run file twice')
     const missing = await invoke(
       ['measure', '--main', 'm.js', '--before-round', path.join(dir, 'no.mjs')],
       deps,

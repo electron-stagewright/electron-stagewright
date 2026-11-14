@@ -16,8 +16,8 @@ async function reachable(entry: string): Promise<{ local: Set<string>; external:
     if (local.has(file)) continue
     local.add(file)
     const text = await readFile(path.join(SRC, file), 'utf8')
-    for (const match of text.matchAll(/(?:from|import)\s*\(?\s*'([^']+)'/g)) {
-      const specifier = match[1] as string
+    for (const match of text.matchAll(/(?:from|import)\s*\(?\s*(['"])([^'"]+)\1/g)) {
+      const specifier = match[2] as string
       if (specifier.startsWith('.'))
         queue.push(specifier.replace(/^\.\//, '').replace(/\.js$/, '.ts'))
       else external.add(specifier)

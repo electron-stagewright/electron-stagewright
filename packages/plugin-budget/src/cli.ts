@@ -248,6 +248,11 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     const value = single.get(flag)
     return value === undefined ? undefined : positiveInt(flag, value, min)
   }
+  const rounds = number('--rounds', 1) ?? DEFAULT_ROUNDS
+  const minSamples = number('--min-samples', 1)
+  if (minSamples !== undefined && minSamples > rounds) {
+    throw new UsageError(`--min-samples ${minSamples} can never be met by --rounds ${rounds}`)
+  }
   return {
     command: 'measure',
     ...optional('main', main === undefined ? undefined : path.resolve(main)),
@@ -258,7 +263,7 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     args,
     env,
     ...optional('budgetPath', budgetPath),
-    rounds: number('--rounds', 1) ?? DEFAULT_ROUNDS,
+    rounds,
     phases: phases as LaunchPhase[],
     ...optional('settleMs', number('--settle-ms', 0)),
     ...optional('windowMs', number('--window-ms', 250)),
@@ -267,7 +272,7 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     ...optional('beforeRoundPath', single.get('--before-round')),
     ...optional('memorySampleMs', number('--memory-sample-ms', 100)),
     skipFailedRounds: flags.has('--skip-failed-rounds'),
-    ...optional('minSamples', number('--min-samples', 1)),
+    ...optional('minSamples', minSamples),
     ...optional('phase', phase as Phase | undefined),
     ...optional('label', single.get('--label')),
     ...optional('outPath', single.get('--out')),
@@ -354,6 +359,9 @@ export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
     }
   }
   if (positional.length === 0) throw new UsageError('check expects at least one run file')
+  if (new Set(positional.map((file) => path.resolve(file))).size !== positional.length) {
+    throw new UsageError('check lists the same run file twice')
+  }
   const minSamples = values.get('--min-samples')
   const phase = values.get('--phase')
   if (phase !== undefined && !(PHASES as readonly string[]).includes(phase)) {

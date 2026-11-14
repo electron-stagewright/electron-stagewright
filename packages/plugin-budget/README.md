@@ -110,7 +110,7 @@ another pid namespace reports memory `unmeasured` instead of a stranger's number
 ```sh
 electron-stagewright-budget measure --main dist/main.js --budget perf-budget.json \
   --rounds 5 --out run.json --check
-electron-stagewright-budget check run.json --budget perf-budget.json [--strict] [--require-measurement]
+electron-stagewright-budget check run.json --budget perf-budget.json [--no-tolerance] [--require-measurement]
 electron-stagewright-budget compare before.json after.json
 electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--out run.json]
 ```
@@ -135,11 +135,13 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
   ```
 
 - `--before-round <script.mjs>` prepares each round before its first launch. The module
-  default-exports `async ({ round, profile }) => ({ env, args })`; the returned `env` and `args`
-  are added to that round's launches. Use it to hand every launch its own copy of a fixture, so
+  default-exports `async ({ round, profile }) => ({ env, args })` (string values only); the
+  returned `env` and `args` are added to that round's launches. Use it to hand every launch its own copy of a fixture, so
   rounds that share state do not skew the median.
 - `--skip-failed-rounds` reports a round whose launch or measurement failed and goes on. Pair it
-  with `--min-samples N` on the check, so a median never rests on fewer than `N` launches:
+  with `--min-samples N` on the check: a metric with fewer than `N` measured launches is left
+  unmeasured instead of gated, and `--require-measurement` turns that into a failure. If every
+  round fails, the command fails with the first round's error (exit `2`):
 
   ```sh
   electron-stagewright-budget measure --main dist/main.js --budget perf-budget.json \
