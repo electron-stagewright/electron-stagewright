@@ -76,11 +76,14 @@ function expectations(budget: Budget, run: BudgetRun, options: CheckOptions): Ex
 
   const memory = budget.memory?.[platform as keyof NonNullable<Budget['memory']>]
   if (memory !== undefined) {
-    // Unset: the run's warm rounds, else live, else cold (a run of fresh-profile launches only).
-    const memoryPhase =
-      options.phase ??
-      memory.phase ??
-      ANY_PHASE_ORDER.find((phase) => run.rounds.some((round) => round.phase === phase))
+    // Unset: the first of warm, live, cold whose rounds measured memory, else that has rounds.
+    const roundsOf = (measured: boolean): Phase | undefined =>
+      ANY_PHASE_ORDER.find((phase) =>
+        run.rounds.some(
+          (round) => round.phase === phase && (!measured || round.measurement.memory !== undefined),
+        ),
+      )
+    const memoryPhase = options.phase ?? memory.phase ?? roundsOf(true) ?? roundsOf(false)
     const base = {
       section: 'memory',
       unit: 'MB',

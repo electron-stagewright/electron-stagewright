@@ -224,6 +224,15 @@ describe('checkRun', () => {
     expect(result).toMatchObject({ phase: 'cold', actual: 90, status: 'pass' })
   })
 
+  it('skips warm rounds that measured no memory', () => {
+    const mixed = run([
+      ['warm', { unavailable: { memory: 'no main eval' } }],
+      ['cold', measurement(90)],
+    ])
+    const result = checkRun(mixed, budget).results.find((r) => r.id === 'memory.main')
+    expect(result).toMatchObject({ phase: 'cold', actual: 90, status: 'pass' })
+  })
+
   it('treats ignoreThreshold and the deprecated strict alike', () => {
     const over = run([['warm', measurement(105)]])
     const tolerant = { ...budget, thresholdPercent: 10 }

@@ -306,10 +306,9 @@ describe('publish-readiness — publishable package manifests', () => {
 
     expect(plugin?.pkg['bin']).toEqual({ [binName]: './dist/cli.js' })
     // A `default` condition may follow, so CommonJS scripts can resolve the CLI too.
-    expect(exportsObject?.['./cli']).toMatchObject({
-      types: './dist/cli.d.ts',
-      import: './dist/cli.js',
-    })
+    const { default: fallback, ...cli } = exportsObject?.['./cli'] as Record<string, unknown>
+    expect(cli).toEqual({ types: './dist/cli.d.ts', import: './dist/cli.js' })
+    expect([undefined, './dist/cli.js']).toContain(fallback)
   })
 })
 
