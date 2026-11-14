@@ -147,6 +147,9 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
     --check --min-samples 2
   ```
 
+- Between launches, `measure` waits up to 10 s for every process the app reported to exit, kills
+  the ones still running, and says so on stderr. Core's stop only ends the main process, so on
+  Windows a GPU or utility child could otherwise outlive a round and slow the next one down.
 - `bundle` measures the `bundle` entries (paths resolve from `--root`, default the budget file's
   directory) and gates them. It needs no Electron and no display.
 - `check` compares run files to the budget. Several files (`check a.json b.json c.json`) are merged

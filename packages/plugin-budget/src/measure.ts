@@ -14,6 +14,7 @@ import type { Budget } from './budget.js'
 import { DEFAULT_WINDOW_MS } from './probe.js'
 import { createRun, type BudgetRun, type MemoryMeasurement } from './run.js'
 import {
+  appProcessIds,
   measureSession,
   memoryWeight,
   sampleMemory,
@@ -115,6 +116,59 @@ async function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promi
   }
 }
 
+/** Liveness and kill by pid, injected so tests never signal real processes. */
+export interface ProcessControl {
+  alive(pid: number): boolean
+  kill(pid: number): void
+}
+
+const HOST_PROCESSES: ProcessControl = {
+  alive: (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      // EPERM: it exists but belongs to someone else.
+      return (error as NodeJS.ErrnoException).code === 'EPERM'
+    }
+  },
+  kill: (pid) => {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Already gone.
+    }
+  },
+}
+
+export const REAP_WAIT_MS = 10_000
+const REAP_POLL_MS = 100
+
+/**
+ * After a stop, waits for every process the app reported to exit, then kills the ones still
+ * running and waits again. A child that outlives its app (a GPU or utility process left behind by
+ * a forced stop) would otherwise compete with the next round. Returns the pids that survived both.
+ */
+export async function reapSurvivors(
+  pids: readonly number[],
+  control: ProcessControl = HOST_PROCESSES,
+  waitMs = REAP_WAIT_MS,
+): Promise<{ killed: number[]; survivors: number[] }> {
+  const waitFor = async (ms: number): Promise<number[]> => {
+    const until = Date.now() + ms
+    let left = pids.filter((pid) => control.alive(pid))
+    while (left.length > 0 && Date.now() < until) {
+      await sleep(REAP_POLL_MS)
+      left = left.filter((pid) => control.alive(pid))
+    }
+    return left
+  }
+  const lingering = await waitFor(waitMs)
+  for (const pid of lingering) control.kill(pid)
+  const survivors = lingering.length === 0 ? [] : await waitFor(Math.min(waitMs, 2_000))
+  return { killed: lingering, survivors }
+}
+
 /** Why main eval is unavailable on this session, or undefined when it works. */
 async function mainEvalUnavailable(session: {
   evaluate(target: 'main', body: string): Promise<unknown>
@@ -196,10 +250,24 @@ async function launchOnce(
       throw new Error(`could not launch the app: ${String(launched['error'] ?? launched['code'])}`)
     }
     const managed = server.sessions.resolve()
+    const pids = new Set<number>()
+    let source: MemorySource = { allowRenderer: true }
+    const notePids = async (): Promise<void> => {
+      for (const pid of await appProcessIds(managed.session, source)) pids.add(pid)
+    }
     try {
       const session = managed.session
       await withTimeout(session.evaluate('renderer', LOADED_BODY), LOAD_TIMEOUT_MS, 'window load')
       await sleep(options.settleMs ?? DEFAULT_SETTLE_MS)
+      // A build with the EnableNodeCliInspectArguments fuse off launches over CDP alone.
+      const mainUnavailable = await mainEvalUnavailable(session)
+      const memoryProbe = options.budget?.memoryProbe
+      source = {
+        allowRenderer: true,
+        ...(mainUnavailable === undefined ? {} : { mainUnavailable }),
+        ...(memoryProbe === undefined ? {} : { memoryProbe }),
+      }
+      await notePids()
       // A priming launch still loads and settles, so it leaves the profile a measured cold one would.
       if (!measure) return {}
 
@@ -211,19 +279,11 @@ async function launchOnce(
               probe: probe.probe,
               ...(probe.intervalMs === undefined ? {} : { intervalMs: probe.intervalMs }),
             }
-      // A build with the EnableNodeCliInspectArguments fuse off launches over CDP alone.
-      const mainUnavailable = await mainEvalUnavailable(session)
       const open = await startWindow(session, {
         allowRenderer: true,
         ...(ipc === undefined ? {} : { ipc }),
         ...(mainUnavailable === undefined ? {} : { mainUnavailable }),
       })
-      const memoryProbe = options.budget?.memoryProbe
-      const source: MemorySource = {
-        allowRenderer: true,
-        ...(mainUnavailable === undefined ? {} : { mainUnavailable }),
-        ...(memoryProbe === undefined ? {} : { memoryProbe }),
-      }
       const sampler = startSampler(session, source, memorySampleMs(options))
       const windowMs = options.windowMs ?? options.budget?.mainThread?.windowMs ?? DEFAULT_WINDOW_MS
       try {
@@ -268,7 +328,20 @@ async function launchOnce(
           : { electronVersion: measured.electronVersion }),
       }
     } finally {
+      // Processes started during the window (a utility host, say) are reaped too.
+      await notePids().catch(() => undefined)
       await dispatch('electron_stop', { sessionId: managed.id }).catch(() => undefined)
+      if (pids.size > 0) {
+        const { killed, survivors } = await reapSurvivors([...pids])
+        if (killed.length > 0) {
+          options.onProgress?.(
+            `${phase}: killed ${killed.length} app process(es) still running after the stop`,
+          )
+        }
+        if (survivors.length > 0) {
+          options.onProgress?.(`${phase}: pids ${survivors.join(', ')} survived a kill`)
+        }
+      }
     }
   } finally {
     await server.close().catch(() => undefined)

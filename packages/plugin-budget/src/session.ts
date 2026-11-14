@@ -165,6 +165,22 @@ export async function sampleMemory(
   }
 }
 
+/** The pids the app reports, or none when they cannot be read. */
+export async function appProcessIds(
+  session: EvaluatingSession,
+  source: MemorySource,
+): Promise<number[]> {
+  try {
+    const processes =
+      source.mainUnavailable === undefined
+        ? (await session.evaluate<MainFacts>('main', MAIN_BODY, { op: 'facts' })).processes
+        : (await probeMetrics(session, source)).processes
+    return processes.map((entry) => entry.pid).filter(isPid)
+  } catch {
+    return []
+  }
+}
+
 /** Memory outside the GPU in the sample's metric, else in working set. */
 export function memoryWeight(memory: MemoryMeasurement): number {
   const total = memoryTotal(memory, true)

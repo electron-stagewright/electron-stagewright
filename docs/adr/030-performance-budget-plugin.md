@@ -62,6 +62,10 @@ and a CLI for CI, both driving the same measurement code.
 - **Peak over the workload.** A memory block may read `aggregate: "peak"`: `measure` samples during
   the window and keeps the heaviest sample outside the GPU as `memoryPeak`, gated as
   `memoryPeak.*` rows. The median is taken over the rounds' peaks.
+- **No process outlives its round.** Before each stop, `measure` notes the pids the app reports;
+  after it, it waits for them, kills survivors, and reports them. Core's stop and force kill end the
+  main process only, and on a Windows runner a later round slowed down while earlier processes
+  were plausibly still running. A tree kill in core is separate work.
 - **Rounds can be prepared and merged.** `beforeRound` runs before each round's first launch and
   may add env and args to it, so every round can start from fresh state. `failedRounds: 'skip'`
   goes on past a failed round, `mergeRuns` and a multi-file `check` combine runs, and `minSamples`
