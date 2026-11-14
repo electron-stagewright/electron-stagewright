@@ -12,6 +12,7 @@ import {
   PROTOCOL_VERSION,
   parseSupervisorMessage,
   serializeError,
+  type ErrorSerializationOptions,
   type HostMessage,
   type SerializedError,
 } from './protocol.js'
@@ -24,11 +25,20 @@ export interface HostPort {
   close(): void
 }
 
-export interface ServeOptions<Ops extends Contract<Ops>, Payload = undefined> {
+/** What `start` receives after the payload. */
+export interface StartContext<Info> {
+  /** Sent with `started`; the supervisor exposes it as `host.info`. Must survive structured clone. */
+  setInfo(info: Info): void
+}
+
+export interface ServeOptions<Ops extends Contract<Ops>, Payload = undefined, Info = undefined> {
   readonly operations: readonly CallOperation<Ops>[]
   readonly streams?: readonly StreamOperation<Ops>[]
   /** Opens whatever the host serves; called once, with the supervisor's start payload. */
-  readonly start: (payload: Payload) => Handlers<Ops> | Promise<Handlers<Ops>>
+  readonly start: (
+    payload: Payload,
+    context: StartContext<Info>,
+  ) => Handlers<Ops> | Promise<Handlers<Ops>>
   /** Runs after every accepted call has answered. */
   readonly stop?: () => void | Promise<void>
   /** Defaults to the utility process's parent port, else the worker thread's. */
@@ -37,6 +47,8 @@ export interface ServeOptions<Ops extends Contract<Ops>, Payload = undefined> {
   readonly statsIntervalMs?: number
   /** Tells the supervisor the cause of an uncaught exception before the host ends. Default true. */
   readonly reportCrashes?: boolean
+  /** Which code and structured detail an error carries across. */
+  readonly errors?: ErrorSerializationOptions
 }
 
 interface ElectronParentPort {
@@ -74,9 +86,18 @@ function rejected(message: string, code: string): SerializedError {
 }
 
 /** A handler's error never crosses as `HostError`, so it cannot pass for the supervisor's own. */
-function handlerError(error: unknown): SerializedError {
-  const serialized = serializeError(error)
+function handlerError(
+  error: unknown,
+  options: ErrorSerializationOptions | undefined,
+): SerializedError {
+  const serialized = serializeError(error, options)
   return serialized.name === 'HostError' ? { ...serialized, name: 'Error' } : serialized
+}
+
+function withoutData(message: HostMessage): HostMessage | null {
+  if (!('error' in message) || message.error?.data === undefined) return null
+  const { name, message: text, code } = message.error
+  return { ...message, error: { name, message: text, ...(code ? { code } : {}) } } as HostMessage
 }
 
 interface OpenStream {
@@ -85,8 +106,8 @@ interface OpenStream {
 }
 
 /** Serves one host until the supervisor sends `stop`. */
-export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
-  options: ServeOptions<Ops, Payload>,
+export function serveHost<Ops extends Contract<Ops>, Payload = undefined, Info = undefined>(
+  options: ServeOptions<Ops, Payload, Info>,
 ): void {
   const found = options.port ?? defaultHostPort()
   if (!found) throw new Error('serveHost must run in a worker thread or a utility process')
@@ -102,7 +123,17 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
   const controllers = new Map<number, AbortController>()
   const streams = new Map<number, OpenStream>()
 
-  const post = (message: HostMessage) => port.post(message)
+  /** An error whose detail cannot be cloned still crosses, without the detail. */
+  const post = (message: HostMessage) => {
+    try {
+      port.post(message)
+    } catch (error) {
+      const fallback = withoutData(message)
+      if (!fallback) throw error
+      port.post(fallback)
+    }
+  }
+  const failure = (error: unknown) => handlerError(error, options.errors)
 
   function track(work: Promise<void>): void {
     inflight.add(work)
@@ -114,7 +145,7 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
     try {
       post(message)
     } catch (error) {
-      post({ type: 'result', id, ok: false, error: handlerError(error) })
+      post({ type: 'result', id, ok: false, error: failure(error) })
     }
   }
 
@@ -141,19 +172,30 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
       if (version !== PROTOCOL_VERSION) {
         throw new Error(`The host speaks protocol ${PROTOCOL_VERSION}, not ${version}`)
       }
-      const served = (await options.start(payload as Payload)) as unknown as Record<string, unknown>
+      let info: Info | undefined
+      let hasInfo = false
+      const context: StartContext<Info> = {
+        setInfo: (value) => {
+          info = value
+          hasInfo = true
+        },
+      }
+      const served = (await options.start(payload as Payload, context)) as unknown as Record<
+        string,
+        unknown
+      >
       for (const op of [...callOps, ...streamOps]) {
         if (typeof served[op] !== 'function') throw new Error(`No handler for ${op}`)
       }
       handlers = served as Record<string, (...args: unknown[]) => unknown>
-      post({ type: 'started' })
+      post(hasInfo ? { type: 'started', info } : { type: 'started' })
       if (options.statsIntervalMs !== undefined) {
         postStats()
         statsTimer = setInterval(postStats, options.statsIntervalMs)
         statsTimer.unref()
       }
     } catch (error) {
-      post({ type: 'start-failed', error: handlerError(error) })
+      post({ type: 'start-failed', error: failure(error) })
     }
   }
 
@@ -190,7 +232,7 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
             : (iterable as Iterable<unknown>)[Symbol.iterator]()
         streams.set(id, { iterator, controller })
       } catch (error) {
-        post({ type: 'result', id, ok: false, error: handlerError(error) })
+        post({ type: 'result', id, ok: false, error: failure(error) })
       }
       return
     }
@@ -200,7 +242,7 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
         .then(() => handler.apply(served, [...args, context]))
         .then(
           (value) => answer(id, { type: 'result', id, ok: true, value }),
-          (error: unknown) => post({ type: 'result', id, ok: false, error: handlerError(error) }),
+          (error: unknown) => post({ type: 'result', id, ok: false, error: failure(error) }),
         )
         .finally(() => controllers.delete(id)),
     )
@@ -231,13 +273,13 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
               } catch (error) {
                 // An item that cannot be cloned ends the stream and frees its producer.
                 cancel(id)
-                post({ type: 'result', id, ok: false, error: handlerError(error) })
+                post({ type: 'result', id, ok: false, error: failure(error) })
               }
             }
           },
           (error: unknown) => {
             streams.delete(id)
-            post({ type: 'result', id, ok: false, error: handlerError(error) })
+            post({ type: 'result', id, ok: false, error: failure(error) })
           },
         ),
     )
@@ -262,25 +304,25 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
   async function stop(): Promise<void> {
     // Close admission before yielding, so a later message cannot reach a closing resource.
     accepting = false
-    let failure: unknown = null
+    let stopFailure: unknown = null
     try {
       await starting
       for (const id of [...streams.keys()]) cancel(id)
       while (inflight.size > 0) await Promise.allSettled([...inflight])
       await options.stop?.()
     } catch (error) {
-      failure = error
+      stopFailure = error
     }
     handlers = null
     if (statsTimer) clearInterval(statsTimer)
-    post(failure ? { type: 'stopped', error: handlerError(failure) } : { type: 'stopped' })
+    post(stopFailure ? { type: 'stopped', error: failure(stopFailure) } : { type: 'stopped' })
     port.close()
   }
 
   if (options.reportCrashes !== false) {
     process.on('uncaughtExceptionMonitor', (error) => {
       try {
-        post({ type: 'crashed', error: handlerError(error) })
+        post({ type: 'crashed', error: failure(error) })
       } catch {
         // The host is ending either way.
       }

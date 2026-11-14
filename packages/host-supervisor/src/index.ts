@@ -26,6 +26,7 @@ export {
   type ExitDecision,
   type Host,
   type HostExit,
+  type HostExitReason,
   type HostOptions,
   type HostState,
 } from './host.js'
@@ -42,9 +43,16 @@ export {
   PROTOCOL_VERSION,
   deserializeError,
   serializeError,
+  type ErrorSerializationOptions,
   type HostMessage,
   type HostStats,
   type SerializedError,
   type SupervisorMessage,
 } from './protocol.js'
-export { defaultHostPort, serveHost, type HostPort, type ServeOptions } from './serve.js'
+export {
+  defaultHostPort,
+  serveHost,
+  type HostPort,
+  type ServeOptions,
+  type StartContext,
+} from './serve.js'

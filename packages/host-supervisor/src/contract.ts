@@ -56,6 +56,8 @@ export interface ChannelExit {
   readonly error?: Error
   /** The runtime ended the host for exceeding its memory limit. */
   readonly outOfMemory?: boolean
+  /** The runtime hit an error it cannot continue from (Electron's utility process `error` event). */
+  readonly runtimeFatal?: boolean
 }
 
 /** One running host, as seen from the supervisor. */

@@ -11,6 +11,16 @@ export interface SerializedError {
   readonly name: string
   readonly message: string
   readonly code?: string
+  /** Structured detail the host chose to send; dropped when it cannot be cloned. */
+  readonly data?: unknown
+}
+
+/** How a host turns a thrown value into a `SerializedError`. */
+export interface ErrorSerializationOptions {
+  /** The shape a code must match to cross. Default `CODE_PATTERN`. */
+  readonly codePattern?: RegExp
+  /** Picks the structured detail to send with an error; `undefined` sends none. */
+  readonly data?: (error: unknown) => unknown
 }
 
 export type SupervisorMessage =
@@ -37,7 +47,7 @@ export interface HostStats {
 }
 
 export type HostMessage =
-  | { readonly type: 'started' }
+  | { readonly type: 'started'; readonly info?: unknown }
   | { readonly type: 'start-failed'; readonly error: SerializedError }
   | { readonly type: 'result'; readonly id: number; readonly ok: true; readonly value: unknown }
   | {
@@ -54,8 +64,15 @@ export type HostMessage =
 /** The only shape a code may take to cross the boundary. */
 export const CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,80}$/
 
-/** Keeps the message and a well-formed code (own or from `cause`), and drops everything else. */
-export function serializeError(error: unknown): SerializedError {
+/**
+ * Keeps the message, a well-formed code (own or from `cause`) and the detail `options.data` picks,
+ * and drops everything else.
+ */
+export function serializeError(
+  error: unknown,
+  options: ErrorSerializationOptions = {},
+): SerializedError {
+  const pattern = options.codePattern ?? CODE_PATTERN
   const candidate = error as {
     name?: unknown
     message?: unknown
@@ -63,8 +80,14 @@ export function serializeError(error: unknown): SerializedError {
     cause?: { code?: unknown; errorCode?: unknown }
   } | null
   const code = [candidate?.code, candidate?.cause?.code, candidate?.cause?.errorCode].find(
-    (value): value is string => typeof value === 'string' && CODE_PATTERN.test(value),
+    (value): value is string => typeof value === 'string' && pattern.test(value),
   )
+  let data: unknown
+  try {
+    data = options.data?.(error)
+  } catch {
+    // A picker that throws must not hide the original error.
+  }
   const message =
     typeof candidate?.message === 'string'
       ? candidate.message
@@ -75,6 +98,7 @@ export function serializeError(error: unknown): SerializedError {
     name: typeof candidate?.name === 'string' ? candidate.name : 'Error',
     message,
     ...(code ? { code } : {}),
+    ...(data === undefined ? {} : { data }),
   }
 }
 
@@ -83,6 +107,7 @@ export function deserializeError(serialized: SerializedError): Error {
   const error = new Error(serialized.message)
   error.name = serialized.name
   if (serialized.code) Object.assign(error, { code: serialized.code })
+  if (serialized.data !== undefined) Object.assign(error, { data: serialized.data })
   return error
 }
 
