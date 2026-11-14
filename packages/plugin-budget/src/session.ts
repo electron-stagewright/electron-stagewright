@@ -165,20 +165,40 @@ export async function sampleMemory(
   }
 }
 
-/** The pids the app reports, or none when they cannot be read. */
-export async function appProcessIds(
+/**
+ * Pids the reaper may kill once the app stops, each with its host start time where the host can
+ * tell (macOS, Linux), so a pid reused by another process is never killed. Only main's own report
+ * counts, and only when this host's process with the main pid is the app's: never pids from the
+ * renderer memory probe.
+ */
+export async function reapablePids(
   session: EvaluatingSession,
-  source: MemorySource,
-): Promise<number[]> {
+  startTime: HostStartTimeReader | undefined = hostStartTimeReader(process.platform),
+): Promise<Map<number, number | undefined>> {
+  const pids = new Map<number, number | undefined>()
+  let facts: MainFacts
   try {
-    const processes =
-      source.mainUnavailable === undefined
-        ? (await session.evaluate<MainFacts>('main', MAIN_BODY, { op: 'facts' })).processes
-        : (await probeMetrics(session, source)).processes
-    return processes.map((entry) => entry.pid).filter(isPid)
+    facts = await session.evaluate<MainFacts>('main', MAIN_BODY, { op: 'facts' })
   } catch {
-    return []
+    return pids
   }
+  if ((await hostMismatch(facts, startTime)) !== undefined) return pids
+  for (const pid of facts.processes.map((entry) => entry.pid).filter(isPid)) {
+    const started = await startTime?.(pid)
+    pids.set(pid, typeof started === 'number' ? started : undefined)
+  }
+  return pids
+}
+
+/** True when `pid` still runs the process recorded when it was collected (or it cannot tell). */
+export async function sameProcess(
+  pid: number,
+  recorded: number | undefined,
+  startTime: HostStartTimeReader | undefined = hostStartTimeReader(process.platform),
+): Promise<boolean> {
+  if (recorded === undefined || startTime === undefined) return true
+  const now = await startTime(pid)
+  return typeof now === 'number' && Math.abs(now - recorded) <= START_TIME_TOLERANCE_MS
 }
 
 /** Memory outside the GPU in the sample's metric, else in working set. */

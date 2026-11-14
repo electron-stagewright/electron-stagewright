@@ -147,8 +147,10 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
     --check --min-samples 2
   ```
 
-- Between launches, `measure` waits up to 10 s for every process the app reported to exit, kills
-  the ones still running, and says so on stderr. Core's stop only ends the main process, so on
+- Between launches, `measure` waits up to 10 s for every process the app's main reported to exit,
+  kills the ones still running, and says so on stderr. It kills a pid only when this host's main
+  pid is the app's and, on macOS and Linux, when the pid still has the start time it had when it
+  was noted. A build without the main inspector is not reaped. Core's stop only ends the main process, so on
   Windows a GPU or utility child could otherwise outlive a round and slow the next one down.
 - `bundle` measures the `bundle` entries (paths resolve from `--root`, default the budget file's
   directory) and gates them. It needs no Electron and no display.

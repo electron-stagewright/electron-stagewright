@@ -14,8 +14,9 @@ import type { Budget } from './budget.js'
 import { DEFAULT_WINDOW_MS } from './probe.js'
 import { createRun, type BudgetRun, type MemoryMeasurement } from './run.js'
 import {
-  appProcessIds,
   measureSession,
+  reapablePids,
+  sameProcess,
   memoryWeight,
   sampleMemory,
   startWindow,
@@ -153,19 +154,24 @@ export async function reapSurvivors(
   pids: readonly number[],
   control: ProcessControl = HOST_PROCESSES,
   waitMs = REAP_WAIT_MS,
+  /** Checked right before each kill; a pid that fails it is left alone and not reported. */
+  verify: (pid: number) => Promise<boolean> = () => Promise.resolve(true),
 ): Promise<{ killed: number[]; survivors: number[] }> {
-  const waitFor = async (ms: number): Promise<number[]> => {
+  const waitFor = async (watched: readonly number[], ms: number): Promise<number[]> => {
     const until = Date.now() + ms
-    let left = pids.filter((pid) => control.alive(pid))
+    let left = watched.filter((pid) => control.alive(pid))
     while (left.length > 0 && Date.now() < until) {
       await sleep(REAP_POLL_MS)
       left = left.filter((pid) => control.alive(pid))
     }
     return left
   }
-  const lingering = await waitFor(waitMs)
+  const lingering: number[] = []
+  for (const pid of await waitFor(pids, waitMs)) {
+    if (await verify(pid)) lingering.push(pid)
+  }
   for (const pid of lingering) control.kill(pid)
-  const survivors = lingering.length === 0 ? [] : await waitFor(Math.min(waitMs, 2_000))
+  const survivors = lingering.length === 0 ? [] : await waitFor(lingering, Math.min(waitMs, 2_000))
   return { killed: lingering, survivors }
 }
 
@@ -250,10 +256,11 @@ async function launchOnce(
       throw new Error(`could not launch the app: ${String(launched['error'] ?? launched['code'])}`)
     }
     const managed = server.sessions.resolve()
-    const pids = new Set<number>()
-    let source: MemorySource = { allowRenderer: true }
+    const pids = new Map<number, number | undefined>()
     const notePids = async (): Promise<void> => {
-      for (const pid of await appProcessIds(managed.session, source)) pids.add(pid)
+      for (const [pid, started] of await reapablePids(managed.session)) {
+        if (!pids.has(pid)) pids.set(pid, started)
+      }
     }
     try {
       const session = managed.session
@@ -262,7 +269,7 @@ async function launchOnce(
       // A build with the EnableNodeCliInspectArguments fuse off launches over CDP alone.
       const mainUnavailable = await mainEvalUnavailable(session)
       const memoryProbe = options.budget?.memoryProbe
-      source = {
+      const source: MemorySource = {
         allowRenderer: true,
         ...(mainUnavailable === undefined ? {} : { mainUnavailable }),
         ...(memoryProbe === undefined ? {} : { memoryProbe }),
@@ -332,7 +339,12 @@ async function launchOnce(
       await notePids().catch(() => undefined)
       await dispatch('electron_stop', { sessionId: managed.id }).catch(() => undefined)
       if (pids.size > 0) {
-        const { killed, survivors } = await reapSurvivors([...pids])
+        const { killed, survivors } = await reapSurvivors(
+          [...pids.keys()],
+          HOST_PROCESSES,
+          REAP_WAIT_MS,
+          (pid) => sameProcess(pid, pids.get(pid)),
+        )
         if (killed.length > 0) {
           options.onProgress?.(
             `${phase}: killed ${killed.length} app process(es) still running after the stop`,
