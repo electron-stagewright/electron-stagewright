@@ -11,7 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createServer } from '@electron-stagewright/core'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 
 import { ORIGIN_MIGRATION_MARKER } from '../src/index.js'
 
@@ -112,7 +112,14 @@ describe('origin migration smoke (real Electron)', () => {
             BrowserWindow.getAllWindows().some((w) => w.getTitle() === ${JSON.stringify(TITLE)} && !w.webContents.isLoading());
           };
           while (!ready()) await new Promise((resolve) => setTimeout(resolve, 50));`)
-        await dispatch('electron_switch_window', { sessionId, windowTitle: TITLE })
+        // Playwright can register the window a moment after main reports it loaded.
+        await vi.waitFor(
+          () => dispatch('electron_switch_window', { sessionId, windowTitle: TITLE }),
+          {
+            timeout: 10_000,
+            interval: 100,
+          },
+        )
         return {
           renderer,
           main,

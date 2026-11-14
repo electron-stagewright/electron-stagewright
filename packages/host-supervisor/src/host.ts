@@ -460,7 +460,12 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
         return
       case 'stats':
         life.lastStats = message.stats
-        options.onStats?.(message.stats)
+        // Inside the transport's listener a throw or rejection would escape as uncaught.
+        Promise.resolve()
+          .then(() => options.onStats?.(message.stats))
+          .catch((error: unknown) =>
+            process.emitWarning(error instanceof Error ? error : new Error(String(error))),
+          )
         return
       case 'stopped':
         life.stoppedReceived = true
