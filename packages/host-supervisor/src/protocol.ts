@@ -17,7 +17,7 @@ export interface SerializedError {
 
 /** How a host turns a thrown value into a `SerializedError`. */
 export interface ErrorSerializationOptions {
-  /** The shape a code must match to cross. Default `CODE_PATTERN`. */
+  /** A further shape a code may match to cross, besides `CODE_PATTERN`. */
   readonly codePattern?: RegExp
   /** Picks the structured detail to send with an error; `undefined` sends none. */
   readonly data?: (error: unknown) => unknown
@@ -72,7 +72,10 @@ export function serializeError(
   error: unknown,
   options: ErrorSerializationOptions = {},
 ): SerializedError {
-  const pattern = options.codePattern ?? CODE_PATTERN
+  // A /g or /y pattern keeps lastIndex between test() calls.
+  const extra = options.codePattern
+    ? new RegExp(options.codePattern.source, options.codePattern.flags.replace(/[gy]/g, ''))
+    : null
   const candidate = error as {
     name?: unknown
     message?: unknown
@@ -80,7 +83,8 @@ export function serializeError(
     cause?: { code?: unknown; errorCode?: unknown }
   } | null
   const code = [candidate?.code, candidate?.cause?.code, candidate?.cause?.errorCode].find(
-    (value): value is string => typeof value === 'string' && pattern.test(value),
+    (value): value is string =>
+      typeof value === 'string' && (CODE_PATTERN.test(value) || extra?.test(value) === true),
   )
   let data: unknown
   try {
