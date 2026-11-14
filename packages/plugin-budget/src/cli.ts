@@ -17,9 +17,15 @@ import { pathToFileURL } from 'node:url'
 import { BudgetFileError, PHASES, loadBudget, type Phase } from './budget.js'
 import { measureBundle } from './bundle.js'
 import { checkRun, type CheckReport } from './check.js'
-import { DEFAULT_ROUNDS, measureApp, type LaunchPhase, type Workload } from './measure.js'
+import {
+  DEFAULT_ROUNDS,
+  measureApp,
+  type BeforeRound,
+  type LaunchPhase,
+  type Workload,
+} from './measure.js'
 import { compareRuns, renderCheckReport, renderComparison } from './render.js'
-import { RunFileError, createRun, loadRun, type BudgetRun } from './run.js'
+import { RunFileError, createRun, loadRun, mergeRuns, type BudgetRun } from './run.js'
 
 export const BUDGET_EXIT_CODES = { SUCCESS: 0, OVER_BUDGET: 1, USAGE: 2 } as const
 export type BudgetExitCode = (typeof BUDGET_EXIT_CODES)[keyof typeof BUDGET_EXIT_CODES]
@@ -38,9 +44,10 @@ export type BudgetCliOptions =
   | { readonly command: 'help' }
   | {
       readonly command: 'check'
-      readonly runPath: string
+      readonly runPaths: readonly string[]
       readonly budgetPath: string
       readonly noTolerance: boolean
+      readonly minSamples?: number
       readonly requireMeasurement: boolean
       readonly phase?: Phase
       readonly json: boolean
@@ -76,6 +83,9 @@ export interface MeasureCliOptions {
   readonly windowMs?: number
   readonly workloadPath?: string
   readonly workloadTimeoutMs?: number
+  readonly beforeRoundPath?: string
+  readonly skipFailedRounds: boolean
+  readonly minSamples?: number
   readonly phase?: Phase
   readonly label?: string
   readonly outPath?: string
@@ -100,11 +110,13 @@ export function formatBudgetCliHelp(): string {
     '                              [--env K=V]... [--budget <file>] [--rounds 3]',
     '                              [--phases cold,warm] [--settle-ms 3000] [--window-ms 2000]',
     '                              [--workload <script.mjs> [--workload-timeout-ms 120000]]',
+    '                              [--before-round <script.mjs>] [--skip-failed-rounds]',
     '                              [--label <text>] [--out <run.json>] [--json]',
     '                              [--check [--no-tolerance] [--require-measurement]',
-    '                              [--phase cold|warm]]',
-    '  electron-stagewright-budget check <run.json> --budget <file> [--no-tolerance]',
-    '                              [--require-measurement] [--phase cold|warm|live] [--json]',
+    '                              [--phase cold|warm] [--min-samples N]]',
+    '  electron-stagewright-budget check <run.json>... --budget <file> [--no-tolerance]',
+    '                              [--require-measurement] [--phase cold|warm|live]',
+    '                              [--min-samples N] [--json]',
     '  electron-stagewright-budget compare <before.json> <after.json> [--json]',
     '  electron-stagewright-budget bundle --budget <file> [--root <dir>] [--out <run.json>]',
     '                              [--no-tolerance] [--json]',
@@ -114,13 +126,16 @@ export function formatBudgetCliHelp(): string {
     '          phase }), drives the app inside the measurement window. Without --out or',
     '          --check the run document goes to stdout. --phase reads every metric from',
     '          that phase; a metric whose phase was not measured is unmeasured.',
-    'check     Compare a measured run to a budget file.',
+    '          --before-round is an ES module whose default export, async ({ round, profile }),',
+    '          prepares each round and may return { env, args } for its launches.',
+    'check     Compare measured runs to a budget file; several runs are merged first.',
     'compare   Print a before/after table of two runs.',
     'bundle    Measure the bundle entries of a budget and gate them; needs no Electron.',
     '',
     '--no-tolerance         Ignore thresholdPercent; the limit itself gates.',
     '                       (--strict is a deprecated alias.)',
     '--require-measurement  Fail when a budgeted metric was not measured.',
+    '--min-samples N        A runtime metric needs N measured rounds, or it is unmeasured.',
     '',
     'Exit codes: 0 within budget, 1 over budget or nothing measured,',
     '            2 usage, unreadable input, or any other error.',
@@ -150,11 +165,20 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     '--window-ms',
     '--workload',
     '--workload-timeout-ms',
+    '--before-round',
+    '--min-samples',
     '--phase',
     '--label',
     '--out',
   ]
-  const booleanFlags = ['--check', '--no-tolerance', '--strict', '--require-measurement', '--json']
+  const booleanFlags = [
+    '--check',
+    '--no-tolerance',
+    '--strict',
+    '--require-measurement',
+    '--skip-failed-rounds',
+    '--json',
+  ]
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index] as string
     // Scanned here, not over all of argv, so `--arg --help` is forwarded to the app.
@@ -205,9 +229,12 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
   const budgetPath = single.get('--budget')
   if (check && budgetPath === undefined) throw new UsageError('--check requires --budget <file>')
   const noTolerance = flags.has('--no-tolerance') || flags.has('--strict')
-  if (!check && (noTolerance || flags.has('--require-measurement') || phase)) {
+  if (
+    !check &&
+    (noTolerance || flags.has('--require-measurement') || phase || single.has('--min-samples'))
+  ) {
     throw new UsageError(
-      '--no-tolerance, --require-measurement, and --phase apply only with --check',
+      '--no-tolerance, --require-measurement, --min-samples, and --phase apply only with --check',
     )
   }
   const optional = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } =>
@@ -232,6 +259,9 @@ function parseMeasureArgs(rest: readonly string[]): MeasureCliOptions | { comman
     ...optional('windowMs', number('--window-ms', 250)),
     ...optional('workloadPath', single.get('--workload')),
     ...optional('workloadTimeoutMs', number('--workload-timeout-ms', 1000)),
+    ...optional('beforeRoundPath', single.get('--before-round')),
+    skipFailedRounds: flags.has('--skip-failed-rounds'),
+    ...optional('minSamples', number('--min-samples', 1)),
     ...optional('phase', phase as Phase | undefined),
     ...optional('label', single.get('--label')),
     ...optional('outPath', single.get('--out')),
@@ -258,7 +288,7 @@ export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
   if (rest.includes('--help') || rest.includes('-h')) return { command: 'help' }
 
   const valueFlags: Record<typeof command, readonly string[]> = {
-    check: ['--budget', '--phase'],
+    check: ['--budget', '--phase', '--min-samples'],
     compare: [],
     bundle: ['--budget', '--root', '--out'],
   }
@@ -317,18 +347,17 @@ export function parseBudgetCliArgs(argv: readonly string[]): BudgetCliOptions {
       ...deprecatedStrict,
     }
   }
-  const [runPath, extra] = positional
-  if (runPath === undefined || extra !== undefined) {
-    throw new UsageError('check expects exactly one run file')
-  }
+  if (positional.length === 0) throw new UsageError('check expects at least one run file')
+  const minSamples = values.get('--min-samples')
   const phase = values.get('--phase')
   if (phase !== undefined && !(PHASES as readonly string[]).includes(phase)) {
     throw new UsageError(`--phase expects one of ${PHASES.join(', ')}`)
   }
   return {
     command,
-    runPath,
+    runPaths: positional,
     budgetPath: requireBudget(),
+    ...(minSamples === undefined ? {} : { minSamples: positiveInt('--min-samples', minSamples) }),
     noTolerance,
     requireMeasurement: flags.has('--require-measurement'),
     ...(phase === undefined ? {} : { phase: phase as Phase }),
@@ -347,19 +376,19 @@ async function writeRun(outPath: string, run: BudgetRun): Promise<void> {
   await writeFile(outPath, `${JSON.stringify(run, null, 2)}\n`)
 }
 
-async function loadWorkload(workloadPath: string): Promise<Workload> {
+async function loadScript<T>(what: string, scriptPath: string): Promise<T> {
   let module: { default?: unknown }
   try {
-    module = (await import(pathToFileURL(path.resolve(workloadPath)).href)) as { default?: unknown }
+    module = (await import(pathToFileURL(path.resolve(scriptPath)).href)) as { default?: unknown }
   } catch (error) {
     throw new UsageError(
-      `Cannot load workload ${workloadPath}: ${error instanceof Error ? error.message : String(error)}`,
+      `Cannot load ${what} ${scriptPath}: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
   if (typeof module.default !== 'function') {
-    throw new UsageError(`Workload ${workloadPath} must default-export an async function`)
+    throw new UsageError(`${what} ${scriptPath} must default-export an async function`)
   }
-  return module.default as Workload
+  return module.default as T
 }
 
 async function runMeasure(
@@ -369,7 +398,13 @@ async function runMeasure(
 ): Promise<BudgetExitCode> {
   const budget = options.budgetPath === undefined ? undefined : await loadBudget(options.budgetPath)
   const workload =
-    options.workloadPath === undefined ? undefined : await loadWorkload(options.workloadPath)
+    options.workloadPath === undefined
+      ? undefined
+      : await loadScript<Workload>('workload', options.workloadPath)
+  const beforeRound =
+    options.beforeRoundPath === undefined
+      ? undefined
+      : await loadScript<BeforeRound>('before-round script', options.beforeRoundPath)
   let run = await deps.measureApp({
     launch: {
       ...(options.main === undefined ? {} : { main: options.main }),
@@ -387,6 +422,8 @@ async function runMeasure(
       ? {}
       : { workloadTimeoutMs: options.workloadTimeoutMs }),
     ...(options.label === undefined ? {} : { label: options.label }),
+    ...(beforeRound === undefined ? {} : { beforeRound }),
+    ...(options.skipFailedRounds ? { failedRounds: 'skip' as const } : {}),
     onProgress: (message) => io.stderr(`${message}\n`),
   })
   // A run with no round would later read as "nothing over budget"; never write one.
@@ -404,6 +441,7 @@ async function runMeasure(
       ignoreThreshold: options.noTolerance,
       requireMeasurement: options.requireMeasurement,
       ...(options.phase === undefined ? {} : { phase: options.phase }),
+      ...(options.minSamples === undefined ? {} : { minSamples: options.minSamples }),
     })
     return emitReport(report, options.json, io)
   }
@@ -439,10 +477,18 @@ export async function runBudgetCli(
   }
   const budget = await loadBudget(options.budgetPath)
   if (options.command === 'check') {
-    const report = checkRun(await loadRun(options.runPath), budget, {
+    const runs = await Promise.all(options.runPaths.map((runPath) => loadRun(runPath)))
+    let run: BudgetRun
+    try {
+      run = mergeRuns(runs)
+    } catch (error) {
+      throw new UsageError(error instanceof Error ? error.message : String(error))
+    }
+    const report = checkRun(run, budget, {
       ignoreThreshold: options.noTolerance,
       requireMeasurement: options.requireMeasurement,
       ...(options.phase === undefined ? {} : { phase: options.phase }),
+      ...(options.minSamples === undefined ? {} : { minSamples: options.minSamples }),
     })
     return emitReport(report, options.json, io)
   }

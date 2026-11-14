@@ -40,6 +40,11 @@ export interface CheckOptions {
   readonly requireMeasurement?: boolean
   /** Read every metric from this phase instead of the budget's own phases. */
   readonly phase?: Phase
+  /**
+   * Rounds a runtime metric needs before its median counts; fewer leaves it `unmeasured`. Use it
+   * with `--rounds N` so that a median never rests on one launch. Bundle entries are exempt.
+   */
+  readonly minSamples?: number
 }
 
 interface Expectation {
@@ -209,6 +214,16 @@ export function checkRun(run: BudgetRun, budget: Budget, options: CheckOptions =
     const row = findRow(rows, expectation)
     if (row === undefined) {
       return { ...base, status: 'unmeasured', detail: unmeasuredDetail(run, expectation) }
+    }
+    const needed = options.minSamples ?? 1
+    if (expectation.section !== 'bundle' && row.samples < needed) {
+      return {
+        ...base,
+        ...(row.phase === undefined ? {} : { phase: row.phase }),
+        status: 'unmeasured',
+        actual: row.value,
+        detail: `${row.samples} of the ${needed} rounds needed measured ${expectation.id}`,
+      }
     }
     return {
       ...base,

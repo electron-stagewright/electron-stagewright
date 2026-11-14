@@ -35,6 +35,7 @@ export {
   createRun,
   loadRun,
   memoryByType,
+  mergeRuns,
   runSchema,
   summarizeLatencies,
   summarizeRun,

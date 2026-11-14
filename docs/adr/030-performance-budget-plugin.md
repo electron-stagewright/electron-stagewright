@@ -54,6 +54,10 @@ and a CLI for CI, both driving the same measurement code.
 - **Startup is not a wall clock.** `maxFirstWindowMs` ends at the first window's load event. A
   launch-to-ready budget that includes work the app does after load is a different metric; the
   README says so instead of letting such a budget pass loosely.
+- **Rounds can be prepared and merged.** `beforeRound` runs before each round's first launch and
+  may add env and args to it, so every round can start from fresh state. `failedRounds: 'skip'`
+  goes on past a failed round, `mergeRuns` and a multi-file `check` combine runs, and `minSamples`
+  refuses a median that rests on too few launches.
 - **The tolerance switch says what it does.** `--no-tolerance` (`ignoreThreshold` in the library)
   drops `thresholdPercent`. It used to be called `--strict`, which apps read as "fail instead of
   warn"; `--strict` stays as a deprecated alias that warns.

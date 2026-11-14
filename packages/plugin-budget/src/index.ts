@@ -39,6 +39,7 @@ export {
   createRun,
   loadRun,
   memoryByType,
+  mergeRuns,
   runSchema,
   summarizeLatencies,
   summarizeRun,
@@ -58,4 +59,11 @@ export type { AppProcessMetric, OsMemoryReader } from './memory.js'
 export { measureSession, startWindow } from './session.js'
 export type { EvaluatingSession, IpcProbe, MeasureOptions, SessionMeasurement } from './session.js'
 export { measureApp } from './measure.js'
-export type { LaunchPhase, MeasureAppOptions, Workload, WorkloadContext } from './measure.js'
+export type {
+  BeforeRound,
+  LaunchPhase,
+  MeasureAppOptions,
+  RoundSetup,
+  Workload,
+  WorkloadContext,
+} from './measure.js'
