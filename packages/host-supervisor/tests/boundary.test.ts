@@ -40,7 +40,9 @@ function failing() {
             fix: (() => 'no') as unknown as string,
           })
         }
-        throw Object.assign(new Error('plain'), { code: 'UPPER_CASE' })
+        throw Object.assign(new Error('plain'), {
+          code: kind === 'upper' ? 'UPPER_CASE' : 'Not a code',
+        })
       },
     }),
   })
@@ -59,7 +61,32 @@ describe('structured errors', () => {
     await host.close()
   })
 
-  it('drops a code outside the configured pattern', async () => {
+  it('keeps matching codes with a global codePattern', async () => {
+    const host = createHost<Ops>({
+      operations: ['fail'],
+      transport: inProcessTransport<Ops>({
+        operations: ['fail'],
+        errors: { codePattern: /^[a-z][a-z-]{1,40}$/g },
+        start: () => ({
+          fail: () => {
+            throw Object.assign(new Error('gone'), { code: 'engine-gone' })
+          },
+        }),
+      }),
+    })
+    for (let i = 0; i < 3; i++) {
+      expect((await rejection(host.ops.fail('edit'))).code).toBe('engine-gone')
+    }
+    await host.close()
+  })
+
+  it('keeps the default codes next to the configured pattern', async () => {
+    const host = createHost<Ops>({ operations: ['fail'], transport: failing() })
+    expect((await rejection(host.ops.fail('upper'))).code).toBe('UPPER_CASE')
+    await host.close()
+  })
+
+  it('drops a code outside both patterns', async () => {
     const host = createHost<Ops>({ operations: ['fail'], transport: failing() })
     const error = await rejection(host.ops.fail('other'))
     expect(error.code).toBeUndefined()
@@ -162,6 +189,39 @@ describe('host info', () => {
     await host.close()
   })
 
+  it('rejects setInfo after start resolves', async () => {
+    let late: ((info: { url: string }) => void) | undefined
+    const host = createHost<ServerOps, undefined, { url: string }>({
+      operations: ['ping'],
+      transport: inProcessTransport<ServerOps, undefined, { url: string }>({
+        operations: ['ping'],
+        start: (_payload, { setInfo }) => {
+          late = setInfo
+          return { ping: () => 'pong' }
+        },
+      }),
+    })
+    await host.start()
+    expect(() => late?.({ url: 'http://late' })).toThrow('before start resolves')
+    await host.close()
+  })
+
+  it('fails the start when the info cannot be cloned', async () => {
+    const host = createHost<ServerOps, undefined, { url: string }>({
+      operations: ['ping'],
+      transport: inProcessTransport<ServerOps, undefined, { url: string }>({
+        operations: ['ping'],
+        start: (_payload, { setInfo }) => {
+          setInfo({ url: (() => 'no') as unknown as string })
+          return { ping: () => 'pong' }
+        },
+      }),
+    })
+    const error = await rejection(host.start())
+    expect(String((error as { cause?: unknown }).cause ?? error)).toContain('setInfo received')
+    await host.close()
+  })
+
   it('is undefined when the host sets none', async () => {
     const host = createHost<ServerOps>({
       operations: ['ping'],
@@ -203,6 +263,19 @@ describe('exit reason', () => {
       channel.exit({ code: 1 })
     })
     expect(exit).toMatchObject({ kind: 'crash', reason: 'uncaught', error: { message: 'boom' } })
+  })
+
+  it('forgets an exception the host survived', async () => {
+    const exit = await exitWith((channel) => {
+      channel.reply({ type: 'crashed', error: { name: 'Error', message: 'handled' } })
+      channel.reply({
+        type: 'stats',
+        stats: { rssMb: 1, heapUsedMb: 1, heapLimitMb: 1, externalMb: 0, eventLoopUtilization: 0 },
+      })
+      channel.exit({ code: 0 })
+    })
+    expect(exit.reason).toBe('exit')
+    expect(exit.error.message).not.toBe('handled')
   })
 
   it('reports a worker error event as uncaught', async () => {
