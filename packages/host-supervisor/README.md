@@ -234,6 +234,8 @@ cause: `process.exit`, a native crash, or a kill from outside.
 
 ## Platform notes
 
+- The utility process transport needs Electron 42 or later. The package declares no Electron
+  dependency; it uses the app's own.
 - `terminate()` cannot interrupt a synchronous native call: the grace period is honoured between
   calls, not inside one.
 - Large results should stream. `postMessage` copies by structured clone, and Electron's V8 memory

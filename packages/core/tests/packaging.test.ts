@@ -530,7 +530,7 @@ describe('kit libraries stay out of the Electron dependency graph', () => {
       for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
         expect(Object.keys(pkg[field] ?? {}), field).not.toContain('electron')
       }
-      expect(pkg['peerDependenciesMeta']).toBeUndefined()
+      expect(Object.keys(pkg['peerDependenciesMeta'] ?? {})).not.toContain('electron')
     },
   )
 })

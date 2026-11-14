@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import type { utilityProcess } from 'electron'
 import { describe, expect, it } from 'vitest'
 
 import { minimalEnvironment } from '../src/env.js'
@@ -125,6 +126,11 @@ describe('minimalEnvironment', () => {
     })
   })
 })
+
+// Compile-time only: the README's `fork: utilityProcess.fork` must type-check.
+export function acceptsElectronFork(fork: typeof utilityProcess.fork) {
+  return utilityProcessTransport({ entry: 'host.js', fork })
+}
 
 describe('subpaths', () => {
   it('keeps Electron out of every module but the utility transport', async () => {

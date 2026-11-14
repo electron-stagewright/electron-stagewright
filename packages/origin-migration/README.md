@@ -84,8 +84,8 @@ Options:
 ## Requirements
 
 - Electron 42 or later. The package does not depend on Electron, not even as a peer; the app
-  passes its own `BrowserWindow` and `session`, which satisfy the exported `StorageWindow` and
-  `SessionLike` types.
+  passes its own `BrowserWindow` class and a `Session` (such as `session.defaultSession`), which
+  satisfy the exported `WindowFactory` and `SessionLike` types.
 - The release that migrates must keep the `GrantFileProtocolExtraPrivileges` fuse on. Without it a
   `file://` page cannot read `localStorage`; the marker then records `localStorageUnreadable` and
   only OPFS files move.
