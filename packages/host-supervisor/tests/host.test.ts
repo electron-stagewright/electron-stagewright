@@ -612,4 +612,36 @@ describe('policies', () => {
     expect(seen[0]).toBeGreaterThan(0)
     await host.close()
   })
+
+  it('turns an onStats that throws into a process warning', async () => {
+    const warn = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined)
+    const boom = new Error('onStats failed')
+    const host = createHost<Ops, { greeting: string }>({
+      operations: OPERATIONS,
+      transport: inProcessTransport<Ops, { greeting: string }>({
+        operations: OPERATIONS,
+        statsIntervalMs: 60_000,
+        start: () => ({
+          echo: (value: string) => value,
+          fail: () => Promise.reject(new Error('x')),
+          slow: () => 'done',
+          hang: () => 'done',
+          count: () => [],
+        }),
+      }),
+      start: { payload: () => ({ greeting: 'x' }) },
+      onStats: () => {
+        throw boom
+      },
+    })
+    try {
+      await host.start()
+      await settle()
+      expect(warn).toHaveBeenCalledWith(boom)
+      await expect(host.ops.echo('still')).resolves.toBe('still')
+    } finally {
+      warn.mockRestore()
+      await host.close()
+    }
+  })
 })

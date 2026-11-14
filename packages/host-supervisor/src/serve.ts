@@ -5,7 +5,7 @@
 
 import { performance } from 'node:perf_hooks'
 import { getHeapStatistics } from 'node:v8'
-import { parentPort } from 'node:worker_threads'
+import { parentPort, resourceLimits } from 'node:worker_threads'
 
 import type { CallContext, CallOperation, Contract, Handlers, StreamOperation } from './contract.js'
 import {
@@ -119,7 +119,9 @@ export function serveHost<Ops extends Contract<Ops>, Payload = undefined>(
   }
 
   let lastElu = performance.eventLoopUtilization()
-  const heapLimitMb = toMb(getHeapStatistics().heap_size_limit)
+  // V8's limit adds the young generation to a worker's old-generation cap, the one that ends it.
+  const heapLimitMb =
+    resourceLimits.maxOldGenerationSizeMb ?? toMb(getHeapStatistics().heap_size_limit)
   function postStats(): void {
     const memory = process.memoryUsage()
     const elu = performance.eventLoopUtilization(lastElu)

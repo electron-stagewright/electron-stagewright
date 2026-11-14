@@ -265,15 +265,22 @@ export async function runOriginMigration(
     await writeMarker(markerPath, marker)
     legacy = await deps.openLegacy()
     // Settings go first, so a failed file step cannot leave the app to boot on defaults.
+    let localStorageDenied = false
     if (stores.has('localStorage') && !marker.localStorageCopied) {
       const entries = await legacy.readLocalStorage()
-      if (entries === null) marker.localStorageUnreadable = true
-      if (entries && entries.length > 0) {
-        target = await deps.openTarget()
-        marker.localStorageKeys = await target.writeLocalStorage(entries)
-        await deps.flush()
+      if (entries === null) {
+        // Files still move; the attempt fails so a later launch can retry the settings.
+        localStorageDenied = true
+        marker.localStorageUnreadable = true
+      } else {
+        delete marker.localStorageUnreadable
+        if (entries.length > 0) {
+          target = await deps.openTarget()
+          marker.localStorageKeys = await target.writeLocalStorage(entries)
+          await deps.flush()
+        }
+        marker.localStorageCopied = true
       }
-      marker.localStorageCopied = true
       await writeMarker(markerPath, marker)
     }
     const copied = new Set(marker.copiedFiles)
@@ -328,6 +335,11 @@ export async function runOriginMigration(
         )
         throw error
       }
+    }
+    if (localStorageDenied) {
+      throw Object.assign(new Error('The file:// page cannot read localStorage'), {
+        code: 'LOCAL_STORAGE_UNREADABLE',
+      })
     }
     marker.state = 'done'
     delete marker.error

@@ -460,7 +460,12 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined>(
         return
       case 'stats':
         life.lastStats = message.stats
-        options.onStats?.(message.stats)
+        try {
+          options.onStats?.(message.stats)
+        } catch (error) {
+          // Thrown inside the transport's message listener, it would be an uncaught exception.
+          process.emitWarning(error instanceof Error ? error : new Error(String(error)))
+        }
         return
       case 'stopped':
         life.stoppedReceived = true

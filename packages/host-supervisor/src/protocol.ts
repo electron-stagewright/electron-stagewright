@@ -30,6 +30,7 @@ export type SupervisorMessage =
 export interface HostStats {
   readonly rssMb: number
   readonly heapUsedMb: number
+  /** A worker's old-generation cap; V8's heap limit in a process. */
   readonly heapLimitMb: number
   readonly externalMb: number
   readonly eventLoopUtilization: number
