@@ -1,4 +1,5 @@
 export { BLANK_DOCUMENT_HTML, blankDocumentResponse } from './blank.js'
+export type { SessionLike, StorageWindow, StorageWindowOptions } from './electron-types.js'
 export { migrateOrigin, type MigrateOriginOptions } from './migrate-origin.js'
 export {
   ORIGIN_MIGRATION_CHUNK_BYTES,

@@ -519,3 +519,19 @@ describe('publish-readiness — RELEASING.md "What publishes" list', () => {
     expect(parsed.entries).toEqual([])
   })
 })
+
+describe('kit libraries stay out of the Electron dependency graph', () => {
+  // An optional peer resolves to the app's Electron and lands in production license reports.
+  it.each(['host-supervisor', 'origin-migration'])(
+    '%s declares no Electron dependency',
+    async (dir) => {
+      const pkg = JSON.parse(
+        await readFile(path.join(REPO_ROOT, 'packages', dir, 'package.json'), 'utf8'),
+      ) as Record<string, Record<string, string> | undefined>
+      for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
+        expect(Object.keys(pkg[field] ?? {}), field).not.toContain('electron')
+      }
+      expect(pkg['peerDependenciesMeta']).toBeUndefined()
+    },
+  )
+})

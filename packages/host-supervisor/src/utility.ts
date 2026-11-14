@@ -42,7 +42,10 @@ export interface UtilityProcessTransportOptions {
   readonly stdio?: 'pipe' | 'ignore' | 'inherit'
   /** macOS: lets the hardened runtime load unsigned `.node` and `.dylib` files. Avoid in release builds. */
   readonly allowLoadingUnsignedLibraries?: boolean
-  /** Replaces `utilityProcess.fork`, for tests. */
+  /**
+   * Electron's `utilityProcess.fork`. Pass it when the main process is bundled (CommonJS, or any
+   * build where this package cannot `require('electron')` itself); tests pass a fake.
+   */
   readonly fork?: (entry: string, args: string[], options: UtilityForkOptions) => UtilityProcessLike
 }
 
@@ -86,7 +89,7 @@ export function utilityProcessTransport(options: UtilityProcessTransportOptions)
         onMessage: (listener) => void child.on('message', listener),
         onExit: (listener) =>
           void child.on('exit', (code) => {
-            const exit: ChannelExit = error ? { code, error } : { code }
+            const exit: ChannelExit = error ? { code, error, runtimeFatal: true } : { code }
             listener(exit)
           }),
         kill: () => {
