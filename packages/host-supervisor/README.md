@@ -100,18 +100,47 @@ serveHost<DbOps, { key: string }>({
   timeout or an abort rejects the call and aborts `context.signal` in the handler, which receives
   it after the caller's arguments. Past `maxPending` calls and open streams, a call fails with
   `HOST_QUEUE_FULL`.
+- **Abort and settle.** By default an abort rejects with `HOST_CALL_ABORTED` at once, and the
+  host's late answer is dropped, so the caller cannot tell whether the work stopped. Set
+  `limits.abortGraceMs` (or `abortGraceMs` per call) to forward the abort and wait: the call then
+  settles with the host's own answer (the handler's abort error, or its value if it finished
+  anyway), or fails with `HOST_ABORT_UNSETTLED` once the grace passes, which means the work may
+  still be running and the host is a candidate for `kill()`. The call stays counted against
+  `maxPending` until it settles. A call the host never received still fails at once, and streams
+  always close at once.
 - **Streams.** One item per pull; nothing is produced ahead. Leaving a `for await` early closes the
   producer in the host.
 - **Exits.** A call in flight when the host exits fails with `HOST_EXITED`; its `cause` is the
   host's uncaught error when the host could report it. It is never resent. `onExit` then returns
   `fatal` (the default), `on-demand` or `restart`. `restartPolicy()` restarts up to 3 times in 10
   minutes with 0.5, 2 and 8 s of backoff, and a restart whose start fails counts.
+  Calls made while a restart is pending (during its backoff or its start) wait for the new host,
+  within their timeout.
+- **Started.** `onStarted` runs after every successful start with `{ info, launches, restart }`;
+  `restart` is `{ exit, attempt }` when the host replaces one that exited on its own (`attempt`
+  counts failed restarts since that exit), null otherwise.
 - **Stop.** `stop()` refuses new calls, lets accepted ones answer, runs the host's `stop`, and
   terminates the host after `graceMs`. It rejects with `HOST_STOP_TIMEOUT` or
   `HOST_STOP_INCOMPLETE` when the host did not close cleanly, so code that is about to touch its
   files can stop. `kill()` terminates without draining. `close()` stops and refuses every later
   call. After `stop()` or `kill()` the next call starts a new host, once the old one has exited or
   `retireWaitMs` has passed.
+- **Pause.** A handle captured anywhere in the app starts a host on its next call. When the host's
+  files must stay closed (a backup, a restore, a key rotation), `await host.pause()` stops the host
+  like `stop()` and starts none until `host.resume()`. Calls made meanwhile wait (within their
+  timeout and `maxPending`), or fail with `HOST_PAUSED` under `pause({ calls: 'reject' })`. A pause
+  whose stop fails rejects like `stop()` but stays paused, so the caller can decide before touching
+  the files:
+
+  ```ts
+  await host.pause()
+  try {
+    await swapDatabaseFiles()
+  } finally {
+    host.resume()
+  }
+  ```
+
 - **Memory.** Worker `resourceLimits` usually end only the worker, reported as `out-of-memory`;
   one allocation far past the cap can still abort the whole process, so use `utilityProcess` when
   the app must survive its host. A `utilityProcess` that runs out of heap is reported as a

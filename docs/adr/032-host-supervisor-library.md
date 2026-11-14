@@ -56,6 +56,15 @@ Ship `@electron-stagewright/host-supervisor`: a supervisor (`createHost`), a hos
 - **Wait for exit.** After a kill, the next host starts only once the previous one has exited, or
   after `retireWaitMs`. A process may hold a file lock until it is gone, and on Windows a kill is
   abrupt.
+- **Abort can wait for the host.** With `abortGraceMs`, an abort is forwarded and the call settles
+  on the host's own answer, or fails with `HOST_ABORT_UNSETTLED` after the grace. The default stays
+  an immediate `HOST_CALL_ABORTED`. A caller that must know whether the work stopped (to offer a
+  forced restart) gets an answer instead of a guess.
+- **Pause.** `pause()` stops the host and refuses to launch another until `resume()`; calls wait
+  or fail with `HOST_PAUSED`. Without it, any captured handle could open the host's files while
+  the app swaps them.
+- **Started events.** `onStarted` reports every successful start, with the exit and attempt that
+  led to a restart, so an app does not wrap the transport to learn that recovery worked.
 - **Cancellation and back-pressure.** `AbortSignal` and the per-call timeout abort the call's
   signal inside the host. Streams are pulled one item per request and closing one early runs the
   producer's `finally`. `maxPending` bounds calls and open streams together.
