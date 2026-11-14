@@ -100,18 +100,47 @@ serveHost<DbOps, { key: string }>({
   timeout or an abort rejects the call and aborts `context.signal` in the handler, which receives
   it after the caller's arguments. Past `maxPending` calls and open streams, a call fails with
   `HOST_QUEUE_FULL`.
+- **Abort and settle.** By default an abort rejects with `HOST_CALL_ABORTED` at once, and the
+  host's late answer is dropped, so the caller cannot tell whether the work stopped. Set
+  `limits.abortGraceMs` (or `abortGraceMs` per call) to forward the abort and wait: the call then
+  settles with the host's own answer (the handler's abort error, or its value if it finished
+  anyway), or fails with `HOST_ABORT_UNSETTLED` once the grace passes, which means the work may
+  still be running and the host is a candidate for `kill()`. The call stays counted against
+  `maxPending` until it settles. A call the host never received still fails at once, and streams
+  always close at once.
 - **Streams.** One item per pull; nothing is produced ahead. Leaving a `for await` early closes the
   producer in the host.
 - **Exits.** A call in flight when the host exits fails with `HOST_EXITED`; its `cause` is the
   host's uncaught error when the host could report it. It is never resent. `onExit` then returns
   `fatal` (the default), `on-demand` or `restart`. `restartPolicy()` restarts up to 3 times in 10
   minutes with 0.5, 2 and 8 s of backoff, and a restart whose start fails counts.
+  Calls made while a restart is pending (during its backoff or its start) wait for the new host,
+  within their timeout.
+- **Started.** `onStarted` runs after every successful start with `{ info, launches, restart }`;
+  `restart` is `{ exit, attempt }` when the host replaces one that exited on its own (`attempt`
+  is 1 for the first try after that exit and grows with each failed one), null otherwise.
 - **Stop.** `stop()` refuses new calls, lets accepted ones answer, runs the host's `stop`, and
   terminates the host after `graceMs`. It rejects with `HOST_STOP_TIMEOUT` or
   `HOST_STOP_INCOMPLETE` when the host did not close cleanly, so code that is about to touch its
   files can stop. `kill()` terminates without draining. `close()` stops and refuses every later
   call. After `stop()` or `kill()` the next call starts a new host, once the old one has exited or
   `retireWaitMs` has passed.
+- **Pause.** A handle captured anywhere in the app starts a host on its next call. When the host's
+  files must stay closed (a backup, a restore, a key rotation), `await host.pause()` stops the host
+  like `stop()` and starts none until `host.resume()`. Calls made meanwhile wait (within their
+  timeout and `maxPending`), or fail with `HOST_PAUSED` under `pause({ calls: 'reject' })`. A pause
+  whose stop fails rejects like `stop()` but stays paused, so the caller can decide before touching
+  the files:
+
+  ```ts
+  await host.pause()
+  try {
+    await swapDatabaseFiles()
+  } finally {
+    host.resume()
+  }
+  ```
+
 - **Memory.** Worker `resourceLimits` usually end only the worker, reported as `out-of-memory`;
   one allocation far past the cap can still abort the whole process, so use `utilityProcess` when
   the app must survive its host. A `utilityProcess` that runs out of heap is reported as a
@@ -121,8 +150,75 @@ serveHost<DbOps, { key: string }>({
   the young generation to `maxOldGenerationSizeMb`. An `onStats` that throws or rejects becomes a
   process warning.
 
-Errors keep their message and a code matching `^[A-Z][A-Z0-9_]{1,80}$`; stacks and object graphs
-never cross. The supervisor's own failures are `HostError` with a code from `HOST_ERROR_CODES`.
+## Errors
+
+An error crosses as its name, its message and a code matching `^[A-Z][A-Z0-9_]{1,80}$`; stacks and
+object graphs cross only as the detail a host picks with `errors.data`. The supervisor's own failures are `HostError` with a code from
+`HOST_ERROR_CODES`, and a host can never make an application error pass for one.
+
+When failures carry structured detail, say so on both sides instead of wrapping every answer:
+
+```ts
+// db-host.js
+serveHost<DbOps>({
+  // ...
+  errors: {
+    codePattern: /^[a-z][a-z-]{1,40}$/, // also the app's own codes, such as `engine-gone`
+    data: (error) =>
+      error instanceof EditError ? { step: error.step, fix: error.fix } : undefined,
+  },
+})
+
+// main process
+createHost<DbOps>({
+  // ...
+  errors: {
+    revive: (e) => (e.name === 'EditError' ? new EditError(e.message, e.code, e.data) : undefined),
+  },
+})
+```
+
+`data` must survive structured clone; when it does not, the error still crosses without it.
+Without `revive`, the rebuilt `Error` carries `name`, `message`, `code` and `data`.
+
+## Start info
+
+A host can hand back what it learned while starting, such as the port its server bound:
+
+```ts
+serveHost<ServerOps, Config, { url: string }>({
+  operations: ['ping'],
+  start: async (config, { setInfo }) => {
+    const server = await listen(config)
+    setInfo({ url: server.url })
+    return { ping: () => 'pong' }
+  },
+})
+
+const host = createHost<ServerOps, Config, { url: string }>({/* ... */})
+const { url } = (await host.start())!
+host.info // the running host's info, or undefined while none runs
+```
+
+Call `setInfo` before `start` resolves; later calls throw. Info that cannot be cloned fails the start.
+
+## Exits
+
+`onExit` and `restartPolicy({ isFatal })` receive a `HostExit`, not an `Error`:
+
+| Field          | Meaning                                                                |
+| -------------- | ---------------------------------------------------------------------- |
+| `kind`         | `crash`, `out-of-memory` or `start-failed`                             |
+| `reason`       | `uncaught`, `out-of-memory`, `runtime-fatal`, `exit` or `start-failed` |
+| `error`        | Always an `Error`: the host's uncaught error when it reported one      |
+| `code`         | The exit code, or null                                                 |
+| `uptimeMs`     | Time since `started`, or null when the host never started              |
+| `pendingCalls` | Calls the exit rejected with `HOST_EXITED`                             |
+| `lastStats`    | The last `HostStats` the host sent, or null                            |
+
+`uncaught` means the host reported an uncaught exception (or a worker thread threw one).
+`runtime-fatal` is Electron's utility process `error` event. `exit` is an end with no reported
+cause: `process.exit`, a native crash, or a kill from outside.
 
 ## Platform notes
 

@@ -9,7 +9,12 @@ export const HOST_ERROR_CODES = [
   /** `onExit` chose `fatal`; the host never starts again. */
   'HOST_FATAL',
   'HOST_CALL_TIMEOUT',
+  /** The call was aborted before the host settled it; the host may still be working on it. */
   'HOST_CALL_ABORTED',
+  /** With `abortGraceMs`: the host did not settle an aborted call within the grace period. */
+  'HOST_ABORT_UNSETTLED',
+  /** `pause({ calls: 'reject' })` is in effect. */
+  'HOST_PAUSED',
   /** More than `maxPending` calls were waiting. */
   'HOST_QUEUE_FULL',
   /** The host refused an operation outside its closed list. */

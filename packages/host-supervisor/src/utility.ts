@@ -86,7 +86,7 @@ export function utilityProcessTransport(options: UtilityProcessTransportOptions)
         onMessage: (listener) => void child.on('message', listener),
         onExit: (listener) =>
           void child.on('exit', (code) => {
-            const exit: ChannelExit = error ? { code, error } : { code }
+            const exit: ChannelExit = error ? { code, error, runtimeFatal: true } : { code }
             listener(exit)
           }),
         kill: () => {

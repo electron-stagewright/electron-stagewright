@@ -29,7 +29,7 @@ async function run() {
     start: { payload: () => ({ greeting: 'hello' }), timeoutMs: 20_000 },
     limits: { callTimeoutMs: 20_000 },
     onExit: (exit) => {
-      result.exits.push({ kind: exit.kind, pendingCalls: exit.pendingCalls })
+      result.exits.push({ kind: exit.kind, reason: exit.reason, pendingCalls: exit.pendingCalls })
       return policy(exit)
     },
   })

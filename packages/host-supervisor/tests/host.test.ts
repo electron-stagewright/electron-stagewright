@@ -565,6 +565,7 @@ describe('policies', () => {
     })
     const exit = (code?: string): HostExit => ({
       kind: 'crash',
+      reason: 'exit',
       error: Object.assign(new Error('x'), code ? { code } : {}),
       code: 1,
       uptimeMs: 1,
