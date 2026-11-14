@@ -107,7 +107,7 @@ another pid namespace reports memory `unmeasured` instead of a stranger's number
 ```sh
 electron-stagewright-budget measure --main dist/main.js --budget perf-budget.json \
   --rounds 5 --out run.json --check
-electron-stagewright-budget check run.json --budget perf-budget.json [--strict] [--require-measurement]
+electron-stagewright-budget check run.json --budget perf-budget.json [--no-tolerance] [--require-measurement]
 electron-stagewright-budget compare before.json after.json
 electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--out run.json]
 ```
