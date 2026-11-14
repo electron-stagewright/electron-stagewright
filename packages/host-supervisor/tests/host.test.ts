@@ -613,9 +613,16 @@ describe('policies', () => {
     await host.close()
   })
 
-  it('turns an onStats that throws into a process warning', async () => {
+  it.each([
+    [
+      'throws',
+      () => {
+        throw new Error('onStats failed')
+      },
+    ],
+    ['rejects', () => Promise.reject(new Error('onStats failed'))],
+  ])('turns an onStats that %s into a process warning', async (_, onStats) => {
     const warn = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined)
-    const boom = new Error('onStats failed')
     const host = createHost<Ops, { greeting: string }>({
       operations: OPERATIONS,
       transport: inProcessTransport<Ops, { greeting: string }>({
@@ -630,14 +637,14 @@ describe('policies', () => {
         }),
       }),
       start: { payload: () => ({ greeting: 'x' }) },
-      onStats: () => {
-        throw boom
-      },
+      onStats,
     })
     try {
       await host.start()
       await settle()
-      expect(warn).toHaveBeenCalledWith(boom)
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(expect.objectContaining({ message: 'onStats failed' })),
+      )
       await expect(host.ops.echo('still')).resolves.toBe('still')
     } finally {
       warn.mockRestore()

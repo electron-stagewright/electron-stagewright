@@ -82,9 +82,8 @@ Options:
 
 - Electron 42 or later.
 - The release that migrates must keep the `GrantFileProtocolExtraPrivileges` fuse on. Without it a
-  `file://` page cannot read `localStorage`: OPFS files still move, but the attempt fails with
-  `LOCAL_STORAGE_UNREADABLE` and the marker records `localStorageUnreadable`, so a later release
-  with the fuse on retries the settings.
+  `file://` page cannot read `localStorage`; the marker then records `localStorageUnreadable` and
+  only OPFS files move.
 - Call it before the renderer loads from the new origin, so the app never boots on empty settings.
 
 ## Lower-level API

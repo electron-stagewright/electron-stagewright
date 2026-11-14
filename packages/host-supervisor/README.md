@@ -117,8 +117,9 @@ serveHost<DbOps, { key: string }>({
   the app must survive its host. A `utilityProcess` that runs out of heap is reported as a
   `crash`: Electron gives no out-of-memory signal. Native memory sits outside any heap cap: pass
   `statsIntervalMs` to `serveHost`, and `memoryWatch({ rssMb, onAlert })` as `onStats`. A worker
-  shares the process, so its `rssMb` is the whole app's; its `heapLimitMb` is the
-  `maxOldGenerationSizeMb` cap. An `onStats` that throws becomes a process warning.
+  shares the process, so its `rssMb` is the whole app's. `heapLimitMb` is V8's limit, which adds
+  the young generation to `maxOldGenerationSizeMb`. An `onStats` that throws or rejects becomes a
+  process warning.
 
 Errors keep their message and a code matching `^[A-Z][A-Z0-9_]{1,80}$`; stacks and object graphs
 never cross. The supervisor's own failures are `HostError` with a code from `HOST_ERROR_CODES`.

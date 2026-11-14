@@ -65,9 +65,8 @@ It is not a Stagewright plugin and registers no MCP tool.
 - The app must serve an empty document on the new origin (`blankDocumentResponse()` helps) and run
   the migration before its renderer loads from that origin.
 - A `file://` page needs the `GrantFileProtocolExtraPrivileges` fuse to read `localStorage`. With
-  the fuse off, the copy still moves OPFS files, records `localStorageUnreadable` and fails the
-  attempt, so a later release with the fuse on retries the settings within the three attempts.
-  The release that migrates should keep the fuse on.
+  the fuse off, the copy records `localStorageUnreadable` and still moves OPFS files. The release
+  that migrates must keep the fuse on.
 - Destroying the only open window fires `window-all-closed`, so the app should create its main
   window (hidden) before the migration opens and closes its pages.
 - The library ships in the app's production bundle, unlike every other package here. Its only

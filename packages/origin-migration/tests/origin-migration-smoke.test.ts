@@ -114,14 +114,11 @@ describe('origin migration smoke (real Electron)', () => {
           while (!ready()) await new Promise((resolve) => setTimeout(resolve, 50));`)
         // Playwright can register the window a moment after main reports it loaded.
         await vi.waitFor(
-          async () => {
-            const switched = (await server.dispatcher.dispatch('electron_switch_window', {
-              sessionId,
-              windowTitle: TITLE,
-            })) as Record<string, unknown>
-            expect(switched, JSON.stringify(switched).slice(0, 300)).toMatchObject({ ok: true })
+          () => dispatch('electron_switch_window', { sessionId, windowTitle: TITLE }),
+          {
+            timeout: 10_000,
+            interval: 100,
           },
-          { timeout: 10_000, interval: 100 },
         )
         return {
           renderer,

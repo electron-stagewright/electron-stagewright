@@ -278,38 +278,19 @@ describe('origin migration', () => {
     await expect(run).resolves.toMatchObject({ status: 'failed' })
   })
 
-  it('copies files but fails the attempt when the legacy page may not read localStorage', async () => {
+  it('still copies origin files when the legacy page may not read localStorage', async () => {
     legacy.localStorage.setItem('settings', 'legacy')
     legacy.localStorage.denied = true
     legacy.opfs.put('app.db', bytes(40))
-    await expect(migrate().run).resolves.toMatchObject({
-      status: 'failed',
-      final: false,
-      marker: { error: 'LOCAL_STORAGE_UNREADABLE' },
-    })
+    await expect(migrate().run).resolves.toMatchObject({ status: 'migrated' })
     expect(target.localStorage.length).toBe(0)
     expect(sameBytes(target.opfs.file('app.db')?.data, bytes(40))).toBe(true)
     expect(await marker()).toMatchObject({
-      state: 'failed',
+      state: 'done',
       localStorageUnreadable: true,
-      localStorageCopied: false,
+      localStorageKeys: 0,
       files: 1,
     })
-  })
-
-  it('retries only localStorage once a later launch can read it', async () => {
-    legacy.localStorage.setItem('settings', 'legacy')
-    legacy.localStorage.denied = true
-    legacy.opfs.put('app.db', bytes(40))
-    await migrate().run
-    target.opfs.put('app.db', bytes(8, 3))
-    legacy.localStorage.denied = false
-    await expect(migrate().run).resolves.toMatchObject({ status: 'migrated' })
-    expect(target.localStorage.getItem('settings')).toBe('legacy')
-    expect(target.opfs.file('app.db')?.data.byteLength).toBe(8)
-    const done = await marker()
-    expect(done).toMatchObject({ state: 'done', attempts: 2, localStorageCopied: true, files: 1 })
-    expect(done.localStorageUnreadable).toBeUndefined()
   })
 
   it('drops a WAL the new origin wrote when legacy moves in a database without one', async () => {

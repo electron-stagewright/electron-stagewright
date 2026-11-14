@@ -12,7 +12,6 @@ import {
   type ChannelExit,
   type Host,
   type HostExit,
-  type HostStats,
 } from '../src/index.js'
 import { workerThreadTransport, type WorkerLike } from '../src/worker.js'
 import { rejection } from './fake-transport.js'
@@ -30,7 +29,6 @@ function workerHost(
     onExit?: (exit: HostExit) => ReturnType<ReturnType<typeof restartPolicy>>
     maxOldGenerationSizeMb?: number
     graceMs?: number
-    onStats?: (stats: HostStats) => void
   } = {},
 ): Host<TestOps> {
   const host = createHost<TestOps, { greeting: string }>({
@@ -46,7 +44,6 @@ function workerHost(
     start: { payload: () => ({ greeting: 'hello' }), timeoutMs: 20_000 },
     ...(extra.graceMs === undefined ? {} : { stop: { graceMs: extra.graceMs } }),
     ...(extra.onExit ? { onExit: extra.onExit } : {}),
-    ...(extra.onStats ? { onStats: extra.onStats } : {}),
   })
   hosts.push(host)
   return host
@@ -114,14 +111,6 @@ describe('workerThreadTransport', { timeout: 30_000 }, () => {
     const error = await rejection(host.stop())
     expect(error.code).toBe('HOST_STOP_TIMEOUT')
     expect((await busy).code).toBe('HOST_STOPPED')
-  })
-
-  it('reports the worker heap cap as heapLimitMb', async () => {
-    const seen: HostStats[] = []
-    const host = workerHost({ maxOldGenerationSizeMb: 48, onStats: (stats) => seen.push(stats) })
-    await host.start()
-    await vi.waitFor(() => expect(seen[0]?.heapLimitMb).toBe(48))
-    await host.close()
   })
 
   it('aborts a call inside the worker', async () => {
