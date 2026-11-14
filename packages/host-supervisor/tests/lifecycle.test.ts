@@ -36,6 +36,16 @@ function served(log: string[] = []) {
 }
 
 describe('abortGraceMs', () => {
+  it('refuses a grace no timer can hold', () => {
+    expect(() =>
+      createHost<Ops>({
+        operations: ['echo', 'work'],
+        transport: served(),
+        limits: { abortGraceMs: Number.POSITIVE_INFINITY },
+      }),
+    ).toThrow(RangeError)
+  })
+
   it('settles an aborted call with the host answer', async () => {
     const host = createHost<Ops>({
       operations: ['echo', 'work'],
@@ -185,6 +195,25 @@ describe('pause and resume', () => {
     await host.close()
   })
 
+  it('does not hold a start once close() has begun', async () => {
+    const host = createHost<Ops>({ operations: ['echo', 'work'], transport: served() })
+    await host.start()
+    const closing = host.close()
+    void host.pause()
+    await expect(host.start()).rejects.toBeInstanceOf(Error)
+    await closing
+  })
+
+  it('rejects a waiting start() when the pause turns to reject', async () => {
+    const host = createHost<Ops>({ operations: ['echo', 'work'], transport: served() })
+    await host.pause()
+    const waiting = host.start()
+    await settle()
+    await host.pause({ calls: 'reject' })
+    await expect(waiting).rejects.toMatchObject({ code: 'HOST_PAUSED' })
+    await host.close()
+  })
+
   it('fails waiting calls when closed while paused', async () => {
     const host = createHost<Ops>({ operations: ['echo', 'work'], transport: served() })
     await host.pause()
@@ -258,6 +287,72 @@ describe('onStarted', () => {
     await settle()
     expect(events[1]).toMatchObject({ launches: 2, restart: { attempt: 1, exit: { code: 1 } } })
     void host.kill()
+  })
+
+  it('relaunches a restart a pause interrupted, with its exit', async () => {
+    const transport = fakeTransport()
+    const events: HostStartedEvent[] = []
+    const host = createHost<Ops>({
+      operations: ['echo', 'work'],
+      transport,
+      onExit: () => ({ action: 'restart', delayMs: 50 }),
+      onStarted: (event) => void events.push(event),
+    })
+    await host.start()
+    transport.last.exit({ code: 1 })
+    await settle()
+    await host.pause()
+    host.resume()
+    await settle()
+    expect(transport.channels).toHaveLength(2)
+    expect(events[1]).toMatchObject({ launches: 2, restart: { attempt: 1, exit: { code: 1 } } })
+    await host.close()
+  })
+
+  it('counts a failed on-demand replacement as an attempt', async () => {
+    const transport = fakeTransport()
+    const events: HostStartedEvent[] = []
+    let failNext = false
+    const launch = transport.launch.bind(transport)
+    transport.launch = () => {
+      if (failNext) {
+        failNext = false
+        throw new Error('spawn failed')
+      }
+      return launch()
+    }
+    const host = createHost<Ops>({
+      operations: ['echo', 'work'],
+      transport,
+      onExit: () => 'on-demand',
+      onStarted: (event) => void events.push(event),
+    })
+    await host.start()
+    transport.last.exit({ code: 1 })
+    await settle()
+    failNext = true
+    await rejection(host.start())
+    await host.start()
+    expect(events[1]).toMatchObject({ restart: { attempt: 2, exit: { code: 1 } } })
+    await host.close()
+  })
+
+  it('reports a start after stop() as a fresh start', async () => {
+    const transport = fakeTransport()
+    const events: HostStartedEvent[] = []
+    const host = createHost<Ops>({
+      operations: ['echo', 'work'],
+      transport,
+      onExit: () => 'on-demand',
+      onStarted: (event) => void events.push(event),
+    })
+    await host.start()
+    transport.last.exit({ code: 1 })
+    await settle()
+    await host.stop()
+    await host.start()
+    expect(events[1]).toMatchObject({ restart: null })
+    await host.close()
   })
 
   it('turns a throwing listener into a warning', async () => {

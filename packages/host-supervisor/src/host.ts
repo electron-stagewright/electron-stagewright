@@ -250,6 +250,15 @@ function normalizeDecision(decision: ExitDecision): {
   return { action: 'fatal', delayMs: 0 }
 }
 
+const MAX_TIMER_MS = 2_147_483_647
+
+function checkGraceMs(value: number | undefined): number | undefined {
+  if (value === undefined || (Number.isFinite(value) && value >= 0 && value <= MAX_TIMER_MS)) {
+    return value
+  }
+  throw new RangeError(`abortGraceMs must be between 0 and ${MAX_TIMER_MS} ms, not ${value}`)
+}
+
 export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info = undefined>(
   options: HostOptions<Ops, Payload, Info>,
 ): Host<Ops, Info> {
@@ -259,7 +268,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
   const retireWaitMs = options.stop?.retireWaitMs ?? DEFAULT_RETIRE_WAIT_MS
   const maxPending = options.limits?.maxPending ?? Number.POSITIVE_INFINITY
   const defaultTimeoutMs = options.limits?.callTimeoutMs
-  const defaultGraceMs = options.limits?.abortGraceMs
+  const defaultGraceMs = checkGraceMs(options.limits?.abortGraceMs)
   const onExit = options.onExit ?? (() => 'fatal' as const)
   const now = options.now ?? Date.now
 
@@ -277,6 +286,8 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
   let launches = 0
   /** The exit an `on-demand` decision left unanswered, reported with the next start. */
   let pendingRestart: HostStartedEvent['restart'] = null
+  /** A restart a pause interrupted, launched again by `resume()`. */
+  let restartHeld = false
   let paused: Required<PauseOptions> | null = null
   let resumeGate: { promise: Promise<void>; resolve: () => void } | null = null
   const pending = new Map<number, Entry>()
@@ -409,7 +420,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
       id: nextId++,
       stream,
       timeoutMs: callOptions?.timeoutMs ?? defaultTimeoutMs,
-      graceMs: callOptions?.abortGraceMs ?? defaultGraceMs,
+      graceMs: checkGraceMs(callOptions?.abortGraceMs ?? defaultGraceMs),
       life: null,
       done: false,
       error: null,
@@ -815,6 +826,9 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
         (error: unknown) => {
           if (starting === launching) starting = null
           if (state === 'starting') state = 'idle'
+          if (pendingRestart) {
+            pendingRestart = { exit: pendingRestart.exit, attempt: pendingRestart.attempt + 1 }
+          }
           throw error
         },
       )
@@ -829,7 +843,10 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     } catch {
       decision = { action: 'fatal', delayMs: 0 }
     }
-    if (state !== 'restarting') throw unavailable()
+    if (state !== 'restarting') {
+      if (decision.action === 'fatal') throw unavailable()
+      throw interrupted(origin, attempt, decision.action === 'restart')
+    }
     if (decision.action === 'fatal') {
       state = 'fatal'
       fatalCause = exit.error
@@ -843,13 +860,13 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
       throw RETRY
     }
     if (decision.delayMs > 0) await restartDelay(decision.delayMs)
-    if (state !== 'restarting') throw unavailable()
+    if (state !== 'restarting') throw interrupted(origin, attempt, true)
     let life: Life
     try {
       life = await launch()
       if (life.exited) throw new Error('The host exited right after starting')
     } catch (error) {
-      if (state !== 'restarting') throw unavailable()
+      if (state !== 'restarting') throw interrupted(origin, attempt + 1, true)
       const cause = (error as { cause?: unknown }).cause
       return recover(
         {
@@ -866,6 +883,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
       )
     }
     if (state !== 'restarting') {
+      launches++
       // A stop drains the host it finds; a kill expects none left running.
       if (state === 'stopping') current = life
       else await retire(life)
@@ -876,6 +894,15 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     starting = null
     started(life, { exit: origin, attempt })
     return life
+  }
+
+  /** A pause keeps the recovery it interrupted for `resume()`; a stop or kill drops it. */
+  function interrupted(origin: HostExit, attempt: number, relaunch: boolean): HostError {
+    if (paused) {
+      pendingRestart = { exit: origin, attempt }
+      restartHeld ||= relaunch
+    }
+    return unavailable()
   }
 
   async function stopHost(): Promise<void> {
@@ -945,6 +972,7 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
 
   function shared(final: boolean): Promise<void> {
     if (final) closeRequested = true
+    if (!paused || final) forgetRestart()
     if (state === 'closed') return Promise.resolve()
     if (stopping) {
       // A close joining a pause's stop still fails the calls waiting for `resume()`.
@@ -967,6 +995,11 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
     releaseGate()
   }
 
+  function forgetRestart(): void {
+    pendingRestart = null
+    restartHeld = false
+  }
+
   function releaseGate(): void {
     const gate = resumeGate
     resumeGate = null
@@ -974,17 +1007,19 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
   }
 
   function pause(pauseOptions: PauseOptions = {}): Promise<void> {
-    if (state === 'closed') return Promise.resolve()
+    if (state === 'closed' || closeRequested) return stopping ?? Promise.resolve()
     paused = { calls: pauseOptions.calls ?? 'wait' }
-    if (!resumeGate) {
-      let resolve!: () => void
-      const promise = new Promise<void>((done) => (resolve = done))
-      resumeGate = { promise, resolve }
-    }
     if (paused.calls === 'reject') {
       for (const entry of [...pending.values()]) {
         if (!entry.life) finish(entry, pausedError(), false)
       }
+      // A start() waiting on the gate retries and meets HOST_PAUSED.
+      releaseGate()
+    }
+    if (!resumeGate) {
+      let resolve!: () => void
+      const promise = new Promise<void>((done) => (resolve = done))
+      resumeGate = { promise, resolve }
     }
     return shared(false)
   }
@@ -999,11 +1034,19 @@ export function createHost<Ops extends Contract<Ops>, Payload = undefined, Info 
       if (paused) return
       if (state === 'paused') state = 'idle'
       releaseGate()
+      if (restartHeld) {
+        restartHeld = false
+        // A failed launch leaves the restart to the next call.
+        Promise.resolve()
+          .then(ensureStarted)
+          .catch(() => undefined)
+      }
     }
   }
 
   async function kill(): Promise<void> {
     if (state === 'closed') return
+    forgetRestart()
     wakeDelay?.()
     abortStart()
     if (state === 'restarting') {

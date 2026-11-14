@@ -118,7 +118,7 @@ serveHost<DbOps, { key: string }>({
   within their timeout.
 - **Started.** `onStarted` runs after every successful start with `{ info, launches, restart }`;
   `restart` is `{ exit, attempt }` when the host replaces one that exited on its own (`attempt`
-  counts failed restarts since that exit), null otherwise.
+  is 1 for the first try after that exit and grows with each failed one), null otherwise.
 - **Stop.** `stop()` refuses new calls, lets accepted ones answer, runs the host's `stop`, and
   terminates the host after `graceMs`. It rejects with `HOST_STOP_TIMEOUT` or
   `HOST_STOP_INCOMPLETE` when the host did not close cleanly, so code that is about to touch its
