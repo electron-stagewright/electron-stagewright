@@ -131,9 +131,28 @@ electron-stagewright-budget bundle --budget perf-budget.json [--root <dir>] [--o
   }
   ```
 
+- `--before-round <script.mjs>` prepares each round before its first launch. The module
+  default-exports `async ({ round, profile }) => ({ env, args })` (string values only); the
+  returned `env` and `args` are added to that round's launches. Use it to hand every launch its own copy of a fixture, so
+  rounds that share state do not skew the median.
+- `--skip-failed-rounds` reports a round whose launch or measurement failed and goes on. Pair it
+  with `--min-samples N` on the check: a metric with fewer than `N` measured launches is left
+  unmeasured instead of gated, and `--require-measurement` turns that into a failure. If every
+  round fails, the command fails with the first round's error (exit `2`):
+
+  ```sh
+  electron-stagewright-budget measure --main dist/main.js --budget perf-budget.json \
+    --rounds 3 --phases cold --before-round fresh-fixture.mjs --skip-failed-rounds \
+    --check --min-samples 2
+  ```
+
 - `bundle` measures the `bundle` entries (paths resolve from `--root`, default the budget file's
   directory) and gates them. It needs no Electron and no display.
-- `check` compares a run file to the budget. Values are the median over the rounds of a phase.
+- `check` compares run files to the budget. Several files (`check a.json b.json c.json`) are merged
+  into one run first, and values are the median over the rounds of a phase. `--min-samples N`
+  leaves a runtime metric with fewer than `N` measured rounds `unmeasured`. In code,
+  `mergeRuns(runs)` and `checkRun(run, budget, { minSamples })` do the same, and `measureApp` takes
+  `beforeRound` and `failedRounds: 'skip'`.
 - `compare` prints a before/after table of two runs.
 - `--no-tolerance` ignores `thresholdPercent`, so the limit itself gates. It does not turn warnings
   into failures: every verdict already fails the command. `--strict` is a deprecated alias that

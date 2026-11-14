@@ -59,7 +59,7 @@ describe('parseBudgetCliArgs', () => {
       ]),
     ).toEqual({
       command: 'check',
-      runPath: 'run.json',
+      runPaths: ['run.json'],
       budgetPath: 'b.json',
       noTolerance: true,
       requireMeasurement: false,

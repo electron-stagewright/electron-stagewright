@@ -26,6 +26,21 @@ export interface WorkloadContext {
 
 export type Workload = (context: WorkloadContext) => Promise<void>
 
+/** What `beforeRound` may add to the launches of one round. */
+export interface RoundSetup {
+  readonly env?: Readonly<Record<string, string>>
+  readonly args?: readonly string[]
+}
+
+/**
+ * Runs before each round's first launch, to hand it fresh state (a database copy, a seeded
+ * fixture). `profile` is the round's empty user-data directory.
+ */
+export type BeforeRound = (context: {
+  readonly round: number
+  readonly profile: string
+}) => RoundSetup | void | Promise<RoundSetup | void>
+
 export interface MeasureAppOptions {
   /** `electron_launch` arguments: `main` and/or `executablePath`, plus `args`, `env`, `cwd`. */
   readonly launch: {
@@ -48,6 +63,12 @@ export interface MeasureAppOptions {
   readonly workloadTimeoutMs?: number
   readonly label?: string
   readonly onProgress?: (message: string) => void
+  readonly beforeRound?: BeforeRound
+  /**
+   * `skip` reports a round whose launch or measurement failed and goes on to the next one; pair
+   * it with `checkRun`'s `minSamples`. Default `throw`.
+   */
+  readonly failedRounds?: 'throw' | 'skip'
 }
 
 export const DEFAULT_ROUNDS = 3
@@ -81,9 +102,25 @@ async function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promi
   }
 }
 
+function checkSetup(setup: RoundSetup | void): RoundSetup {
+  if (setup === undefined) return {}
+  const strings = (value: unknown): boolean =>
+    Array.isArray(value) && value.every((item) => typeof item === 'string')
+  const env = (setup as { env?: unknown }).env
+  if (
+    typeof setup !== 'object' ||
+    (setup.args !== undefined && !strings(setup.args)) ||
+    (env !== undefined && (typeof env !== 'object' || env === null || !strings(Object.values(env))))
+  ) {
+    throw new TypeError('beforeRound must return { env?: Record<string, string>, args?: string[] }')
+  }
+  return setup
+}
+
 /** Launch once on `profile` and, when `measure` is set, take one measurement. */
 async function launchOnce(
   options: MeasureAppOptions,
+  setup: RoundSetup,
   profile: string,
   phase: LaunchPhase,
   measure: boolean,
@@ -94,7 +131,10 @@ async function launchOnce(
   try {
     const launched = await dispatch('electron_launch', {
       ...options.launch,
-      args: [...(options.launch.args ?? []), `--user-data-dir=${profile}`],
+      ...(options.launch.env === undefined && setup.env === undefined
+        ? {}
+        : { env: { ...options.launch.env, ...setup.env } }),
+      args: [...(options.launch.args ?? []), ...(setup.args ?? []), `--user-data-dir=${profile}`],
     })
     if (launched['ok'] !== true) {
       throw new Error(`could not launch the app: ${String(launched['error'] ?? launched['code'])}`)
@@ -163,19 +203,28 @@ export async function measureApp(options: MeasureAppOptions): Promise<BudgetRun>
   const phases = options.phases ?? ['cold', 'warm']
   const rounds: BudgetRun['rounds'][number][] = []
   let electronVersion: string | undefined
+  let firstFailure: unknown
   for (let round = 1; round <= (options.rounds ?? DEFAULT_ROUNDS); round += 1) {
     const profile = await mkdtemp(path.join(tmpdir(), 'sw-budget-profile-'))
     try {
+      const setup = checkSetup(await options.beforeRound?.({ round, profile }))
       for (const phase of ['cold', 'warm'] as const) {
         const measure = phases.includes(phase)
         if (!measure && !(phase === 'cold' && phases.includes('warm'))) continue
         options.onProgress?.(`round ${round}: ${phase}${measure ? '' : ' (priming, unmeasured)'}`)
-        const result = await launchOnce(options, profile, phase, measure)
+        const result = await launchOnce(options, setup, profile, phase, measure)
         electronVersion ??= result.electronVersion
         if (result.measurement !== undefined) {
           rounds.push({ round, phase, measurement: result.measurement })
         }
       }
+    } catch (error) {
+      if (options.failedRounds !== 'skip') throw error
+      firstFailure ??= error
+      // A warm launch shares the cold one's state, so the rest of the round is dropped too.
+      options.onProgress?.(
+        `round ${round} failed and was skipped: ${error instanceof Error ? error.message : String(error)}`,
+      )
     } finally {
       // A process that outlives the app can hold the profile; that must not discard the rounds.
       await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(
@@ -186,6 +235,8 @@ export async function measureApp(options: MeasureAppOptions): Promise<BudgetRun>
       )
     }
   }
+  // Every round failing is a setup problem (a wrong path, a broken script), not a budget verdict.
+  if (rounds.length === 0 && firstFailure !== undefined) throw firstFailure
   return createRun({
     rounds,
     ...(electronVersion === undefined ? {} : { electronVersion }),

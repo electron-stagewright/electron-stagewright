@@ -72,4 +72,28 @@ describe('budget measure smoke (real Electron)', () => {
     },
     120_000,
   )
+
+  it.skipIf(!RUN_E2E)(
+    'prepares each round with beforeRound and skips a round that fails',
+    async () => {
+      const profiles: string[] = []
+      const run = await measureApp({
+        launch: { main: path.join(FIXTURE_DIR, 'main.js') },
+        rounds: 2,
+        phases: ['cold'],
+        settleMs: 100,
+        windowMs: 250,
+        failedRounds: 'skip',
+        beforeRound: ({ round, profile }) => {
+          profiles.push(profile)
+          if (round === 1) throw new Error('fixture copy failed')
+          return { env: { BUDGET_ROUND: String(round) }, args: ['--lang=en'] }
+        },
+      })
+      expect(profiles).toHaveLength(2)
+      expect(new Set(profiles).size).toBe(2)
+      expect(run.rounds.map((round) => [round.round, round.phase])).toEqual([[2, 'cold']])
+    },
+    120_000,
+  )
 })

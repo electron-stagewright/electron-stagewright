@@ -135,6 +135,42 @@ export function createRun(
   }
 }
 
+/**
+ * One run from several, rounds numbered in order, so a check takes the median across all of them.
+ * Every run must come from the same platform; the first Electron version, label and bundle win.
+ */
+export function mergeRuns(runs: readonly BudgetRun[]): BudgetRun {
+  const [first] = runs
+  if (first === undefined) throw new Error('mergeRuns needs at least one run')
+  const other = runs.find((run) => run.platform !== first.platform || run.arch !== first.arch)
+  if (other !== undefined) {
+    throw new Error(
+      `cannot merge runs from ${first.platform}-${first.arch} and ${other.platform}-${other.arch}`,
+    )
+  }
+  let round = 0
+  const electronVersion = runs.find((run) => run.electron_version !== undefined)?.electron_version
+  const label = runs.find((run) => run.label !== undefined)?.label
+  const bundle = runs.find((run) => run.bundle !== undefined)?.bundle
+  return {
+    format: RUN_FORMAT,
+    schema_version: RUN_SCHEMA_VERSION,
+    created_at: first.created_at,
+    platform: first.platform,
+    arch: first.arch,
+    ...(electronVersion === undefined ? {} : { electron_version: electronVersion }),
+    ...(label === undefined ? {} : { label }),
+    // Each run numbers its rounds from 1; a run's cold and warm launch share a round.
+    rounds: runs.flatMap((run) => {
+      const offset = round
+      const numbers = run.rounds.map((entry) => entry.round)
+      round += numbers.length === 0 ? 0 : Math.max(...numbers)
+      return run.rounds.map((entry) => ({ ...entry, round: entry.round + offset }))
+    }),
+    ...(bundle === undefined ? {} : { bundle }),
+  }
+}
+
 const round1 = (value: number): number => Math.round(value * 10) / 10
 
 export function median(values: readonly number[]): number {

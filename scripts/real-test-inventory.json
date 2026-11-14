@@ -101,7 +101,7 @@
   },
   {
     "path": "packages/plugin-budget/tests/budget-cli-smoke.test.ts",
-    "tests": 1
+    "tests": 2
   },
   {
     "path": "packages/plugin-budget/tests/budget-smoke.test.ts",
