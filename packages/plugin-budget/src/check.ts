@@ -33,6 +33,8 @@ export interface CheckReport {
 
 export interface CheckOptions {
   /** Ignore every `thresholdPercent`: the limit itself gates. */
+  readonly ignoreThreshold?: boolean
+  /** @deprecated Same as `ignoreThreshold`; it never meant "fail instead of warn". */
   readonly strict?: boolean
   /** Treat a budgeted metric the run did not measure as a failure. */
   readonly requireMeasurement?: boolean
@@ -53,10 +55,13 @@ interface Expectation {
 
 const ANY_PHASE_ORDER: readonly Phase[] = ['warm', 'live', 'cold']
 
-function expectations(budget: Budget, platform: string, options: CheckOptions): Expectation[] {
+function expectations(budget: Budget, run: BudgetRun, options: CheckOptions): Expectation[] {
+  const platform = run.platform
   const list: Expectation[] = []
   const tolerance = (own: number | undefined): number =>
-    options.strict === true ? 0 : (own ?? budget.thresholdPercent ?? 0)
+    options.ignoreThreshold === true || options.strict === true
+      ? 0
+      : (own ?? budget.thresholdPercent ?? 0)
 
   if (budget.startup !== undefined) {
     list.push({
@@ -71,11 +76,19 @@ function expectations(budget: Budget, platform: string, options: CheckOptions): 
 
   const memory = budget.memory?.[platform as keyof NonNullable<Budget['memory']>]
   if (memory !== undefined) {
+    // Unset: the first of warm, live, cold whose rounds measured memory, else that has rounds.
+    const roundsOf = (measured: boolean): Phase | undefined =>
+      ANY_PHASE_ORDER.find((phase) =>
+        run.rounds.some(
+          (round) => round.phase === phase && (!measured || round.measurement.memory !== undefined),
+        ),
+      )
+    const memoryPhase = options.phase ?? memory.phase ?? roundsOf(true) ?? roundsOf(false)
     const base = {
       section: 'memory',
       unit: 'MB',
       thresholdPercent: tolerance(memory.thresholdPercent),
-      phase: options.phase ?? memory.phase ?? 'warm',
+      ...(memoryPhase === undefined ? {} : { phase: memoryPhase }),
       metric: memory.metric,
     } as const
     for (const type of PROCESS_TYPES) {
@@ -184,7 +197,7 @@ function unmeasuredDetail(run: BudgetRun, expectation: Expectation): string {
 /** Compare `run` to `budget` for the platform the run was measured on. */
 export function checkRun(run: BudgetRun, budget: Budget, options: CheckOptions = {}): CheckReport {
   const rows = summarizeRun(run)
-  const results = expectations(budget, run.platform, options).map((expectation): CheckResult => {
+  const results = expectations(budget, run, options).map((expectation): CheckResult => {
     // Divide last: 200 * (1 + 15 / 100) is 229.99999999999997, which would fail a 230.
     const exactAllowed = (expectation.limit * (100 + expectation.thresholdPercent)) / 100
     const allowed = Math.round(exactAllowed * 10) / 10

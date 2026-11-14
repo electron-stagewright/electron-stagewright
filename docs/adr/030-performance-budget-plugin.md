@@ -49,6 +49,18 @@ and a CLI for CI, both driving the same measurement code.
   produced one.
 - **Phases.** The CLI measures a `cold` launch on an empty throwaway profile and a `warm` relaunch
   on it, for several rounds; a check reads the median. A live agent session is the `live` phase.
+  A memory budget that names no phase reads the run's warm rounds, else live, else cold, so a run
+  of fresh-profile launches is gated rather than left `unmeasured`.
+- **Startup is not a wall clock.** `maxFirstWindowMs` ends at the first window's load event. A
+  launch-to-ready budget that includes work the app does after load is a different metric; the
+  README says so instead of letting such a budget pass loosely.
+- **The tolerance switch says what it does.** `--no-tolerance` (`ignoreThreshold` in the library)
+  drops `thresholdPercent`. It used to be called `--strict`, which apps read as "fail instead of
+  warn"; `--strict` stays as a deprecated alias that warns.
+- **A check-only entry.** `@electron-stagewright/plugin-budget/check` exports the budget and run
+  formats, `checkRun` and the renderers. It reaches no core, plugin or launcher module, so a gate
+  that only checks does not load the MCP SDK. Installing the package still installs core; that
+  footprint is the cost of one package for the plugin, the CLI and the check.
 
 ### Security posture (extends ADR-014)
 

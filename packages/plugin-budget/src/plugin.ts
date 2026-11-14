@@ -478,7 +478,7 @@ export function createBudgetPlugin(): StagewrightPlugin {
       }
       const report = checkRun(run, budget, {
         phase: 'live',
-        strict: args.strict === true,
+        ignoreThreshold: args.strict === true,
         requireMeasurement: args.requireMeasurement === true,
       })
       return makeSuccess(

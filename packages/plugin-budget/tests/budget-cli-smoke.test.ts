@@ -63,7 +63,11 @@ describe('budget measure smoke (real Electron)', () => {
       const report = checkRun({ ...run, bundle }, budget, { requireMeasurement: true })
       expect(report.results.filter((result) => result.status !== 'pass')).toEqual([])
       expect(report.passed).toBe(true)
-      const impossible = checkRun(run, { mainThread: { maxStallMs: 50 } }, { strict: true })
+      const impossible = checkRun(
+        run,
+        { mainThread: { maxStallMs: 50 } },
+        { ignoreThreshold: true },
+      )
       expect(impossible).toMatchObject({ passed: false, reason: 'OVER_BUDGET' })
     },
     120_000,
