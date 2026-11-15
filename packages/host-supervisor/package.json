@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/host-supervisor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Supervisor for one stateful host off the Electron main thread: a closed operation list, lazy start, drain on stop, per-call timeout and AbortSignal, a pending limit, and bounded restart, over worker_threads or utilityProcess.",
   "type": "module",
   "license": "MIT",

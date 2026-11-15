@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/demo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A no-network Electron demo for verifying an Electron Stagewright MCP connection and its multi-window workflow.",
   "type": "module",
   "license": "MIT",

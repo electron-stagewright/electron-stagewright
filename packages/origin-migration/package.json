@@ -1,6 +1,6 @@
 {
   "name": "@electron-stagewright/origin-migration",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "One-time copy of an Electron renderer's localStorage and origin private file system from the file:// origin to a custom-scheme origin, safe to interrupt and retry.",
   "type": "module",
   "license": "MIT",
