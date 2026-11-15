@@ -80,10 +80,10 @@ describe('reviewed real-runtime inventory', () => {
     )
   })
 
-  it('keeps six ordinary OS/Node cells and requires real commands in each runtime lane', async () => {
+  it('keeps an ordinary cell per OS and requires real commands in each runtime lane', async () => {
     const ci = await readFile(path.join(root, '.github/workflows/ci.yml'), 'utf8')
     expect(ci).toContain('os: [ubuntu-latest, macos-latest, windows-latest]')
-    expect(ci).toContain('node: [24, 26]')
+    expect(ci).toContain('node-version-file: .nvmrc')
     const runtime = await readFile(path.join(root, '.github/workflows/e2e-electron.yml'), 'utf8')
     expect(runtime.match(/run: (?:xvfb-run --auto-servernum )?pnpm test:real/g)).toHaveLength(3)
     expect(runtime.match(/run: (?:xvfb-run --auto-servernum )?pnpm package:smoke/g)).toHaveLength(3)

@@ -4,14 +4,14 @@ import { runDoctorChecks } from '../src/doctor.js'
 import { NPX_PREFIX_REMEDY } from '../src/runtime/default-electron.js'
 
 const READY_DEPS = {
-  nodeVersion: 'v24.5.0',
+  nodeVersion: 'v26.13.1',
   platform: 'darwin' as const,
   env: {},
   resolvePackage: async () => {},
   inspectDirectory: async () => 'accessible' as const,
   serverRuntime: async () => ({
     core: '0.3.0',
-    node: 'v24.5.0',
+    node: 'v26.13.1',
     v8: '13.6.0',
     nodeModuleVersion: '137',
     playwright: '1.61.1',

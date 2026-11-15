@@ -39,7 +39,8 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
+          check-latest: true
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 

@@ -68,7 +68,7 @@ async function fileExists(p: string): Promise<boolean> {
 
 /** Plain semver `x.y.z` with optional pre-release / build metadata. `0.0.0` is intentionally valid. */
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
-const NODE_ENGINE = '>=24.0.0'
+const NODE_ENGINE = '>=26.13.1'
 const REQUIRED_FILE_ENTRIES = ['README.md', 'LICENSE'] as const
 const REPOSITORY_URL = 'git+https://github.com/electron-stagewright/electron-stagewright.git'
 
@@ -232,7 +232,7 @@ describe('publish-readiness — publishable package manifests', () => {
     )
 
     expect(violations).toContain(
-      'packages/core: engines.node must be >=24.0.0 (the ADR-002 Node floor; got >=22.0.0)',
+      'packages/core: engines.node must be >=26.13.1 (the ADR-002 Node floor; got >=22.0.0)',
     )
   })
 

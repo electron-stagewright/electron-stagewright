@@ -22,7 +22,7 @@ describe('real-Electron workflow', () => {
 
     expect(windows).toContain('name: Real-Electron smokes (windows)')
     expect(windows).toContain('runs-on: windows-latest')
-    expect(windows).toContain('node-version: 24')
+    expect(windows).toContain('node-version-file: .nvmrc')
     expect(windows).toContain("require('electron')")
     expect(windows).toContain("STAGEWRIGHT_E2E: '1'")
     expect(windows).toContain('run: pnpm test:real')

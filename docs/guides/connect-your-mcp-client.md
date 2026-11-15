@@ -12,7 +12,7 @@ that launch the server; everything else is the client's standard MCP configurati
 
 ## Before you start
 
-- **Node.js 24 or newer** (the server's floor — check with `node -v`).
+- **Node.js 26 or newer** (the server's floor — check with `node -v`).
 - **On Linux, a display for the server process.** Electron opens real windows, so the server needs
   `DISPLAY` or `WAYLAND_DISPLAY`: run the host inside a desktop session, or start it under a virtual
   display such as `xvfb-run -a`. `doctor` reports this as the `display` check.
@@ -466,7 +466,7 @@ working setup prints one JSON document with `"ok": true` and exits 0; each entry
 {
   "ok": true,
   "checks": [
-    { "id": "node", "status": "pass", "message": "Node v24.19.0 satisfies the >=24 floor." },
+    { "id": "node", "status": "pass", "message": "Node v26.13.1 satisfies the >=26 floor." },
     {
       "id": "playwright",
       "status": "pass",
@@ -581,7 +581,7 @@ The failure modes are almost all about the stdio channel or the spawn command.
 | Codex reports the server timed out during startup                               | Codex allows 10 seconds by default, and an `npx` resolution can take longer                                                                                | Set `startup_timeout_sec = 30` on the server in `~/.codex/config.toml`, and run the terminal bootstrap first.                                                           |
 | A desktop host logs `npx` or `node` not found                                   | The host started from the Dock or Finder without your shell `PATH`                                                                                         | Use the absolute `npx` path and an `env.PATH` that contains Node.js; see the desktop-apps section above.                                                                |
 | `doctor` fails the `display` check, or no app window opens on Linux             | The server process has neither `DISPLAY` nor `WAYLAND_DISPLAY` (a headless machine, an SSH session, or a host that filters the environment, such as Codex) | Run the host in a desktop session, start it under `xvfb-run -a`, or forward `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` (in Codex, through `env_vars`).               |
-| Server won't start; a version/engine error                                      | Node below the version floor                                                                                                                               | The server requires Node 24+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                                                   |
+| Server won't start; a version/engine error                                      | Node below the version floor                                                                                                                               | The server requires Node 26+. Check `node -v`; with `npx`, the client must resolve a new-enough Node.                                                                   |
 | `doctor` reports `electron` as failed right after a fresh install               | Electron has not downloaded its binary yet; it does that on first use                                                                                      | Run `install-electron` with the same `--package` list (or `pnpm exec install-electron` in the project), then run `doctor` again.                                        |
 | `electron_launch` reports that Playwright or Electron is not installed          | The core package was started without an optional launch peer                                                                                               | Use the pinned `npx` form shown above, install all three packages globally, or pass `executablePath` to `electron_launch`.                                              |
 | `doctor` fails `playwright` or `electron` with `Cannot find module` under `npx` | `npx` ran inside a project that already has that package at the pinned version, so it left the package out of its cache                                    | Add `--prefix ~/` after `-y` in every `npx` command for the server, rerun `install-electron` and `doctor`, then restart the host.                                       |

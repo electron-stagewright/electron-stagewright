@@ -81,11 +81,11 @@ describe('GitHub Actions runtime policy', () => {
     ])
   })
 
-  it('preserves the supported Node runtime matrix', async () => {
+  it('runs the test matrix on the Node line .nvmrc names', async () => {
     const workflow = await readFile(path.join(WORKFLOWS_DIRECTORY, 'ci.yml'), 'utf8')
 
-    expect(workflow).toContain('node: [24, 26]')
-    expect(workflow).toContain('node-version: ${{ matrix.node }}')
+    expect(workflow).toContain('node-version-file: .nvmrc')
+    expect(workflow).toContain('check-latest: true')
   })
 
   it('keeps published startup measurement manual, cross-platform, and artifact-backed', async () => {
@@ -93,7 +93,7 @@ describe('GitHub Actions runtime policy', () => {
 
     expect(workflow).toContain('workflow_dispatch:')
     expect(workflow).toContain('os: [ubuntu-latest, macos-latest, windows-latest]')
-    expect(workflow).toContain('node-version: 24')
+    expect(workflow).toContain('node-version-file: .nvmrc')
     expect(workflow).toContain('pnpm bench:startup')
     expect(workflow).toContain('actions/upload-artifact@v7')
     expect(workflow).toContain('path: output/startup-*')

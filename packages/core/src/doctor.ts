@@ -115,7 +115,7 @@ export interface DoctorDeps {
   readonly inventoryNativeAddons?: (appRoot: string) => Promise<NativeAddonInventory>
 }
 
-const NODE_FLOOR = 24
+const NODE_FLOOR = 26
 
 async function resolvePackage(name: 'playwright' | 'electron'): Promise<void> {
   // Doctor only needs to establish that the optional peer can be resolved. Importing Electron's

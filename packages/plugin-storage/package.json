@@ -50,7 +50,7 @@
     "fake-indexeddb": "^6.2.5"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.13.1"
   },
   "publishConfig": {
     "access": "public"

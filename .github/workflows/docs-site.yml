@@ -22,7 +22,8 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
+          check-latest: true
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # build-docs-site exits non-zero on a broken or local-only internal link, so this validates the

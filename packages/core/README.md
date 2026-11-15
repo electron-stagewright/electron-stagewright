@@ -16,7 +16,7 @@ before pointing the server at your own app.
 
 ## Use the published package
 
-Requires Node.js 24 or newer, and on Linux a display for the server (`DISPLAY`, `WAYLAND_DISPLAY`,
+Requires Node.js 26 or newer, and on Linux a display for the server (`DISPLAY`, `WAYLAND_DISPLAY`,
 or `xvfb-run -a`). The default launch transport uses Playwright and an Electron runtime,
 so start the CLI with all three packages available. Before handing the command to an MCP host,
 prepare it once in a terminal: Electron downloads its binary the first time something loads it,
