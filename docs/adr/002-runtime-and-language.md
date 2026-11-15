@@ -40,7 +40,7 @@ Closely related is [ADR-003](./003-transport-abstraction.md): Microsoft's Playwr
 
 Compilation target is `ES2023`; module resolution is `NodeNext`.
 
-`@types/node` tracks the Node 24 major so the type surface matches the runtime floor.
+`@types/node` tracks the Node 26 major so the type surface matches the runtime floor.
 
 ### Module system
 

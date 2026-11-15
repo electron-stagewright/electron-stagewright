@@ -82,7 +82,7 @@ jobs:
     if: ${{ always() }}
     steps:
       # Keep Build fail-closed when an upstream gate fails, skips or is cancelled.
-      # lint-and-typecheck has already built and checked the manifest; test owns all six cells.
+      # lint-and-typecheck has already built and checked the manifest; test owns every OS cell.
       - name: Require the build, manifest and test gates
         env:
           LINT_RESULT: ${{ needs.lint-and-typecheck.result }}

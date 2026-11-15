@@ -115,7 +115,8 @@ export interface DoctorDeps {
   readonly inventoryNativeAddons?: (appRoot: string) => Promise<NativeAddonInventory>
 }
 
-const NODE_FLOOR = 26
+// Mirrors engines.node; the manifest drift test keeps them equal.
+export const NODE_FLOOR = '26.13.1'
 
 async function resolvePackage(name: 'playwright' | 'electron'): Promise<void> {
   // Doctor only needs to establish that the optional peer can be resolved. Importing Electron's
@@ -218,8 +219,14 @@ async function inspectDirectory(
 }
 
 function nodeCheck(nodeVersion: string): DoctorCheck {
-  const major = Number.parseInt(nodeVersion.replace(/^v/, '').split('.')[0] ?? '', 10)
-  if (Number.isInteger(major) && major >= NODE_FLOOR) {
+  const actual = nodeVersion
+    .replace(/^v/, '')
+    .split('.')
+    .map((part) => Number.parseInt(part, 10))
+  const floor = NODE_FLOOR.split('.').map(Number)
+  const index = floor.findIndex((part, i) => actual[i] !== part)
+  const satisfied = index === -1 || (actual[index] ?? Number.NaN) > (floor[index] ?? 0)
+  if (satisfied) {
     return {
       id: 'node',
       status: 'pass',

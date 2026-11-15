@@ -26,6 +26,21 @@ const READY_DEPS = {
 }
 
 describe('runDoctorChecks', () => {
+  it.each([
+    ['v26.13.0', 'fail'],
+    ['v26.13.1', 'pass'],
+    ['v26.14.0', 'pass'],
+    ['v27.0.0-alpha.0', 'pass'],
+    ['v24.19.0', 'fail'],
+  ])('checks Node %s against the full engines floor', async (nodeVersion, status) => {
+    const report = await runDoctorChecks(
+      { allowEvalMain: false, allowEvalRenderer: false },
+      { ...READY_DEPS, nodeVersion },
+    )
+
+    expect(report.checks.find((check) => check.id === 'node')?.status).toBe(status)
+  })
+
   it('reports a stable, passing preflight with skip statuses for unconfigured paths', async () => {
     const report = await runDoctorChecks(
       { allowEvalMain: false, allowEvalRenderer: true },

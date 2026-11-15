@@ -18,6 +18,8 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { NODE_FLOOR } from '../src/doctor.js'
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
 interface ManifestSlice {
@@ -80,17 +82,27 @@ describe('manifest drift — packageManager vs engines vs CI matrix', () => {
     expect(Number(line), `.nvmrc (${line}) must equal the engines.node major`).toBe(floor[0])
   })
 
-  it('every workflow takes Node from .nvmrc', async () => {
+  it('doctor checks the same Node floor engines.node declares', async () => {
+    const root = await readJson(path.join(ROOT, 'package.json'))
+    expect(parseExact(NODE_FLOOR)).toEqual(parseFloor(root.engines?.node ?? ''))
+  })
+
+  it('every setup-node step takes Node from .nvmrc with check-latest', async () => {
     const dir = path.join(ROOT, '.github', 'workflows')
-    const pinned: string[] = []
+    const drift: string[] = []
     let setups = 0
     for (const file of await fs.readdir(dir)) {
       if (!/\.ya?ml$/.test(file)) continue
       const workflow = await fs.readFile(path.join(dir, file), 'utf8')
-      setups += (workflow.match(/node-version-file: \.nvmrc/g) ?? []).length
-      if (/^\s+node-version:/m.test(workflow)) pinned.push(file)
+      const steps = (workflow.match(/uses: actions\/setup-node@/g) ?? []).length
+      const nvmrc = (workflow.match(/^\s+node-version-file: \.nvmrc$/gm) ?? []).length
+      const latest = (workflow.match(/^\s+check-latest: true$/gm) ?? []).length
+      setups += steps
+      if (nvmrc !== steps || latest !== steps || /node-version['"]?\s*:/.test(workflow)) {
+        drift.push(file)
+      }
     }
-    expect(pinned, 'hard-coded node-version in workflows').toEqual([])
+    expect(drift, 'workflows whose setup-node steps do not all read .nvmrc').toEqual([])
     expect(setups).toBeGreaterThan(0)
   })
 
