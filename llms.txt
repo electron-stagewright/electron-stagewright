@@ -6,7 +6,7 @@
 
 ## Install (Claude Code)
 
-Requires Node.js 24 or newer. Run these from a terminal before the MCP host starts the server; keep
+Requires Node.js 26.13.1 or newer. Run these from a terminal before the MCP host starts the server; keep
 the `--package` list identical in all three commands. `install-electron` downloads Electron's
 binary up front, because its first-use download prints to stdout and would corrupt the MCP stdio
 stream. `doctor --json` must report `"ok": true`. Keep `--prefix ~/`: without it, `npx` skips any

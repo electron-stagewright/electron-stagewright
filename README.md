@@ -44,7 +44,7 @@ Microsoft's official Playwright MCP team [explicitly declined](https://github.co
 
 ## Quick start
 
-Requires **Node.js 24 or newer** (`node -v`); on Linux the server also needs a display (`DISPLAY`,
+Requires **Node.js 26.13.1 or newer** (`node -v`); on Linux the server also needs a display (`DISPLAY`,
 `WAYLAND_DISPLAY`, or `xvfb-run -a`). The default launch transport uses Playwright and an
 Electron runtime. For a private setup in the current project, keep the server local to that project
 and pin the release-tested package set.

@@ -39,7 +39,7 @@
     "electron": ">=12.2.0"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.13.1"
   },
   "publishConfig": {
     "access": "public"

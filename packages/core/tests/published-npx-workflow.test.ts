@@ -17,7 +17,7 @@ describe('published npx smoke workflow', () => {
     expect(workflow).toContain('release:')
     expect(workflow).toContain('types: [published]')
     expect(workflow).toContain('workflow_dispatch:')
-    expect(workflow).toContain('node-version: 24')
+    expect(workflow).toContain('node-version-file: .nvmrc')
     expect(workflow).toContain('node scripts/published-npx-smoke.mjs')
   })
 })

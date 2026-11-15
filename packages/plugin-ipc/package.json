@@ -48,7 +48,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.13.1"
   },
   "publishConfig": {
     "access": "public"

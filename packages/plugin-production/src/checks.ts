@@ -12,6 +12,7 @@
  */
 
 import { Buffer } from 'node:buffer'
+import type { Stats } from 'node:fs'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
@@ -752,7 +753,7 @@ export async function checkCrashReporter(appPath: string): Promise<CheckResult> 
   const frameworkPath = path.join(appPath, ELECTRON_FRAMEWORK)
   const versionsPath = path.join(frameworkPath, 'Versions')
 
-  let frameworkInfo: Awaited<ReturnType<typeof stat>>
+  let frameworkInfo: Stats
   try {
     frameworkInfo = await stat(frameworkPath)
   } catch {

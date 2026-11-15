@@ -32,7 +32,7 @@ tool contracts.
 
 ## Prerequisites
 
-- Node.js 24 or newer (see `engines` in `package.json`; the server has no native dependencies).
+- Node.js 26.13.1 or newer (see `engines` in `package.json`; the server has no native dependencies).
 - pnpm via Corepack: `corepack enable`.
 
 ## Install and build

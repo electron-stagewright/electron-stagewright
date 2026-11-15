@@ -5,9 +5,8 @@
  * 1. `packageManager` (the exact pnpm CI/corepack resolves) must satisfy the
  *    `engines.pnpm` floor — a bumped engines range with a stale packageManager
  *    (or vice versa) breaks contributors in a way local dev rarely surfaces.
- * 2. `engines.node`'s floor must equal the SMALLEST Node version in the CI test
- *    matrix — CI proving a floor the manifest does not declare (or declaring a
- *    floor CI never exercises) makes the support claim untestable.
+ * 2. `engines.node`'s major must be the line `.nvmrc` names, and every workflow must read
+ *    `.nvmrc`, so CI always runs the floor the manifest declares.
  * 3. Every workspace package that declares `engines.node` must declare the SAME
  *    floor as the root — a package cannot be more (or less) demanding than the
  *    workspace that gates it.
@@ -18,6 +17,8 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
+
+import { NODE_FLOOR } from '../src/doctor.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
@@ -72,23 +73,37 @@ describe('manifest drift — packageManager vs engines vs CI matrix', () => {
     ).toBe(true)
   })
 
-  it('engines.node floor matches the smallest Node version in the CI test matrix', async () => {
+  it('engines.node floor is the Node line named in .nvmrc', async () => {
     const root = await readJson(path.join(ROOT, 'package.json'))
     expect(root.engines?.node, 'root package.json must declare engines.node').toBeDefined()
     const floor = parseFloor(root.engines?.node ?? '')
+    const line = (await fs.readFile(path.join(ROOT, '.nvmrc'), 'utf8')).trim()
+    expect(line, '.nvmrc must name a Node major line').toMatch(/^\d+$/)
+    expect(Number(line), `.nvmrc (${line}) must equal the engines.node major`).toBe(floor[0])
+  })
 
-    const ci = await fs.readFile(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
-    const matrix = /node:\s*\[([^\]]+)\]/.exec(ci)
-    expect(matrix, 'ci.yml must declare a node version matrix').not.toBeNull()
-    const versions = (matrix?.[1] ?? '')
-      .split(',')
-      .map((v) => Number(v.trim()))
-      .filter((v) => Number.isFinite(v))
-    expect(versions.length).toBeGreaterThan(0)
-    expect(
-      Math.min(...versions),
-      `CI matrix floor (${Math.min(...versions)}) must equal engines.node major floor (${floor[0]})`,
-    ).toBe(floor[0])
+  it('doctor checks the same Node floor engines.node declares', async () => {
+    const root = await readJson(path.join(ROOT, 'package.json'))
+    expect(parseExact(NODE_FLOOR)).toEqual(parseFloor(root.engines?.node ?? ''))
+  })
+
+  it('every setup-node step takes Node from .nvmrc with check-latest', async () => {
+    const dir = path.join(ROOT, '.github', 'workflows')
+    const drift: string[] = []
+    let setups = 0
+    for (const file of await fs.readdir(dir)) {
+      if (!/\.ya?ml$/.test(file)) continue
+      const workflow = await fs.readFile(path.join(dir, file), 'utf8')
+      const steps = (workflow.match(/uses: actions\/setup-node@/g) ?? []).length
+      const nvmrc = (workflow.match(/^\s+node-version-file: \.nvmrc$/gm) ?? []).length
+      const latest = (workflow.match(/^\s+check-latest: true$/gm) ?? []).length
+      setups += steps
+      if (nvmrc !== steps || latest !== steps || /node-version['"]?\s*:/.test(workflow)) {
+        drift.push(file)
+      }
+    }
+    expect(drift, 'workflows whose setup-node steps do not all read .nvmrc').toEqual([])
+    expect(setups).toBeGreaterThan(0)
   })
 
   it('every workspace package with engines.node declares the same floor as the root', async () => {

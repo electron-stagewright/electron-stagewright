@@ -14,7 +14,7 @@
     {
       "description": "Keep runtime type definitions on the supported Node major",
       "matchPackageNames": ["@types/node"],
-      "allowedVersions": "/^24\\./"
+      "allowedVersions": "/^26\\./"
     },
     {
       "description": "Review Electron majors as standalone compatibility work",

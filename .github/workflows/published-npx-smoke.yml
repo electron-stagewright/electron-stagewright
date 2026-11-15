@@ -17,7 +17,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
+          check-latest: true
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       # This intentionally installs no workspace dependencies. From an empty npm/Electron cache, and

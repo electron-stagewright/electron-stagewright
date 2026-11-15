@@ -6,13 +6,13 @@ verified” means a required hosted job launches Electron and drives the complet
 
 ## Runtime matrix
 
-| Operating system | Node 24            | Node 26            | Real Electron      | Notes                                                                                  |
-| ---------------- | ------------------ | ------------------ | ------------------ | -------------------------------------------------------------------------------------- |
-| Ubuntu latest    | Unit + integration | Unit + integration | Node 24 under Xvfb | Also proves the Linux native-addon runtime fixture.                                    |
-| macOS latest     | Unit + integration | Unit + integration | Node 24 native     | Also proves the macOS native-addon runtime fixture and packed CLI.                     |
-| Windows latest   | Unit + integration | Unit + integration | Node 24 native     | Also proves the Windows native-addon runtime fixture (node-gyp + MSVC) and packed CLI. |
+| Operating system | Node 26            | Real Electron      | Notes                                                                                  |
+| ---------------- | ------------------ | ------------------ | -------------------------------------------------------------------------------------- |
+| Ubuntu latest    | Unit + integration | Node 26 under Xvfb | Also proves the Linux native-addon runtime fixture.                                    |
+| macOS latest     | Unit + integration | Node 26 native     | Also proves the macOS native-addon runtime fixture and packed CLI.                     |
+| Windows latest   | Unit + integration | Node 26 native     | Also proves the Windows native-addon runtime fixture (node-gyp + MSVC) and packed CLI. |
 
-The package requires Node 24 or newer. CI exercises Node 24 and 26; versions newer than 26 may work
+The package requires Node 26.13.1 or newer. CI runs the newest Node 26 release; newer lines may work
 but are not yet part of the maintained matrix.
 
 ### Source resolution (not a qualification claim)

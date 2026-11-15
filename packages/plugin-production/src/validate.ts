@@ -8,6 +8,7 @@
  * @module
  */
 
+import type { Stats } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -126,10 +127,7 @@ function tally(checks: readonly CheckResult[], status: CheckStatus): number {
   return checks.filter((check) => check.status === status).length
 }
 
-function classifyArtifact(
-  appPath: string,
-  info: Awaited<ReturnType<typeof stat>>,
-): ProductionArtifactType {
+function classifyArtifact(appPath: string, info: Stats): ProductionArtifactType {
   const extension = path.extname(appPath).toLowerCase()
   if (info.isDirectory() && extension === '.app') return 'macos-app'
   if (info.isFile() && isWindowsArtifactPath(appPath)) return 'windows-artifact'

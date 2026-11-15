@@ -59,12 +59,17 @@ describe('multi-window lifecycle smoke (real Electron)', () => {
       expect(launched.ok).toBe(true)
       const sessionId = launched.session_id
 
-      const listed = (await dispatcher.dispatch('electron_windows_list', {
-        sessionId,
-      })) as SuccessResponse & {
-        readonly windows: readonly { readonly id: string; readonly title: string }[]
+      // Launch resolves on the first window; the second gets its title once its page loads.
+      let preferences: { readonly id: string; readonly title: string } | undefined
+      for (const until = Date.now() + 10_000; preferences === undefined && Date.now() < until;) {
+        const listed = (await dispatcher.dispatch('electron_windows_list', {
+          sessionId,
+        })) as SuccessResponse & {
+          readonly windows: readonly { readonly id: string; readonly title: string }[]
+        }
+        preferences = listed.windows.find((window) => window.title === 'Preferences window')
+        if (preferences === undefined) await new Promise((resolve) => setTimeout(resolve, 100))
       }
-      const preferences = listed.windows.find((window) => window.title === 'Preferences window')
       if (preferences === undefined) throw new Error('fixture preferences window was not listed')
 
       await expect(

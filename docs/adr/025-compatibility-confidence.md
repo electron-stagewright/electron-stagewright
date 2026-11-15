@@ -26,7 +26,7 @@ Compatibility claims are evidence-based and split into three levels:
    than implying support.
 
 Required real-Electron lanes run on Ubuntu, macOS, and Windows with the Node floor. The ordinary test
-matrix continues to cover Node 24 and 26 on all three operating systems. The public compatibility
+matrix covers the Node floor on all three operating systems. The public compatibility
 guide records the exact version policy, transport evidence, platform-specific plugin boundaries, and
 the difference between current CI evidence and broad ecosystem compatibility.
 

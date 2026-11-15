@@ -22,7 +22,8 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
+          check-latest: true
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Build every workspace before resolving workspace package exports. The benchmark
@@ -36,19 +37,19 @@ jobs:
       - run: pnpm manifest:check
 
   test:
-    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [24, 26]
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ matrix.node }}
+          node-version-file: .nvmrc
+          check-latest: true
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Tests import the benchmark manifest, which imports every first-party plugin by
@@ -64,7 +65,8 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
+          check-latest: true
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Coverage loads the same workspace package entrypoints as the test job.
@@ -80,7 +82,7 @@ jobs:
     if: ${{ always() }}
     steps:
       # Keep Build fail-closed when an upstream gate fails, skips or is cancelled.
-      # lint-and-typecheck has already built and checked the manifest; test owns all six cells.
+      # lint-and-typecheck has already built and checked the manifest; test owns every OS cell.
       - name: Require the build, manifest and test gates
         env:
           LINT_RESULT: ${{ needs.lint-and-typecheck.result }}

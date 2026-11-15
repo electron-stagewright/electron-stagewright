@@ -21,7 +21,7 @@ Closely related is [ADR-003](./003-transport-abstraction.md): Microsoft's Playwr
 
 ### Runtime
 
-**Node.js** as the only supported runtime. **Minimum version: Node 24**. CI exercises both **Node 24 and Node 26** so forward-compatibility issues surface before Node 26 becomes the next LTS line.
+**Node.js** as the only supported runtime. **Minimum version: the current LTS line, Node 26** (see the status updates below).
 
 ### Language
 
@@ -40,7 +40,7 @@ Closely related is [ADR-003](./003-transport-abstraction.md): Microsoft's Playwr
 
 Compilation target is `ES2023`; module resolution is `NodeNext`.
 
-`@types/node` tracks the Node 24 major so the type surface matches the runtime floor.
+`@types/node` tracks the Node 26 major so the type surface matches the runtime floor.
 
 ### Module system
 
@@ -66,14 +66,14 @@ Compilation target is `ES2023`; module resolution is `NodeNext`.
 
 CI exercises the runtime decision on the full cross-platform grid:
 
-| Job              | OS                                          | Node   |
-| ---------------- | ------------------------------------------- | ------ |
-| Lint + Typecheck | ubuntu-latest                               | 24     |
-| Test             | ubuntu-latest, macos-latest, windows-latest | 24, 26 |
-| Build            | ubuntu-latest                               | 24     |
-| Example smoke    | ubuntu-latest                               | 24     |
+| Job              | OS                                          | Node |
+| ---------------- | ------------------------------------------- | ---- |
+| Lint + Typecheck | ubuntu-latest                               | 26   |
+| Test             | ubuntu-latest, macos-latest, windows-latest | 26   |
+| Build            | ubuntu-latest                               | 26   |
+| Example smoke    | ubuntu-latest                               | 26   |
 
-The Test job runs the six-cell matrix on every push and PR; Lint, Typecheck, Build, and example smoke are single-cell. The platform commitment is "Linux + macOS + Windows, Node 24 and 26" and is encoded in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml). Any change to that matrix is a deliberate amendment to this ADR.
+The Test job runs on all three operating systems on every push and PR; Lint, Typecheck, Build, and example smoke are single-cell. Every job reads the Node line from `.nvmrc` with `check-latest`. The platform commitment is "Linux + macOS + Windows on the Node LTS floor" and is encoded in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml). Any change to that matrix is a deliberate amendment to this ADR.
 
 ### Anti-goals
 
@@ -93,11 +93,10 @@ ADR-002 deliberately does **not** decide the following — those are out-of-scop
 - **Playwright `_electron` deprecation watch.** Microsoft has signalled the `_electron` API may be deprecated (Playwright MCP PR #1291). When that lands, this project pivots to raw CDP via ADR-003's `CDPTransport`. The pivot is much cheaper if the runtime hasn't introduced its own ESM/CommonJS or Node-API mismatch on top.
 - **Boring + well-trodden.** A foundational design decision should not be the place to take a runtime gamble.
 
-### Why Node 24 floor
+### Why the LTS floor
 
-- Node 24 is the current floor encoded in `.nvmrc`, root `package.json`, and `packages/core/package.json`.
-- Node 26 runs in the test matrix as the forward-compatibility line.
-- Both versions support native ESM in all the configurations this project uses, native `fetch`, `--watch` mode, and `node --test` (the latter is irrelevant — we use vitest — but it indicates a mature runtime).
+- The floor is the current LTS line, Node 26, named in `.nvmrc` and encoded in every package's `engines.node`.
+- It supports native ESM in all the configurations this project uses, native `fetch`, `--watch` mode, and `node --test` (the latter is irrelevant — we use vitest — but it indicates a mature runtime).
 
 ### Why TypeScript 6 with strict-plus
 
@@ -139,10 +138,10 @@ ADR-002 deliberately does **not** decide the following — those are out-of-scop
 ## Consequences
 
 - The runtime / language baseline is now the load-bearing assumption for every downstream ADR. Future ADRs cite ADR-002 rather than re-justifying these decisions.
-- Contributors are expected to run **Node 24 or Node 26** locally. Node 22 and below will be rejected at install time by `engines.node`.
+- Contributors are expected to run **Node 26** locally (`fnm use` or `nvm use` reads `.nvmrc`). Older lines are rejected at install time by `engines.node`.
 - The `pnpm install` step requires **pnpm 11+**. Corepack handles this transparently when contributors run `corepack enable` once.
 - Source files use ESM imports exclusively. Any `require()`, `module.exports`, or `.cjs` source file is a lint error.
-- The CI matrix is the contract: any change to "Linux + macOS + Windows × Node 24 + 26" is an amendment to this ADR.
+- The CI matrix is the contract: any change to "Linux + macOS + Windows on the Node LTS floor" is an amendment to this ADR.
 - The decision is revisitable. If Bun reaches feature parity with Node for the MCP SDK and Playwright `_electron`, a future ADR may add it as an additional supported runtime (not a replacement). Adding Deno would require a similar follow-up.
 - **No retroactive enforcement.** Existing examples or scripts that already comply do not need changes; the ADR documents the locked baseline going forward.
 
@@ -169,6 +168,21 @@ current LTS:
 Supersedes note: earlier revisions of this ADR framed Node 22 as the floor and
 Node 24 as the forward-compat line. The current decision is Node 24 as the floor
 and Node 26 as the forward-compat test line.
+
+## Status Update (2026-11-14) — Node 26 LTS floor
+
+Node 26 entered Active LTS ("Lithium") with 26.13.0; Node 24 is now Maintenance LTS. The floor
+follows the current LTS line:
+
+- **`engines.node` raised `>=24.0.0` → `>=26.13.1`** in the root and every package, the newest
+  security release of the line.
+- **`.nvmrc` → `26`.** Every workflow reads it (`node-version-file` with `check-latest: true`), so
+  CI picks up a security patch without a commit. A drift test rejects a hard-coded
+  `node-version`.
+- **`@types/node` → `^26.x`**, matching the runtime major.
+- **Test matrix: Node 26 on Linux, macOS and Windows.** No later release line exists yet; the next
+  one joins the matrix as the forward-compatibility line once it ships.
+- **`doctor`** fails below Node 26.
 
 ## Related decisions
 
