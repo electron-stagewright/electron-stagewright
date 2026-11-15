@@ -99,6 +99,7 @@ import {
 import { buildScrollIntoViewBody } from './playwright-electron-bodies.js'
 import { originRelation } from './surface-origin.js'
 import { runDomStorage } from './dom-storage.js'
+import { createKillProcessTree, noProcessTree, type KillProcessTree } from './process-tree.js'
 import { RENDERER_RESIZE_BODY } from './window-size.js'
 import type {
   AttachOptions,
@@ -270,9 +271,31 @@ async function waitForProcessExit(child: ChildProcess, timeoutMs: number): Promi
   })
 }
 
+/** Process groups of detached packaged apps still owned, killed if this process exits first. */
+const ownedGroups = new Set<number>()
+let exitHookInstalled = false
+
+function holdGroup(pid: number): void {
+  ownedGroups.add(pid)
+  if (exitHookInstalled) return
+  exitHookInstalled = true
+  // A detached child no longer receives the signals sent to this process's own group.
+  process.once('exit', () => {
+    for (const group of ownedGroups) {
+      try {
+        process.kill(-group, 'SIGKILL')
+      } catch {
+        // Already gone.
+      }
+    }
+  })
+}
+
 interface ProcessControl {
   readonly ownsProcess: boolean
-  readonly kill?: () => boolean
+  readonly kill?: () => boolean | Promise<boolean>
+  /** Called once the session no longer owns the process. */
+  readonly release?: () => void
   readonly waitForExit?: (timeoutMs: number) => Promise<boolean>
 }
 
@@ -2452,20 +2475,21 @@ class CdpSession implements TransportSession {
       }
     }
     this.#closeAll()
+    this.#processControl.release?.()
     return { escalated }
   }
 
-  #kill(): boolean {
+  async #kill(): Promise<boolean> {
     if (this.#processControl.kill === undefined) return false
     try {
-      return this.#processControl.kill()
+      return await this.#processControl.kill()
     } catch {
       return false
     }
   }
 
   async #killAndReap(): Promise<boolean> {
-    const killed = this.#kill()
+    const killed = await this.#kill()
     if (
       killed &&
       this.#processControl.ownsProcess &&
@@ -2515,6 +2539,8 @@ export interface CDPTransportOptions {
   readonly fetchJson?: FetchJson
   /** SIGKILL sender override (used by stop escalation). Defaults to `process.kill`. */
   readonly killProcess?: KillProcess
+  /** Kills an owned packaged process with its whole tree. Defaults to {@link killProcessTree}. */
+  readonly killProcessTree?: KillProcessTree
   /** Packaged-process spawn override. Defaults to `node:child_process.spawn`. */
   readonly spawnProcess?: SpawnProcess
   /** Loopback-port reservation override. Defaults to a short-lived IPv4 TCP listener. */
@@ -2549,6 +2575,9 @@ export class CDPTransport implements ITransport {
 
   readonly #deps: CdpSessionDeps
   readonly #spawnProcess: SpawnProcess
+  readonly #killProcessTree: KillProcessTree
+  /** False under an injected spawn, whose fake pids must never reach the exit hook. */
+  readonly #spawnsRealProcesses: boolean
   readonly #reserveLoopbackPort: ReserveLoopbackPort
   readonly #launchPollIntervalMs: number
 
@@ -2561,6 +2590,13 @@ export class CDPTransport implements ITransport {
       platform: opts.platform ?? process.platform,
     }
     this.#spawnProcess = opts.spawnProcess ?? defaultSpawnProcess
+    this.#spawnsRealProcesses = opts.spawnProcess === undefined
+    // An injected spawn yields a fake child whose pid must never reach a real kill.
+    this.#killProcessTree =
+      opts.killProcessTree ??
+      (opts.spawnProcess === undefined
+        ? createKillProcessTree({ platform: this.#deps.platform })
+        : noProcessTree)
     this.#reserveLoopbackPort = opts.reserveLoopbackPort ?? defaultReserveLoopbackPort
     this.#launchPollIntervalMs = opts.launchPollIntervalMs ?? LAUNCH_POLL_INTERVAL_MS
   }
@@ -2613,6 +2649,8 @@ export class CDPTransport implements ITransport {
         shell: false,
         stdio: 'ignore',
         windowsHide: true,
+        // Lead a process group on POSIX, so a forced stop reaches every Chromium child.
+        detached: this.#deps.platform !== 'win32',
       })
     } catch (cause) {
       throw new StagewrightError(
@@ -2624,8 +2662,21 @@ export class CDPTransport implements ITransport {
       )
     }
 
-    const killChild = (): boolean => {
-      if (processHasExited(child)) return false
+    const killTree = this.#killProcessTree
+    const detached = this.#deps.platform !== 'win32' && child.pid !== undefined
+    if (detached && child.pid !== undefined && this.#spawnsRealProcesses) {
+      holdGroup(child.pid)
+    }
+    const release = () => {
+      if (child.pid !== undefined) ownedGroups.delete(child.pid)
+    }
+    const killChild = async (): Promise<boolean> => {
+      if (child.pid === undefined) return processHasExited(child) ? false : child.kill('SIGKILL')
+      if (processHasExited(child)) {
+        // The group can outlive its leader; its id is not reused while members remain.
+        return detached ? killTree(child.pid, { exited: true }).catch(() => false) : false
+      }
+      if (await killTree(child.pid).catch(() => false)) return true
       return child.kill('SIGKILL')
     }
 
@@ -2648,13 +2699,14 @@ export class CDPTransport implements ITransport {
         {
           ownsProcess: true,
           kill: killChild,
+          release,
           waitForExit: (budgetMs) => waitForProcessExit(child, budgetMs),
         },
       )
     } catch (error) {
       let killed = false
       try {
-        killed = killChild()
+        killed = await killChild()
       } catch {
         // Preserve the launch failure; cleanup is best-effort when spawning never yielded a pid.
       }
@@ -2663,6 +2715,7 @@ export class CDPTransport implements ITransport {
         // immediately, but still bound the reap wait in case the host delays process notification.
         await waitForProcessExit(child, PROCESS_REAP_BUDGET_MS)
       }
+      release()
       throw error
     }
   }

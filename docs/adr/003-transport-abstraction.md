@@ -349,6 +349,13 @@ implementation status is below.
   transport's graceful stop is bounded and escalates to SIGKILL rather than
   wedging on a hung app — the session is always released with the process
   reaped, never orphaned without a handle.
+- A forced or escalated stop of a process the transport launched kills its
+  whole tree, not just the main pid: `taskkill /pid N /T /F` on Windows (run
+  while the main process is alive, since it walks the tree by parent pid), and
+  SIGKILL to the process group on POSIX, where both transports spawn the app as
+  a group leader and wait for the group to empty (bounded). Chromium's GPU,
+  utility and crashpad children otherwise outlived the stop. A pid passed to an
+  attach is still killed alone: the transport did not start its tree.
 - The Playwright transport additionally attaches console/dialog capture to
   EVERY window (the `window` event), attributes buffered entries by
   `windowId`, and recovers the active window from the known list before
@@ -563,7 +570,8 @@ The CDP launch implementation owns the whole repeated consumer sequence:
    exists;
 4. connect through the existing pooled CDP attach path; and
 5. retain child ownership so stop waits for real process exit within the graceful-close budget,
-   escalates to SIGKILL when necessary, and briefly waits for the killed child to be reaped.
+   escalates to a process-tree kill when necessary, and briefly waits for the killed child to be
+   reaped. The child is spawned `detached` on POSIX so its process group can be killed.
 
 Caller-supplied remote-debugging switches are refused because they would make endpoint ownership and
 cleanup ambiguous. Failed discovery or connection reaps the child. A launch-owned CDP session

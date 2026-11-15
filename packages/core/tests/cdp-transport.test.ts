@@ -10,7 +10,7 @@
  * `STAGEWRIGHT_E2E`-gated `cdp-attach-smoke.test.ts`.
  */
 
-import { type ChildProcess } from 'node:child_process'
+import { type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 
 import { describe, expect, it, vi } from 'vitest'
@@ -509,6 +509,52 @@ describe('CDPTransport.launch', () => {
     })
     expect(child.signalCode).toBe('SIGKILL')
   })
+
+  it.each([
+    ['darwin', true],
+    ['linux', true],
+    ['win32', false],
+  ] as const)(
+    'on %s spawns detached=%s and force-kills the whole tree before the pid',
+    async (platform, detached) => {
+      const server = new FakeCdpServer()
+      const child = new FakeChildProcess()
+      const spawned: SpawnOptions[] = []
+      const trees: number[] = []
+      const transport = new CDPTransport({
+        platform,
+        wsFactory: server.factory,
+        reserveLoopbackPort: async () => 9333,
+        spawnProcess: (_command, _args, options) => {
+          spawned.push(options)
+          return child.asChildProcess()
+        },
+        killProcessTree: async (pid) => {
+          trees.push(pid)
+          child.kill('SIGKILL')
+          return true
+        },
+        fetchJson: async (url) =>
+          url.endsWith('/json/version')
+            ? { webSocketDebuggerUrl: BROWSER_WS }
+            : [
+                {
+                  id: 'T1',
+                  type: 'page',
+                  title: 'Packaged',
+                  url: 'app://packaged.html',
+                  webSocketDebuggerUrl: PAGE_T1_WS,
+                },
+              ],
+      })
+      const session = await transport.launch({ executablePath: '/opt/App/app' })
+      expect(spawned[0]?.detached).toBe(detached)
+
+      await transport.forceKill(session)
+      expect(trees).toEqual([4242])
+      expect(child.killSignals).toEqual(['SIGKILL'])
+    },
+  )
 
   it('force-kills and reaps an owned packaged process without a graceful close', async () => {
     const server = new FakeCdpServer()

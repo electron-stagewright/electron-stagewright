@@ -237,7 +237,12 @@ export interface PWElectronApp {
     arg?: EvalPayload,
   ): Promise<T>
   close(): Promise<void>
-  process(): { pid: number | undefined; kill(signal: string): boolean }
+  process(): {
+    pid: number | undefined
+    readonly exitCode?: number | null
+    readonly signalCode?: string | null
+    kill(signal: string): boolean
+  }
 }
 
 /** The experimental `_electron` namespace entry point: `_electron.launch()`. */
